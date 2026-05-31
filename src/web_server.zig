@@ -26,7 +26,6 @@ var vm_count: usize = 0;
 var vms_mutex: sync.SpinMutex = .{};
 var prefs: vm.Prefs = .{};
 
-const PORT: u16 = 9080;
 const BIND_ADDR: [4]u8 = .{ 0, 0, 0, 0 }; // 0.0.0.0 — accessible remotely
 const API_KEY: []const u8 = "kvmgui"; // default API key for X-API-Key auth
 var auth_token: [64]u8 = [_]u8{0} ** 64;
@@ -84,6 +83,17 @@ fn checkAuth(req: []const u8) bool {
     return std.mem.eql(u8, provided, API_KEY);
 }
 
+/// Write exactly `len` bytes to fd, retrying on short writes. Returns false on failure.
+fn writeAll(conn: c.fd_t, buf: [*]const u8, len: usize) bool {
+    var written: usize = 0;
+    while (written < len) {
+        const n = c.write(conn, buf + written, len - written);
+        if (n <= 0) return false;
+        written += @intCast(n);
+    }
+    return true;
+}
+
 /// Write an HTTP response with status code, content type, CORS headers, and body.
 fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8) void {
     const status_line: []const u8 = switch (status) {
@@ -94,21 +104,31 @@ fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8
         500 => "HTTP/1.1 500 Internal Server Error\r\n",
         else => "HTTP/1.1 200 OK\r\n",
     };
-    _ = c.write(conn, status_line.ptr, status_line.len);
+    if (!writeAll(conn, status_line.ptr, status_line.len)) return;
 
     // CORS headers (allow cross-origin browser access)
-    _ = c.write(conn, @ptrCast("Access-Control-Allow-Origin: *\r\n"), 32);
-    _ = c.write(conn, @ptrCast("Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n"), 53);
-    _ = c.write(conn, @ptrCast("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"), 48);
+    const h_acao: []const u8 = "Access-Control-Allow-Origin: *\r\n";
+    const h_acah: []const u8 = "Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n";
+    const h_acam: []const u8 = "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    const h_ct: []const u8 = "Content-Type: ";
+    if (!writeAll(conn, h_acao.ptr, h_acao.len)) return;
+    if (!writeAll(conn, h_acah.ptr, h_acah.len)) return;
+    if (!writeAll(conn, h_acam.ptr, h_acam.len)) return;
 
-    _ = c.write(conn, @ptrCast("Content-Type: "), 14);
-    _ = c.write(conn, ct.ptr, ct.len);
-    _ = c.write(conn, @ptrCast("\r\nContent-Length: "), 18);
+    if (!writeAll(conn, h_ct.ptr, h_ct.len)) return;
+    if (!writeAll(conn, ct.ptr, ct.len)) return;
+    if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
+        const h_cc: []const u8 = "\r\nCache-Control: public, max-age=86400";
+        if (!writeAll(conn, h_cc.ptr, h_cc.len)) return;
+    }
+    const h_cl: []const u8 = "\r\nContent-Length: ";
+    if (!writeAll(conn, h_cl.ptr, h_cl.len)) return;
     var len_buf: [16]u8 = undefined;
     const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{body.len}) catch "0";
-    _ = c.write(conn, len_str.ptr, len_str.len);
-    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 25);
-    _ = c.write(conn, body.ptr, body.len);
+    if (!writeAll(conn, len_str.ptr, len_str.len)) return;
+    const h_conn: []const u8 = "\r\nConnection: close\r\n\r\n";
+    if (!writeAll(conn, h_conn.ptr, h_conn.len)) return;
+    _ = writeAll(conn, body.ptr, body.len); // best effort for body
 }
 
 /// Write HTTP headers for a streaming response (no Content-Length, uses chunked or raw stream).
@@ -119,17 +139,27 @@ fn writeStreamHeaders(conn: c.fd_t, status: u16, ct: []const u8, content_len: u6
         500 => "HTTP/1.1 500 Internal Server Error\r\n",
         else => "HTTP/1.1 200 OK\r\n",
     };
-    _ = c.write(conn, status_line.ptr, status_line.len);
-    _ = c.write(conn, @ptrCast("Access-Control-Allow-Origin: *\r\n"), 32);
-    _ = c.write(conn, @ptrCast("Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n"), 53);
-    _ = c.write(conn, @ptrCast("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"), 48);
-    _ = c.write(conn, @ptrCast("Content-Type: "), 14);
-    _ = c.write(conn, ct.ptr, ct.len);
-    _ = c.write(conn, @ptrCast("\r\nContent-Length: "), 18);
+    if (!writeAll(conn, status_line.ptr, status_line.len)) return;
+    const h_acao: []const u8 = "Access-Control-Allow-Origin: *\r\n";
+    const h_acah: []const u8 = "Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n";
+    const h_acam: []const u8 = "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    const h_ct: []const u8 = "Content-Type: ";
+    if (!writeAll(conn, h_acao.ptr, h_acao.len)) return;
+    if (!writeAll(conn, h_acah.ptr, h_acah.len)) return;
+    if (!writeAll(conn, h_acam.ptr, h_acam.len)) return;
+    if (!writeAll(conn, h_ct.ptr, h_ct.len)) return;
+    if (!writeAll(conn, ct.ptr, ct.len)) return;
+    if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
+        const h_cc: []const u8 = "\r\nCache-Control: public, max-age=86400";
+        if (!writeAll(conn, h_cc.ptr, h_cc.len)) return;
+    }
+    const h_cl: []const u8 = "\r\nContent-Length: ";
+    if (!writeAll(conn, h_cl.ptr, h_cl.len)) return;
     var len_buf: [32]u8 = undefined;
     const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{content_len}) catch "0";
-    _ = c.write(conn, len_str.ptr, len_str.len);
-    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 25);
+    if (!writeAll(conn, len_str.ptr, len_str.len)) return;
+    const h_conn: []const u8 = "\r\nConnection: close\r\n\r\n";
+    if (!writeAll(conn, h_conn.ptr, h_conn.len)) return;
 }
 
 fn acceptLoop(fd: c.fd_t) void {
@@ -187,6 +217,9 @@ fn serveHtml(conn: c.fd_t) void {
     var response: []const u8 = "";
     var content_type: []const u8 = "text/html";
     var status: u16 = 200;
+    var json_buf: [32768]u8 = undefined;
+    var detail_buf: [4096]u8 = undefined;
+    var snap_buf: [4096]u8 = undefined;
 
     // Auth: check X-API-Key for mutating endpoints
     const needs_auth = !std.mem.startsWith(u8, req, "GET /api/vms") and
@@ -197,6 +230,8 @@ fn serveHtml(conn: c.fd_t) void {
         !std.mem.startsWith(u8, req, "GET /api/vnets") and
         !std.mem.startsWith(u8, req, "GET /api/vm/") and
         !std.mem.startsWith(u8, req, "GET / ") and
+        !std.mem.startsWith(u8, req, "GET /app.js") and
+        !std.mem.startsWith(u8, req, "GET /app.css") and
         !std.mem.eql(u8, req[0..@min(req.len, "GET /favicon".len)], "GET /favicon");
 
     if (needs_auth and !checkAuth(req)) {
@@ -206,7 +241,8 @@ fn serveHtml(conn: c.fd_t) void {
 
     if (std.mem.startsWith(u8, req, "GET /api/vms")) {
         content_type = "application/json";
-        response = try renderJson();
+        const json_bytes = renderJson(&json_buf);
+        response = if (json_bytes > 0) json_buf[0..json_bytes] else "[]";
     } else if (std.mem.startsWith(u8, req, "GET /api/health")) {
         response = "{\"status\":\"ok\",\"version\":\"1.0\"}";
         content_type = "application/json";
@@ -215,7 +251,7 @@ fn serveHtml(conn: c.fd_t) void {
         response = try serveConfigRaw();
     } else if (std.mem.startsWith(u8, req, "GET /api/vm/")) {
         content_type = "application/json";
-        response = try renderVmDetail(req);
+        response = renderVmDetail(req, &detail_buf);
     } else if (std.mem.startsWith(u8, req, "POST /api/power/")) {
         response = try handlePower(req);
         content_type = "text/plain";
@@ -263,7 +299,7 @@ fn serveHtml(conn: c.fd_t) void {
         response = try handleSnapshotTake(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "GET /api/snapshot/list/")) {
-        response = try handleSnapshotList(req);
+        response = handleSnapshotList(req, &snap_buf);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/snapshot/revert/")) {
         response = try handleSnapshotRevert(req);
@@ -286,25 +322,41 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/config")) {
         response = handleConfigSave(req) catch "save err";
         content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "GET /app.css")) {
+        response = app_css;
+        content_type = "text/css; charset=utf-8";
+    } else if (std.mem.startsWith(u8, req, "GET /app.js")) {
+        response = app_js;
+        content_type = "application/javascript; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET / ")) {
         response = index_html;
         content_type = "text/html; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET /favicon")) {
-        status = 404;
-        response = "not found";
-        content_type = "text/plain";
+        content_type = "image/svg+xml";
+        response = \\<?xml version="1.0" encoding="utf-8"?>
+        \\<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+        \\  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#6366f1"/></linearGradient></defs>
+        \\  <rect width="32" height="32" rx="6" fill="url(#g)"/>
+        \\  <text x="16" y="22" text-anchor="middle" font-size="18" font-weight="bold" fill="#fff" font-family="system-ui,sans-serif">K</text>
+        \\</svg>
+        ;
     } else {
         response = index_html;
         content_type = "text/html; charset=utf-8";
     }
 
-    // Map known error strings to HTTP status codes
-    if (std.mem.eql(u8, response, "invalid") or std.mem.eql(u8, response, "invalid idx")) {
-        status = 404;
-    } else if (std.mem.eql(u8, response, "no disk") or std.mem.eql(u8, response, "not running")) {
-        status = 400;
-    } else if (std.mem.indexOf(u8, response, "err") != null) {
-        status = 500;
+    // Map known error strings to HTTP status codes (only for text/plain API responses,
+    // not for text/html like index_html which may contain "err" in JS/CSS).
+    if (std.mem.eql(u8, content_type, "text/plain")) {
+        if (std.mem.eql(u8, response, "invalid") or std.mem.eql(u8, response, "invalid idx")) {
+            status = 404;
+        } else if (std.mem.eql(u8, response, "no disk") or std.mem.eql(u8, response, "not running") or std.mem.eql(u8, response, "off")) {
+            status = 400;
+        } else if (std.mem.eql(u8, response, "no vnc") or std.mem.eql(u8, response, "no spice")) {
+            status = 500;
+        } else if (std.mem.indexOf(u8, response, "err") != null or std.mem.indexOf(u8, response, "Err") != null) {
+            status = 500;
+        }
     }
 
     writeHttpResponse(conn, status, content_type, response);
@@ -535,7 +587,7 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
     return "no fb";
 }
 
-fn renderVmDetail(req: []const u8) ![]const u8 {
+fn renderVmDetail(req: []const u8, buf: []u8) []const u8 {
     const prefix = "GET /api/vm/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "{}";
     const rest = req[start + prefix.len ..];
@@ -543,7 +595,6 @@ fn renderVmDetail(req: []const u8) ![]const u8 {
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "{}";
     if (idx >= vm_count) return "{}";
     const v = &vms[idx];
-    var buf: [3072]u8 = undefined;
     var w: usize = 0;
 
     // First 32 fields
@@ -599,17 +650,22 @@ fn renderVmDetail(req: []const u8) ![]const u8 {
     return buf[0..w];
 }
 
-fn renderJson() ![]const u8 {
-    var json_buf: [24576]u8 = undefined;
+/// Render JSON into caller-provided buffer. Returns bytes written, or 0 on overflow.
+fn renderJson(buf: []u8) usize {
+    if (buf.len == 0) return 0;
     var w: usize = 0;
-    @memcpy(json_buf[w..][0..1], "[");
+    buf[w] = '[';
     w += 1;
     for (0..vm_count) |i| {
-        if (i > 0) { json_buf[w] = ','; w += 1; }
+        if (i > 0) {
+            if (w >= buf.len) return 0;
+            buf[w] = ',';
+            w += 1;
+        }
         const v = &vms[i];
 
         // First block: up through port_forwards
-        const part1 = std.fmt.bufPrint(json_buf[w..],
+        const part1 = std.fmt.bufPrint(buf[w..],
             \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
         , .{
             i, v.getNameSlice(), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
@@ -633,7 +689,7 @@ fn renderJson() ![]const u8 {
         w += part1.len;
 
         // Remaining fields
-        const part2 = std.fmt.bufPrint(json_buf[w..],
+        const part2 = std.fmt.bufPrint(buf[w..],
             \\,"mac":"{s}","mac_address":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"enable_kvm":{s},"embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
         , .{
             if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
@@ -659,9 +715,10 @@ fn renderJson() ![]const u8 {
         }) catch break;
         w += part2.len;
     }
-    json_buf[w] = ']';
+    if (w >= buf.len) return 0;
+    buf[w] = ']';
     w += 1;
-    return json_buf[0..w];
+    return w;
 }
 
 fn handlePower(req: []const u8) ![]const u8 {
@@ -1014,16 +1071,15 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-fn handleSnapshotList(req: []const u8) ![]const u8 {
+fn handleSnapshotList(req: []const u8, buf: []u8) []const u8 {
     const idx = parseIdx(req, "GET /api/snapshot/list/") orelse return "invalid";
     if (idx >= vm_count) return "invalid idx";
     const v = &vms[idx];
     if (!v.hasDisk()) return "no disk";
-    var buf: [4096]u8 = undefined;
     const n: usize = if (getVmmHandle(idx)) |h|
-        g_vmm.snapshotListFn(h, v.getDiskPathSlice(), &buf, std.heap.page_allocator) catch 0
+        g_vmm.snapshotListFn(h, v.getDiskPathSlice(), buf, std.heap.page_allocator) catch 0
     else
-        qemu.snapshotList(v.getDiskPathSlice(), &buf, std.heap.page_allocator) catch 0;
+        qemu.snapshotList(v.getDiskPathSlice(), buf, std.heap.page_allocator) catch 0;
     if (n > 0 and n <= buf.len) return buf[0..n];
     return "(none)";
 }
@@ -1145,7 +1201,7 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
     var len_buf: [32]u8 = undefined;
     const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{file_size}) catch "0";
     _ = c.write(conn, len_str.ptr, len_str.len);
-    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 25);
+    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 23);
 
     var buf: [65536]u8 = undefined;
     while (true) {
@@ -1286,7 +1342,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var len_buf: [32]u8 = undefined;
     const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{file_size}) catch "0";
     _ = c.write(conn, len_str.ptr, len_str.len);
-    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 25);
+    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 23);
 
     var buf: [65536]u8 = undefined;
     while (true) {
@@ -1316,7 +1372,7 @@ fn bodyVal(body: []const u8, key: []const u8) []const u8 {
     const pat = std.fmt.bufPrint(&pat_buf, "{s}=", .{key}) catch return "";
     if (std.mem.indexOf(u8, body, pat)) |idx| {
         const start = idx + pat.len;
-        const end = std.mem.indexOfScalar(u8, body[start..], '&') orelse body.len;
+        const end = std.mem.indexOfScalar(u8, body[start..], '&') orelse (body.len - start);
         return body[start .. start + end];
     }
     return "";
@@ -1367,301 +1423,9 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-const index_html =
-    \\<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    \\<title>KVMGUI</title><style>
-    \\*{margin:0;padding:0;box-sizing:border-box}body{font:14px system-ui;display:flex;height:100vh;background:#1e1f23;color:#e6e7ea}
-    \\aside{width:220px;background:#16171a;padding:10px;overflow-y:auto;display:flex;flex-direction:column}
-    \\aside h2{font-size:13px;color:#9aa1ab;margin:10px 0 5px;text-transform:uppercase;letter-spacing:1px}
-    \\aside .vm-item{padding:6px 8px;cursor:pointer;border-radius:4px;display:flex;align-items:center;gap:6px;font-size:13px}
-    \\aside .vm-item:hover{background:#2c2f36}.vm-item.active{background:#3b82f6;color:#fff}
-    \\main{flex:1;padding:20px;overflow-y:auto}
-    \\main h1{font-size:24px;margin-bottom:10px}.detail-row{display:flex;gap:10px;padding:6px 0;font-size:13px}
-    \\.detail-label{color:#9aa1ab;width:100px}.btn{padding:6px 14px;border:1px solid #3a3e46;background:#2c2f36;color:#e6e7ea;border-radius:5px;cursor:pointer;font-size:13px;margin-right:6px}
-    \\.btn:hover{background:#363a42}.btn.primary{background:#3b82f6;border-color:#3b82f6;color:#fff}
-    \\.btn.danger{background:#c0392b;border-color:#c0392b;color:#fff}
-    \\.toolbar{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
-    \\#serialpanel{display:none;background:#0a0a0a;border-radius:8px;margin-bottom:16px;padding:0;overflow:hidden}
-    \\#serialterm{width:100%;height:300px;background:#0a0a0a;color:#00ff66;font:13px 'Courier New',monospace;padding:8px;border:none;resize:none;outline:none;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
-    \\dialog{border:none;border-radius:8px;padding:20px;background:#1e1f23;color:#e6e7ea;width:400px}
-    \\dialog input,select{width:100%;padding:6px;margin:6px 0;background:#16171a;color:#e6e7ea;border:1px solid #3a3e46;border-radius:4px}
-    \\dialog .btn-row{display:flex;gap:6px;margin-top:12px;justify-content:flex-end}
-    \\#statusbar{position:fixed;bottom:0;left:0;right:0;padding:4px 12px;font-size:11px;background:#16171a;color:#9aa1ab}
-    \\</style></head><body>
-    \\<aside><h2>KVMGUI</h2><input id="search" placeholder="Filter VMs..." style="width:100%;padding:4px 8px;margin-bottom:8px;background:#2c2f36;color:#e6e7ea;border:1px solid #3a3e46;border-radius:4px;font-size:12px" oninput="filterList()"><div id="vmlist"></div>
-    \\<div style="margin-top:auto"><button class="btn primary" style="width:100%" onclick="newVm()">+ New VM</button></div></aside>
-    \\<main><div id="display" style="background:#000;border-radius:8px;margin-bottom:16px;display:none"><canvas id="fbcanvas" width="640" height="480" style="width:100%;max-height:400px"></canvas></div><div id="serialpanel"><textarea id="serialterm" readonly></textarea><div style="display:flex;gap:8px;padding:4px 8px"><button class="btn danger" onclick="manualDisconnectSerial()" style="font-size:11px;padding:2px 8px">Disconnect</button></div></div><div class="toolbar">
-    \\<button class="btn primary" onclick="newdlg.showModal()">+ New VM</button>
-    \\<button id="powerbtn" class="btn primary" onclick="powerToggle()">▶ Power On</button>
-    \\<button class="btn" onclick="pauseGuest()">Pause</button>
-    \\<button class="btn" onclick="resumeGuest()">Resume</button>
-    \\<button class="btn" onclick="shutdownGuest()">Shut Down</button>
-    \\<button class="btn" onclick="resetGuest()">Reset</button>
-    \\<button class="btn" onclick="suspendGuest()">Suspend</button>
-    \\<button class="btn" onclick="sendCad()">Ctrl+Alt+Del</button>
-    \\<button class="btn" onclick="editVm()">Settings</button>
-    \\<button class="btn" onclick="renameGuest()">Rename</button>
-    \\<button class="btn" onclick="cloneGuest()">Clone</button>
-    \\<button class="btn" onclick="importGuest()">Import</button>
-    \\<button class="btn" onclick="takeSnapshot()">Snapshot</button>
-    \\<button class="btn" onclick="exportOvf()">Export OVF</button>
-    \\<button class="btn" onclick="openVnets()">VNet Editor</button>
-    \\<button class="btn" onclick="openPrefs()">Preferences</button>
-    \\<button class="btn" onclick="batchStart()">▶ Start All</button>
-    \\<button class="btn danger" onclick="batchStop()">⏹ Stop All</button>
-    \\<button class="btn danger" onclick="deleteVm()">Delete</button>
-    \\</div><h1 id="vmname">Select a VM</h1>
-    \\<div id="details"></div></main>
-    \\<div id="statusbar">Ready</div>
-    \\<dialog id="newdlg"><h3>New Virtual Machine</h3>
-    \\<input id="n_name" placeholder="VM Name" value="New VM"><input id="n_mem" placeholder="Memory (MB)" type="number" value="2048">
-    \\<input id="n_cpu" placeholder="CPU Cores" type="number" value="2"><input id="n_disk" placeholder="Disk (GB)" type="number" value="20">
-    \\<div class="btn-row"><button class="btn" onclick="newdlg.close()">Cancel</button><button class="btn primary" onclick="createVm()">Create</button></div></dialog>
-    \\<dialog id="editdlg"><h3>Virtual Machine Settings</h3><div style="max-height:70vh;overflow-y:auto">
-    \\<label style="font-size:11px;color:#9aa1ab">Name</label><input id="e_name" placeholder="VM Name">
-    \\<label style="font-size:11px;color:#9aa1ab">Memory (MB)</label><input id="e_mem" type="number">
-    \\<label style="font-size:11px;color:#9aa1ab">CPU Cores</label><input id="e_cpu" type="number">
-    \\<label style="font-size:11px;color:#9aa1ab">Disk Size (GB)</label><input id="e_disk" type="number">
-    \\<label style="font-size:11px;color:#9aa1ab">Network</label><select id="e_network"><option value="user">NAT (User)</option><option value="bridge">Bridged</option><option value="none">None</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Firmware</label><select id="e_firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Shared Folder</label><input id="e_shared" placeholder="/host/path">
-    \\<label style="font-size:11px;color:#9aa1ab">USB Device</label><input id="e_usb" placeholder="vendorid:prodid">
-    \\<label style="font-size:11px;color:#9aa1ab">Guest Tools</label><select id="e_gt"><option value="0">No</option><option value="1">Yes</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">AutoProtect</label><select id="e_ap"><option value="0">Off</option><option value="1">On</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">AP Interval (min)</label><input id="e_apint" type="number" value="60">
-    \\<label style="font-size:11px;color:#9aa1ab">AP Max Snapshots</label><input id="e_apmax" type="number" value="10">
-    \\<label style="font-size:11px;color:#9aa1ab">Disk 2 Path</label><input id="e_d2path" placeholder="/path/to/disk2.qcow2">
-    \\<label style="font-size:11px;color:#9aa1ab">Disk 2 Size (GB)</label><input id="e_d2size" type="number" value="0">
-    \\<label style="font-size:11px;color:#9aa1ab">Floppy Path</label><input id="e_floppy" placeholder="/path/to/floppy.img">
-    \\<label style="font-size:11px;color:#9aa1ab">NIC 2</label><select id="e_nic2"><option value="none">None</option><option value="user">NAT</option><option value="bridge">Bridged</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">NIC 3</label><select id="e_nic3"><option value="none">None</option><option value="user">NAT</option><option value="bridge">Bridged</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Port Forwards</label><input id="e_pf" placeholder="tcp:2222::22,tcp:8080::80">
-    \\<label style="font-size:11px;color:#9aa1ab">Notes</label><input id="e_notes" placeholder="VM notes...">
-    \\<label style="font-size:11px;color:#9aa1ab">CPU Sockets</label><input id="e_cpu_sockets" type="number" value="1">
-    \\<label style="font-size:11px;color:#9aa1ab">Disk Format</label><select id="e_disk_format"><option value="0">QCOW2</option><option value="1">Raw</option><option value="2">VMDK</option><option value="3">VDI</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">ISO Path</label><input id="e_iso_path" placeholder="/path/to/boot.iso">
-    \\<label style="font-size:11px;color:#9aa1ab">MAC Address</label><input id="e_mac_address" placeholder="52:54:00:xx:xx:xx">
-    \\<label style="font-size:11px;color:#9aa1ab">NIC 2 MAC</label><input id="e_nic2_mac" placeholder="52:54:00:xx:xx:xx">
-    \\<label style="font-size:11px;color:#9aa1ab">NIC 3 MAC</label><input id="e_nic3_mac" placeholder="52:54:00:xx:xx:xx">
-    \\<label style="font-size:11px;color:#9aa1ab">Disk 2 Format</label><select id="e_disk2_format"><option value="0">QCOW2</option><option value="1">Raw</option><option value="2">VMDK</option><option value="3">VDI</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">3D Acceleration</label><select id="e_enable_3d"><option value="0">No</option><option value="1">Yes</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">GPU Device</label><select id="e_gpu_device"><option value="0">Virtio-GPU (virgl)</option><option value="1">Virtio-VGA (virgl)</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Display</label><select id="e_display"><option value="0">GTK</option><option value="1">SDL</option><option value="2">SPICE</option><option value="3">VNC</option><option value="4">None (headless)</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Display Resolution</label><select id="e_display_resolution"><option value="0">Auto</option><option value="1">800x600</option><option value="2">1024x768</option><option value="3">1280x800</option><option value="4">1920x1080</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Guest OS</label><select id="e_guest_os"><option value="0">Linux</option><option value="1">Microsoft Windows</option><option value="2">FreeBSD</option><option value="3">Apple macOS</option><option value="4">Other</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Audio</label><select id="e_audio"><option value="0">None</option><option value="1">Intel HDA</option><option value="2">AC97</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Boot Order</label><select id="e_boot_order"><option value="0">Hard Disk</option><option value="1">CD/DVD</option><option value="2">Network (PXE)</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">KVM Acceleration</label><select id="e_enable_kvm"><option value="0">No</option><option value="1">Yes</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Embed Display</label><select id="e_embed_display"><option value="0">No</option><option value="1">Yes</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">VNC Port</label><input id="e_vnc_port" type="number" value="5901">
-    \\<label style="font-size:11px;color:#9aa1ab">SPICE Port</label><input id="e_spice_port" type="number" value="5900">
-    \\<label style="font-size:11px;color:#9aa1ab">Serial Console</label><select id="e_enable_serial"><option value="0">No</option><option value="1">Yes</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Num Displays</label><input id="e_num_displays" type="number" value="1">
-    \\<label style="font-size:11px;color:#9aa1ab">Favorite</label><select id="e_favorite"><option value="0">No</option><option value="1">Yes</option></select>
-    \\</div><div class="btn-row"><button class="btn" onclick="editdlg.close()">Cancel</button><button class="btn primary" onclick="saveVm()">Save</button></div></dialog>
-    \\<dialog id="snapdlg"><h3>Snapshots</h3>
-    \\<div style="margin-bottom:10px"><input id="s_tag" placeholder="Snapshot tag" style="width:60%"><button class="btn primary" onclick="takeSnapshotFromDlg()" style="width:35%">Take</button></div>
-    \\<div id="snaplist" style="max-height:300px;overflow-y:auto;font-size:13px"><div style="color:#666">Loading...</div></div>
-    \\<div class="btn-row"><button class="btn" onclick="snapdlg.close()">Close</button></div></dialog>
-    \\<dialog id="clonedlg"><h3>Clone VM</h3>
-    \\<p style="margin-bottom:12px;color:#9aa1ab">Choose clone type for <strong id="clone_name"></strong></p>
-    \\<div class="btn-row"><button class="btn" onclick="doClone(0)">Full Clone</button><button class="btn primary" onclick="doClone(1)">Linked Clone</button><button class="btn" onclick="clonedlg.close()">Cancel</button></div></dialog>
-    \\<dialog id="vnetdlg"><h3>Virtual Network Editor</h3>
-    \\<div style="display:flex;gap:10px"><div style="width:40%"><select id="vnet_sel" size="8" style="width:100%;height:200px;background:#16171a;color:#e6e7ea;border:1px solid #3a3e46;border-radius:4px" onchange="onVnetSelect()"></select>
-    \\<div class="btn-row"><button class="btn" onclick="vnetAdd()">Add</button><button class="btn danger" onclick="vnetRemove()">Remove</button><button class="btn" onclick="vnetDefaults()">Use Defaults</button></div></div>
-    \\<div style="width:60%"><label style="font-size:11px;color:#9aa1ab">Name</label><input id="vn_name">
-    \\<label style="font-size:11px;color:#9aa1ab">Type</label><select id="vn_type"><option value="bridged">Bridged</option><option value="nat">NAT</option><option value="host_only">Host-only</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Subnet</label><input id="vn_subnet" placeholder="192.168.0.0">
-    \\<label style="font-size:11px;color:#9aa1ab">Mask</label><input id="vn_mask" placeholder="255.255.255.0">
-    \\<label style="font-size:11px;color:#9aa1ab">DHCP</label><select id="vn_dhcp"><option value="0">No</option><option value="1">Yes</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">DHCP Start</label><input id="vn_dstart" placeholder="192.168.0.128">
-    \\<label style="font-size:11px;color:#9aa1ab">DHCP End</label><input id="vn_dend" placeholder="192.168.0.254">
-    \\<label style="font-size:11px;color:#9aa1ab">Host Interface</label><input id="vn_iface" placeholder="eth0 (bridged only)">
-    \\<label style="font-size:11px;color:#9aa1ab">Gateway (NAT only)</label><input id="vn_gw" placeholder="192.168.0.1">
-    \\<label style="font-size:11px;color:#9aa1ab">Port Forwards</label><input id="vn_pf" placeholder="2222:192.168.0.128:22">
-    \\<div class="btn-row"><button class="btn" onclick="vnetSaveCurrent()">Apply Changes</button></div></div></div>
-    \\<div class="btn-row"><button class="btn primary" onclick="vnetSaveAll()">Save & Close</button><button class="btn" onclick="vnetdlg.close()">Cancel</button></div></dialog>
-    \\<dialog id="prefsdlg"><h3>Preferences</h3>
-    \\<label style="font-size:11px;color:#9aa1ab">Theme</label><select id="p_theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">Default Memory (MB)</label><input id="p_mem" type="number" value="2048">
-    \\<label style="font-size:11px;color:#9aa1ab">Default CPU Cores</label><input id="p_cpu" type="number" value="2">
-    \\<label style="font-size:11px;color:#9aa1ab">AutoProtect</label><select id="p_ap"><option value="0">Off</option><option value="1">On</option></select>
-    \\<label style="font-size:11px;color:#9aa1ab">AutoProtect Interval (min)</label><input id="p_apint" type="number" value="60">
-    \\<label style="font-size:11px;color:#9aa1ab">AutoProtect Max Snapshots</label><input id="p_apmax" type="number" value="10">
-    \\<div class="btn-row"><button class="btn" onclick="prefsdlg.close()">Cancel</button><button class="btn primary" onclick="savePrefs()">Save</button></div></dialog>
-    \\<script>
-    \\let vms=[]; let sel=null;
-    \\function setStatus(s){document.getElementById('statusbar').textContent=s;}
-    \\async function apiPost(url,body){try{const r=await fetch(url,{method:'POST',body});if(!r.ok)throw new Error(r.status);return r;}catch(e){setStatus('Error: '+e.message);return null;}}
-    \\async function refresh(){try{const r=await fetch('/api/vms');if(!r.ok)return;vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){}}
-    \\function filterList(){const f=document.getElementById('search').value.toLowerCase();renderList(f);}
-    \\function renderList(filter){const e=document.getElementById('vmlist');const f=(filter||'').toLowerCase();let h='';
-    \\const viz=vms.map((v,i)=>({i,show:!f||v.name.toLowerCase().includes(f),fav:v.favorite==='true',v}));
-    \\let hasFavs=false,hasNon=false;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;}
-    \\for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
-    \\const color=x.v.status==='running'?'#22c55e':x.v.status==='paused'?'#f97316':x.v.status==='suspended'?'#eab308':'#9aa1ab';
-    \\const icon=x.v.status==='running'?'▶':x.v.status==='paused'?'⏸':'  ';
-    \\h+=`<div class="vm-item${sel===x.i?' active':''}" onclick="select(${x.i})"><span style="color:${color};font-weight:bold">${icon}</span> ${x.v.name}<span style="margin-left:auto;cursor:pointer;color:#fbbf24" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}
-    \\if(hasFavs&&hasNon)h+='<div style="color:#555;font-size:11px;padding:4px 8px;border-bottom:1px solid #333;margin:4px 0">──────────</div>';
-    \\if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
-    \\const color=x.v.status==='running'?'#22c55e':x.v.status==='paused'?'#f97316':x.v.status==='suspended'?'#eab308':'#9aa1ab';
-    \\const icon=x.v.status==='running'?'▶':x.v.status==='paused'?'⏸':'  ';
-    \\h+=`<div class="vm-item${sel===x.i?' active':''}" onclick="select(${x.i})"><span style="color:${color};font-weight:bold">${icon}</span> ${x.v.name}<span style="margin-left:auto;cursor:pointer;color:#555" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}}
-    \\e.innerHTML=h||'<div style="color:#666;font-size:12px">No VMs</div>';
-    \\let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
-    \\let parts=cnt+' virtual machine(s)';if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
-    \\if(sel!==null&&sel<vms.length){const v=vms[sel];document.getElementById('statusbar').textContent=v.name+' — '+v.status+'    |    '+parts;}
-    \\else document.getElementById('statusbar').textContent=parts;}
-    \\async function toggleFavorite(i){if(i>=vms.length)return;const v=vms[i];const fav=v.favorite==='true'?'0':'1';
-    \\const r=await apiPost('/api/save/'+i,'favorite='+fav);if(r){v.favorite=fav==='1'?'true':'false';renderList();if(sel===i)renderDetails();}}
-    \\function select(i){sel=i;renderList();renderDetails();}
-    \\function renderDetails(){if(sel===null||sel>=vms.length){document.getElementById('vmname').textContent='Select a VM';document.getElementById('details').innerHTML='';return;}
-    \\const v=vms[sel];const sc=v.status==='running'?'#22c55e':v.status==='paused'?'#f97316':v.status==='suspended'?'#eab308':'#9aa1ab';
-    \\document.getElementById('vmname').textContent=v.name;
-    \\let h=`<div class="detail-row"><span class="detail-label">State</span><span style="color:${sc};font-weight:bold">${v.status}</span></div>`;
-    \\h+=`<div class="detail-row"><span class="detail-label">Guest OS</span>${v.os}</div>`;
-    \\h+=`<div class="detail-row"><span class="detail-label">Memory</span>${v.mem} MB</div>`;
-    \\h+=`<div class="detail-row"><span class="detail-label">CPU</span>${v.cpu} cores</div>`;
-    \\h+=`<div class="detail-row"><span class="detail-label">Hard Disk</span>${v.disk} GB (${v.fw})</div>`;
-    \\h+=`<div class="detail-row"><span class="detail-label">Network</span>${v.net}</div>`;
-    \\if(v.mac)h+=`<div class="detail-row"><span class="detail-label">MAC</span>${v.mac}</div>`;
-    \\if(v.nic2_mode&&v.nic2_mode!=='none')h+=`<div class="detail-row"><span class="detail-label">NIC 2</span>${v.nic2_mode}</div>`;
-    \\if(v.nic3_mode&&v.nic3_mode!=='none')h+=`<div class="detail-row"><span class="detail-label">NIC 3</span>${v.nic3_mode}</div>`;
-    \\if(v.shared_folder)h+=`<div class="detail-row"><span class="detail-label">Shared Folder</span>${v.shared_folder}</div>`;
-    \\if(v.usb_device)h+=`<div class="detail-row"><span class="detail-label">USB Device</span>${v.usb_device}</div>`;
-    \\if(v.guest_tools==='true')h+=`<div class="detail-row"><span class="detail-label">Guest Tools</span>✓ installed</div>`;
-    \\if(v.autoprotect==='true')h+=`<div class="detail-row"><span class="detail-label">AutoProtect</span>every ${v.autoprotect_interval} min, keep ${v.autoprotect_max}</div>`;
-    \\if(v.hasDisk2==='true')h+=`<div class="detail-row"><span class="detail-label">Disk 2</span>${v.disk2_size} GB</div>`;
-    \\if(v.hasFloppy==='true')h+=`<div class="detail-row"><span class="detail-label">Floppy</span>attached</div>`;
-    \\if(v.port_forwards)h+=`<div class="detail-row"><span class="detail-label">Port Fwds</span>${v.port_forwards}</div>`;
-    \\if(v.notes)h+=`<div class="detail-row"><span class="detail-label">Notes</span>${v.notes}</div>`;
-    \\document.getElementById('details').innerHTML=h;updatePowerBtn();}
-    \\async function powerToggle(){if(sel===null)return;const r=await apiPost('/api/power/'+sel);if(r)refresh();}
-    \\async function shutdownGuest(){if(sel===null)return;const r=await apiPost('/api/shutdown/'+sel);if(r)setStatus('Shut down guest — ACPI power button sent.');}
-    \\async function resetGuest(){if(sel===null)return;const r=await apiPost('/api/reset/'+sel);if(r)setStatus('Reset guest — system_reset sent.');}
-    \\async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/pause/'+sel);if(r){refresh();setStatus('Paused guest — execution frozen.');}}
-    \\async function resumeGuest(){if(sel===null)return;const r=await apiPost('/api/resume/'+sel);if(r){refresh();setStatus('Resumed guest — execution continued.');}}
-    \\async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=prompt('Rename VM:',v.name);if(n&&n!==v.name){const r=await apiPost('/api/rename/'+sel,'name='+encodeURIComponent(n));if(r)refresh();}}
-    \\async function suspendGuest(){if(sel===null)return;const r=await apiPost('/api/suspend/'+sel);if(r){refresh();setStatus('Suspended VM to disk.');}}
-    \\async function cloneGuest(){if(sel===null)return;document.getElementById('clone_name').textContent=vms[sel].name;document.getElementById('clonedlg').showModal();}
-    \\async function doClone(linked){if(sel===null)return;document.getElementById('clonedlg').close();const body=linked?'linked=1':'';const r=await apiPost('/api/clone/'+sel,body);if(r){refresh();setStatus(linked?'Linked clone created.':'VM cloned.');}}
-    \\async function importGuest(){const p=prompt('Path to VM disk image (.qcow2):');if(p){const r=await apiPost('/api/import','path='+encodeURIComponent(p));if(r){refresh();setStatus('VM imported.');}}}
-    \\async function batchStart(){for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){await apiPost('/api/power/'+i);}}refresh();setStatus('Batch start complete.');}
-    \\async function batchStop(){for(let i=0;i<vms.length;i++){if(vms[i].status==='running'||vms[i].status==='paused'){await apiPost('/api/power/'+i);}}refresh();setStatus('Batch stop complete.');}
-    \\async function takeSnapshot(){if(sel===null)return;openSnapshots();}
-    \\async function takeSnapshotFromDlg(){if(sel===null)return;const t=document.getElementById('s_tag').value;if(!t){alert('Enter a tag name');return;}
-    \\const r=await apiPost('/api/snapshot/take/'+sel,'tag='+encodeURIComponent(t));if(r){document.getElementById('s_tag').value='';loadSnapshots();setStatus('Snapshot taken: '+t);}}
-    \\async function openSnapshots(){if(sel===null)return;document.getElementById('snapdlg').showModal();loadSnapshots();}
-    \\async function loadSnapshots(){if(sel===null)return;const r=await fetch('/api/snapshot/list/'+sel);const t=await r.text();
-    \\const el=document.getElementById('snaplist');if(!t||t==='(none)'){el.innerHTML='<div style="color:#666">No snapshots</div>';return;}
-    \\const lines=t.split('\\n');let h='';for(const ln of lines){if(!ln.trim())continue;if(/^\\s*(ID|Snapshot)\\s/.test(ln))continue;const parts=ln.trim().split(/\\s+/);const tag=parts[1]||ln;const rest=parts.slice(2).join(' ');
-    \\h+=`<div style="padding:4px 0;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center"><span title="${rest}">${tag}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" onclick="revertSnapshot('${tag}')">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" onclick="deleteSnapshot('${tag}')">Del</button></span></div>`;}
-    \\el.innerHTML=h;}
-    \\async function revertSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Revert to snapshot "'+tag+'"? This will discard current state.'))return;
-    \\const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);snapdlg.close();}}
-    \\async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Delete snapshot "'+tag+'"?'))return;
-    \\const r=await apiPost('/api/snapshot/delete/'+sel,'tag='+encodeURIComponent(tag));if(r){loadSnapshots();setStatus('Deleted snapshot: '+tag);}}
-    \\async function sendCad(){if(sel===null)return;const r=await apiPost('/api/cad/'+sel);if(r)setStatus('Ctrl+Alt+Del sent to guest.');}
-    \\async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/export/'+sel,{method:'POST',headers:{'X-API-Key':'kvmgui'}});if(!r.ok){setStatus('Export failed: '+r.status);return;}const blob=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=vms[sel].name+'.ova';a.click();setStatus('Export downloaded.');}catch(e){setStatus('Export error: '+e);}}
-    \\function updatePowerBtn(){const b=document.getElementById('powerbtn');if(sel===null||sel>=vms.length){b.textContent='▶ Power On';b.className='btn primary';return;}
-    \\const v=vms[sel];if(v.status==='running'||v.status==='paused'){b.textContent='⏹ Power Off';b.className='btn danger';}else{b.textContent='▶ Power On';b.className='btn primary';}}
-    \\function newVm(){document.getElementById('newdlg').showModal();}
-    \\async function createVm(){const n=document.getElementById('n_name').value;const m=document.getElementById('n_mem').value;
-    \\const c=document.getElementById('n_cpu').value;const d=document.getElementById('n_disk').value;
-    \\const r=await apiPost('/api/new','name='+encodeURIComponent(n)+'&mem='+m+'&cpu='+c+'&disk='+d);if(r){document.getElementById('newdlg').close();refresh();}}
-    \\async function deleteVm(){if(sel===null)return;if(!confirm('Delete this VM?'))return;const r=await apiPost('/api/delete/'+sel);if(r){sel=null;refresh();}}
-    \\function editVm(){if(sel===null)return;const v=vms[sel];
-    \\document.getElementById('e_name').value=v.name||'';document.getElementById('e_mem').value=v.mem||2048;
-    \\document.getElementById('e_cpu').value=v.cpu||2;document.getElementById('e_disk').value=v.disk||20;
-    \\document.getElementById('e_network').value=v.net||'user';document.getElementById('e_firmware').value=v.fw||'bios';
-    \\document.getElementById('e_shared').value=v.shared_folder||'';document.getElementById('e_usb').value=v.usb_device||'';
-    \\document.getElementById('e_gt').value=v.guest_tools==='true'?'1':'0';document.getElementById('e_ap').value=v.autoprotect==='true'?'1':'0';
-    \\document.getElementById('e_apint').value=v.autoprotect_interval||60;document.getElementById('e_apmax').value=v.autoprotect_max||10;
-    \\document.getElementById('e_d2path').value=v.disk2_path||'';document.getElementById('e_d2size').value=v.disk2_size||0;
-    \\document.getElementById('e_floppy').value=v.floppy_path||'';document.getElementById('e_nic2').value=v.nic2_mode||'none';
-    \\document.getElementById('e_nic3').value=v.nic3_mode||'none';document.getElementById('e_pf').value=v.port_forwards||'';
-    \\document.getElementById('e_notes').value=v.notes||'';
-    \\document.getElementById('e_cpu_sockets').value=v.cpu_sockets||1;document.getElementById('e_disk_format').value=v.disk_format||0;
-    \\document.getElementById('e_iso_path').value=v.iso_path||'';document.getElementById('e_mac_address').value=v.mac_address||'';
-    \\document.getElementById('e_disk2_format').value=v.disk2_format||0;document.getElementById('e_enable_3d').value=v.enable_3d==='true'?'1':'0';
-    \\document.getElementById('e_gpu_device').value=v.gpu_device||0;document.getElementById('e_display').value=v.display||0;
-    \\document.getElementById('e_display_resolution').value=v.display_resolution||0;document.getElementById('e_guest_os').value=v.guest_os||0;
-    \\document.getElementById('e_audio').value=v.audio||0;document.getElementById('e_boot_order').value=v.boot_order||0;
-    \\document.getElementById('e_enable_kvm').value=v.enable_kvm==='true'?'1':'0';document.getElementById('e_embed_display').value=v.embed_display==='true'?'1':'0';
-    \\document.getElementById('e_vnc_port').value=v.vnc_port||5900;document.getElementById('e_spice_port').value=v.spice_port||5901;
-    \\document.getElementById('e_enable_serial').value=v.enable_serial==='true'?'1':'0';document.getElementById('e_num_displays').value=v.num_displays||1;
-    \\document.getElementById('e_favorite').value=v.favorite==='true'?'1':'0';document.getElementById('e_nic2_mac').value=v.nic2_mac||'';
-    \\document.getElementById('e_nic3_mac').value=v.nic3_mac||'';document.getElementById('editdlg').showModal();}
-    \\async function saveVm(){if(sel===null)return;
-    \\const body=['name','mem','cpu','cpu_sockets','disk','disk_format','iso_path','mac_address','network','firmware','shared_folder','usb','guest_tools','autoprotect',
-    \\'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','nic2','nic2_mac','nic3','nic3_mac','portfw','notes',
-    \\'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order',
-    \\'enable_kvm','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite']
-    \\.map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
-    \\const r=await apiPost('/api/save/'+sel,body);if(r){document.getElementById('editdlg').close();refresh();}
-    \\// ── VNet Editor ──
-    \\let vnetsData=[],vnetIdx=-1;
-    \\async function openVnets(){await loadVnets();document.getElementById('vnetdlg').showModal();}
-    \\async function loadVnets(){const r=await fetch('/api/vnets');if(r.ok)vnetsData=await r.json();renderVnetList();}
-    \\function renderVnetList(){const sel=document.getElementById('vnet_sel');let h='';if(!vnetsData.networks)vnetsData={networks:[]};
-    \\for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const line=n.name+' — '+n.type;h+=`<option value="${i}"${i===vnetIdx?' selected':''}>${line}</option>`;}
-    \\sel.innerHTML=h;if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length)showVnetFields(vnetIdx);}
-    \\function onVnetSelect(){const s=document.getElementById('vnet_sel');vnetIdx=parseInt(s.value);if(vnetIdx>=0)showVnetFields(vnetIdx);}
-    \\function showVnetFields(i){const n=vnetsData.networks[i];if(!n)return;
-    \\document.getElementById('vn_name').value=n.name||'';document.getElementById('vn_type').value=n.type||'nat';
-    \\document.getElementById('vn_subnet').value=n.subnet||'';document.getElementById('vn_mask').value=n.mask||'';
-    \\document.getElementById('vn_dhcp').value=n.dhcp?'1':'0';document.getElementById('vn_dstart').value=n.dhcp_start||'';
-    \\document.getElementById('vn_dend').value=n.dhcp_end||'';document.getElementById('vn_iface').value=n.host_iface||'';
-    \\document.getElementById('vn_gw').value=n.gateway||'';document.getElementById('vn_pf').value=n.port_forwards||'';}
-    \\function vnetSaveCurrent(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;const n=vnetsData.networks[vnetIdx];
-    \\n.name=document.getElementById('vn_name').value;n.type=document.getElementById('vn_type').value;
-    \\n.subnet=document.getElementById('vn_subnet').value;n.mask=document.getElementById('vn_mask').value;
-    \\n.dhcp=document.getElementById('vn_dhcp').value==='1';n.dhcp_start=document.getElementById('vn_dstart').value;
-    \\n.dhcp_end=document.getElementById('vn_dend').value;n.host_iface=document.getElementById('vn_iface').value;
-    \\n.gateway=document.getElementById('vn_gw').value;n.port_forwards=document.getElementById('vn_pf').value;renderVnetList();}
-    \\function vnetAdd(){if(vnetsData.networks.length>=20)return;const n={name:'VMnet'+vnetsData.networks.length,type:'host_only',subnet:'192.168.100.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.100.128',dhcp_end:'192.168.100.254',host_iface:'',gateway:'',port_forwards:''};
-    \\vnetsData.networks.push(n);vnetIdx=vnetsData.networks.length-1;renderVnetList();}
-    \\function vnetRemove(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;vnetsData.networks.splice(vnetIdx,1);if(vnetIdx>=vnetsData.networks.length)vnetIdx=vnetsData.networks.length-1;renderVnetList();}
-    \\function vnetDefaults(){const def=[{name:'VMnet0',type:'bridged',subnet:'',mask:'',dhcp:false,dhcp_start:'',dhcp_end:'',host_iface:'auto',gateway:'',port_forwards:''},{name:'VMnet1',type:'host_only',subnet:'192.168.118.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.118.128',dhcp_end:'192.168.118.254',host_iface:'',gateway:'',port_forwards:''},{name:'VMnet8',type:'nat',subnet:'192.168.140.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.140.128',dhcp_end:'192.168.140.254',host_iface:'',gateway:'192.168.140.2',port_forwards:'2222:192.168.140.128:22'}];
-    \\vnetsData={networks:def};vnetIdx=0;renderVnetList();}
-    \\async function vnetSaveAll(){const r=await apiPost('/api/vnets/save',JSON.stringify(vnetsData));if(r){document.getElementById('vnetdlg').close();setStatus('VNet settings saved.');}}
-    \\// ── Preferences ──
-    \\async function openPrefs(){const r=await fetch('/api/config');const cfg=r.ok?await r.json():{};
-    \\document.getElementById('p_theme').value=cfg.theme||'system';document.getElementById('p_mem').value=cfg.default_memory_mb||2048;
-    \\document.getElementById('p_cpu').value=cfg.default_cpu_cores||2;document.getElementById('p_ap').value=cfg.autoprotect_enabled_default?'1':'0';
-    \\document.getElementById('p_apint').value=cfg.autoprotect_interval_min_default||60;document.getElementById('p_apmax').value=cfg.autoprotect_max_default||10;
-    \\document.getElementById('prefsdlg').showModal();}
-    \\async function savePrefs(){const body=['theme','default_memory_mb','default_cpu_cores','autoprotect_enabled','autoprotect_interval','autoprotect_max']
-    \\.map(id=>{const el=document.getElementById('p_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
-    \\const r=await apiPost('/api/config',body);if(r){document.getElementById('prefsdlg').close();setStatus('Preferences saved.');}}
-    \\refresh();
-    \\setInterval(refresh,5000);
-    \\// WebGPU/Canvas2D framebuffer display
-    \\let fbCanvas=document.getElementById('fbcanvas'),fbCtx=fbCanvas.getContext('2d'),fbInterval=null;
-    \\async function startFb(){if(sel===null){document.getElementById('display').style.display='none';if(fbInterval)clearInterval(fbInterval);return;}
-    \\document.getElementById('display').style.display='block';
-    \\if(fbInterval)clearInterval(fbInterval);fbInterval=setInterval(async()=>{if(sel===null||sel>=vms.length)return;const v=vms[sel];if(v.status!=='running')return;
-    \\try{const r=await fetch('/api/fb/'+sel);if(!r.ok)return;const buf=await r.arrayBuffer();if(buf.byteLength<100)return;const w=640,h=480;fbCanvas.width=w;fbCanvas.height=h;
-    \\const img=fbCtx.createImageData(w,h);const src=new Uint8Array(buf);const dst=img.data;for(let i=0;i<w*h;i++){const o=i*4;dst[o]=src[o+2];dst[o+1]=src[o+1];dst[o+2]=src[o];dst[o+3]=255;}
-    \\fbCtx.putImageData(img,0,0);}catch(e){}},200)};
-    \\setInterval(()=>{if(sel!==null&&sel<vms.length&&vms[sel].status==='running')startFb();},2000);
-    \\// Serial console
-    \\let serialWs=null,serialIdx=null,serialManualOff=false;
-    \\function startSerial(idx){if(serialManualOff)return;if(serialWs&&serialIdx===idx)return;stopSerial();
-    \\if(idx===null||idx>=vms.length)return;const v=vms[idx];if(v.status!=='running'||!v.hasSerial)return;
-    \\serialIdx=idx;const term=document.getElementById('serialterm');term.value='';document.getElementById('serialpanel').style.display='block';
-    \\const proto=location.protocol==='https:'?'wss:':'ws:';serialWs=new WebSocket(proto+'//'+location.host+'/ws/serial/'+idx);
-    \\serialWs.onmessage=e=>{term.value+=e.data;term.scrollTop=term.scrollHeight;};
-    \\serialWs.onclose=()=>{stopSerial();};
-    \\serialWs.onerror=()=>{stopSerial();};}
-    \\function stopSerial(){if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;document.getElementById('serialpanel').style.display='none';}
-    \\function manualDisconnectSerial(){serialManualOff=true;stopSerial();}
-    \\document.getElementById('serialterm').addEventListener('keydown',e=>{if(!serialWs||serialWs.readyState!==WebSocket.OPEN)return;
-    \\e.preventDefault();let s=e.key;if(e.key==='Enter')s='\r\n';else if(e.key==='Backspace')s='\x08';else if(e.key==='Tab')s='\t';
-    \\if(s.length===1||s==='\r\n'||s==='\x08'||s==='\t')serialWs.send(s);});
-    \\setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&serialIdx!==sel)serialManualOff=false;if(v.status==='running'&&v.hasSerial)startSerial(sel);else stopSerial();}},3000);
-    \\</script></body></html>
-;
+const index_html = @embedFile("index.html");
+const app_css = @embedFile("web/app.css");
+const app_js = @embedFile("web/app.js");
 
 /// Background thread: periodically take AutoProtect snapshots for VMs that have it enabled.
 fn autoprotectTicker() void {
@@ -1731,9 +1495,220 @@ fn autoprotectTicker() void {
     }
 }
 
+// ── Tests ──────────────────────────────────────────────────────────
+
+test "parseIdx: extracts numeric index from URL path" {
+    const req = "GET /api/power/42 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const idx = parseIdx(req, "/api/power/");
+    try std.testing.expect(idx != null);
+    try std.testing.expectEqual(@as(usize, 42), idx.?);
+}
+
+test "parseIdx: returns null when prefix not found" {
+    const req = "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const idx = parseIdx(req, "/api/power/");
+    try std.testing.expect(idx == null);
+}
+
+test "parseIdx: handles multi-digit index" {
+    const req = "GET /api/save/12345 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const idx = parseIdx(req, "/api/save/");
+    try std.testing.expectEqual(@as(usize, 12345), idx.?);
+}
+
+test "parseIdx: returns null on non-numeric index" {
+    const req = "GET /api/power/abc HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const idx = parseIdx(req, "/api/power/");
+    try std.testing.expect(idx == null);
+}
+
+test "getBody: extracts body after double CRLF" {
+    const req = "GET /api/save/0 HTTP/1.1\r\nHost: localhost\r\n\r\nname=foo&mem=2048";
+    const body = getBody(req);
+    try std.testing.expect(body != null);
+    try std.testing.expectEqualStrings("name=foo&mem=2048", body.?);
+}
+
+test "getBody: returns null when no body separator found" {
+    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost";
+    const body = getBody(req);
+    try std.testing.expect(body == null);
+}
+
+test "getBody: empty body after double CRLF" {
+    const req = "GET /api/power/0 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const body = getBody(req);
+    try std.testing.expect(body != null);
+    try std.testing.expectEqualStrings("", body.?);
+}
+
+test "bodyVal: extracts key=value from body" {
+    const body = "name=myvm&mem=2048&cpu=4";
+    try std.testing.expectEqualStrings("myvm", bodyVal(body, "name"));
+    try std.testing.expectEqualStrings("2048", bodyVal(body, "mem"));
+    try std.testing.expectEqualStrings("4", bodyVal(body, "cpu"));
+}
+
+test "bodyVal: returns empty string when key not found" {
+    const body = "name=myvm&mem=2048";
+    try std.testing.expectEqualStrings("", bodyVal(body, "nonexistent"));
+}
+
+test "bodyVal: handles last value without trailing &" {
+    const body = "name=test&disk=40";
+    try std.testing.expectEqualStrings("40", bodyVal(body, "disk"));
+}
+
+test "bodyVal: handles value with special characters" {
+    const body = "name=test%20vm&path=%2Ftmp%2Fdisk";
+    try std.testing.expectEqualStrings("test%20vm", bodyVal(body, "name"));
+    try std.testing.expectEqualStrings("%2Ftmp%2Fdisk", bodyVal(body, "path"));
+}
+
+test "bodyVal: handles single key=value pair" {
+    const body = "name=only";
+    try std.testing.expectEqualStrings("only", bodyVal(body, "name"));
+}
+
+test "bodyVal: handles empty body" {
+    const body = "";
+    try std.testing.expectEqualStrings("", bodyVal(body, "name"));
+}
+
+test "bodyVal: key with empty value returns empty string" {
+    const body = "name=&mem=2048";
+    try std.testing.expectEqualStrings("", bodyVal(body, "name"));
+}
+
+test "bodyVal: key at very end with empty value" {
+    const body = "name=test&key=";
+    try std.testing.expectEqualStrings("", bodyVal(body, "key"));
+}
+
+test "bodyVal: percent-encoded key name" {
+    const body = "na%6De=value&cpu=4";
+    try std.testing.expectEqualStrings("value", bodyVal(body, "na%6De"));
+    // percent-encoded key matches literally; raw key does not
+    try std.testing.expectEqualStrings("", bodyVal(body, "name"));
+}
+
+test "bodyVal: value containing equals sign" {
+    const body = "name=foo=bar&mem=1024";
+    try std.testing.expectEqualStrings("foo=bar", bodyVal(body, "name"));
+}
+
+test "bodyVal: value containing percent-encoded ampersand" {
+    const body = "name=foo%26bar&cpu=2";
+    try std.testing.expectEqualStrings("foo%26bar", bodyVal(body, "name"));
+}
+
+test "bodyVal: key prefix of another key" {
+    const body = "prefix=1&prefix2=2";
+    try std.testing.expectEqualStrings("1", bodyVal(body, "prefix"));
+    try std.testing.expectEqualStrings("2", bodyVal(body, "prefix2"));
+}
+
+test "bodyVal: long body near 4KB" {
+    var buf: [4096]u8 = undefined;
+    var pos: usize = 0;
+    // Build repeated filler pairs to fill most of the buffer
+    while (pos + 16 < buf.len - 30) {
+        @memcpy(buf[pos..][0..6], "fillr=");
+        pos += 6;
+        @memset(buf[pos..][0..6], 'x');
+        pos += 6;
+        buf[pos] = '&';
+        pos += 1;
+    }
+    // Append our target key at the end
+    @memcpy(buf[pos..][0..6], "last=1");
+    pos += 6;
+    const body = buf[0..pos];
+    try std.testing.expectEqualStrings("1", bodyVal(body, "last"));
+    // Also find a filler value
+    try std.testing.expectEqualStrings("xxxxxx", bodyVal(body, "fillr"));
+    // Key not present in a full buffer
+    try std.testing.expectEqualStrings("", bodyVal(body, "nonexistent"));
+}
+
+// ── Fuzz tests ──────────────────────────────────────────────────────
+
+test "fuzz: bodyVal never panics on random key=value bodies" {
+    var prng = std.Random.DefaultPrng.init(0xABCD_1234);
+    const rnd = prng.random();
+    var buf: [256]u8 = undefined;
+
+    const keys = [_][]const u8{ "name", "mem", "cpu", "disk", "net", "iso" };
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        var pos: usize = 0;
+        var first = true;
+        while (pos < buf.len - 40) {
+            if (!first) { buf[pos] = '&'; pos += 1; }
+            first = false;
+            const k = keys[rnd.uintLessThan(usize, keys.len)];
+            const kl = k.len;
+            @memcpy(buf[pos..][0..kl], k);
+            pos += kl;
+            buf[pos] = '=';
+            pos += 1;
+            const vlen = rnd.uintLessThan(usize, 20);
+            for (buf[pos..pos + vlen]) |*b| {
+                b.* = switch (rnd.uintLessThan(u8, 4)) {
+                    0 => rnd.intRangeAtMost(u8, 'a', 'z'),
+                    1 => rnd.intRangeAtMost(u8, 'A', 'Z'),
+                    2 => rnd.intRangeAtMost(u8, '0', '9'),
+                    3 => '%',
+                    else => unreachable,
+                };
+            }
+            pos += vlen;
+        }
+        const body = buf[0..pos];
+        for (keys) |k| {
+            _ = bodyVal(body, k);
+        }
+    }
+}
+
+test "fuzz: getBody never panics and returns valid suffix of input" {
+    var prng = std.Random.DefaultPrng.init(0xFEED_C0DE);
+    const rnd = prng.random();
+    var buf: [1024]u8 = undefined;
+
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        if (getBody(buf[0..len])) |body| {
+            try std.testing.expect(body.len <= len);
+        }
+    }
+}
+
+test "fuzz: parseIdx never panics on random URL-like input" {
+    var prng = std.Random.DefaultPrng.init(0x1337_CAFE);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+
+    const prefixes = [_][]const u8{ "/api/power/", "/api/save/", "/api/delete/", "/api/clone/" };
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        for (prefixes) |pfx| {
+            _ = parseIdx(buf[0..len], pfx);
+        }
+    }
+}
+
 pub fn main() !void {
     vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
     g_vmm = hv_backend.createVmm(.auto);
+
+    const port: u16 = if (appio.getenv("KV_PORT")) |env| blk: {
+        break :blk std.fmt.parseInt(u16, env, 10) catch 9080;
+    } else 9080;
 
     const sock = c.socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return;
@@ -1744,7 +1719,7 @@ pub fn main() !void {
 
     // Bind to 0.0.0.0 — accessible locally and remotely
     const bind_ip: u32 = (@as(u32, BIND_ADDR[0]) << 24) | (@as(u32, BIND_ADDR[1]) << 16) | (@as(u32, BIND_ADDR[2]) << 8) | @as(u32, BIND_ADDR[3]);
-    var addr: c.sockaddr.in = .{ .family = AF_INET, .port = std.mem.nativeToBig(u16, PORT), .addr = std.mem.nativeToBig(u32, bind_ip), .zero = [_]u8{0} ** 8 };
+    var addr: c.sockaddr.in = .{ .family = AF_INET, .port = std.mem.nativeToBig(u16, port), .addr = std.mem.nativeToBig(u32, bind_ip), .zero = [_]u8{0} ** 8 };
     if (c.bind(sock, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) != 0) return;
     if (c.listen(sock, 10) != 0) return;
 
@@ -1762,7 +1737,7 @@ pub fn main() !void {
 
     std.debug.print("\n╔══════════════════════════════════════════════╗\n", .{});
     std.debug.print("║  KVMGUI Daemon v1.0                         ║\n", .{});
-    std.debug.print("║  TCP:   http://0.0.0.0:{d}                 ║\n", .{PORT});
+    std.debug.print("║  TCP:   http://0.0.0.0:{d}                 ║\n", .{port});
     std.debug.print("║  Unix:  unix://{s}       ║\n", .{unix_path});
     std.debug.print("║  Health: GET /api/health                    ║\n", .{});
     std.debug.print("╚══════════════════════════════════════════════╝\n\n", .{});
