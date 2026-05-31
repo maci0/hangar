@@ -9,6 +9,7 @@ const qmp = @import("qmp.zig");
 const vnc = @import("vnc_client.zig");
 const spice = @import("spice_client.zig");
 const ws = @import("ws.zig");
+const usock = @import("usock.zig");
 const hv_iface = @import("hv/interface.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
 const appio = @import("appio.zig");
@@ -75,6 +76,12 @@ fn serveHtml(conn: c.fd_t) void {
     // ── WebSocket VNC Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/vnc/")) {
         handleWsVnc(conn, req) catch {};
+        return;
+    }
+
+    // ── WebSocket Serial Console ──
+    if (std.mem.startsWith(u8, req, "GET /ws/serial/")) {
+        handleWsSerial(conn, req) catch {};
         return;
     }
 
@@ -253,6 +260,79 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
     ws2vnc.join();
 }
 
+/// Handle WebSocket Serial Console proxy request.
+/// Upgrades the connection to WebSocket, connects to the VM's serial
+/// Unix socket, and spawns bidirectional relay threads.
+fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
+    // Parse VM index from URL: GET /ws/serial/<idx>
+    const prefix = "GET /ws/serial/";
+    const start = std.mem.indexOf(u8, req, prefix) orelse return;
+    const rest = req[start + prefix.len ..];
+    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
+    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
+    if (idx >= vm_count) return;
+    const v = &vms[idx];
+    if (!v.isAlive() or !v.enable_serial or !v.hasName()) return;
+
+    // Perform WebSocket upgrade handshake.
+    const accept_key = ws.parseUpgrade(req) orelse return;
+    try ws.writeUpgradeResponse(conn, accept_key);
+
+    // Connect to the VM's serial Unix socket.
+    var sock_buf: [256]u8 = undefined;
+    const sock_path = std.fmt.bufPrintZ(
+        &sock_buf,
+        "/tmp/kvmgui-serial-{s}.sock",
+        .{v.getNameSlice()},
+    ) catch return;
+
+    const serial = usock.UnixStream.connect(sock_path) catch return;
+    defer serial.close();
+
+    // Spawn threads for bidirectional relay.
+    const RelayCtx = struct {
+        ws_fd: c.fd_t,
+        serial_fd: c.fd_t,
+    };
+    var ctx = RelayCtx{ .ws_fd = conn, .serial_fd = serial.fd };
+
+    // Thread: serial → WebSocket
+    const ser2ws = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+        fn run(ctx_ptr: *RelayCtx) void {
+            var buf: [65536]u8 = undefined;
+            while (true) {
+                const n = c.read(ctx_ptr.serial_fd, &buf, buf.len);
+                if (n <= 0) break;
+                ws.writeFrame(ctx_ptr.ws_fd, .text, buf[0..@intCast(n)]) catch break;
+            }
+            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_WR);
+        }
+    }.run, .{&ctx});
+
+    // Thread: WebSocket → serial
+    const ws2ser = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+        fn run(ctx_ptr: *RelayCtx) void {
+            var buf: [65536]u8 = undefined;
+            while (true) {
+                const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
+                if (hdr.opcode == .close) break;
+                if (hdr.opcode == .ping) {
+                    ws.writePong(ctx_ptr.ws_fd) catch break;
+                    continue;
+                }
+                if (hdr.opcode == .pong) continue;
+                const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
+                if (rlen == 0) continue;
+                _ = c.write(ctx_ptr.serial_fd, buf[0..rlen].ptr, rlen);
+            }
+            _ = c.shutdown(ctx_ptr.serial_fd, SHUT_WR);
+        }
+    }.run, .{&ctx});
+
+    ser2ws.join();
+    ws2ser.join();
+}
+
 fn renderFramebuffer(req: []const u8) ![]const u8 {
     // GET /api/fb/N — return the framebuffer for VM N as a valid BMP image
     const prefix = "GET /api/fb/";
@@ -314,14 +394,18 @@ fn renderVmDetail(req: []const u8) ![]const u8 {
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "{}";
     if (idx >= vm_count) return "{}";
     const v = &vms[idx];
-    var buf: [1536]u8 = undefined;
-    const json = std.fmt.bufPrint(&buf,
-        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"disk":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}","mac":"{s}","nic2_mode":"{s}","nic3_mode":"{s}","num_displays":{d}}}
+    var buf: [3072]u8 = undefined;
+    var w: usize = 0;
+
+    // First 32 fields
+    const part1 = std.fmt.bufPrint(buf[w..],
+        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
     , .{
         idx, v.getNameSlice(), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
-        v.memory_mb, v.cpu_cores, v.disk_size_gb,
+        v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(),
         std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
         if (v.hasIso()) "true" else "false", if (v.hasDisk()) "true" else "false",
+        if (v.hasIso()) v.getIsoPathSlice() else "",
         if (v.hasNotes()) v.getNotesSlice() else "",
         if (v.hasSharedFolder()) v.getSharedFolderSlice() else "",
         if (v.hasUsbDevice()) v.getUsbDeviceSlice() else "",
@@ -330,32 +414,60 @@ fn renderVmDetail(req: []const u8) ![]const u8 {
         v.autoprotect_interval_min, v.autoprotect_max,
         if (v.hasDisk2()) "true" else "false", v.disk2_size_gb,
         if (v.hasDisk2()) v.getDisk2PathSlice() else "",
+        v.disk2_format.toIndex(),
         if (v.hasFloppy()) "true" else "false",
         if (v.hasFloppy()) v.getFloppyPathSlice() else "",
         if (v.hasPortForwards()) v.getPortForwardsSlice() else "",
+    }) catch return "{}";
+    w += part1.len;
+
+    // Remaining fields
+    const part2 = std.fmt.bufPrint(buf[w..],
+        \\,"mac":"{s}","mac_address":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"enable_kvm":{s},"embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+    , .{
+        if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
         if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
         std.mem.span(v.nics[1].mode.toStr()),
+        if (v.nics[1].mac_len > 0) v.getNic2MacSlice() else "",
         std.mem.span(v.nics[2].mode.toStr()),
+        if (v.nics[2].mac_len > 0) v.getNic3MacSlice() else "",
         v.num_displays,
+        if (v.enable_serial) "true" else "false",
+        if (v.enable_3d) "true" else "false",
+        v.gpu_device.toIndex(),
+        v.display.toIndex(),
+        v.display_resolution.toIndex(),
+        v.guest_os.toIndex(),
+        v.audio.toIndex(),
+        v.boot_order.toIndex(),
+        if (v.enable_kvm) "true" else "false",
+        if (v.embed_display) "true" else "false",
+        v.vnc_port,
+        v.spice_port,
+        if (v.favorite) "true" else "false",
     }) catch return "{}";
-    return buf[0..json.len];
+    w += part2.len;
+    return buf[0..w];
 }
 
 fn renderJson() ![]const u8 {
-    var json_buf: [16384]u8 = undefined;
+    var json_buf: [24576]u8 = undefined;
     var w: usize = 0;
     @memcpy(json_buf[w..][0..1], "[");
     w += 1;
     for (0..vm_count) |i| {
         if (i > 0) { json_buf[w] = ','; w += 1; }
         const v = &vms[i];
-        const entry = std.fmt.bufPrint(json_buf[w..],
-            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"disk":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}","mac":"{s}","nic2_mode":"{s}","nic3_mode":"{s}","num_displays":{d}}}
+
+        // First block: up through port_forwards
+        const part1 = std.fmt.bufPrint(json_buf[w..],
+            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
         , .{
             i, v.getNameSlice(), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
-            v.memory_mb, v.cpu_cores, v.disk_size_gb,
+            v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(),
             std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
             if (v.hasIso()) "true" else "false", if (v.hasDisk()) "true" else "false",
+            if (v.hasIso()) v.getIsoPathSlice() else "",
             if (v.hasNotes()) v.getNotesSlice() else "",
             if (v.hasSharedFolder()) v.getSharedFolderSlice() else "",
             if (v.hasUsbDevice()) v.getUsbDeviceSlice() else "",
@@ -364,15 +476,39 @@ fn renderJson() ![]const u8 {
             v.autoprotect_interval_min, v.autoprotect_max,
             if (v.hasDisk2()) "true" else "false", v.disk2_size_gb,
             if (v.hasDisk2()) v.getDisk2PathSlice() else "",
+            v.disk2_format.toIndex(),
             if (v.hasFloppy()) "true" else "false",
             if (v.hasFloppy()) v.getFloppyPathSlice() else "",
             if (v.hasPortForwards()) v.getPortForwardsSlice() else "",
+        }) catch break;
+        w += part1.len;
+
+        // Remaining fields
+        const part2 = std.fmt.bufPrint(json_buf[w..],
+            \\,"mac":"{s}","mac_address":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"enable_kvm":{s},"embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+        , .{
+            if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
             if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
             std.mem.span(v.nics[1].mode.toStr()),
+            if (v.nics[1].mac_len > 0) v.getNic2MacSlice() else "",
             std.mem.span(v.nics[2].mode.toStr()),
+            if (v.nics[2].mac_len > 0) v.getNic3MacSlice() else "",
             v.num_displays,
+            if (v.enable_serial) "true" else "false",
+            if (v.enable_3d) "true" else "false",
+            v.gpu_device.toIndex(),
+            v.display.toIndex(),
+            v.display_resolution.toIndex(),
+            v.guest_os.toIndex(),
+            v.audio.toIndex(),
+            v.boot_order.toIndex(),
+            if (v.enable_kvm) "true" else "false",
+            if (v.embed_display) "true" else "false",
+            v.vnc_port,
+            v.spice_port,
+            if (v.favorite) "true" else "false",
         }) catch break;
-        w += entry.len;
+        w += part2.len;
     }
     json_buf[w] = ']';
     w += 1;
@@ -713,6 +849,8 @@ const index_html =
     \\.btn:hover{background:#363a42}.btn.primary{background:#3b82f6;border-color:#3b82f6;color:#fff}
     \\.btn.danger{background:#c0392b;border-color:#c0392b;color:#fff}
     \\.toolbar{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+    \\#serialpanel{display:none;background:#0a0a0a;border-radius:8px;margin-bottom:16px;padding:0;overflow:hidden}
+    \\#serialterm{width:100%;height:300px;background:#0a0a0a;color:#00ff66;font:13px 'Courier New',monospace;padding:8px;border:none;resize:none;outline:none;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
     \\dialog{border:none;border-radius:8px;padding:20px;background:#1e1f23;color:#e6e7ea;width:400px}
     \\dialog input,select{width:100%;padding:6px;margin:6px 0;background:#16171a;color:#e6e7ea;border:1px solid #3a3e46;border-radius:4px}
     \\dialog .btn-row{display:flex;gap:6px;margin-top:12px;justify-content:flex-end}
@@ -720,7 +858,7 @@ const index_html =
     \\</style></head><body>
     \\<aside><h2>KVMGUI</h2><input id="search" placeholder="Filter VMs..." style="width:100%;padding:4px 8px;margin-bottom:8px;background:#2c2f36;color:#e6e7ea;border:1px solid #3a3e46;border-radius:4px;font-size:12px" oninput="filterList()"><div id="vmlist"></div>
     \\<div style="margin-top:auto"><button class="btn primary" style="width:100%" onclick="newVm()">+ New VM</button></div></aside>
-    \\<main><div id="display" style="background:#000;border-radius:8px;margin-bottom:16px;display:none"><canvas id="fbcanvas" width="640" height="480" style="width:100%;max-height:400px"></canvas></div><div class="toolbar">
+    \\<main><div id="display" style="background:#000;border-radius:8px;margin-bottom:16px;display:none"><canvas id="fbcanvas" width="640" height="480" style="width:100%;max-height:400px"></canvas></div><div id="serialpanel"><textarea id="serialterm" readonly></textarea></div><div class="toolbar">
     \\<button id="powerbtn" class="btn primary" onclick="powerToggle()">▶ Power On</button>
     \\<button class="btn" onclick="shutdownGuest()">Shut Down</button>
     \\<button class="btn" onclick="resetGuest()">Reset</button>
@@ -824,6 +962,20 @@ const index_html =
     \\const img=fbCtx.createImageData(w,h);const src=new Uint8Array(buf);const dst=img.data;for(let i=0;i<w*h;i++){const o=i*4;dst[o]=src[o+2];dst[o+1]=src[o+1];dst[o+2]=src[o];dst[o+3]=255;}
     \\fbCtx.putImageData(img,0,0);}catch(e){}},200)};
     \\setInterval(()=>{if(sel!==null&&sel<vms.length&&vms[sel].status==='running')startFb();},2000);
+    \\// Serial console
+    \\let serialWs=null,serialIdx=null;
+    \\function startSerial(idx){if(serialWs&&serialIdx===idx)return;stopSerial();
+    \\if(idx===null||idx>=vms.length)return;const v=vms[idx];if(v.status!=='running'||!v.hasSerial)return;
+    \\serialIdx=idx;const term=document.getElementById('serialterm');term.value='';document.getElementById('serialpanel').style.display='block';
+    \\const proto=location.protocol==='https:'?'wss:':'ws:';serialWs=new WebSocket(proto+'//'+location.host+'/ws/serial/'+idx);
+    \\serialWs.onmessage=e=>{term.value+=e.data;term.scrollTop=term.scrollHeight;};
+    \\serialWs.onclose=()=>{stopSerial();};
+    \\serialWs.onerror=()=>{stopSerial();};}
+    \\function stopSerial(){if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;document.getElementById('serialpanel').style.display='none';}
+    \\document.getElementById('serialterm').addEventListener('keydown',e=>{if(!serialWs||serialWs.readyState!==WebSocket.OPEN)return;
+    \\e.preventDefault();let s=e.key;if(e.key==='Enter')s='\r\n';else if(e.key==='Backspace')s='\x08';else if(e.key==='Tab')s='\t';
+    \\if(s.length===1||s==='\r\n'||s==='\x08'||s==='\t')serialWs.send(s);});
+    \\setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms[sel];if(v.status==='running'&&v.hasSerial)startSerial(sel);else stopSerial();}},3000);
     \\</script></body></html>
 ;
 

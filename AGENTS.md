@@ -39,8 +39,7 @@ DISPLAY=:99 ./zig-out/bin/kvmgui &
 
 ```
 src/
-  main.zig          FLTK frontend — all GUI, callbacks, dialogs (monolith, ~1905 lines)
-  main_fltk.zig     Earlier/simpler FLTK implementation (fewer features)
+  main.zig          FLTK frontend — all GUI, callbacks, dialogs (monolith)
   web_server.zig    Standalone HTTP daemon with embedded HTML/CSS/JS UI (port 9080)
   vm.zig            VM config model, enums (DiskFormat, GuestOs, VmStatus, ...)
   vnet.zig          Virtual switch model (VMnet0..N: type/subnet/DHCP) + own JSON store
@@ -62,8 +61,8 @@ src/
   autoprotect.zig   AutoProtect snapshot scheduling logic
   transport.zig     Transport abstraction (Unix/TCP/SHM) for client↔daemon
   vmrun.zig         CLI tool for remote VM management (vmrun list/start/stop/...)
-  display.zig       IUP-heritage VNC/SPICE display (not used by FLTK frontend)
-  serial.zig        IUP-heritage serial console (not used by FLTK frontend)
+  dialogs.zig       Modal dialogs: prefs, VNet editor, about, OVF export, remote connect
+  display.zig       VNC/SPICE framebuffer rendering onto FLTK Fl_RGB_Image (Display tab)
   hv/
     interface.zig   Hypervisor abstraction interface (Vmm dispatch table)
     qemu_backend.zig  QEMU backend implementing the Vmm interface

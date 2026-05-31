@@ -1,104 +1,26 @@
-//! KVMGUI — FLTK Frontend (full VM management with callbacks)
+//! KVMGUI — FLTK Frontend (VM operation callbacks, remaining dialogs, main loop)
 const std = @import("std");
 const vm = @import("vm.zig");
+const vnet = @import("vnet.zig");
 const persist = @import("persist.zig");
 const qemu = @import("qemu.zig");
 const vnc = @import("vnc_client.zig");
 const spice = @import("spice_client.zig");
-const usock = @import("usock.zig");
-const ringbuf = @import("ringbuf.zig");
 const termfilter = @import("termfilter.zig");
-const sync = @import("sync.zig");
 const qmp = @import("qmp.zig");
-const ovf = @import("ovf.zig");
-const vnet = @import("vnet.zig");
-const appio = @import("appio.zig");
 const autoprotect = @import("autoprotect.zig");
-const transport = @import("transport.zig");
-const fbmath = @import("fbmath.zig");
-const hv_iface = @import("hv/interface.zig");
+const app = @import("appstate.zig");
+const serial = @import("serial_console.zig");
+const display_mod = @import("display.zig");
+const remote = @import("remote.zig");
+const dialogs = @import("dialogs.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
-// posix aliases removed — use std.c directly
+const cfltk = @import("cfltk_import.zig").c;
 
 extern fn time(t: ?*c_long) c_long;
 
-const cfltk = @cImport({
-    @cInclude("cfltk/cfl.h");
-    @cInclude("cfltk/cfl_window.h");
-    @cInclude("cfltk/cfl_button.h");
-    @cInclude("cfltk/cfl_box.h");
-    @cInclude("cfltk/cfl_group.h");
-    @cInclude("cfltk/cfl_menu.h");
-    @cInclude("cfltk/cfl_input.h");
-    @cInclude("cfltk/cfl_browser.h");
-    @cInclude("cfltk/cfl_text.h");
-    @cInclude("cfltk/cfl_misc.h");
-    @cInclude("cfltk/cfl_image.h");
-    @cInclude("cfltk/cfl_draw.h");
-    @cInclude("cfltk/cfl_dialog.h");
-});
-
-const MAX_VMS = 64;
-var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
-var vm_count: usize = 0;
-var selected_idx: ?usize = null;
-var prefs: vm.Prefs = .{};
-var browser: ?*cfltk.Fl_Browser = null;
-var status_bar: ?*cfltk.Fl_Box = null;
-var detail_labels: [12]?*cfltk.Fl_Box = [_]?*cfltk.Fl_Box{null} ** 12;
-var sum_name: ?*cfltk.Fl_Box = null;
-var win_handle: ?*cfltk.Fl_Window = null;
-var ctx_menu_handle: ?*cfltk.Fl_Menu_Button = null;
-var console_widget: ?*cfltk.Fl_Browser = null;
-var display_box: ?*cfltk.Fl_Box = null;
-var search_input: ?*cfltk.Fl_Input = null;
-var filter_text: [64]u8 = [_]u8{0} ** 64;
-var filter_len: usize = 0;
-var vm_started: [MAX_VMS]i64 = [_]i64{0} ** MAX_VMS;
-var g_vmm: hv_iface.Vmm = undefined;
-var g_vmm_handles: [MAX_VMS]?hv_iface.VmmHandle = .{null} ** MAX_VMS;
-var vnc_client: ?*vnc.VncClient = null;
-var spice_client: ?*spice.SpiceClient = null;
-const SERIAL_BUF_SIZE = 64 * 1024;
-var serial_buf: [SERIAL_BUF_SIZE]u8 = undefined;
-var serial_len: usize = 0;
-var serial_mutex: sync.SpinMutex = .{};
-var serial_running: bool = false;
-var serial_thread: ?std.Thread = null;
-var serial_fd: ?std.c.fd_t = null;
-
-fn serialReader() void {
-    const fd = serial_fd orelse return;
-    var buf: [4096]u8 = undefined;
-    while (@atomicLoad(bool, &serial_running, .seq_cst)) {
-        const n = std.c.read(fd, &buf, buf.len);
-        if (n <= 0) break;
-        serial_mutex.lock();
-        serial_len = ringbuf.append(&serial_buf, serial_len, buf[0..@intCast(n)]);
-        serial_mutex.unlock();
-    }
-}
-
-fn serialConnect(vm_name: []const u8) void {
-    if (serial_fd != null) return;
-    var path_buf: [256]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "/tmp/kvmgui-serial-{s}.sock", .{vm_name}) catch return;
-    const stream = usock.UnixStream.connect(path) catch return;
-    serial_fd = stream.fd;
-    @atomicStore(bool, &serial_running, true, .seq_cst);
-    serial_thread = std.Thread.spawn(std.Thread.SpawnConfig{}, serialReader, .{}) catch {
-        serial_fd = null;
-        return;
-    };
-}
-
-fn serialDisconnect() void {
-    @atomicStore(bool, &serial_running, false, .seq_cst);
-    if (serial_fd) |fd| { _ = std.c.close(fd); serial_fd = null; }
-    if (serial_thread) |t| { t.join(); serial_thread = null; }
-}
-
-fn browserCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { selectCurrent(); refreshDetails(); }
+// ── Callback stubs (delegate to helpers and dialog modules) ──────────
+fn browserCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { app.selectCurrent(); app.refreshDetails(); }
 fn powerCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { togglePower(); }
 fn shutdownCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { shutdownGuest(); }
 fn resetCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { resetGuest(); }
@@ -108,269 +30,56 @@ fn importCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { importVm()
 fn cloneCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { cloneVm(); }
 fn snapshotCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { snapDialog(); }
 fn deleteVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { deleteCurrentVm(); }
-fn favCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { toggleFavorite(); }
-fn prefsCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { prefsDialog(); }
-fn vnetCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { vnetDialog(); }
+fn favCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.toggleFavorite(); }
+fn prefsCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.prefsDialog(); }
+fn vnetCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.vnetDialog(); }
 fn quitCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { shutdown(); }
-fn aboutCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { aboutDialog(); }
-fn exportOvfCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { exportOvfDialog(); }
-fn homeCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { selected_idx = null; refreshBrowser(); refreshDetails(); }
-fn connectRemoteCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { remoteConnectDialog(); }
+fn aboutCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.aboutDialog(); }
+fn exportOvfCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.exportOvfDialog(); }
+fn homeCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { app.selected_idx = null; app.refreshBrowser(); app.refreshDetails(); }
+fn connectRemoteCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.remoteConnectDialog(); }
 
-var remote_mode: bool = false;
-var remote_url: [128]u8 = [_]u8{0} ** 128;
-var remote_url_len: usize = 0;
-
-fn remoteConnectDialog() void {
-    const dlg = cfltk.Fl_Window_new_wh(420, 220, "Connect to Remote Server");
-    cfltk.Fl_Window_make_modal(dlg, 0);
-    _ = cfltk.Fl_Box_new(10, 10, 400, 20, "Server URL: unix:///path | http://host:port | shm:///name");
-    const url_input = cfltk.Fl_Input_new(10, 35, 400, 24, "");
-    _ = cfltk.Fl_Box_new(10, 70, 400, 20, "Auth token (optional):");
-    const token_input = cfltk.Fl_Input_new(10, 95, 400, 24, "");
-    const connect_btn = cfltk.Fl_Button_new(170, 175, 110, 30, "Connect");
-    const local_btn = cfltk.Fl_Button_new(290, 175, 110, 30, "Local Mode");
-    const status_label = cfltk.Fl_Box_new(10, 135, 400, 20, "Currently: Local Mode");
-
-    const RD = struct { url: ?*cfltk.Fl_Input, token: ?*cfltk.Fl_Input, status: ?*cfltk.Fl_Box, dlg: ?*cfltk.Fl_Window };
-    var rd = RD{ .url = @ptrCast(url_input), .token = @ptrCast(token_input), .status = @ptrCast(status_label), .dlg = @ptrCast(dlg) };
-
-    const ConnectFn = struct {
-        fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
-            const rdp: *RD = @ptrCast(@alignCast(d orelse return));
-            if (rdp.url) |u| {
-                const s = std.mem.span(cfltk.Fl_Input_value(u));
-                if (s.len == 0 or s.len >= remote_url.len) {
-                    if (rdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: invalid URL");
-                    return;
-                }
-                // Parse URL and test connectivity with a health check.
-                const parsed = transport.Url.parse(s) orelse {
-                    if (rdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: failed to parse URL");
-                    return;
-                };
-                var conn = transport.Connection.connect(&parsed) orelse {
-                    if (rdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: connection failed — server unreachable");
-                    return;
-                };
-                defer conn.close();
-
-                // Optionally send auth token if provided.
-                var auth_header: [128]u8 = undefined;
-                const body: ?[]const u8 = if (rdp.token) |t| blk: {
-                    const tok = std.mem.span(cfltk.Fl_Input_value(t));
-                    if (tok.len > 0 and tok.len < 64) {
-                        const h = std.fmt.bufPrint(&auth_header, "Authorization: Bearer {s}\r\n", .{tok}) catch "";
-                        break :blk h;
-                    }
-                    break :blk null;
-                } else null;
-
-                // Health check: send a lightweight GET.
-                var out_buf: [256]u8 = undefined;
-                const n = conn.request("GET", "/api/health", body, &out_buf);
-                if (n == 0) {
-                    if (rdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: health check failed — bad response");
-                    return;
-                }
-
-                // Connection valid — enter remote mode.
-                std.mem.copyForwards(u8, &remote_url, s);
-                remote_url_len = s.len;
-                remote_mode = true;
-                if (rdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Connected (remote mode)");
-                if (status_bar) |sb2| {
-                    var sbb: [160]u8 = undefined;
-                    const txt = std.fmt.bufPrintZ(&sbb, "Connected to {s} — Remote Mode", .{s}) catch "Remote Mode";
-                    cfltk.Fl_Box_set_label(sb2, txt.ptr);
-                    cfltk.Fl_Box_set_label_color(sb2, 0x0088CC);
-                }
-                // Refresh the VM list from the remote server.
-                remoteRefreshVmList();
-                refreshBrowser();
-                refreshDetails();
-                if (rdp.dlg) |dl| cfltk.Fl_Window_hide(dl);
-            }
-        }
-    };
-    const LocalFn = struct {
-        fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
-            const rdp: *RD = @ptrCast(@alignCast(d orelse return));
-            remote_mode = false;
-            remote_url_len = 0;
-            if (rdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Switched to Local Mode");
-            if (status_bar) |s| {
-                cfltk.Fl_Box_set_label(s, "Ready — Local Mode");
-                cfltk.Fl_Box_set_label_color(s, 0x666666);
-            }
-            // Reload local VM list from disk.
-            vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
-            refreshBrowser();
-            refreshDetails();
-            if (rdp.dlg) |dl| cfltk.Fl_Window_hide(dl);
-        }
-    };
-    cfltk.Fl_Button_set_callback(connect_btn, &ConnectFn.go, &rd);
-    cfltk.Fl_Button_set_callback(local_btn, &LocalFn.go, &rd);
-    cfltk.Fl_Window_end(dlg);
-    cfltk.Fl_Window_show(dlg);
-}
-
-fn apiGet(path: []const u8, out: []u8) usize {
-    if (!remote_mode or remote_url_len == 0) return 0;
-    const url = transport.Url.parse(remote_url[0..remote_url_len]) orelse return 0;
-    var conn = transport.Connection.connect(&url) orelse return 0;
-    defer conn.close();
-    return conn.request("GET", path, null, out);
-}
-
-fn apiPost(path: []const u8, body: []const u8, out: []u8) usize {
-    if (!remote_mode or remote_url_len == 0) return 0;
-    const url = transport.Url.parse(remote_url[0..remote_url_len]) orelse return 0;
-    var conn = transport.Connection.connect(&url) orelse return 0;
-    defer conn.close();
-    return conn.request("POST", path, body, out);
-}
-
-/// Fetch the full vms.json config from the remote server and load it locally.
-fn remoteRefreshVmList() void {
-    if (!remote_mode or remote_url_len == 0) return;
-    const url = transport.Url.parse(remote_url[0..remote_url_len]) orelse return;
-    var conn = transport.Connection.connect(&url) orelse return;
-    defer conn.close();
-
-    var buf: [64 * 1024]u8 = undefined;
-    const n = conn.request("GET", "/api/config", null, &buf);
-    if (n == 0) return;
-    var tmp_prefs: vm.Prefs = .{};
-    vm_count = persist.loadFromSlice(&vms, buf[0..n], &tmp_prefs);
-}
-
-fn aboutDialog() void {
-    const dlg = cfltk.Fl_Window_new_wh(400, 250, "About KVMGUI");
-    cfltk.Fl_Window_make_modal(dlg, 0);
-    _ = cfltk.Fl_Box_new(10, 10, 380, 30, "KVMGUI v1.0");
-    _ = cfltk.Fl_Box_new(10, 40, 380, 20, "Lightweight QEMU/KVM Virtual Machine Manager");
-    _ = cfltk.Fl_Box_new(10, 70, 380, 20, "Built with Zig + FLTK 1.4");
-    _ = cfltk.Fl_Box_new(10, 100, 380, 60, "Features: VM mgmt, VNC/SPICE display, serial console, snapshots, OVF export, AutoProtect, virtual networks");
-    _ = cfltk.Fl_Box_new(10, 170, 380, 20, "Pure modules: 586 tests passing");
-    const cb = cfltk.Fl_Button_new(310, 210, 80, 30, "OK");
-    const OK = struct { fn g(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {} };
-    cfltk.Fl_Button_set_callback(cb, &OK.g, null);
-    cfltk.Fl_Window_end(dlg);
-    cfltk.Fl_Window_show(dlg);
-}
-
-fn exportOvfDialog() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count) return;
-    const v = &vms[idx];
-    if (!v.hasDisk()) { setStatus("VM has no disk — cannot export OVF"); return; }
-
-    // Build a suggested filename from the VM name
-    var suggest_buf: [256]u8 = undefined;
-    const suggest = std.fmt.bufPrintZ(&suggest_buf, "{s}.ovf", .{v.getNameSlice()}) catch "vm.ovf";
-
-    // Use FLTK's native file chooser to pick save path
-    const path_ptr = cfltk.Fl_file_chooser("Save OVF Package", "*.ovf", suggest, 0);
-    if (path_ptr == null or path_ptr[0] == 0) return;
-    const save_path = std.mem.sliceTo(path_ptr, 0);
-
-    // Build the OVF descriptor using ovf.zig
-    const disk_bytes: u64 = @as(u64, v.disk_size_gb) * 1024 * 1024 * 1024;
-    // Derive VMDK href from the save path
-    var vmdk_name_buf: [256]u8 = undefined;
-    const dot = std.mem.lastIndexOfScalar(u8, save_path, '.');
-    const base = if (dot) |d| save_path[0..d] else save_path;
-    const vmdk_href = std.fmt.bufPrint(&vmdk_name_buf, "{s}-disk1.vmdk", .{base}) catch {
-        setStatus("Path too long for OVF export");
-        return;
-    };
-    const spec = ovf.Spec{
-        .name = v.getNameSlice(),
-        .cpu_cores = v.cpu_cores,
-        .memory_mb = v.memory_mb,
-        .disk_capacity_bytes = disk_bytes,
-        .vmdk_href = vmdk_href,
-        .vmdk_size_bytes = disk_bytes,
-        .has_network = v.nics[0].mode != .none,
-    };
-
-    const xml = ovf.buildDescriptor(spec, std.heap.page_allocator) catch {
-        setStatus("Failed to generate OVF descriptor");
-        return;
-    };
-    defer std.heap.page_allocator.free(xml);
-
-    // Write the .ovf file using writeFile (atomic, single-shot)
-    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = save_path, .data = xml }) catch {
-        setStatus("Failed to write OVF file");
-        return;
-    };
-
-    // Generate the VMDK via qemu-img convert.
-    const disk_path = v.getDiskPathSlice();
-    if (disk_path.len > 0) {
-        const vmdk_full = std.heap.page_allocator.dupeZ(u8, vmdk_href) catch {
-            setStatus("OVF saved, but VMDK path buffer allocation failed");
-            return;
-        };
-        defer std.heap.page_allocator.free(vmdk_full);
-        if (getVmmHandle(idx)) |h| {
-            g_vmm.convertDiskFn(h, disk_path, vmdk_full, @intFromEnum(v.disk_format), std.heap.page_allocator) catch {
-                setStatus("OVF saved, but VMDK conversion failed (qemu-img missing?)");
-                return;
-            };
-        } else {
-            qemu.convertDiskImage(disk_path, v.disk_format, vmdk_full, std.heap.page_allocator) catch {
-                setStatus("OVF saved, but VMDK conversion failed (qemu-img missing?)");
-                return;
-            };
-        }
-    }
-
-    setStatus("OVF package exported successfully");
-}
+fn newVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { newVmDialog(); }
 
 fn shutdown() void {
     // Save window geometry before closing.
-    if (win_handle) |w| {
+    if (app.win_handle) |w| {
         const ww = cfltk.Fl_Window_width(w);
         const wh = cfltk.Fl_Window_height(w);
         if (ww > 0 and wh > 0) {
-            prefs.win_x = @intCast(cfltk.Fl_Window_x(w));
-            prefs.win_y = @intCast(cfltk.Fl_Window_y(w));
-            prefs.win_w = @intCast(ww);
-            prefs.win_h = @intCast(wh);
+            app.prefs.win_x = @intCast(cfltk.Fl_Window_x(w));
+            app.prefs.win_y = @intCast(cfltk.Fl_Window_y(w));
+            app.prefs.win_w = @intCast(ww);
+            app.prefs.win_h = @intCast(wh);
         }
     }
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
     // Clean up all Vmm handles.
-    for (0..vm_count) |i| destroyVmmHandle(i);
-    if (vnc_client) |vc| { vc.disconnect(); vc.free(); vnc_client = null; }
-    if (spice_client) |sc| { sc.disconnect(); sc.free(); spice_client = null; }
-    clearDisplay();
-    serialDisconnect();
-    if (win_handle) |w| cfltk.Fl_Window_hide(w);
+    for (0..app.vm_count) |i| app.destroyVmmHandle(i);
+    if (app.vnc_client) |vc| { vc.disconnect(); vc.free(); app.vnc_client = null; }
+    if (app.spice_client) |sc| { sc.disconnect(); sc.free(); app.spice_client = null; }
+    display_mod.clearDisplay();
+    serial.serialDisconnect();
+    if (app.win_handle) |w| cfltk.Fl_Window_hide(w);
 }
 
 fn cloneVm() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count or vm_count >= MAX_VMS) return;
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count or app.vm_count >= app.MAX_VMS) return;
 
     // Remote mode: dispatch clone to server, then refresh.
-    if (remote_mode) {
+    if (app.remote_mode) {
         var path_buf: [32]u8 = undefined;
         const path = std.fmt.bufPrintZ(&path_buf, "/api/clone/{d}", .{idx}) catch return;
         var out_buf: [64]u8 = undefined;
-        _ = apiPost(path, "", &out_buf);
-        remoteRefreshVmList();
-        refreshBrowser();
-        refreshDetails();
+        _ = remote.apiPost(path, "", &out_buf);
+        remote.remoteRefreshVmList();
+        app.refreshBrowser();
+        app.refreshDetails();
         return;
     }
 
-    const src = &vms[idx];
+    const src = &app.vms[idx];
 
     // Ask for clone type: full (copy disk) or linked (COW backing file).
     var linked: bool = false;
@@ -420,7 +129,7 @@ fn cloneVm() void {
     clone.status = .stopped;
     clone.pid = null;
     clone.clearSavedStatePath();
-    const ci: u16 = @intCast(vm_count);
+    const ci: u16 = @intCast(app.vm_count);
     clone.vnc_port = 5900 + ci;
     clone.spice_port = 5930 + ci;
     var mac_buf: [18]u8 = undefined;
@@ -434,21 +143,21 @@ fn cloneVm() void {
         const dot = std.mem.lastIndexOfScalar(u8, src_disk, '.');
         const base = if (dot) |d| src_disk[0..d] else src_disk;
         const clone_disk = std.fmt.bufPrintZ(&disk_buf, "{s}_linked.qcow2", .{base}) catch {
-            setStatus("Failed to build linked clone disk path");
+            app.setStatus("Failed to build linked clone disk path");
             return;
         };
         clone.setDiskPath(clone_disk);
         clone.disk_format = .qcow2;
 
         // Create the linked clone backing file.
-        if (getVmmHandle(idx)) |h| {
-            g_vmm.createLinkedCloneFn(h, clone_disk, src_disk, @intFromEnum(src.disk_format), std.heap.page_allocator) catch {
-                setStatus("Failed to create linked clone disk");
+        if (app.getVmmHandle(idx)) |h| {
+            app.g_vmm.createLinkedCloneFn(h, clone_disk, src_disk, @intFromEnum(src.disk_format), std.heap.page_allocator) catch {
+                app.setStatus("Failed to create linked clone disk");
                 return;
             };
         } else {
             qemu.createLinkedClone(clone_disk, src_disk, src.disk_format, std.heap.page_allocator) catch {
-                setStatus("Failed to create linked clone disk");
+                app.setStatus("Failed to create linked clone disk");
                 return;
             };
         }
@@ -462,21 +171,21 @@ fn cloneVm() void {
             if (std.fmt.bufPrintZ(&disk_buf, "{s}_clone.qcow2", .{base})) |clone_disk| {
                 clone.setDiskPath(clone_disk);
             } else |_| {
-                setStatus("Cloned, but failed to set disk path");
+                app.setStatus("Cloned, but failed to set disk path");
             }
         }
     }
 
-    vms[vm_count] = clone;
-    vm_count += 1;
-    selected_idx = vm_count - 1;
-    refreshBrowser();
-    refreshDetails();
-    persist.save(&vms, vm_count, prefs) catch {};
+    app.vms[app.vm_count] = clone;
+    app.vm_count += 1;
+    app.selected_idx = app.vm_count - 1;
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
 }
 
 fn importVm() void {
-    if (vm_count >= MAX_VMS) { setStatus("Max VM limit reached"); return; }
+    if (app.vm_count >= app.MAX_VMS) { app.setStatus("Max VM limit reached"); return; }
 
     // Open file chooser for disk images
     const path_ptr = cfltk.Fl_file_chooser("Select Disk Image", "*.{qcow2,raw,img,vmdk,vdi,iso}", null, 0);
@@ -484,13 +193,13 @@ fn importVm() void {
     const disk_path = std.mem.sliceTo(path_ptr, 0);
 
     // Remote mode: send the path to the server.
-    if (remote_mode) {
+    if (app.remote_mode) {
         var out_buf: [64]u8 = undefined;
-        _ = apiPost("/api/import", disk_path, &out_buf);
-        remoteRefreshVmList();
-        selected_idx = vm_count -| 1;
-        refreshBrowser();
-        refreshDetails();
+        _ = remote.apiPost("/api/import", disk_path, &out_buf);
+        remote.remoteRefreshVmList();
+        app.selected_idx = app.vm_count -| 1;
+        app.refreshBrowser();
+        app.refreshDetails();
         return;
     }
 
@@ -523,20 +232,20 @@ fn importVm() void {
     cfg.setDiskPath(disk_path);
     cfg.disk_format = fmt;
     cfg.disk_size_gb = 20; // default — user can resize in settings
-    cfg.memory_mb = prefs.default_memory_mb;
-    cfg.cpu_cores = prefs.default_cpu_cores;
+    cfg.memory_mb = app.prefs.default_memory_mb;
+    cfg.cpu_cores = app.prefs.default_cpu_cores;
 
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     cfg.setMacAddress(std.mem.span(mac));
 
-    vms[vm_count] = cfg;
-    vm_count += 1;
-    selected_idx = vm_count - 1;
-    refreshBrowser();
-    refreshDetails();
-    persist.save(&vms, vm_count, prefs) catch {};
-    setStatus("VM imported from disk image");
+    app.vms[app.vm_count] = cfg;
+    app.vm_count += 1;
+    app.selected_idx = app.vm_count - 1;
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
+    app.setStatus("VM imported from disk image");
 }
 
 fn vnetDialog() void {
@@ -548,7 +257,7 @@ fn vnetDialog() void {
     cfltk.Fl_Window_make_modal(dlg, 0);
     _ = cfltk.Fl_Box_new(10, 10, 560, 20, "Virtual Network switches (VMnet):");
     const net_list = cfltk.Fl_Browser_new(10, 35, 560, 260, "");
-    // Populate the browser with real vnet data
+    // Populate the app.browser with real vnet data
     for (0..net_set.count) |i| {
         const net = &net_set.nets[i];
         var line: [256]u8 = undefined;
@@ -572,7 +281,7 @@ fn vnetDialog() void {
     };
     var vd = VDlg{ .b = @ptrCast(net_list), .ns = &net_set, .dlg = @ptrCast(dlg) };
 
-    // Refresh helper: clears browser and re-populates from net_set
+    // Refresh helper: clears app.browser and re-populates from net_set
     const refreshFn = struct {
         fn refresh(vdp: *VDlg) void {
             if (vdp.b) |b| {
@@ -646,43 +355,42 @@ fn vnetDialog() void {
     cfltk.Fl_Window_end(dlg);
     cfltk.Fl_Window_show(dlg);
 }
-fn newVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { newVmDialog(); }
 
 fn toggleFavorite() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count) return;
-    vms[idx].favorite = !vms[idx].favorite;
-    refreshBrowser();
-    persist.save(&vms, vm_count, prefs) catch {};
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+    app.vms[idx].favorite = !app.vms[idx].favorite;
+    app.refreshBrowser();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
 }
 
 fn deleteCurrentVm() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count) return;
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
 
     // Remote mode: dispatch delete to server, then refresh.
-    if (remote_mode) {
+    if (app.remote_mode) {
         var path_buf: [32]u8 = undefined;
         const path = std.fmt.bufPrintZ(&path_buf, "/api/delete/{d}", .{idx}) catch return;
         var out_buf: [64]u8 = undefined;
-        _ = apiPost(path, "", &out_buf);
-        remoteRefreshVmList();
-        refreshBrowser();
-        refreshDetails();
+        _ = remote.apiPost(path, "", &out_buf);
+        remote.remoteRefreshVmList();
+        app.refreshBrowser();
+        app.refreshDetails();
         return;
     }
 
-    destroyVmmHandle(idx);
+    app.destroyVmmHandle(idx);
     var i = idx;
-    while (i + 1 < vm_count) : (i += 1) vms[i] = vms[i + 1];
+    while (i + 1 < app.vm_count) : (i += 1) app.vms[i] = app.vms[i + 1];
     // Shift Vmm handles too
-    while (i < g_vmm_handles.len - 1) : (i += 1) g_vmm_handles[i] = g_vmm_handles[i + 1];
-    g_vmm_handles[vm_count - 1] = null;
-    vm_count -= 1;
-    selected_idx = if (vm_count > 0) @min(idx, vm_count - 1) else null;
-    refreshBrowser();
-    refreshDetails();
-    persist.save(&vms, vm_count, prefs) catch {};
+    while (i < app.g_vmm_handles.len - 1) : (i += 1) app.g_vmm_handles[i] = app.g_vmm_handles[i + 1];
+    app.g_vmm_handles[app.vm_count - 1] = null;
+    app.vm_count -= 1;
+    app.selected_idx = if (app.vm_count > 0) @min(idx, app.vm_count - 1) else null;
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
 }
 
 /// Build URL-encoded body for remote VM save requests from FLTK input fields.
@@ -700,6 +408,14 @@ fn buildSaveBody(buf: []u8, dd: *const anyopaque) ![]const u8 {
         n2m: ?*cfltk.Fl_Input, n2mac: ?*cfltk.Fl_Input,
         n3m: ?*cfltk.Fl_Input, n3mac: ?*cfltk.Fl_Input,
         pf: ?*cfltk.Fl_Input,
+        cs: ?*cfltk.Fl_Input, kv: ?*cfltk.Fl_Check_Button,
+        os: ?*cfltk.Fl_Input, bo: ?*cfltk.Fl_Input,
+        dp: ?*cfltk.Fl_Input, rs: ?*cfltk.Fl_Input,
+        e3: ?*cfltk.Fl_Check_Button, gp: ?*cfltk.Fl_Input,
+        em: ?*cfltk.Fl_Check_Button, sr: ?*cfltk.Fl_Check_Button,
+        vn: ?*cfltk.Fl_Input, sp: ?*cfltk.Fl_Input,
+        df: ?*cfltk.Fl_Input, ma: ?*cfltk.Fl_Input,
+        au: ?*cfltk.Fl_Input, fv: ?*cfltk.Fl_Check_Button,
         v: *vm.VmConfig, dl: ?*cfltk.Fl_Window,
     };
     const ed: *const Ed = @ptrCast(@alignCast(dd));
@@ -723,14 +439,30 @@ fn buildSaveBody(buf: []u8, dd: *const anyopaque) ![]const u8 {
     if (ed.n2m) |nm| { const s = try std.fmt.bufPrint(buf[pos..], "nic2={s}&", .{std.mem.span(cfltk.Fl_Input_value(nm))}); pos += s.len; }
     if (ed.n3m) |nm| { const s = try std.fmt.bufPrint(buf[pos..], "nic3={s}&", .{std.mem.span(cfltk.Fl_Input_value(nm))}); pos += s.len; }
     if (ed.pf) |pfi| { const s = try std.fmt.bufPrint(buf[pos..], "portfw={s}&", .{std.mem.span(cfltk.Fl_Input_value(pfi))}); pos += s.len; }
+    if (ed.cs) |csi| { const s = try std.fmt.bufPrint(buf[pos..], "cpu_sockets={s}&", .{std.mem.span(cfltk.Fl_Input_value(csi))}); pos += s.len; }
+    if (ed.kv) |kvi| { const s = try std.fmt.bufPrint(buf[pos..], "enable_kvm={d}&", .{@as(u8, if (cfltk.Fl_Check_Button_is_checked(kvi) != 0) 1 else 0)}); pos += s.len; }
+    if (ed.os) |osi| { const s = try std.fmt.bufPrint(buf[pos..], "guest_os={s}&", .{std.mem.span(cfltk.Fl_Input_value(osi))}); pos += s.len; }
+    if (ed.bo) |boi| { const s = try std.fmt.bufPrint(buf[pos..], "boot_order={s}&", .{std.mem.span(cfltk.Fl_Input_value(boi))}); pos += s.len; }
+    if (ed.dp) |dpi| { const s = try std.fmt.bufPrint(buf[pos..], "display={s}&", .{std.mem.span(cfltk.Fl_Input_value(dpi))}); pos += s.len; }
+    if (ed.rs) |rsi| { const s = try std.fmt.bufPrint(buf[pos..], "display_resolution={s}&", .{std.mem.span(cfltk.Fl_Input_value(rsi))}); pos += s.len; }
+    if (ed.e3) |e3i| { const s = try std.fmt.bufPrint(buf[pos..], "enable_3d={d}&", .{@as(u8, if (cfltk.Fl_Check_Button_is_checked(e3i) != 0) 1 else 0)}); pos += s.len; }
+    if (ed.gp) |gpi| { const s = try std.fmt.bufPrint(buf[pos..], "gpu_device={s}&", .{std.mem.span(cfltk.Fl_Input_value(gpi))}); pos += s.len; }
+    if (ed.em) |emi| { const s = try std.fmt.bufPrint(buf[pos..], "embed_display={d}&", .{@as(u8, if (cfltk.Fl_Check_Button_is_checked(emi) != 0) 1 else 0)}); pos += s.len; }
+    if (ed.sr) |sri| { const s = try std.fmt.bufPrint(buf[pos..], "enable_serial={d}&", .{@as(u8, if (cfltk.Fl_Check_Button_is_checked(sri) != 0) 1 else 0)}); pos += s.len; }
+    if (ed.vn) |vni| { const s = try std.fmt.bufPrint(buf[pos..], "vnc_port={s}&", .{std.mem.span(cfltk.Fl_Input_value(vni))}); pos += s.len; }
+    if (ed.sp) |spi| { const s = try std.fmt.bufPrint(buf[pos..], "spice_port={s}&", .{std.mem.span(cfltk.Fl_Input_value(spi))}); pos += s.len; }
+    if (ed.df) |dfi| { const s = try std.fmt.bufPrint(buf[pos..], "disk_format={s}&", .{std.mem.span(cfltk.Fl_Input_value(dfi))}); pos += s.len; }
+    if (ed.ma) |mai| { const s = try std.fmt.bufPrint(buf[pos..], "mac_address={s}&", .{std.mem.span(cfltk.Fl_Input_value(mai))}); pos += s.len; }
+    if (ed.au) |aui| { const s = try std.fmt.bufPrint(buf[pos..], "audio={s}&", .{std.mem.span(cfltk.Fl_Input_value(aui))}); pos += s.len; }
+    if (ed.fv) |fvi| { const s = try std.fmt.bufPrint(buf[pos..], "favorite={d}&", .{@as(u8, if (cfltk.Fl_Check_Button_is_checked(fvi) != 0) 1 else 0)}); pos += s.len; }
     return buf[0..pos];
 }
 
 fn editVmDialog() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count) return;
-    const cfg = &vms[idx];
-    const dlg = cfltk.Fl_Window_new_wh(480, 880, "Virtual Machine Settings");
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+    const cfg = &app.vms[idx];
+    const dlg = cfltk.Fl_Window_new_wh(480, 1020, "Virtual Machine Settings");
     cfltk.Fl_Window_make_modal(dlg, 0);
 
     _ = cfltk.Fl_Box_new(10, 10, 110, 20, "VM Name:");
@@ -810,8 +542,62 @@ fn editVmDialog() void {
     _ = cfltk.Fl_Box_new(10, 640, 110, 20, "Port Forwards:");
     const pf_input = cfltk.Fl_Input_new(130, 638, 340, 24, if (cfg.hasPortForwards()) cfg.getPortForwards() else "");
 
-    const save_btn = cfltk.Fl_Button_new(290, 840, 80, 30, "Save");
-    const cancel_btn = cfltk.Fl_Button_new(380, 840, 80, 30, "Cancel");
+    // ── CPU Sockets / KVM ─────────────────────────────────────────
+    _ = cfltk.Fl_Box_new(10, 700, 110, 20, "CPU Sockets:");
+    var csbuf: [16]u8 = undefined;
+    const cs_str = std.fmt.bufPrintZ(&csbuf, "{d}", .{cfg.cpu_sockets}) catch "1";
+    const cs_input = cfltk.Fl_Input_new(130, 698, 150, 24, cs_str);
+    const kvm_input = cfltk.Fl_Check_Button_new(300, 698, 170, 24, "Enable KVM");
+    if (cfg.enable_kvm) cfltk.Fl_Check_Button_set_checked(kvm_input, 1);
+
+    // ── Guest OS / Boot Order ─────────────────────────────────────
+    _ = cfltk.Fl_Box_new(10, 730, 110, 20, "Guest OS:");
+    const os_input = cfltk.Fl_Input_new(130, 728, 150, 24, std.mem.span(cfg.guest_os.label()));
+    _ = cfltk.Fl_Box_new(300, 730, 60, 20, "Boot:");
+    const boot_input = cfltk.Fl_Input_new(360, 728, 110, 24, std.mem.span(cfg.boot_order.label()));
+
+    // ── Display Type / Resolution ─────────────────────────────────
+    _ = cfltk.Fl_Box_new(10, 760, 110, 20, "Display:");
+    const disp_input = cfltk.Fl_Input_new(130, 758, 150, 24, std.mem.span(cfg.display.label()));
+    _ = cfltk.Fl_Box_new(300, 760, 60, 20, "Res:");
+    const res_input = cfltk.Fl_Input_new(360, 758, 110, 24, std.mem.span(cfg.display_resolution.label()));
+
+    // ── 3D Accel / GPU ────────────────────────────────────────────
+    const e3d_input = cfltk.Fl_Check_Button_new(130, 788, 160, 24, "3D Acceleration");
+    if (cfg.enable_3d) cfltk.Fl_Check_Button_set_checked(e3d_input, 1);
+    _ = cfltk.Fl_Box_new(300, 790, 60, 20, "GPU:");
+    const gpu_input = cfltk.Fl_Input_new(360, 788, 110, 24, std.mem.span(cfg.gpu_device.label()));
+
+    // ── Embed Display / Serial ────────────────────────────────────
+    const emb_input = cfltk.Fl_Check_Button_new(130, 818, 160, 24, "Embed Display");
+    if (cfg.embed_display) cfltk.Fl_Check_Button_set_checked(emb_input, 1);
+    const ser_input = cfltk.Fl_Check_Button_new(300, 818, 170, 24, "Enable Serial");
+    if (cfg.enable_serial) cfltk.Fl_Check_Button_set_checked(ser_input, 1);
+
+    // ── VNC Port / SPICE Port ─────────────────────────────────────
+    _ = cfltk.Fl_Box_new(10, 850, 110, 20, "VNC Port:");
+    var vncbuf: [16]u8 = undefined;
+    const vnc_str = std.fmt.bufPrintZ(&vncbuf, "{d}", .{cfg.vnc_port}) catch "5900";
+    const vnc_input = cfltk.Fl_Input_new(130, 848, 150, 24, vnc_str);
+    _ = cfltk.Fl_Box_new(300, 850, 60, 20, "SPICE:");
+    var spcbuf: [16]u8 = undefined;
+    const spc_str = std.fmt.bufPrintZ(&spcbuf, "{d}", .{cfg.spice_port}) catch "5901";
+    const spc_input = cfltk.Fl_Input_new(360, 848, 110, 24, spc_str);
+
+    // ── Disk Format / MAC ─────────────────────────────────────────
+    _ = cfltk.Fl_Box_new(10, 880, 110, 20, "Disk Format:");
+    const df_input = cfltk.Fl_Input_new(130, 878, 150, 24, std.mem.span(cfg.disk_format.label()));
+    _ = cfltk.Fl_Box_new(300, 880, 60, 20, "MAC:");
+    const mac_input = cfltk.Fl_Input_new(360, 878, 110, 24, if (cfg.nics[0].mac_len > 0) cfg.getMacAddress() else "");
+
+    // ── Audio / Favorite ──────────────────────────────────────────
+    _ = cfltk.Fl_Box_new(10, 910, 110, 20, "Audio:");
+    const aud_input = cfltk.Fl_Input_new(130, 908, 150, 24, std.mem.span(cfg.audio.label()));
+    const fav_input = cfltk.Fl_Check_Button_new(300, 908, 170, 24, "Favorite");
+    if (cfg.favorite) cfltk.Fl_Check_Button_set_checked(fav_input, 1);
+
+    const save_btn = cfltk.Fl_Button_new(290, 980, 80, 30, "Save");
+    const cancel_btn = cfltk.Fl_Button_new(380, 980, 80, 30, "Cancel");
 
     const Ed = struct {
         na: ?*cfltk.Fl_Input, me: ?*cfltk.Fl_Input, cp: ?*cfltk.Fl_Input,
@@ -826,6 +612,14 @@ fn editVmDialog() void {
         n2m: ?*cfltk.Fl_Input, n2mac: ?*cfltk.Fl_Input,
         n3m: ?*cfltk.Fl_Input, n3mac: ?*cfltk.Fl_Input,
         pf: ?*cfltk.Fl_Input,
+        cs: ?*cfltk.Fl_Input, kv: ?*cfltk.Fl_Check_Button,
+        os: ?*cfltk.Fl_Input, bo: ?*cfltk.Fl_Input,
+        dp: ?*cfltk.Fl_Input, rs: ?*cfltk.Fl_Input,
+        e3: ?*cfltk.Fl_Check_Button, gp: ?*cfltk.Fl_Input,
+        em: ?*cfltk.Fl_Check_Button, sr: ?*cfltk.Fl_Check_Button,
+        vn: ?*cfltk.Fl_Input, sp: ?*cfltk.Fl_Input,
+        df: ?*cfltk.Fl_Input, ma: ?*cfltk.Fl_Input,
+        au: ?*cfltk.Fl_Input, fv: ?*cfltk.Fl_Check_Button,
         v: *vm.VmConfig, dl: ?*cfltk.Fl_Window,
         idx: usize,
     };
@@ -842,25 +636,33 @@ fn editVmDialog() void {
         .n2m = @ptrCast(n2m_input), .n2mac = @ptrCast(n2mac_input),
         .n3m = @ptrCast(n3m_input), .n3mac = @ptrCast(n3mac_input),
         .pf = @ptrCast(pf_input),
+        .cs = @ptrCast(cs_input), .kv = @ptrCast(kvm_input),
+        .os = @ptrCast(os_input), .bo = @ptrCast(boot_input),
+        .dp = @ptrCast(disp_input), .rs = @ptrCast(res_input),
+        .e3 = @ptrCast(e3d_input), .gp = @ptrCast(gpu_input),
+        .em = @ptrCast(emb_input), .sr = @ptrCast(ser_input),
+        .vn = @ptrCast(vnc_input), .sp = @ptrCast(spc_input),
+        .df = @ptrCast(df_input), .ma = @ptrCast(mac_input),
+        .au = @ptrCast(aud_input), .fv = @ptrCast(fav_input),
         .v = cfg, .dl = @ptrCast(dlg), .idx = idx,
     };
 
     const S = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
         const dd: *Ed = @ptrCast(@alignCast(d orelse return));
         // Remote mode: POST URL-encoded settings to server.
-        if (remote_mode) {
-            var body: [2048]u8 = undefined;
+        if (app.remote_mode) {
+            var body: [3072]u8 = undefined;
             const b = buildSaveBody(&body, dd) catch {
-                setStatus("Failed to build save request");
+                app.setStatus("Failed to build save request");
                 return;
             };
             var path_buf: [32]u8 = undefined;
             const path = std.fmt.bufPrintZ(&path_buf, "/api/save/{d}", .{dd.idx}) catch return;
             var out_buf: [64]u8 = undefined;
-            _ = apiPost(path, b, &out_buf);
-            remoteRefreshVmList();
-            refreshBrowser();
-            refreshDetails();
+            _ = remote.apiPost(path, b, &out_buf);
+            remote.remoteRefreshVmList();
+            app.refreshBrowser();
+            app.refreshDetails();
             if (dd.dl) |dl2| cfltk.Fl_Window_hide(dl2);
             return;
         }
@@ -914,8 +716,68 @@ fn editVmDialog() void {
         }
         if (dd.n3mac) |n3m| { const s = std.mem.span(cfltk.Fl_Input_value(n3m)); dd.v.setNic3Mac(s); }
         if (dd.pf) |pfi| { const s = std.mem.span(cfltk.Fl_Input_value(pfi)); if (s.len > 0) dd.v.setPortForwards(s) else dd.v.clearPortForwards(); }
-        refreshBrowser(); refreshDetails();
-        persist.save(&vms, vm_count, prefs) catch {};
+        // ── New fields: sockets, kvm, os, boot, display, res, 3d, gpu, embed, serial, vnc, spice, diskfmt, mac, audio, fav ──
+        if (dd.cs) |csi| dd.v.cpu_sockets = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(csi)), 10) catch dd.v.cpu_sockets);
+        if (dd.kv) |kvi| dd.v.enable_kvm = cfltk.Fl_Check_Button_is_checked(kvi) != 0;
+        if (dd.os) |osi| {
+            const s = std.mem.span(cfltk.Fl_Input_value(osi));
+            // Match against label() values displayed in the dialog
+            if (std.ascii.indexOfIgnoreCase(s, "linux") != null) { dd.v.guest_os = .linux; }
+            else if (std.ascii.indexOfIgnoreCase(s, "windows") != null) { dd.v.guest_os = .windows; }
+            else if (std.ascii.indexOfIgnoreCase(s, "freebsd") != null) { dd.v.guest_os = .freebsd; }
+            else if (std.ascii.indexOfIgnoreCase(s, "macos") != null) { dd.v.guest_os = .macos; }
+            else { dd.v.guest_os = .other; }
+        }
+        if (dd.bo) |boi| {
+            const s = std.mem.span(cfltk.Fl_Input_value(boi));
+            if (std.ascii.eqlIgnoreCase(s, "cd/dvd")) { dd.v.boot_order = .cdrom_first; }
+            else if (std.ascii.eqlIgnoreCase(s, "network (pxe)")) { dd.v.boot_order = .network_first; }
+            else if (std.ascii.indexOfIgnoreCase(s, "disk") != null) { dd.v.boot_order = .disk_first; }
+            else { dd.v.boot_order = .disk_first; }
+        }
+        if (dd.dp) |dpi| {
+            const s = std.mem.span(cfltk.Fl_Input_value(dpi));
+            if (std.ascii.indexOfIgnoreCase(s, "sdl") != null) { dd.v.display = .sdl; }
+            else if (std.ascii.indexOfIgnoreCase(s, "spice") != null) { dd.v.display = .spice; }
+            else if (std.ascii.indexOfIgnoreCase(s, "vnc") != null) { dd.v.display = .vnc; }
+            else if (std.ascii.indexOfIgnoreCase(s, "none") != null or std.ascii.indexOfIgnoreCase(s, "headless") != null) { dd.v.display = .none; }
+            else { dd.v.display = .gtk; }
+        }
+        if (dd.rs) |rsi| {
+            const s = std.mem.span(cfltk.Fl_Input_value(rsi));
+            if (std.ascii.eqlIgnoreCase(s, "800x600")) { dd.v.display_resolution = .res_800x600; }
+            else if (std.ascii.eqlIgnoreCase(s, "1024x768")) { dd.v.display_resolution = .res_1024x768; }
+            else if (std.ascii.eqlIgnoreCase(s, "1280x800")) { dd.v.display_resolution = .res_1280x800; }
+            else if (std.ascii.eqlIgnoreCase(s, "1920x1080")) { dd.v.display_resolution = .res_1920x1080; }
+            else { dd.v.display_resolution = .auto; }
+        }
+        if (dd.e3) |e3i| dd.v.enable_3d = cfltk.Fl_Check_Button_is_checked(e3i) != 0;
+        if (dd.gp) |gpi| {
+            const s = std.mem.span(cfltk.Fl_Input_value(gpi));
+            if (std.ascii.indexOfIgnoreCase(s, "vga") != null) { dd.v.gpu_device = .virtio_vga_gl; }
+            else { dd.v.gpu_device = .virtio_gpu_gl; }
+        }
+        if (dd.em) |emi| dd.v.embed_display = cfltk.Fl_Check_Button_is_checked(emi) != 0;
+        if (dd.sr) |sri| dd.v.enable_serial = cfltk.Fl_Check_Button_is_checked(sri) != 0;
+        if (dd.vn) |vni| dd.v.vnc_port = std.fmt.parseInt(u16, std.mem.span(cfltk.Fl_Input_value(vni)), 10) catch dd.v.vnc_port;
+        if (dd.sp) |spi| dd.v.spice_port = std.fmt.parseInt(u16, std.mem.span(cfltk.Fl_Input_value(spi)), 10) catch dd.v.spice_port;
+        if (dd.df) |dfi| {
+            const s = std.mem.span(cfltk.Fl_Input_value(dfi));
+            if (std.ascii.eqlIgnoreCase(s, "raw")) { dd.v.disk_format = .raw; }
+            else if (std.ascii.eqlIgnoreCase(s, "vmdk")) { dd.v.disk_format = .vmdk; }
+            else if (std.ascii.eqlIgnoreCase(s, "vdi")) { dd.v.disk_format = .vdi; }
+            else { dd.v.disk_format = .qcow2; }
+        }
+        if (dd.ma) |mai| { const s = std.mem.span(cfltk.Fl_Input_value(mai)); dd.v.setMacAddress(s); }
+        if (dd.au) |aui| {
+            const s = std.mem.span(cfltk.Fl_Input_value(aui));
+            if (std.ascii.indexOfIgnoreCase(s, "hda") != null) { dd.v.audio = .hda; }
+            else if (std.ascii.indexOfIgnoreCase(s, "ac97") != null) { dd.v.audio = .ac97; }
+            else { dd.v.audio = .none; }
+        }
+        if (dd.fv) |fvi| dd.v.favorite = cfltk.Fl_Check_Button_is_checked(fvi) != 0;
+        app.refreshBrowser(); app.refreshDetails();
+        persist.save(&app.vms, app.vm_count, app.prefs) catch {};
         if (dd.dl) |dl2| cfltk.Fl_Window_hide(dl2);
     }};
     const C = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
@@ -929,9 +791,9 @@ fn editVmDialog() void {
 }
 
 fn snapDialog() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count) return;
-    const vc = &vms[idx];
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+    const vc = &app.vms[idx];
     if (!vc.hasDisk()) return;
     const dlg = cfltk.Fl_Window_new_wh(480, 200, "Snapshot Manager");
     cfltk.Fl_Window_make_modal(dlg, 0);
@@ -944,7 +806,7 @@ fn snapDialog() void {
     const cb = cfltk.Fl_Button_new(10, 160, 80, 30, "Close");
     const rl = cfltk.Fl_Box_new(10, 110, 460, 40, "");
     const SD = struct { n: ?*cfltk.Fl_Input, r: ?*cfltk.Fl_Box, v: *vm.VmConfig, d: ?*cfltk.Fl_Window, idx: usize, remote: bool };
-    var sd = SD{ .n = @ptrCast(ni), .r = @ptrCast(rl), .v = vc, .d = @ptrCast(dlg), .idx = idx, .remote = remote_mode };
+    var sd = SD{ .n = @ptrCast(ni), .r = @ptrCast(rl), .v = vc, .d = @ptrCast(dlg), .idx = idx, .remote = app.remote_mode };
     const TK = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
         const s: *SD = @ptrCast(@alignCast(d orelse return));
         if (s.n) |nn| {
@@ -952,10 +814,10 @@ fn snapDialog() void {
                 var path_buf: [48]u8 = undefined;
                 const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/take/{d}", .{s.idx}) catch return;
                 var out_buf: [64]u8 = undefined;
-                _ = apiPost(path, std.mem.span(cfltk.Fl_Input_value(nn)), &out_buf);
+                _ = remote.apiPost(path, std.mem.span(cfltk.Fl_Input_value(nn)), &out_buf);
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Created (remote).");
-            } else if (getVmmHandle(s.idx)) |h| {
-                g_vmm.snapshotCreateFn(h, s.v.getDiskPathSlice(), std.mem.span(cfltk.Fl_Input_value(nn)), std.heap.page_allocator) catch {};
+            } else if (app.getVmmHandle(s.idx)) |h| {
+                app.g_vmm.snapshotCreateFn(h, s.v.getDiskPathSlice(), std.mem.span(cfltk.Fl_Input_value(nn)), std.heap.page_allocator) catch {};
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Created.");
             } else {
                 qemu.snapshotCreate(s.v.getDiskPathSlice(), std.mem.span(cfltk.Fl_Input_value(nn)), std.heap.page_allocator) catch {};
@@ -969,7 +831,7 @@ fn snapDialog() void {
             var path_buf: [48]u8 = undefined;
             const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/list/{d}", .{s.idx}) catch return;
             var out_buf: [4096]u8 = undefined;
-            const n = apiGet(path, &out_buf);
+            const n = remote.apiGet(path, &out_buf);
             if (s.r) |rr| {
                 if (n > 0 and n <= out_buf.len) {
                     cfltk.Fl_Box_set_label(rr, @ptrCast(&out_buf));
@@ -979,8 +841,8 @@ fn snapDialog() void {
             }
         } else {
             var buf: [4096]u8 = undefined;
-            const n: usize = if (getVmmHandle(s.idx)) |h|
-                g_vmm.snapshotListFn(h, s.v.getDiskPathSlice(), &buf, std.heap.page_allocator) catch 0
+            const n: usize = if (app.getVmmHandle(s.idx)) |h|
+                app.g_vmm.snapshotListFn(h, s.v.getDiskPathSlice(), &buf, std.heap.page_allocator) catch 0
             else
                 qemu.snapshotList(s.v.getDiskPathSlice(), &buf, std.heap.page_allocator) catch 0;
             if (s.r) |rr| { if (n > 0) cfltk.Fl_Box_set_label(rr, @ptrCast(&buf)); }
@@ -995,10 +857,10 @@ fn snapDialog() void {
                 var path_buf: [64]u8 = undefined;
                 const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/revert/{d}", .{s.idx}) catch return;
                 var out_buf: [64]u8 = undefined;
-                _ = apiPost(path, tag, &out_buf);
+                _ = remote.apiPost(path, tag, &out_buf);
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Reverted (remote).");
-            } else if (getVmmHandle(s.idx)) |h| {
-                g_vmm.snapshotApplyFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch {};
+            } else if (app.getVmmHandle(s.idx)) |h| {
+                app.g_vmm.snapshotApplyFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch {};
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Reverted.");
             } else {
                 qemu.snapshotApply(s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch {};
@@ -1015,10 +877,10 @@ fn snapDialog() void {
                 var path_buf: [64]u8 = undefined;
                 const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/delete/{d}", .{s.idx}) catch return;
                 var out_buf: [64]u8 = undefined;
-                _ = apiPost(path, tag, &out_buf);
+                _ = remote.apiPost(path, tag, &out_buf);
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Deleted (remote).");
-            } else if (getVmmHandle(s.idx)) |h| {
-                g_vmm.snapshotDeleteFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch {};
+            } else if (app.getVmmHandle(s.idx)) |h| {
+                app.g_vmm.snapshotDeleteFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch {};
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Deleted.");
             } else {
                 qemu.snapshotDelete(s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch {};
@@ -1044,22 +906,22 @@ fn prefsDialog() void {
     cfltk.Fl_Window_make_modal(dlg, 0);
     _ = cfltk.Fl_Box_new(10, 10, 130, 20, "Default Memory (MB):");
     var mb: [16]u8 = undefined;
-    const mem_input = cfltk.Fl_Input_new(140, 8, 270, 24, std.fmt.bufPrintZ(&mb, "{d}", .{prefs.default_memory_mb}) catch "2048");
+    const mem_input = cfltk.Fl_Input_new(140, 8, 270, 24, std.fmt.bufPrintZ(&mb, "{d}", .{app.prefs.default_memory_mb}) catch "2048");
     _ = cfltk.Fl_Box_new(10, 40, 130, 20, "Default CPU Cores:");
     var cb2: [16]u8 = undefined;
-    const cpu_input = cfltk.Fl_Input_new(140, 38, 270, 24, std.fmt.bufPrintZ(&cb2, "{d}", .{prefs.default_cpu_cores}) catch "2");
+    const cpu_input = cfltk.Fl_Input_new(140, 38, 270, 24, std.fmt.bufPrintZ(&cb2, "{d}", .{app.prefs.default_cpu_cores}) catch "2");
 
     _ = cfltk.Fl_Box_new(10, 70, 130, 20, "AutoProtect:");
     const ap_check = cfltk.Fl_Check_Button_new(140, 68, 20, 24, "");
-    cfltk.Fl_Check_Button_set_value(ap_check, if (prefs.autoprotect_enabled_default) 1 else 0);
+    cfltk.Fl_Check_Button_set_value(ap_check, if (app.prefs.autoprotect_enabled_default) 1 else 0);
 
     _ = cfltk.Fl_Box_new(10, 100, 130, 20, "Snapshot Interval (min):");
     var ab: [16]u8 = undefined;
-    const ap_int_input = cfltk.Fl_Input_new(140, 98, 270, 24, std.fmt.bufPrintZ(&ab, "{d}", .{prefs.autoprotect_interval_min_default}) catch "60");
+    const ap_int_input = cfltk.Fl_Input_new(140, 98, 270, 24, std.fmt.bufPrintZ(&ab, "{d}", .{app.prefs.autoprotect_interval_min_default}) catch "60");
 
     _ = cfltk.Fl_Box_new(10, 130, 130, 20, "Max Snapshots:");
     var ac: [16]u8 = undefined;
-    const ap_max_input = cfltk.Fl_Input_new(140, 128, 270, 24, std.fmt.bufPrintZ(&ac, "{d}", .{prefs.autoprotect_max_default}) catch "10");
+    const ap_max_input = cfltk.Fl_Input_new(140, 128, 270, 24, std.fmt.bufPrintZ(&ac, "{d}", .{app.prefs.autoprotect_max_default}) catch "10");
 
     // Save reads the input fields back and persists prefs
     const PData = struct {
@@ -1085,31 +947,31 @@ fn prefsDialog() void {
             if (pp.mem) |mi| {
                 const val = std.mem.span(cfltk.Fl_Input_value(mi));
                 if (val.len > 0) {
-                    prefs.default_memory_mb = std.fmt.parseInt(u32, val, 10) catch 2048;
+                    app.prefs.default_memory_mb = std.fmt.parseInt(u32, val, 10) catch 2048;
                 }
             }
             if (pp.cpu) |ci| {
                 const val = std.mem.span(cfltk.Fl_Input_value(ci));
                 if (val.len > 0) {
-                    prefs.default_cpu_cores = std.fmt.parseInt(u32, val, 10) catch 2;
+                    app.prefs.default_cpu_cores = std.fmt.parseInt(u32, val, 10) catch 2;
                 }
             }
             if (pp.ap_check) |apc| {
-                prefs.autoprotect_enabled_default = cfltk.Fl_Check_Button_value(apc) != 0;
+                app.prefs.autoprotect_enabled_default = cfltk.Fl_Check_Button_value(apc) != 0;
             }
             if (pp.ap_int) |ai| {
                 const val = std.mem.span(cfltk.Fl_Input_value(ai));
                 if (val.len > 0) {
-                    prefs.autoprotect_interval_min_default = std.fmt.parseInt(u32, val, 10) catch 60;
+                    app.prefs.autoprotect_interval_min_default = std.fmt.parseInt(u32, val, 10) catch 60;
                 }
             }
             if (pp.ap_max) |am| {
                 const val = std.mem.span(cfltk.Fl_Input_value(am));
                 if (val.len > 0) {
-                    prefs.autoprotect_max_default = std.fmt.parseInt(u32, val, 10) catch 10;
+                    app.prefs.autoprotect_max_default = std.fmt.parseInt(u32, val, 10) catch 10;
                 }
             }
-            persist.save(&vms, vm_count, prefs) catch {};
+            persist.save(&app.vms, app.vm_count, app.prefs) catch {};
             if (pp.dlg) |d| cfltk.Fl_Window_hide(d);
         }
     };
@@ -1129,171 +991,109 @@ fn prefsDialog() void {
     cfltk.Fl_Window_show(dlg);
 }
 
-fn selectCurrent() void {
-    const b = browser orelse return;
-    const line = cfltk.Fl_Browser_value(b);
-    if (line <= 0) { selected_idx = null; return; }
-    const target: usize = @intCast(line - 1);
-
-    const filter: []const u8 = if (filter_len > 0) filter_text[0..filter_len] else "";
-    var cursor: usize = 0;
-    selected_idx = null;
-
-    // Determine if separator is present: at least one fav AND one non-fav visible.
-    var fav_count: usize = 0;
-    var nonfav_count: usize = 0;
-    for (0..vm_count) |i| {
-        if (!filterMatch(&vms[i], filter)) continue;
-        if (vms[i].favorite) fav_count += 1 else nonfav_count += 1;
-    }
-    const has_sep = fav_count > 0 and nonfav_count > 0;
-
-    // Pass 1: favorites
-    for (0..vm_count) |i| {
-        if (!vms[i].favorite or !filterMatch(&vms[i], filter)) continue;
-        if (cursor == target) { selected_idx = i; return; }
-        cursor += 1;
-    }
-
-    // Separator line
-    if (has_sep) {
-        if (cursor == target) return; // clicked on separator → no selection
-        cursor += 1;
-    }
-
-    // Pass 2: non-favorites (or all if no favs)
-    for (0..vm_count) |i| {
-        const eligible = if (has_sep) !vms[i].favorite else true;
-        if (!eligible or !filterMatch(&vms[i], filter)) continue;
-        if (cursor == target) { selected_idx = i; return; }
-        cursor += 1;
-    }
-}
-
-fn filterMatch(v: *const vm.VmConfig, filter: []const u8) bool {
-    if (filter.len == 0) return true;
-    const name = v.getNameSlice();
-    var lower_buf: [128]u8 = undefined;
-    const lower = std.ascii.lowerString(&lower_buf, name);
-    return std.mem.indexOf(u8, lower, filter) != null;
-}
 
 /// Get or create the Vmm handle for VM at index idx.
-fn getVmmHandle(idx: usize) ?hv_iface.VmmHandle {
-    if (idx >= vm_count) return null;
-    if (g_vmm_handles[idx] == null) {
-        const mode: hv_backend.AccelMode = if (vms[idx].enable_kvm) .auto else .force_tcg;
-        g_vmm_handles[idx] = hv_backend.createHandle(&vms[idx], mode, std.heap.page_allocator) catch return null;
-    }
-    return g_vmm_handles[idx];
-}
 
 /// Destroy the Vmm handle for VM at index idx.
-fn destroyVmmHandle(idx: usize) void {
-    if (g_vmm_handles[idx]) |h| {
-        g_vmm.deinitFn(h);
-        g_vmm_handles[idx] = null;
-    }
-}
 
 fn togglePower() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count) return;
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
 
     // Remote mode: dispatch to server.
-    if (remote_mode) {
+    if (app.remote_mode) {
         var path_buf: [32]u8 = undefined;
         const path = std.fmt.bufPrintZ(&path_buf, "/api/power/{d}", .{idx}) catch return;
         var out_buf: [64]u8 = undefined;
-        _ = apiPost(path, "", &out_buf);
-        remoteRefreshVmList();
-        refreshBrowser();
-        refreshDetails();
+        _ = remote.apiPost(path, "", &out_buf);
+        remote.remoteRefreshVmList();
+        app.refreshBrowser();
+        app.refreshDetails();
         return;
     }
 
-    if (vms[idx].isAlive()) {
+    if (app.vms[idx].isAlive()) {
         // Power off: kill the QEMU process and clean up connections
-        if (getVmmHandle(idx)) |h| {
-            g_vmm.forceStopFn(h);
-            g_vmm.reapFn(h);
+        if (app.getVmmHandle(idx)) |h| {
+            app.g_vmm.forceStopFn(h);
+            app.g_vmm.reapFn(h);
         } else {
-            qemu.forceStopVm(&vms[idx]); qemu.reapVm(&vms[idx]);
+            qemu.forceStopVm(&app.vms[idx]); qemu.reapVm(&app.vms[idx]);
         }
-        if (vnc_client) |vc| { vc.disconnect(); vc.free(); vnc_client = null; }
-        if (spice_client) |sc| { sc.disconnect(); sc.free(); spice_client = null; }
-        clearDisplay();
-        serialDisconnect();
+        if (app.vnc_client) |vc| { vc.disconnect(); vc.free(); app.vnc_client = null; }
+        if (app.spice_client) |sc| { sc.disconnect(); sc.free(); app.spice_client = null; }
+        display_mod.clearDisplay();
+        serial.serialDisconnect();
     } else {
         // Power on: start QEMU (handles -incoming for resume from suspended state)
-        if (getVmmHandle(idx)) |h| {
-            g_vmm.startFn(h, @ptrCast(&vms[idx])) catch {
-                setStatus("Failed to start VM");
+        if (app.getVmmHandle(idx)) |h| {
+            app.g_vmm.startFn(h, @ptrCast(&app.vms[idx])) catch {
+                app.setStatus("Failed to start VM");
                 return;
             };
         } else {
-            qemu.startVm(&vms[idx], std.heap.page_allocator) catch {
-                setStatus("Failed to start VM");
+            qemu.startVm(&app.vms[idx], std.heap.page_allocator) catch {
+                app.setStatus("Failed to start VM");
                 return;
             };
         }
-        vm_started[idx] = 1;
+        app.vm_started[idx] = 1;
         // If we resumed from a saved state, clear it so next power-on is fresh
-        if (vms[idx].hasSavedState()) {
-            vms[idx].clearSavedStatePath();
+        if (app.vms[idx].hasSavedState()) {
+            app.vms[idx].clearSavedStatePath();
         }
     }
-    refreshBrowser();
-    refreshDetails();
-    persist.save(&vms, vm_count, prefs) catch {};
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
 }
 
 fn shutdownGuest() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count) return;
-    if (!vms[idx].isAlive()) { setStatus("VM is not running"); return; }
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+    if (!app.vms[idx].isAlive()) { app.setStatus("VM is not running"); return; }
 
-    if (remote_mode) {
+    if (app.remote_mode) {
         var path_buf: [32]u8 = undefined;
         const path = std.fmt.bufPrintZ(&path_buf, "/api/shutdown/{d}", .{idx}) catch return;
         var out_buf: [64]u8 = undefined;
-        _ = apiPost(path, "", &out_buf);
-        setStatus("Shut down guest (remote).");
+        _ = remote.apiPost(path, "", &out_buf);
+        app.setStatus("Shut down guest (remote).");
         return;
     }
-    if (getVmmHandle(idx)) |h| {
-        g_vmm.shutdownFn(h) catch { setStatus("Shutdown failed"); return; };
+    if (app.getVmmHandle(idx)) |h| {
+        app.g_vmm.shutdownFn(h) catch { app.setStatus("Shutdown failed"); return; };
     } else {
-        shutdownViaQmp(idx) catch { setStatus("Shutdown failed"); return; };
+        shutdownViaQmp(idx) catch { app.setStatus("Shutdown failed"); return; };
     }
-    setStatus("Shut down guest — ACPI power button sent.");
+    app.setStatus("Shut down guest — ACPI power button sent.");
 }
 
 fn resetGuest() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count) return;
-    if (!vms[idx].isAlive()) { setStatus("VM is not running"); return; }
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+    if (!app.vms[idx].isAlive()) { app.setStatus("VM is not running"); return; }
 
-    if (remote_mode) {
+    if (app.remote_mode) {
         var path_buf: [32]u8 = undefined;
         const path = std.fmt.bufPrintZ(&path_buf, "/api/reset/{d}", .{idx}) catch return;
         var out_buf: [64]u8 = undefined;
-        _ = apiPost(path, "", &out_buf);
-        setStatus("Reset guest (remote).");
+        _ = remote.apiPost(path, "", &out_buf);
+        app.setStatus("Reset guest (remote).");
         return;
     }
-    if (getVmmHandle(idx)) |h| {
-        g_vmm.resetFn(h) catch { setStatus("Reset failed"); return; };
+    if (app.getVmmHandle(idx)) |h| {
+        app.g_vmm.resetFn(h) catch { app.setStatus("Reset failed"); return; };
     } else {
-        resetViaQmp(idx) catch { setStatus("Reset failed"); return; };
+        resetViaQmp(idx) catch { app.setStatus("Reset failed"); return; };
     }
-    setStatus("Reset guest — system_reset sent.");
+    app.setStatus("Reset guest — system_reset sent.");
 }
 
 fn shutdownViaQmp(idx: usize) !void {
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
-    const sock = qmp.socketPath(vms[idx].getNameSlice(), &sock_buf) orelse return error.NoSocket;
+    const sock = qmp.socketPath(app.vms[idx].getNameSlice(), &sock_buf) orelse return error.NoSocket;
     try client.connect(sock);
     defer client.disconnect();
     try client.powerdown();
@@ -1302,38 +1102,38 @@ fn shutdownViaQmp(idx: usize) !void {
 fn resetViaQmp(idx: usize) !void {
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
-    const sock = qmp.socketPath(vms[idx].getNameSlice(), &sock_buf) orelse return error.NoSocket;
+    const sock = qmp.socketPath(app.vms[idx].getNameSlice(), &sock_buf) orelse return error.NoSocket;
     try client.connect(sock);
     defer client.disconnect();
     try client.systemReset();
 }
 
 fn suspendVm() void {
-    const idx = selected_idx orelse return;
-    if (idx >= vm_count) return;
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
 
     // Remote mode: dispatch to server.
-    if (remote_mode) {
+    if (app.remote_mode) {
         var path_buf: [32]u8 = undefined;
         const path = std.fmt.bufPrintZ(&path_buf, "/api/suspend/{d}", .{idx}) catch return;
         var out_buf: [64]u8 = undefined;
-        _ = apiPost(path, "", &out_buf);
-        remoteRefreshVmList();
-        refreshBrowser();
-        refreshDetails();
+        _ = remote.apiPost(path, "", &out_buf);
+        remote.remoteRefreshVmList();
+        app.refreshBrowser();
+        app.refreshDetails();
         return;
     }
 
-    const v = &vms[idx];
+    const v = &app.vms[idx];
     if (!v.isAlive()) {
-        setStatus("VM is not running — cannot suspend");
+        app.setStatus("VM is not running — cannot suspend");
         return;
     }
 
     // Generate state save path
     var state_path: [256]u8 = undefined;
     const path = std.fmt.bufPrintZ(&state_path, "/tmp/kvmgui-state-{s}.bin", .{v.getNameSlice()}) catch {
-        setStatus("Failed to build state path");
+        app.setStatus("Failed to build state path");
         return;
     };
 
@@ -1341,24 +1141,24 @@ fn suspendVm() void {
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
     const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse {
-        setStatus("Failed to build QMP socket path");
+        app.setStatus("Failed to build QMP socket path");
         return;
     };
     client.connect(sock) catch {
-        setStatus("Failed to connect QMP for suspend");
+        app.setStatus("Failed to connect QMP for suspend");
         return;
     };
     defer client.disconnect();
 
-    setStatus("Suspending VM to file...");
+    app.setStatus("Suspending VM to file...");
     client.suspendToFile(path) catch {
-        setStatus("Suspend migration failed to start");
+        app.setStatus("Suspend migration failed to start");
         return;
     };
 
     // Wait for migration to complete (30s timeout built into waitMigrateComplete)
     client.waitMigrateComplete() catch {
-        setStatus("Suspend migration timed out — VM may still be running");
+        app.setStatus("Suspend migration timed out — VM may still be running");
         return;
     };
 
@@ -1366,24 +1166,24 @@ fn suspendVm() void {
     v.setSavedStatePath(path[0..]);
 
     // Kill the QEMU process
-    if (getVmmHandle(idx)) |h| {
-        g_vmm.forceStopFn(h);
-        g_vmm.reapFn(h);
+    if (app.getVmmHandle(idx)) |h| {
+        app.g_vmm.forceStopFn(h);
+        app.g_vmm.reapFn(h);
     } else {
         qemu.forceStopVm(v);
         qemu.reapVm(v);
     }
 
     // Clean up display and serial connections
-    if (vnc_client) |vc| { vc.disconnect(); vc.free(); vnc_client = null; }
-    if (spice_client) |sc| { sc.disconnect(); sc.free(); spice_client = null; }
-    clearDisplay();
-    serialDisconnect();
+    if (app.vnc_client) |vc| { vc.disconnect(); vc.free(); app.vnc_client = null; }
+    if (app.spice_client) |sc| { sc.disconnect(); sc.free(); app.spice_client = null; }
+    display_mod.clearDisplay();
+    serial.serialDisconnect();
 
-    refreshBrowser();
-    refreshDetails();
-    persist.save(&vms, vm_count, prefs) catch {};
-    setStatus("VM suspended to file — ready to resume on power-on");
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
+    app.setStatus("VM suspended to file — ready to resume on power-on");
 }
 
 fn newVmDialog() void {
@@ -1419,7 +1219,7 @@ fn newVmDialog() void {
         fn go(_: ?*cfltk.Fl_Widget, data: ?*anyopaque) callconv(.c) void {
             const dd: *DlgData = @ptrCast(@alignCast(data orelse return));
             // Remote mode: POST to /api/create, then refresh from server.
-            if (remote_mode) {
+            if (app.remote_mode) {
                 var body: [512]u8 = undefined;
                 var pos: usize = 0;
                 if (dd.name) |n| {
@@ -1439,15 +1239,15 @@ fn newVmDialog() void {
                     pos += s.len;
                 }
                 var out_buf: [64]u8 = undefined;
-                _ = apiPost("/api/create", body[0..pos], &out_buf);
-                remoteRefreshVmList();
-                selected_idx = vm_count -| 1;
-                refreshBrowser();
-                refreshDetails();
+                _ = remote.apiPost("/api/create", body[0..pos], &out_buf);
+                remote.remoteRefreshVmList();
+                app.selected_idx = app.vm_count -| 1;
+                app.refreshBrowser();
+                app.refreshDetails();
                 if (dd.dlg) |d| cfltk.Fl_Window_hide(d);
                 return;
             }
-            if (vm_count >= MAX_VMS) return;
+            if (app.vm_count >= app.MAX_VMS) return;
 
             var cfg = vm.VmConfig{};
             if (dd.name) |n| cfg.setName(std.mem.span(cfltk.Fl_Input_value(n)));
@@ -1456,20 +1256,20 @@ fn newVmDialog() void {
             if (dd.disk) |d| cfg.disk_size_gb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(d)), 10) catch 20);
 
             // Apply AutoProtect defaults from preferences
-            cfg.autoprotect = prefs.autoprotect_enabled_default;
-            cfg.autoprotect_interval_min = prefs.autoprotect_interval_min_default;
-            cfg.autoprotect_max = prefs.autoprotect_max_default;
+            cfg.autoprotect = app.prefs.autoprotect_enabled_default;
+            cfg.autoprotect_interval_min = app.prefs.autoprotect_interval_min_default;
+            cfg.autoprotect_max = app.prefs.autoprotect_max_default;
 
             var mac_buf: [18]u8 = undefined;
             const mac = vm.generateMacAddress(&mac_buf);
             cfg.setMacAddress(std.mem.span(mac));
 
-            vms[vm_count] = cfg;
-            vm_count += 1;
-            selected_idx = vm_count - 1;
-            refreshBrowser();
-            refreshDetails();
-            persist.save(&vms, vm_count, prefs) catch {};
+            app.vms[app.vm_count] = cfg;
+            app.vm_count += 1;
+            app.selected_idx = app.vm_count - 1;
+            app.refreshBrowser();
+            app.refreshDetails();
+            persist.save(&app.vms, app.vm_count, app.prefs) catch {};
             if (dd.dlg) |d| cfltk.Fl_Window_hide(d);
         }
     };
@@ -1489,122 +1289,17 @@ fn newVmDialog() void {
 }
 
 
-fn refreshBrowser() void {
-    const b = browser orelse return;
-    cfltk.Fl_Browser_clear(b);
-    const filter: []const u8 = if (filter_len > 0) filter_text[0..filter_len] else "";
 
-    // Pass 1: favorites (star prefix).
-    for (0..vm_count) |i| {
-        const v = &vms[i];
-        if (v.favorite and filterMatch(v, filter)) {
-            var buf: [256]u8 = undefined;
-            const prefix: []const u8 = switch (v.status) { .running => "★▶ ", .paused => "★⏸ ", else => "★  " };
-            const txt = std.fmt.bufPrintZ(&buf, "{s}{s}", .{ prefix, v.getNameSlice() }) catch continue;
-            cfltk.Fl_Browser_add(b, txt.ptr);
-        }
-    }
-
-    // Check if we need a separator.
-    var has_favs = false;
-    var has_nonfavs = false;
-    for (0..vm_count) |i| {
-        if (filterMatch(&vms[i], filter)) {
-            if (vms[i].favorite) has_favs = true else has_nonfavs = true;
-        }
-    }
-
-    if (has_favs and has_nonfavs) {
-        _ = cfltk.Fl_Browser_add(b, "──────────");
-    }
-
-    // Pass 2: non-favorites (or all if no favs).
-    for (0..vm_count) |i| {
-        const v = &vms[i];
-        const show = if (has_favs) !v.favorite else true;
-        if (show and filterMatch(v, filter)) {
-            var buf: [256]u8 = undefined;
-            const prefix: []const u8 = switch (v.status) { .running => "▶ ", .paused => "⏸ ", else => "  " };
-            const txt = std.fmt.bufPrintZ(&buf, "{s}{s}", .{ prefix, v.getNameSlice() }) catch continue;
-            cfltk.Fl_Browser_add(b, txt.ptr);
-        }
-    }
-}
-
-fn refreshDetails() void {
-    if (sum_name) |l| {
-        if (selected_idx) |idx| {
-            if (idx < vm_count) {
-                const v = &vms[idx];
-                cfltk.Fl_Box_set_label(l, v.getName());
-                setDetail(0, "State", std.mem.span(v.status.label()));
-                // Color-code the state label
-                if (detail_labels[0]) |dl| {
-                    const color: u32 = switch (v.status) {
-                        .running => 0x00AA00, // green
-                        .paused => 0xFF8800,  // orange
-                        .suspended => 0xCC6600, // dark orange
-                        .stopped => 0x888888,   // gray
-                    };
-                    cfltk.Fl_Box_set_label_color(dl, color);
-                }
-                setDetail(1, "Guest OS", std.mem.span(v.guest_os.label()));
-                var mbuf: [32]u8 = undefined;
-                const mt = std.fmt.bufPrintZ(&mbuf, "{d} MB", .{v.memory_mb}) catch "---";
-                setDetail(2, "Memory", mt);
-                var cbuf: [32]u8 = undefined;
-                const ct = std.fmt.bufPrintZ(&cbuf, "{d}", .{v.cpu_cores}) catch "---";
-                setDetail(3, "CPU", ct);
-                setDetail(4, "Hard Disk", if (v.hasDisk()) v.getDiskPathSlice() else "(none)");
-                setDetail(5, "Network", std.mem.span(v.nics[0].mode.label()));
-                setDetail(6, "CD/DVD", if (v.hasIso()) v.getIsoPathSlice() else "Auto detect");
-                setDetail(7, "Notes", if (v.hasNotes()) v.getNotesSlice() else "");
-                setDetail(8, "Shared Folder", if (v.hasSharedFolder()) v.getSharedFolderSlice() else "(none)");
-                setDetail(9, "USB Device", if (v.hasUsbDevice()) v.getUsbDeviceSlice() else "(none)");
-                setDetail(10, "Guest Tools", if (v.guest_tools) "Enabled" else "Disabled");
-                if (v.autoprotect) {
-                    var ap_buf: [64]u8 = undefined;
-                    const ap_str = std.fmt.bufPrintZ(&ap_buf, "Every {d} min, keep {d}", .{ v.autoprotect_interval_min, v.autoprotect_max }) catch "Enabled";
-                    setDetail(11, "AutoProtect", ap_str);
-                } else {
-                    setDetail(11, "AutoProtect", "Disabled");
-                }
-                if (status_bar) |s| {
-                    var sbuf: [200]u8 = undefined;
-                    if (v.isAlive() and vm_started[idx] > 0) {
-                        const elapsed: u64 = @intCast(vm_started[idx]);
-                        const hrs = elapsed / 3600;
-                        const mins = (elapsed % 3600) / 60;
-                        const secs = elapsed % 60;
-                        const st = std.fmt.bufPrintZ(&sbuf, "{s} — {s} | Uptime: {d}:{d:0>2}:{d:0>2} | {d} VM(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), hrs, mins, secs, vm_count }) catch "Running";
-                        cfltk.Fl_Box_set_label(s, st.ptr);
-                    } else {
-                        const st = std.fmt.bufPrintZ(&sbuf, "{s} — {s}    |    {d} virtual machine(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), vm_count }) catch "Ready";
-                        cfltk.Fl_Box_set_label(s, st.ptr);
-                    }
-                }
-                return;
-            }
-        }
-        cfltk.Fl_Box_set_label(l, "No virtual machine selected.");
-        for (&detail_labels) |*dl| { if (dl.*) |d| cfltk.Fl_Box_set_label(d, ""); }
-        if (status_bar) |s| {
-            var sbuf: [64]u8 = undefined;
-            const st = std.fmt.bufPrintZ(&sbuf, "{d} virtual machine(s)", .{vm_count}) catch "Ready";
-            cfltk.Fl_Box_set_label(s, st.ptr);
-        }
-    }
-}
 
 // Global event handler — intercepts keyboard shortcuts + right-clicks
 fn kbHandler(event: c_int) callconv(.c) c_int {
     if (event == 12) { // FL_PUSH = 12 (mouse button press)
         if (cfltk.Fl_event_button() == 3) { // Right click
-            selectCurrent();
+            app.selectCurrent();
             _ = cfltk.Fl_event_x();
             _ = cfltk.Fl_event_y();
             // Show context menu
-            if (ctx_menu_handle) |cm| _ = cfltk.Fl_Menu_Button_popup(cm);
+            if (app.ctx_menu_handle) |cm| _ = cfltk.Fl_Menu_Button_popup(cm);
             return 1;
         }
     }
@@ -1615,28 +1310,28 @@ fn kbHandler(event: c_int) callconv(.c) c_int {
     if (ctrl and key == 'q') { shutdown(); return 1; }
     if (key == 0xffbf) { editVmDialog(); return 1; } // F2
     if (key == 0xffff) { deleteCurrentVm(); return 1; } // DEL
-    if (key == 0xffc8) { if (win_handle) |w| { const cur = cfltk.Fl_Window_fullscreen_active(w); cfltk.Fl_Window_fullscreen(w, if (cur != 0) @as(c_uint, 0) else 1); } return 1; } // F11 toggle
-    if (ctrl and key == 'w') { selected_idx = null; refreshBrowser(); refreshDetails(); return 1; }
+    if (key == 0xffc8) { if (app.win_handle) |w| { const cur = cfltk.Fl_Window_fullscreen_active(w); cfltk.Fl_Window_fullscreen(w, if (cur != 0) @as(c_uint, 0) else 1); } return 1; } // F11 toggle
+    if (ctrl and key == 'w') { app.selected_idx = null; app.refreshBrowser(); app.refreshDetails(); return 1; }
     return 0;
 }
 
 // Console timer — polls serial ring buffer and updates Fl_Browser widget.
 fn consoleTimerCB(_: ?*anyopaque) callconv(.c) void {
-    if (console_widget) |cw| {
-        serial_mutex.lock();
-        if (serial_len > 0) {
-            var tmp: [SERIAL_BUF_SIZE + 1]u8 = undefined;
-            const n = serial_len;
-            @memcpy(tmp[0..n], serial_buf[0..n]);
-            serial_len = 0;
-            serial_mutex.unlock();
+    if (app.console_widget) |cw| {
+        app.serial_mutex.lock();
+        if (app.serial_len > 0) {
+            var tmp: [app.SERIAL_BUF_SIZE + 1]u8 = undefined;
+            const n = app.serial_len;
+            @memcpy(tmp[0..n], app.serial_buf[0..n]);
+            app.serial_len = 0;
+            app.serial_mutex.unlock();
             const valid_len = termfilter.sanitize(&tmp, n);
             if (valid_len > 0) {
                 tmp[valid_len] = 0;
                 cfltk.Fl_Browser_add(cw, @ptrCast(tmp[0..valid_len].ptr));
             }
         } else {
-            serial_mutex.unlock();
+            app.serial_mutex.unlock();
         }
     }
     _ = cfltk.Fl_repeat_timeout(0.5, consoleTimerCB, null);
@@ -1644,100 +1339,18 @@ fn consoleTimerCB(_: ?*anyopaque) callconv(.c) void {
 
 // Display timer — polls VNC framebuffer and updates display tab (100ms).
 fn searchCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
-    if (search_input) |si| {
+    if (app.search_input) |si| {
         const val = cfltk.Fl_Input_value(si);
         const sv = std.mem.span(val);
-        filter_len = @min(sv.len, filter_text.len - 1);
-        _ = std.ascii.lowerString(@as([]u8, @ptrCast(&filter_text)), sv); filter_len = sv.len;
-        refreshBrowser();
+        app.filter_len = @min(sv.len, app.filter_text.len - 1);
+        _ = std.ascii.lowerString(@as([]u8, @ptrCast(&app.filter_text)), sv); app.filter_len = sv.len;
+        app.refreshBrowser();
     }
 }
 
-fn displayTimerCB(_: ?*anyopaque) callconv(.c) void {
-    if (display_box) |db| {
-        const box_w = cfltk.Fl_Box_width(db);
-        const box_h = cfltk.Fl_Box_height(db);
-        if (vnc_client) |vc| {
-            if (vc.checkDirty()) {
-                if (vc.lockFb()) |fb| {
-                    defer vc.unlockFb();
-                    var fw: c_int = 0;
-                    var fh: c_int = 0;
-                    if (vc.getSize(&fw, &fh)) {
-                        renderFramebuffer(db, fb, fw, fh, 0, box_w, box_h);
-                    }
-                }
-            }
-        } else if (spice_client) |sc| {
-            if (sc.checkDirty()) {
-                if (sc.getFb()) |fb| {
-                    var fw: c_int = 0;
-                    var fh: c_int = 0;
-                    if (sc.getSize(&fw, &fh)) {
-                        renderFramebuffer(db, fb, fw, fh, sc.stride, box_w, box_h);
-                    }
-                }
-            }
-        }
-    }
-    _ = cfltk.Fl_repeat_timeout(0.1, displayTimerCB, null);
-}
 
 /// Copy+swap a BGRA framebuffer to RGBA, wrap in an Fl_RGB_Image,
 /// scale to fit the display box, and attach it.
-fn renderFramebuffer(
-    db: *cfltk.Fl_Box,
-    fb: [*]const u8,
-    fw: c_int,
-    fh: c_int,
-    src_stride: c_int,
-    box_w: c_int,
-    box_h: c_int,
-) void {
-    const px = fbmath.fbFits(fw, fh, std.math.maxInt(usize) / 4) orelse return;
-    const buf_size: usize = px * 4;
-    const stride: usize = if (src_stride > 0) @intCast(src_stride) else @as(usize, @intCast(fw)) * 4;
-
-    const rgba = std.heap.c_allocator.alloc(u8, buf_size) catch return;
-    defer std.heap.c_allocator.free(rgba);
-
-    const dst_stride: usize = @as(usize, @intCast(fw)) * 4;
-    var y: c_int = 0;
-    while (y < fh) : (y += 1) {
-        const src_row = fb[@as(usize, @intCast(y)) * stride ..];
-        const dst_row = rgba[@as(usize, @intCast(y)) * dst_stride ..];
-        var x: usize = 0;
-        while (x < @as(usize, @intCast(fw))) : (x += 1) {
-            const si = x * 4;
-            const di = x * 4;
-            dst_row[di + 0] = src_row[si + 2]; // R ← B
-            dst_row[di + 1] = src_row[si + 1]; // G ← G
-            dst_row[di + 2] = src_row[si + 0]; // B ← R
-            dst_row[di + 3] = src_row[si + 3]; // A ← A
-        }
-    }
-
-    const img = cfltk.Fl_RGB_Image_new(@ptrCast(rgba.ptr), fw, fh, 4, 0);
-    if (img == null) return;
-
-    // Scale down to fit the display box (proportional, no expansion).
-    if (fw > box_w or fh > box_h) {
-        cfltk.Fl_RGB_Image_scale(img, box_w, box_h, 1, 0);
-    }
-
-    cfltk.Fl_Box_set_label(db, "");
-    cfltk.Fl_Box_set_image(db, @ptrCast(img));
-    cfltk.Fl_Box_redraw(db);
-}
-
-/// Clear the display box — release any image and restore placeholder text.
-fn clearDisplay() void {
-    if (display_box) |db| {
-        cfltk.Fl_Box_set_image(db, null);
-        cfltk.Fl_Box_set_label(db, "VNC/SPICE display renders here when a VM is running.");
-        cfltk.Fl_Box_redraw(db);
-    }
-}
 
 // Timer callback — checks VM liveness, connects display, refreshes UI every 2 seconds.
 // Also runs AutoProtect snapshot scheduling for VMs with autoprotect enabled.
@@ -1745,18 +1358,18 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
     var changed = false;
     const now_unix = time(null);
 
-    for (0..vm_count) |i| {
-        const v = &vms[i];
+    for (0..app.vm_count) |i| {
+        const v = &app.vms[i];
         if (v.status == .running or v.status == .paused) {
-            const alive: bool = if (getVmmHandle(i)) |h| g_vmm.isAliveFn(h) else qemu.isVmAlive(v);
+            const alive: bool = if (app.getVmmHandle(i)) |h| app.g_vmm.isAliveFn(h) else qemu.isVmAlive(v);
             if (!alive) {
                 changed = true;
-                vm_started[i] = 0;
-                if (vnc_client) |vc| { vc.disconnect(); vc.free(); vnc_client = null; }
-                if (spice_client) |sc| { sc.disconnect(); sc.free(); spice_client = null; }
-                clearDisplay();
-            } else if (vm_started[i] > 0) {
-                vm_started[i] += 2; // 2 seconds per timer tick
+                app.vm_started[i] = 0;
+                if (app.vnc_client) |vc| { vc.disconnect(); vc.free(); app.vnc_client = null; }
+                if (app.spice_client) |sc| { sc.disconnect(); sc.free(); app.spice_client = null; }
+                display_mod.clearDisplay();
+            } else if (app.vm_started[i] > 0) {
+                app.vm_started[i] += 2; // 2 seconds per timer tick
             }
         }
 
@@ -1771,16 +1384,16 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                 var name_buf: [64]u8 = undefined;
                 const snap_name = autoprotect.snapName(&name_buf, seq);
                 if (snap_name.len > 0) {
-                    if (getVmmHandle(i)) |h| {
-                        g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch {};
+                    if (app.getVmmHandle(i)) |h| {
+                        app.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch {};
                     } else {
                         qemu.snapshotCreate(v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch {};
                     }
 
                     // Prune excess AutoProtect snapshots
                     var list_buf: [4096]u8 = undefined;
-                    if (if (getVmmHandle(i)) |h|
-                        g_vmm.snapshotListFn(h, v.getDiskPathSlice(), &list_buf, std.heap.page_allocator)
+                    if (if (app.getVmmHandle(i)) |h|
+                        app.g_vmm.snapshotListFn(h, v.getDiskPathSlice(), &list_buf, std.heap.page_allocator)
                     else
                         qemu.snapshotList(v.getDiskPathSlice(), &list_buf, std.heap.page_allocator)) |_| {
                         // Count AutoProtect snapshots and collect the oldest names
@@ -1805,76 +1418,57 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                         const excess = autoprotect.pruneExcess(auto_count, v.autoprotect_max);
                         // Delete the oldest AutoProtect snapshots (they come first in the list)
                         const to_delete = @min(excess, auto_names.len);
-                        const hnd = getVmmHandle(i);
+                        const hnd = app.getVmmHandle(i);
                         for (0..to_delete) |j| {
                             if (hnd) |h| {
-                                g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), auto_names[j], std.heap.page_allocator) catch {};
+                                app.g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), auto_names[j], std.heap.page_allocator) catch {};
                             } else {
                                 qemu.snapshotDelete(v.getDiskPathSlice(), auto_names[j], std.heap.page_allocator) catch {};
                             }
                         }
                     } else |_| {}
                 }
-                persist.save(&vms, vm_count, prefs) catch {};
+                persist.save(&app.vms, app.vm_count, app.prefs) catch {};
             }
         }
     }
     // Auto-connect VNC/SPICE and serial for the selected VM if running
-    if (selected_idx) |idx| {
-        if (idx < vm_count) {
-            const v = &vms[idx];
+    if (app.selected_idx) |idx| {
+        if (idx < app.vm_count) {
+            const v = &app.vms[idx];
             if (v.isAlive()) {
-                if (v.embed_display and vnc_client == null and spice_client == null) {
+                if (v.embed_display and app.vnc_client == null and app.spice_client == null) {
                     if (v.display == .spice) {
-                        spice_client = spice.SpiceClient.new();
-                        if (spice_client) |sc| _ = sc.connect("127.0.0.1", @intCast(v.spice_port));
+                        app.spice_client = spice.SpiceClient.new();
+                        if (app.spice_client) |sc| _ = sc.connect("127.0.0.1", @intCast(v.spice_port));
                     } else {
-                        vnc_client = vnc.VncClient.new();
-                        if (vnc_client) |vc| _ = vc.connect("127.0.0.1", @intCast(v.vnc_port));
+                        app.vnc_client = vnc.VncClient.new();
+                        if (app.vnc_client) |vc| _ = vc.connect("127.0.0.1", @intCast(v.vnc_port));
                     }
                 }
-                if (v.enable_serial and serial_fd == null) {
-                    serialConnect(v.getNameSlice());
+                if (v.enable_serial and app.serial_fd == null) {
+                    serial.serialConnect(v.getNameSlice());
                 }
             }
         }
     }
-    if (changed) { refreshBrowser(); refreshDetails(); }
+    if (changed) { app.refreshBrowser(); app.refreshDetails(); }
     _ = cfltk.Fl_repeat_timeout(2.0, timerCB, null);
 }
 
-fn setStatus(msg: []const u8) void {
-    if (status_bar) |sb| {
-        var buf: [256]u8 = undefined;
-        if (msg.len >= buf.len) {
-            cfltk.Fl_Box_set_label(sb, @ptrCast(msg.ptr));
-        } else {
-            @memcpy(buf[0..msg.len], msg);
-            buf[msg.len] = 0;
-            cfltk.Fl_Box_set_label(sb, @ptrCast(&buf));
-        }
-    }
-}
 
-fn setDetail(i: usize, _: []const u8, value: []const u8) void {
-    if (i < detail_labels.len) {
-        if (detail_labels[i]) |dl| {
-            cfltk.Fl_Box_set_label(dl, @ptrCast(value.ptr));
-        }
-    }
-}
 
 pub fn main() void {
-    vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
+    app.vm_count = persist.load(&app.vms, std.heap.page_allocator, &app.prefs);
     _ = cfltk.Fl_set_scheme("gtk+");
 
     // Initialize the HV abstraction dispatch table (QEMU backend).
-    g_vmm = hv_backend.createVmm(.auto);
+    app.g_vmm = hv_backend.createVmm(.auto);
 
-    const WW: i32 = if (prefs.win_w > 0) prefs.win_w else 960;
-    const WH: i32 = if (prefs.win_h > 0) prefs.win_h else 680;
+    const WW: i32 = if (app.prefs.win_w > 0) app.prefs.win_w else 960;
+    const WH: i32 = if (app.prefs.win_h > 0) app.prefs.win_h else 680;
     const win = cfltk.Fl_Window_new_wh(WW, WH, "KVMGUI");
-    win_handle = @ptrCast(win);
+    app.win_handle = @ptrCast(win);
 
     // Menu bar with working submenus
     const menu_bar = cfltk.Fl_Menu_Bar_new(0, 0, WW, 25, "");
@@ -1935,15 +1529,15 @@ pub fn main() void {
     // Sidebar
     _ = cfltk.Fl_Box_new(0, body_y, SW, 20, "Library");
     const b = cfltk.Fl_Browser_new(2, body_y + 22, SW - 4, body_h - 45, "");
-    browser = @ptrCast(b);
+    app.browser = @ptrCast(b);
     cfltk.Fl_Browser_set_callback(b, browserCB, null);
     const si = cfltk.Fl_Input_new(2, body_y + body_h - 20, SW - 4, 18, "");
-    search_input = @ptrCast(si);
+    app.search_input = @ptrCast(si);
     cfltk.Fl_Input_set_callback(si, searchCB, null);
 
-    // Context menu (right-click popup on VM browser)
+    // Context menu (right-click popup on VM app.browser)
     const ctx_menu = cfltk.Fl_Menu_Button_new(0, 0, 0, 0, "");
-    ctx_menu_handle = @ptrCast(ctx_menu);
+    app.ctx_menu_handle = @ptrCast(ctx_menu);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Power On/Off", 0, @ptrCast(&powerCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Shut Down Guest", 0, @ptrCast(&shutdownCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Reset Guest", 0, @ptrCast(&resetCB), null, 0);
@@ -1959,7 +1553,7 @@ pub fn main() void {
     // Summary
     const sg = cfltk.Fl_Group_new(CX, body_y + 20, CW, body_h - 20, "Summary");
     const nm = cfltk.Fl_Box_new(CX + 10, body_y + 30, CW - 20, 30, "No virtual machine selected.");
-    sum_name = @ptrCast(nm);
+    app.sum_name = @ptrCast(nm);
     cfltk.Fl_Box_set_label_font(@ptrCast(nm), 1);
     cfltk.Fl_Box_set_label_size(@ptrCast(nm), 18);
 
@@ -1967,7 +1561,7 @@ pub fn main() void {
     for ([_][]const u8{ "State:", "Guest OS:", "Memory:", "CPU:", "Hard Disk:", "Network:", "CD/DVD:", "Notes:", "Shared Folder:", "USB Device:", "Guest Tools:", "AutoProtect:" }, 0..) |lbl, i| {
         _ = cfltk.Fl_Box_new(CX + 10, ypos, 100, 18, @ptrCast(lbl.ptr));
         const dv = cfltk.Fl_Box_new(CX + 115, ypos, CW - 130, 18, "");
-        detail_labels[i] = @ptrCast(dv);
+        app.detail_labels[i] = @ptrCast(dv);
         ypos += 22;
     }
     cfltk.Fl_Group_end(@ptrCast(sg));
@@ -1975,13 +1569,13 @@ pub fn main() void {
     // Display tab
     const dg = cfltk.Fl_Group_new(CX, body_y + 20, CW, body_h - 20, "Display");
     const db = cfltk.Fl_Box_new(CX + 5, body_y + 25, CW - 10, body_h - 30, "VNC/SPICE display renders here when a VM is running.");
-    display_box = @ptrCast(db);
+    app.display_box = @ptrCast(db);
     cfltk.Fl_Group_end(@ptrCast(dg));
 
     // Console tab
     const cg = cfltk.Fl_Group_new(CX, body_y + 20, CW, body_h - 20, "Console");
     const cb = cfltk.Fl_Browser_new(CX + 5, body_y + 25, CW - 10, body_h - 30, "");
-    console_widget = @ptrCast(cb);
+    app.console_widget = @ptrCast(cb);
     _ = cfltk.Fl_Browser_add(cb, "Serial console — not connected.");
     cfltk.Fl_Group_end(@ptrCast(cg));
 
@@ -1990,19 +1584,19 @@ pub fn main() void {
     // Status bar
     const sb = cfltk.Fl_Box_new(0, WH - 26, WW, 26, "Ready — Local Mode");
     cfltk.Fl_Box_set_label_color(sb, 0x666666);
-    status_bar = @ptrCast(sb);
+    app.status_bar = @ptrCast(sb);
 
     cfltk.Fl_Window_end(win);
     cfltk.Fl_Window_show(win);
 
     // Restore saved window position.
-    if (prefs.win_x >= 0 and prefs.win_y >= 0) {
-        _ = cfltk.Fl_Window_resize(win, prefs.win_x, prefs.win_y, WW, WH);
+    if (app.prefs.win_x >= 0 and app.prefs.win_y >= 0) {
+        _ = cfltk.Fl_Window_resize(win, app.prefs.win_x, app.prefs.win_y, WW, WH);
     }
 
-    refreshBrowser();
-    if (vm_count > 0) selected_idx = 0;
-    refreshDetails();
+    app.refreshBrowser();
+    if (app.vm_count > 0) app.selected_idx = 0;
+    app.refreshDetails();
 
     // Start periodic VM status check (every 2 seconds)
     _ = cfltk.Fl_add_timeout(2.0, timerCB, null);
@@ -2011,7 +1605,7 @@ pub fn main() void {
     _ = cfltk.Fl_add_handler(kbHandler);
 
     // Start display refresh timer (every 100ms for VNC framebuffer updates)
-    _ = cfltk.Fl_add_timeout(0.1, displayTimerCB, null);
+    _ = cfltk.Fl_add_timeout(0.1, display_mod.displayTimerCB, null);
 
     // Console poll timer (every 500ms)
     _ = cfltk.Fl_add_timeout(0.5, consoleTimerCB, null);
