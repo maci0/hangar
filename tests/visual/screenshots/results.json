@@ -1,0 +1,164 @@
+{
+  "passed": 10,
+  "total": 10,
+  "tests": [
+    {
+      "name": "app_launches",
+      "passed": true,
+      "message": "App process is running",
+      "screenshot": null,
+      "stats": null
+    },
+    {
+      "name": "window_renders",
+      "passed": true,
+      "message": "Window rendered (1280x800, non-bg=60.1%)",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/02_main_window.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 20.994,
+        "mean_g": 22.863,
+        "mean_b": 24.727,
+        "stddev_r": 25.582,
+        "stddev_g": 26.976,
+        "stddev_b": 28.443,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.601
+      }
+    },
+    {
+      "name": "has_ui_elements",
+      "passed": true,
+      "message": "UI complexity: 60.1% non-background pixels, stddev=(25.6, 27.0, 28.5)",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/03_ui_elements.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 20.998,
+        "mean_g": 22.867,
+        "mean_b": 24.731,
+        "stddev_r": 25.602,
+        "stddev_g": 26.994,
+        "stddev_b": 28.459,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.601
+      }
+    },
+    {
+      "name": "correct_dimensions",
+      "passed": true,
+      "message": "Screenshot is 1280x800 (Xvfb is 1280x800)",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/04_dimensions.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 20.998,
+        "mean_g": 22.867,
+        "mean_b": 24.731,
+        "stddev_r": 25.602,
+        "stddev_g": 26.994,
+        "stddev_b": 28.459,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.601
+      }
+    },
+    {
+      "name": "click_new_vm_button",
+      "passed": true,
+      "message": "UI changed after click (pixel_diff=0.000, mean_diff=9.2)",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/05b_after_new_vm_click.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 18.149,
+        "mean_g": 19.815,
+        "mean_b": 21.434,
+        "stddev_r": 22.663,
+        "stddev_g": 23.853,
+        "stddev_b": 25.117,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.601
+      }
+    },
+    {
+      "name": "new_vm_dialog_content",
+      "passed": true,
+      "message": "Dialog complexity: 60.1% non-bg pixels",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/06_new_vm_dialog.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 18.149,
+        "mean_g": 19.815,
+        "mean_b": 21.434,
+        "stddev_r": 22.663,
+        "stddev_g": 23.853,
+        "stddev_b": 25.117,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.601
+      }
+    },
+    {
+      "name": "type_vm_name",
+      "passed": true,
+      "message": "Typed 'TestVM' into name field (mean_diff=0.1)",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/07b_after_typing.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 18.153,
+        "mean_g": 19.792,
+        "mean_b": 21.396,
+        "stddev_r": 22.671,
+        "stddev_g": 23.749,
+        "stddev_b": 24.917,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.601
+      }
+    },
+    {
+      "name": "close_dialog",
+      "passed": true,
+      "message": "Dialog closed (mean_diff=9.1)",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/08_after_dialog_close.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 21.005,
+        "mean_g": 22.82,
+        "mean_b": 24.656,
+        "stddev_r": 25.615,
+        "stddev_g": 26.815,
+        "stddev_b": 28.113,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.601
+      }
+    },
+    {
+      "name": "app_still_running",
+      "passed": true,
+      "message": "App process still alive after all tests",
+      "screenshot": null,
+      "stats": null
+    },
+    {
+      "name": "final_screenshot",
+      "passed": true,
+      "message": "Final state: 1280x800, non-bg=60.1%",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/10_final_state.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 21.005,
+        "mean_g": 22.82,
+        "mean_b": 24.656,
+        "stddev_r": 25.615,
+        "stddev_g": 26.815,
+        "stddev_b": 28.113,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.601
+      }
+    }
+  ]
+}

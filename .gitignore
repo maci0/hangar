@@ -1,0 +1,43 @@
+# Zig build output / cache
+zig-out/
+.zig-cache/
+zig-cache/
+
+# Object files & loose compiled binaries (scratch from IUP-era experiments)
+*.o
+*.a.tmp
+src/*.tmp.*
+main_iup
+main_iup_table
+kvmgui-fltk
+test_cairo_iup
+test_rfb_cimport
+check_syntax
+
+# Secrets / local env
+.env
+*.local
+
+# Editor / tool caches
+.codegraph/
+.opencode/
+.ruff_cache/
+~
+
+# Test sandbox
+test_home/
+
+# Archives
+*.tar.gz
+
+# External dependency clones (have their own .git — vendor/manage separately)
+deps/
+ref/
+legacy/
+
+# Scratch C reference samples / loose experiments
+SDLvncviewer.c
+vncviewer.c
+rfbclient.h
+rfbproto.h
+test_serial.zig

@@ -1,0 +1,103 @@
+{
+  "passed": 6,
+  "total": 6,
+  "tests": [
+    {
+      "name": "app_loads_vm",
+      "passed": true,
+      "message": "App running, UI rendered (87.0% non-bg)",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/vnc_e2e/01_app_loaded.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 250.088,
+        "mean_g": 249.978,
+        "mean_b": 249.86,
+        "stddev_r": 16.798,
+        "stddev_g": 16.428,
+        "stddev_b": 16.407,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.87
+      }
+    },
+    {
+      "name": "click_start",
+      "passed": true,
+      "message": "QEMU VNC listening on port 5955",
+      "screenshot": null,
+      "stats": null
+    },
+    {
+      "name": "vnc_connects",
+      "passed": true,
+      "message": "App still running after VNC connection period",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/vnc_e2e/03_vnc_connected.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 249.903,
+        "mean_g": 249.782,
+        "mean_b": 249.658,
+        "stddev_r": 16.934,
+        "stddev_g": 16.562,
+        "stddev_b": 16.485,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.859
+      }
+    },
+    {
+      "name": "display_tab_shows_framebuffer",
+      "passed": true,
+      "message": "Tab switch detected: mean_diff=484.7, pixel_diff=0.013 \u2014 VNC framebuffer visible",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/vnc_e2e/04b_display_tab.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 88.348,
+        "mean_g": 88.219,
+        "mean_b": 88.092,
+        "stddev_r": 115.96,
+        "stddev_g": 115.761,
+        "stddev_b": 115.593,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.872
+      }
+    },
+    {
+      "name": "display_area_content",
+      "passed": true,
+      "message": "Display area 1080x642: mean=(27,27,27), stddev=(73.9,73.8,73.8), non-bg=91.4% \u2014 dark (BIOS screen)",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/vnc_e2e/05_display_area.png",
+      "stats": {
+        "width": 1080,
+        "height": 642,
+        "mean_r": 27.073,
+        "mean_g": 27.058,
+        "mean_b": 27.045,
+        "stddev_r": 73.863,
+        "stddev_g": 73.827,
+        "stddev_b": 73.796,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.914
+      }
+    },
+    {
+      "name": "app_still_running",
+      "passed": true,
+      "message": "App process still alive after VNC display test",
+      "screenshot": "/home/maci/Desktop/Projects/kvmgui/tests/visual/screenshots/vnc_e2e/06_final_state.png",
+      "stats": {
+        "width": 1280,
+        "height": 800,
+        "mean_r": 88.348,
+        "mean_g": 88.219,
+        "mean_b": 88.092,
+        "stddev_r": 115.96,
+        "stddev_g": 115.761,
+        "stddev_b": 115.593,
+        "is_blank": false,
+        "non_bg_pixel_ratio": 0.872
+      }
+    }
+  ]
+}
