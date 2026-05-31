@@ -13,7 +13,11 @@ const usock = @import("usock.zig");
 const hv_iface = @import("hv/interface.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
 const ovf = @import("ovf.zig");
+const vnet = @import("vnet.zig");
 const appio = @import("appio.zig");
+const autoprotect = @import("autoprotect.zig");
+
+extern fn time(t: ?*c_long) c_long;
 
 const MAX_VMS = 64;
 var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
@@ -22,6 +26,7 @@ var prefs: vm.Prefs = .{};
 
 const PORT: u16 = 9080;
 const BIND_ADDR: [4]u8 = .{ 0, 0, 0, 0 }; // 0.0.0.0 — accessible remotely
+const API_KEY: []const u8 = "kvmgui"; // default API key for X-API-Key auth
 var auth_token: [64]u8 = [_]u8{0} ** 64;
 var auth_token_len: usize = 0;
 
@@ -59,6 +64,72 @@ const SHUT_WR: c_int = 1;
 const F_SETFL: c_int = 4;
 const O_NONBLOCK: c_int = 2048;
 
+/// Simple API-key check. Reads X-API-Key header from request.
+/// GET /api/vms, /api/health, /api/fb/N, /api/snapshot/list/N, WebSocket upgrade are exempt.
+fn checkAuth(req: []const u8) bool {
+    if (auth_token_len > 0) {
+        const key_start = std.mem.indexOf(u8, req, "X-API-Key: ") orelse return false;
+        const key_val_start = key_start + "X-API-Key: ".len;
+        const key_end = std.mem.indexOfScalar(u8, req[key_val_start..], '\r') orelse req.len;
+        const provided = req[key_val_start .. key_val_start + key_end];
+        return std.mem.eql(u8, provided, auth_token[0..auth_token_len]);
+    }
+    // No custom token set — fall back to built-in API_KEY
+    const key_start = std.mem.indexOf(u8, req, "X-API-Key: ") orelse return false;
+    const key_val_start = key_start + "X-API-Key: ".len;
+    const key_end = std.mem.indexOfScalar(u8, req[key_val_start..], '\r') orelse req.len;
+    const provided = req[key_val_start .. key_val_start + key_end];
+    return std.mem.eql(u8, provided, API_KEY);
+}
+
+/// Write an HTTP response with status code, content type, CORS headers, and body.
+fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8) void {
+    const status_line: []const u8 = switch (status) {
+        200 => "HTTP/1.1 200 OK\r\n",
+        201 => "HTTP/1.1 201 Created\r\n",
+        400 => "HTTP/1.1 400 Bad Request\r\n",
+        404 => "HTTP/1.1 404 Not Found\r\n",
+        500 => "HTTP/1.1 500 Internal Server Error\r\n",
+        else => "HTTP/1.1 200 OK\r\n",
+    };
+    _ = c.write(conn, status_line.ptr, status_line.len);
+
+    // CORS headers (allow cross-origin browser access)
+    _ = c.write(conn, @ptrCast("Access-Control-Allow-Origin: *\r\n"), 32);
+    _ = c.write(conn, @ptrCast("Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n"), 53);
+    _ = c.write(conn, @ptrCast("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"), 48);
+
+    _ = c.write(conn, @ptrCast("Content-Type: "), 14);
+    _ = c.write(conn, ct.ptr, ct.len);
+    _ = c.write(conn, @ptrCast("\r\nContent-Length: "), 18);
+    var len_buf: [16]u8 = undefined;
+    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{body.len}) catch "0";
+    _ = c.write(conn, len_str.ptr, len_str.len);
+    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 25);
+    _ = c.write(conn, body.ptr, body.len);
+}
+
+/// Write HTTP headers for a streaming response (no Content-Length, uses chunked or raw stream).
+fn writeStreamHeaders(conn: c.fd_t, status: u16, ct: []const u8, content_len: u64) void {
+    const status_line: []const u8 = switch (status) {
+        200 => "HTTP/1.1 200 OK\r\n",
+        404 => "HTTP/1.1 404 Not Found\r\n",
+        500 => "HTTP/1.1 500 Internal Server Error\r\n",
+        else => "HTTP/1.1 200 OK\r\n",
+    };
+    _ = c.write(conn, status_line.ptr, status_line.len);
+    _ = c.write(conn, @ptrCast("Access-Control-Allow-Origin: *\r\n"), 32);
+    _ = c.write(conn, @ptrCast("Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n"), 53);
+    _ = c.write(conn, @ptrCast("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"), 48);
+    _ = c.write(conn, @ptrCast("Content-Type: "), 14);
+    _ = c.write(conn, ct.ptr, ct.len);
+    _ = c.write(conn, @ptrCast("\r\nContent-Length: "), 18);
+    var len_buf: [32]u8 = undefined;
+    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{content_len}) catch "0";
+    _ = c.write(conn, len_str.ptr, len_str.len);
+    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 25);
+}
+
 fn acceptLoop(fd: c.fd_t) void {
     while (true) {
         const conn = c.accept(fd, null, null);
@@ -74,6 +145,12 @@ fn serveHtml(conn: c.fd_t) void {
     if (n <= 0) return;
     const req = buf[0..@intCast(n)];
 
+    // ── CORS preflight ──
+    if (std.mem.startsWith(u8, req, "OPTIONS ")) {
+        writeHttpResponse(conn, 200, "text/plain", "ok");
+        return;
+    }
+
     // ── WebSocket VNC Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/vnc/")) {
         handleWsVnc(conn, req) catch {};
@@ -86,9 +163,44 @@ fn serveHtml(conn: c.fd_t) void {
         return;
     }
 
-    // Route: GET / → index page, GET /api/vms → JSON, POST /api/power/{idx} → toggle
+    // ── File download (streaming) routes — handled first ──
+    if (std.mem.startsWith(u8, req, "GET /api/vm/") and std.mem.indexOf(u8, req, "/disk2/download") != null) {
+        handleDisk2Download(conn, req) catch {};
+        return;
+    }
+    if (std.mem.startsWith(u8, req, "POST /api/vm/") and std.mem.indexOf(u8, req, "/upload-disk") != null) {
+        const resp = handleUploadDisk(req) catch "upload err";
+        const status: u16 = if (std.mem.eql(u8, resp, "ok")) @as(u16, 200) else 400;
+        writeHttpResponse(conn, status, "text/plain", resp);
+        return;
+    }
+    if (std.mem.startsWith(u8, req, "POST /api/export/")) {
+        handleExport(conn, req) catch {
+            writeHttpResponse(conn, 500, "text/plain", "export err");
+        };
+        return;
+    }
+
+    // ── Standard routes ──
     var response: []const u8 = "";
     var content_type: []const u8 = "text/html";
+    var status: u16 = 200;
+
+    // Auth: check X-API-Key for mutating endpoints
+    const needs_auth = !std.mem.startsWith(u8, req, "GET /api/vms") and
+        !std.mem.startsWith(u8, req, "GET /api/health") and
+        !std.mem.startsWith(u8, req, "GET /api/fb/") and
+        !std.mem.startsWith(u8, req, "GET /api/snapshot/list/") and
+        !std.mem.startsWith(u8, req, "GET /api/config") and
+        !std.mem.startsWith(u8, req, "GET /api/vnets") and
+        !std.mem.startsWith(u8, req, "GET /api/vm/") and
+        !std.mem.startsWith(u8, req, "GET / ") and
+        !std.mem.eql(u8, req[0..@min(req.len, "GET /favicon".len)], "GET /favicon");
+
+    if (needs_auth and !checkAuth(req)) {
+        writeHttpResponse(conn, 400, "text/plain", "auth required");
+        return;
+    }
 
     if (std.mem.startsWith(u8, req, "GET /api/vms")) {
         content_type = "application/json";
@@ -163,22 +275,37 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/cad/")) {
         response = try handleCad(req);
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/export/")) {
-        response = handleExport(req) catch "export err";
+    } else if (std.mem.startsWith(u8, req, "GET /api/vnets")) {
+        content_type = "application/json";
+        response = handleVnetsJson() catch "[]";
+    } else if (std.mem.startsWith(u8, req, "POST /api/vnets/save")) {
+        response = handleVnetsSave(req) catch "save err";
+        content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "POST /api/config")) {
+        response = handleConfigSave(req) catch "save err";
+        content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "GET / ")) {
+        response = index_html;
+        content_type = "text/html; charset=utf-8";
+    } else if (std.mem.startsWith(u8, req, "GET /favicon")) {
+        status = 404;
+        response = "not found";
         content_type = "text/plain";
     } else {
         response = index_html;
         content_type = "text/html; charset=utf-8";
     }
 
-    _ = c.write(conn, @ptrCast("HTTP/1.1 200 OK\r\nContent-Type: "), 36);
-    _ = c.write(conn, content_type.ptr, content_type.len);
-    _ = c.write(conn, @ptrCast("\r\nContent-Length: "), 18);
-    var len_buf: [16]u8 = undefined;
-    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{response.len}) catch "0";
-    _ = c.write(conn, len_str.ptr, len_str.len);
-    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 25);
-    _ = c.write(conn, response.ptr, response.len);
+    // Map known error strings to HTTP status codes
+    if (std.mem.eql(u8, response, "invalid") or std.mem.eql(u8, response, "invalid idx")) {
+        status = 404;
+    } else if (std.mem.eql(u8, response, "no disk") or std.mem.eql(u8, response, "not running")) {
+        status = 400;
+    } else if (std.mem.indexOf(u8, response, "err") != null) {
+        status = 500;
+    }
+
+    writeHttpResponse(conn, status, content_type, response);
 }
 
 /// Return the raw vms.json content for remote clients to sync their state.
@@ -932,17 +1059,123 @@ fn handleCad(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-fn handleExport(req: []const u8) ![]const u8 {
-    const idx = parseIdx(req, "POST /api/export/") orelse return "invalid";
+/// Stream the disk2 image file to the client as a download.
+fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
+    const idx = parseIdx(req, "GET /api/vm/") orelse return;
+    if (idx >= vm_count) return;
+    const v = &vms[idx];
+    if (!v.hasDisk2()) return;
+
+    const disk2_path = v.getDisk2PathSlice();
+    const fd = c.open(@ptrCast(disk2_path.ptr), .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return;
+    defer _ = c.close(fd);
+
+    const file_size: u64 = @intCast(c.lseek(fd, 0, 2)); // SEEK_END = 2
+    _ = c.lseek(fd, 0, 0); // SEEK_SET = 0
+
+    const basename = std.fs.path.basename(disk2_path);
+    var cd_header: [512]u8 = undefined;
+    const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{basename}) catch return;
+    _ = c.write(conn, @ptrCast("HTTP/1.1 200 OK\r\n"), 17);
+    _ = c.write(conn, @ptrCast("Access-Control-Allow-Origin: *\r\n"), 32);
+    _ = c.write(conn, @ptrCast("Content-Type: application/octet-stream\r\n"), 40);
+    _ = c.write(conn, @ptrCast("Content-Disposition: "), 21);
+    _ = c.write(conn, cd.ptr, cd.len);
+    _ = c.write(conn, @ptrCast("\r\nContent-Length: "), 18);
+    var len_buf: [32]u8 = undefined;
+    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{file_size}) catch "0";
+    _ = c.write(conn, len_str.ptr, len_str.len);
+    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 25);
+
+    var buf: [65536]u8 = undefined;
+    while (true) {
+        const n = c.read(fd, &buf, buf.len);
+        if (n <= 0) break;
+        _ = c.write(conn, &buf, @intCast(n));
+    }
+}
+
+/// Accept a multipart/form-data file upload for disk2.
+fn handleUploadDisk(req: []const u8) ![]const u8 {
+    const idx = parseIdx(req, "POST /api/vm/") orelse return "invalid";
     if (idx >= vm_count) return "invalid idx";
+
+    // Parse multipart boundary from Content-Type header
+    const ct_start = std.mem.indexOf(u8, req, "Content-Type: multipart/form-data; boundary=") orelse return "no boundary";
+    const bd_val_start = ct_start + "Content-Type: multipart/form-data; boundary=".len;
+    const bd_end = std.mem.indexOfScalar(u8, req[bd_val_start..], '\r') orelse req.len;
+    const boundary = req[bd_val_start .. bd_val_start + bd_end];
+
+    // Locate body (after double CRLF)
+    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
+    const body = req[body_start + 4 ..];
+
+    // Find first boundary
+    const first_bd = std.mem.indexOf(u8, body, boundary) orelse return "no boundary in body";
+    // Skip boundary line
+    var pos = first_bd + boundary.len;
+    if (pos + 2 <= body.len and body[pos] == '\r' and body[pos + 1] == '\n') pos += 2;
+    if (pos < body.len and body[pos] == '\n') pos += 1;
+
+    // Skip part headers (Content-Disposition, Content-Type)
+    while (pos + 1 < body.len) {
+        if (body[pos] == '\r' and body[pos + 1] == '\n') {
+            pos += 2;
+            break;
+        }
+        if (body[pos] == '\n') {
+            pos += 1;
+            break;
+        }
+        pos += 1;
+    }
+
+    // Find closing boundary (--boundary--\r\n)
+    const end_bd = std.mem.indexOf(u8, body[pos..], boundary) orelse return "no end boundary";
+    const file_data = body[pos .. pos + end_bd - 2]; // subtract the leading \r\n of boundary
+
+    // Build destination path: same dir as primary disk, with _disk2 suffix + same extension
+    const v = &vms[idx];
+    const primary = v.getDiskPathSlice();
+    const ext = std.fs.path.extension(primary);
+    const dir = std.fs.path.dirname(primary) orelse primary;
+
+    var dest_buf: [vm.MAX_PATH]u8 = undefined;
+    if (ext.len > 0 and ext.len < 16) {
+        const name_no_ext = primary[dir.len + 1 .. primary.len - ext.len];
+        const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2{s}", .{ dir, name_no_ext, ext }) catch return "path err";
+        std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
+        vms[idx].setDisk2Path(dest);
+    } else {
+        const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2", .{ dir, primary[dir.len + 1 ..] }) catch return "path err";
+        std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
+        vms[idx].setDisk2Path(dest);
+    }
+    persist.save(&vms, vm_count, prefs) catch {};
+    return "ok";
+}
+
+/// Create OVF+VMDK export, tar+gzip it, and stream the result as a download.
+fn handleExport(conn: c.fd_t, req: []const u8) !void {
+    const idx = parseIdx(req, "POST /api/export/") orelse return;
+    if (idx >= vm_count) return;
     const v = &vms[idx];
 
     const dir_path = "/tmp/ovf_export";
     std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {};
 
+    // Remove previous export if any, then recreate
+    const tar_path = "/tmp/ovf_export.tar.gz";
+    _ = c.unlink(tar_path);
+    _ = c.unlink(dir_path); // in case it was a file (won't work on dir, but harmless)
+    // Ensure directory is empty
+    _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {};
+    std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {};
+
     const vmdk_name = "disk1.vmdk";
     var path_buf: [vm.MAX_PATH]u8 = undefined;
-    const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return "buf err";
+    const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return;
 
     const disk_cap: u64 = @as(u64, v.disk_size_gb) * 1024 * 1024 * 1024;
     const spec = ovf.Spec{
@@ -954,15 +1187,119 @@ fn handleExport(req: []const u8) ![]const u8 {
         .vmdk_size_bytes = 0,
         .has_network = v.nics[0].mode != .none,
     };
-    const xml = ovf.buildDescriptor(spec, std.heap.page_allocator) catch return "ovf err";
+    const xml = ovf.buildDescriptor(spec, std.heap.page_allocator) catch return;
     defer std.heap.page_allocator.free(xml);
 
     const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, v.getNameSlice() });
     defer std.heap.page_allocator.free(ovf_path);
-    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch return "write err";
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch return;
 
-    qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, std.heap.page_allocator) catch return "convert err";
-    return dir_path;
+    qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, std.heap.page_allocator) catch return;
+
+    // Tar+gzip the export directory
+    {
+        const tar_argv = [_][]const u8{ "tar", "-czf", tar_path, "-C", dir_path, "." };
+        qemu.runWait(&tar_argv, std.heap.page_allocator) catch return;
+    }
+
+    // Stream the tar.gz file
+    const tar_fd = c.open(tar_path, .{ .ACCMODE = .RDONLY });
+    if (tar_fd < 0) return;
+    defer _ = c.close(tar_fd);
+
+    const file_size: u64 = @intCast(c.lseek(tar_fd, 0, 2));
+    _ = c.lseek(tar_fd, 0, 0);
+
+    const filename = std.fmt.bufPrint(&path_buf, "{s}.ova", .{v.getNameSlice()}) catch "export.ova";
+    var cd_header: [512]u8 = undefined;
+    const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{filename}) catch return;
+
+    _ = c.write(conn, @ptrCast("HTTP/1.1 200 OK\r\n"), 17);
+    _ = c.write(conn, @ptrCast("Access-Control-Allow-Origin: *\r\n"), 32);
+    _ = c.write(conn, @ptrCast("Content-Type: application/octet-stream\r\n"), 40);
+    _ = c.write(conn, @ptrCast("Content-Disposition: "), 21);
+    _ = c.write(conn, cd.ptr, cd.len);
+    _ = c.write(conn, @ptrCast("\r\nContent-Length: "), 18);
+    var len_buf: [32]u8 = undefined;
+    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{file_size}) catch "0";
+    _ = c.write(conn, len_str.ptr, len_str.len);
+    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 25);
+
+    var buf: [65536]u8 = undefined;
+    while (true) {
+        const n = c.read(tar_fd, &buf, buf.len);
+        if (n <= 0) break;
+        _ = c.write(conn, &buf, @intCast(n));
+    }
+
+    // Cleanup
+    _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {};
+    _ = c.unlink(tar_path);
+}
+
+fn getBody(req: []const u8) ?[]const u8 {
+    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return null;
+    return req[body_start + 4 ..];
+}
+
+fn handleVnetsJson() ![]const u8 {
+    const set = vnet.load();
+    return vnet.toJson(&set, std.heap.page_allocator);
+}
+
+/// Parse key=value body data. Returns empty slice when not found.
+fn bodyVal(body: []const u8, key: []const u8) []const u8 {
+    var pat_buf: [64]u8 = undefined;
+    const pat = std.fmt.bufPrint(&pat_buf, "{s}=", .{key}) catch return "";
+    if (std.mem.indexOf(u8, body, pat)) |idx| {
+        const start = idx + pat.len;
+        const end = std.mem.indexOfScalar(u8, body[start..], '&') orelse body.len;
+        return body[start .. start + end];
+    }
+    return "";
+}
+
+fn handleVnetsSave(req: []const u8) ![]const u8 {
+    const body = getBody(req) orelse return "no body";
+    // Body is raw JSON — parse and save
+    var set = vnet.fromJson(body);
+    if (set.count == 0) {
+        set = vnet.NetworkSet.defaults();
+    }
+    try vnet.save(&set);
+    return "ok";
+}
+
+fn handleConfigSave(req: []const u8) ![]const u8 {
+    const body = getBody(req) orelse return "no body";
+
+    {
+        const v = bodyVal(body, "theme");
+        if (v.len > 0) prefs.theme = vm.Theme.fromStr(v);
+    }
+    {
+        const v = bodyVal(body, "default_memory_mb");
+        if (v.len > 0) prefs.default_memory_mb = std.fmt.parseInt(u32, v, 10) catch prefs.default_memory_mb;
+    }
+    {
+        const v = bodyVal(body, "default_cpu_cores");
+        if (v.len > 0) prefs.default_cpu_cores = std.fmt.parseInt(u32, v, 10) catch prefs.default_cpu_cores;
+    }
+    {
+        const v = bodyVal(body, "autoprotect_enabled");
+        if (v.len > 0) prefs.autoprotect_enabled_default = std.mem.eql(u8, v, "true") or std.mem.eql(u8, v, "1");
+    }
+    {
+        const v = bodyVal(body, "autoprotect_interval");
+        if (v.len > 0) prefs.autoprotect_interval_min_default = std.fmt.parseInt(u32, v, 10) catch prefs.autoprotect_interval_min_default;
+    }
+    {
+        const v = bodyVal(body, "autoprotect_max");
+        if (v.len > 0) prefs.autoprotect_max_default = std.fmt.parseInt(u32, v, 10) catch prefs.autoprotect_max_default;
+    }
+
+    persist.save(&vms, vm_count, prefs) catch {};
+    return "ok";
 }
 
 const index_html =
@@ -988,7 +1325,8 @@ const index_html =
     \\</style></head><body>
     \\<aside><h2>KVMGUI</h2><input id="search" placeholder="Filter VMs..." style="width:100%;padding:4px 8px;margin-bottom:8px;background:#2c2f36;color:#e6e7ea;border:1px solid #3a3e46;border-radius:4px;font-size:12px" oninput="filterList()"><div id="vmlist"></div>
     \\<div style="margin-top:auto"><button class="btn primary" style="width:100%" onclick="newVm()">+ New VM</button></div></aside>
-    \\<main><div id="display" style="background:#000;border-radius:8px;margin-bottom:16px;display:none"><canvas id="fbcanvas" width="640" height="480" style="width:100%;max-height:400px"></canvas></div><div id="serialpanel"><textarea id="serialterm" readonly></textarea></div><div class="toolbar">
+    \\<main><div id="display" style="background:#000;border-radius:8px;margin-bottom:16px;display:none"><canvas id="fbcanvas" width="640" height="480" style="width:100%;max-height:400px"></canvas></div><div id="serialpanel"><textarea id="serialterm" readonly></textarea><div style="display:flex;gap:8px;padding:4px 8px"><button class="btn danger" onclick="manualDisconnectSerial()" style="font-size:11px;padding:2px 8px">Disconnect</button></div></div><div class="toolbar">
+    \\<button class="btn primary" onclick="newdlg.showModal()">+ New VM</button>
     \\<button id="powerbtn" class="btn primary" onclick="powerToggle()">▶ Power On</button>
     \\<button class="btn" onclick="pauseGuest()">Pause</button>
     \\<button class="btn" onclick="resumeGuest()">Resume</button>
@@ -1002,6 +1340,10 @@ const index_html =
     \\<button class="btn" onclick="importGuest()">Import</button>
     \\<button class="btn" onclick="takeSnapshot()">Snapshot</button>
     \\<button class="btn" onclick="exportOvf()">Export OVF</button>
+    \\<button class="btn" onclick="openVnets()">VNet Editor</button>
+    \\<button class="btn" onclick="openPrefs()">Preferences</button>
+    \\<button class="btn" onclick="batchStart()">▶ Start All</button>
+    \\<button class="btn danger" onclick="batchStop()">⏹ Stop All</button>
     \\<button class="btn danger" onclick="deleteVm()">Delete</button>
     \\</div><h1 id="vmname">Select a VM</h1>
     \\<div id="details"></div></main>
@@ -1052,18 +1394,58 @@ const index_html =
     \\<label style="font-size:11px;color:#9aa1ab">Num Displays</label><input id="e_num_displays" type="number" value="1">
     \\<label style="font-size:11px;color:#9aa1ab">Favorite</label><select id="e_favorite"><option value="0">No</option><option value="1">Yes</option></select>
     \\</div><div class="btn-row"><button class="btn" onclick="editdlg.close()">Cancel</button><button class="btn primary" onclick="saveVm()">Save</button></div></dialog>
+    \\<dialog id="snapdlg"><h3>Snapshots</h3>
+    \\<div style="margin-bottom:10px"><input id="s_tag" placeholder="Snapshot tag" style="width:60%"><button class="btn primary" onclick="takeSnapshotFromDlg()" style="width:35%">Take</button></div>
+    \\<div id="snaplist" style="max-height:300px;overflow-y:auto;font-size:13px"><div style="color:#666">Loading...</div></div>
+    \\<div class="btn-row"><button class="btn" onclick="snapdlg.close()">Close</button></div></dialog>
+    \\<dialog id="vnetdlg"><h3>Virtual Network Editor</h3>
+    \\<div style="display:flex;gap:10px"><div style="width:40%"><select id="vnet_sel" size="8" style="width:100%;height:200px;background:#16171a;color:#e6e7ea;border:1px solid #3a3e46;border-radius:4px" onchange="onVnetSelect()"></select>
+    \\<div class="btn-row"><button class="btn" onclick="vnetAdd()">Add</button><button class="btn danger" onclick="vnetRemove()">Remove</button><button class="btn" onclick="vnetDefaults()">Use Defaults</button></div></div>
+    \\<div style="width:60%"><label style="font-size:11px;color:#9aa1ab">Name</label><input id="vn_name">
+    \\<label style="font-size:11px;color:#9aa1ab">Type</label><select id="vn_type"><option value="bridged">Bridged</option><option value="nat">NAT</option><option value="host_only">Host-only</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">Subnet</label><input id="vn_subnet" placeholder="192.168.0.0">
+    \\<label style="font-size:11px;color:#9aa1ab">Mask</label><input id="vn_mask" placeholder="255.255.255.0">
+    \\<label style="font-size:11px;color:#9aa1ab">DHCP</label><select id="vn_dhcp"><option value="0">No</option><option value="1">Yes</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">DHCP Start</label><input id="vn_dstart" placeholder="192.168.0.128">
+    \\<label style="font-size:11px;color:#9aa1ab">DHCP End</label><input id="vn_dend" placeholder="192.168.0.254">
+    \\<label style="font-size:11px;color:#9aa1ab">Host Interface</label><input id="vn_iface" placeholder="eth0 (bridged only)">
+    \\<label style="font-size:11px;color:#9aa1ab">Gateway (NAT only)</label><input id="vn_gw" placeholder="192.168.0.1">
+    \\<label style="font-size:11px;color:#9aa1ab">Port Forwards</label><input id="vn_pf" placeholder="2222:192.168.0.128:22">
+    \\<div class="btn-row"><button class="btn" onclick="vnetSaveCurrent()">Apply Changes</button></div></div></div>
+    \\<div class="btn-row"><button class="btn primary" onclick="vnetSaveAll()">Save & Close</button><button class="btn" onclick="vnetdlg.close()">Cancel</button></div></dialog>
+    \\<dialog id="prefsdlg"><h3>Preferences</h3>
+    \\<label style="font-size:11px;color:#9aa1ab">Theme</label><select id="p_theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">Default Memory (MB)</label><input id="p_mem" type="number" value="2048">
+    \\<label style="font-size:11px;color:#9aa1ab">Default CPU Cores</label><input id="p_cpu" type="number" value="2">
+    \\<label style="font-size:11px;color:#9aa1ab">AutoProtect</label><select id="p_ap"><option value="0">Off</option><option value="1">On</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">AutoProtect Interval (min)</label><input id="p_apint" type="number" value="60">
+    \\<label style="font-size:11px;color:#9aa1ab">AutoProtect Max Snapshots</label><input id="p_apmax" type="number" value="10">
+    \\<div class="btn-row"><button class="btn" onclick="prefsdlg.close()">Cancel</button><button class="btn primary" onclick="savePrefs()">Save</button></div></dialog>
     \\<script>
     \\let vms=[]; let sel=null;
     \\function setStatus(s){document.getElementById('statusbar').textContent=s;}
-    \\async function refresh(){const r=await fetch('/api/vms');vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}
+    \\async function apiPost(url,body){try{const r=await fetch(url,{method:'POST',body});if(!r.ok)throw new Error(r.status);return r;}catch(e){setStatus('Error: '+e.message);return null;}}
+    \\async function refresh(){try{const r=await fetch('/api/vms');if(!r.ok)return;vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){}}
     \\function filterList(){const f=document.getElementById('search').value.toLowerCase();renderList(f);}
-    \\function renderList(filter){const e=document.getElementById('vmlist');const f=(filter||'').toLowerCase();let h='';for(let i=0;i<vms.length;i++){const v=vms[i];if(f&&!v.name.toLowerCase().includes(f))continue;
-    \\const color=v.status==='running'?'#22c55e':v.status==='paused'?'#f97316':v.status==='suspended'?'#eab308':'#9aa1ab';
-    \\const icon=v.status==='running'?'▶':v.status==='paused'?'⏸':'  ';
-    \\h+=`<div class="vm-item${sel===i?' active':''}" onclick="select(${i})"><span style="color:${color};font-weight:bold">${icon}</span> ${v.name}</div>`;}
+    \\function renderList(filter){const e=document.getElementById('vmlist');const f=(filter||'').toLowerCase();let h='';
+    \\const viz=vms.map((v,i)=>({i,show:!f||v.name.toLowerCase().includes(f),fav:v.favorite==='true',v}));
+    \\let hasFavs=false,hasNon=false;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;}
+    \\for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
+    \\const color=x.v.status==='running'?'#22c55e':x.v.status==='paused'?'#f97316':x.v.status==='suspended'?'#eab308':'#9aa1ab';
+    \\const icon=x.v.status==='running'?'▶':x.v.status==='paused'?'⏸':'  ';
+    \\h+=`<div class="vm-item${sel===x.i?' active':''}" onclick="select(${x.i})"><span style="color:${color};font-weight:bold">${icon}</span> ${x.v.name}<span style="margin-left:auto;cursor:pointer;color:#fbbf24" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}
+    \\if(hasFavs&&hasNon)h+='<div style="color:#555;font-size:11px;padding:4px 8px;border-bottom:1px solid #333;margin:4px 0">──────────</div>';
+    \\if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
+    \\const color=x.v.status==='running'?'#22c55e':x.v.status==='paused'?'#f97316':x.v.status==='suspended'?'#eab308':'#9aa1ab';
+    \\const icon=x.v.status==='running'?'▶':x.v.status==='paused'?'⏸':'  ';
+    \\h+=`<div class="vm-item${sel===x.i?' active':''}" onclick="select(${x.i})"><span style="color:${color};font-weight:bold">${icon}</span> ${x.v.name}<span style="margin-left:auto;cursor:pointer;color:#555" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}}
     \\e.innerHTML=h||'<div style="color:#666;font-size:12px">No VMs</div>';
-    \\let cnt=0,running=0;for(let v of vms){cnt++;if(v.status==='running')running++;}
-    \\document.getElementById('statusbar').textContent=cnt+' virtual machine(s)'+(running>0?', '+running+' running':'');}
+    \\let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
+    \\let parts=cnt+' virtual machine(s)';if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
+    \\if(sel!==null&&sel<vms.length){const v=vms[sel];document.getElementById('statusbar').textContent=v.name+' — '+v.status+'    |    '+parts;}
+    \\else document.getElementById('statusbar').textContent=parts;}
+    \\async function toggleFavorite(i){if(i>=vms.length)return;const v=vms[i];const fav=v.favorite==='true'?'0':'1';
+    \\const r=await apiPost('/api/save/'+i,'favorite='+fav);if(r){v.favorite=fav==='1'?'true':'false';renderList();if(sel===i)renderDetails();}}
     \\function select(i){sel=i;renderList();renderDetails();}
     \\function renderDetails(){if(sel===null||sel>=vms.length){document.getElementById('vmname').textContent='Select a VM';document.getElementById('details').innerHTML='';return;}
     \\const v=vms[sel];const sc=v.status==='running'?'#22c55e':v.status==='paused'?'#f97316':v.status==='suspended'?'#eab308':'#9aa1ab';
@@ -1086,25 +1468,39 @@ const index_html =
     \\if(v.port_forwards)h+=`<div class="detail-row"><span class="detail-label">Port Fwds</span>${v.port_forwards}</div>`;
     \\if(v.notes)h+=`<div class="detail-row"><span class="detail-label">Notes</span>${v.notes}</div>`;
     \\document.getElementById('details').innerHTML=h;updatePowerBtn();}
-    \\async function powerToggle(){if(sel===null)return;await fetch('/api/power/'+sel,{method:'POST'});refresh();}
-    \\async function shutdownGuest(){if(sel===null)return;await fetch('/api/shutdown/'+sel,{method:'POST'});setStatus('Shut down guest — ACPI power button sent.');}
-    \\async function resetGuest(){if(sel===null)return;await fetch('/api/reset/'+sel,{method:'POST'});setStatus('Reset guest — system_reset sent.');}
-    \\async function pauseGuest(){if(sel===null)return;await fetch('/api/pause/'+sel,{method:'POST'});refresh();setStatus('Paused guest — execution frozen.');}
-    \\async function resumeGuest(){if(sel===null)return;await fetch('/api/resume/'+sel,{method:'POST'});refresh();setStatus('Resumed guest — execution continued.');}
-    \\async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=prompt('Rename VM:',v.name);if(n&&n!==v.name){await fetch('/api/rename/'+sel,{method:'POST',body:'name='+encodeURIComponent(n)});refresh();}}
-    \\async function suspendGuest(){if(sel===null)return;await fetch('/api/suspend/'+sel,{method:'POST'});refresh();setStatus('Suspended VM to disk.');}
-    \\async function cloneGuest(){if(sel===null)return;if(!confirm('Clone this VM?'))return;await fetch('/api/clone/'+sel,{method:'POST'});refresh();setStatus('VM cloned.');}
-    \\async function importGuest(){const p=prompt('Path to VM disk image (.qcow2):');if(p){await fetch('/api/import',{method:'POST',body:encodeURIComponent(p)});refresh();setStatus('VM imported.');}}
-    \\async function takeSnapshot(){if(sel===null)return;const t=prompt('Snapshot tag name:');if(t){await fetch('/api/snapshot/take/'+sel,{method:'POST',body:'tag='+encodeURIComponent(t)});refresh();setStatus('Snapshot taken: '+t);}}
-    \\async function sendCad(){if(sel===null)return;await fetch('/api/cad/'+sel,{method:'POST'});setStatus('Ctrl+Alt+Del sent to guest.');}
-    \\async function exportOvf(){if(sel===null)return;const r=await fetch('/api/export/'+sel,{method:'POST'});const p=await r.text();setStatus('OVF exported to: '+p);}
+    \\async function powerToggle(){if(sel===null)return;const r=await apiPost('/api/power/'+sel);if(r)refresh();}
+    \\async function shutdownGuest(){if(sel===null)return;const r=await apiPost('/api/shutdown/'+sel);if(r)setStatus('Shut down guest — ACPI power button sent.');}
+    \\async function resetGuest(){if(sel===null)return;const r=await apiPost('/api/reset/'+sel);if(r)setStatus('Reset guest — system_reset sent.');}
+    \\async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/pause/'+sel);if(r){refresh();setStatus('Paused guest — execution frozen.');}}
+    \\async function resumeGuest(){if(sel===null)return;const r=await apiPost('/api/resume/'+sel);if(r){refresh();setStatus('Resumed guest — execution continued.');}}
+    \\async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=prompt('Rename VM:',v.name);if(n&&n!==v.name){const r=await apiPost('/api/rename/'+sel,'name='+encodeURIComponent(n));if(r)refresh();}}
+    \\async function suspendGuest(){if(sel===null)return;const r=await apiPost('/api/suspend/'+sel);if(r){refresh();setStatus('Suspended VM to disk.');}}
+    \\async function cloneGuest(){if(sel===null)return;if(!confirm('Clone this VM?'))return;const r=await apiPost('/api/clone/'+sel);if(r){refresh();setStatus('VM cloned.');}}
+    \\async function importGuest(){const p=prompt('Path to VM disk image (.qcow2):');if(p){const r=await apiPost('/api/import','path='+encodeURIComponent(p));if(r){refresh();setStatus('VM imported.');}}}
+    \\async function batchStart(){for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){await apiPost('/api/power/'+i);}}refresh();setStatus('Batch start complete.');}
+    \\async function batchStop(){for(let i=0;i<vms.length;i++){if(vms[i].status==='running'||vms[i].status==='paused'){await apiPost('/api/power/'+i);}}refresh();setStatus('Batch stop complete.');}
+    \\async function takeSnapshot(){if(sel===null)return;openSnapshots();}
+    \\async function takeSnapshotFromDlg(){if(sel===null)return;const t=document.getElementById('s_tag').value;if(!t){alert('Enter a tag name');return;}
+    \\const r=await apiPost('/api/snapshot/take/'+sel,'tag='+encodeURIComponent(t));if(r){document.getElementById('s_tag').value='';loadSnapshots();setStatus('Snapshot taken: '+t);}}
+    \\async function openSnapshots(){if(sel===null)return;document.getElementById('snapdlg').showModal();loadSnapshots();}
+    \\async function loadSnapshots(){if(sel===null)return;const r=await fetch('/api/snapshot/list/'+sel);const t=await r.text();
+    \\const el=document.getElementById('snaplist');if(!t||t==='(none)'){el.innerHTML='<div style="color:#666">No snapshots</div>';return;}
+    \\const lines=t.split('\\n');let h='';for(const ln of lines){if(!ln.trim())continue;if(/^\\s*(ID|Snapshot)\\s/.test(ln))continue;const parts=ln.trim().split(/\\s+/);const tag=parts[1]||ln;const rest=parts.slice(2).join(' ');
+    \\h+=`<div style="padding:4px 0;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center"><span title="${rest}">${tag}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" onclick="revertSnapshot('${tag}')">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" onclick="deleteSnapshot('${tag}')">Del</button></span></div>`;}
+    \\el.innerHTML=h;}
+    \\async function revertSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Revert to snapshot "'+tag+'"? This will discard current state.'))return;
+    \\const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);snapdlg.close();}}
+    \\async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Delete snapshot "'+tag+'"?'))return;
+    \\const r=await apiPost('/api/snapshot/delete/'+sel,'tag='+encodeURIComponent(tag));if(r){loadSnapshots();setStatus('Deleted snapshot: '+tag);}}
+    \\async function sendCad(){if(sel===null)return;const r=await apiPost('/api/cad/'+sel);if(r)setStatus('Ctrl+Alt+Del sent to guest.');}
+    \\async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/export/'+sel,{method:'POST',headers:{'X-API-Key':'kvmgui'}});if(!r.ok){setStatus('Export failed: '+r.status);return;}const blob=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=vms[sel].name+'.ova';a.click();setStatus('Export downloaded.');}catch(e){setStatus('Export error: '+e);}}
     \\function updatePowerBtn(){const b=document.getElementById('powerbtn');if(sel===null||sel>=vms.length){b.textContent='▶ Power On';b.className='btn primary';return;}
-    \\const v=vms[sel];if(v.status==='running'){b.textContent='⏹ Power Off';b.className='btn danger';}else if(v.status==='paused'){b.textContent='▶ Resume';b.className='btn primary';}else{b.textContent='▶ Power On';b.className='btn primary';}}
+    \\const v=vms[sel];if(v.status==='running'||v.status==='paused'){b.textContent='⏹ Power Off';b.className='btn danger';}else{b.textContent='▶ Power On';b.className='btn primary';}}
     \\function newVm(){document.getElementById('newdlg').showModal();}
     \\async function createVm(){const n=document.getElementById('n_name').value;const m=document.getElementById('n_mem').value;
     \\const c=document.getElementById('n_cpu').value;const d=document.getElementById('n_disk').value;
-    \\await fetch(`/api/new`,{method:'POST',body:`name=${encodeURIComponent(n)}&mem=${m}&cpu=${c}&disk=${d}`});document.getElementById('newdlg').close();refresh();}
-    \\async function deleteVm(){if(sel===null)return;if(!confirm('Delete this VM?'))return;await fetch('/api/delete/'+sel,{method:'POST'});sel=null;refresh();}
+    \\const r=await apiPost('/api/new','name='+encodeURIComponent(n)+'&mem='+m+'&cpu='+c+'&disk='+d);if(r){document.getElementById('newdlg').close();refresh();}}
+    \\async function deleteVm(){if(sel===null)return;if(!confirm('Delete this VM?'))return;const r=await apiPost('/api/delete/'+sel);if(r){sel=null;refresh();}}
     \\function editVm(){if(sel===null)return;const v=vms[sel];
     \\document.getElementById('e_name').value=v.name||'';document.getElementById('e_mem').value=v.mem||2048;
     \\document.getElementById('e_cpu').value=v.cpu||2;document.getElementById('e_disk').value=v.disk||20;
@@ -1133,7 +1529,42 @@ const index_html =
     \\'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order',
     \\'enable_kvm','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite']
     \\.map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
-    \\await fetch('/api/save/'+sel,{method:'POST',body});document.getElementById('editdlg').close();refresh();}
+    \\const r=await apiPost('/api/save/'+sel,body);if(r){document.getElementById('editdlg').close();refresh();}
+    \\// ── VNet Editor ──
+    \\let vnetsData=[],vnetIdx=-1;
+    \\async function openVnets(){await loadVnets();document.getElementById('vnetdlg').showModal();}
+    \\async function loadVnets(){const r=await fetch('/api/vnets');if(r.ok)vnetsData=await r.json();renderVnetList();}
+    \\function renderVnetList(){const sel=document.getElementById('vnet_sel');let h='';if(!vnetsData.networks)vnetsData={networks:[]};
+    \\for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const line=n.name+' — '+n.type;h+=`<option value="${i}"${i===vnetIdx?' selected':''}>${line}</option>`;}
+    \\sel.innerHTML=h;if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length)showVnetFields(vnetIdx);}
+    \\function onVnetSelect(){const s=document.getElementById('vnet_sel');vnetIdx=parseInt(s.value);if(vnetIdx>=0)showVnetFields(vnetIdx);}
+    \\function showVnetFields(i){const n=vnetsData.networks[i];if(!n)return;
+    \\document.getElementById('vn_name').value=n.name||'';document.getElementById('vn_type').value=n.type||'nat';
+    \\document.getElementById('vn_subnet').value=n.subnet||'';document.getElementById('vn_mask').value=n.mask||'';
+    \\document.getElementById('vn_dhcp').value=n.dhcp?'1':'0';document.getElementById('vn_dstart').value=n.dhcp_start||'';
+    \\document.getElementById('vn_dend').value=n.dhcp_end||'';document.getElementById('vn_iface').value=n.host_iface||'';
+    \\document.getElementById('vn_gw').value=n.gateway||'';document.getElementById('vn_pf').value=n.port_forwards||'';}
+    \\function vnetSaveCurrent(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;const n=vnetsData.networks[vnetIdx];
+    \\n.name=document.getElementById('vn_name').value;n.type=document.getElementById('vn_type').value;
+    \\n.subnet=document.getElementById('vn_subnet').value;n.mask=document.getElementById('vn_mask').value;
+    \\n.dhcp=document.getElementById('vn_dhcp').value==='1';n.dhcp_start=document.getElementById('vn_dstart').value;
+    \\n.dhcp_end=document.getElementById('vn_dend').value;n.host_iface=document.getElementById('vn_iface').value;
+    \\n.gateway=document.getElementById('vn_gw').value;n.port_forwards=document.getElementById('vn_pf').value;renderVnetList();}
+    \\function vnetAdd(){if(vnetsData.networks.length>=20)return;const n={name:'VMnet'+vnetsData.networks.length,type:'host_only',subnet:'192.168.100.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.100.128',dhcp_end:'192.168.100.254',host_iface:'',gateway:'',port_forwards:''};
+    \\vnetsData.networks.push(n);vnetIdx=vnetsData.networks.length-1;renderVnetList();}
+    \\function vnetRemove(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;vnetsData.networks.splice(vnetIdx,1);if(vnetIdx>=vnetsData.networks.length)vnetIdx=vnetsData.networks.length-1;renderVnetList();}
+    \\function vnetDefaults(){const def=[{name:'VMnet0',type:'bridged',subnet:'',mask:'',dhcp:false,dhcp_start:'',dhcp_end:'',host_iface:'auto',gateway:'',port_forwards:''},{name:'VMnet1',type:'host_only',subnet:'192.168.118.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.118.128',dhcp_end:'192.168.118.254',host_iface:'',gateway:'',port_forwards:''},{name:'VMnet8',type:'nat',subnet:'192.168.140.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.140.128',dhcp_end:'192.168.140.254',host_iface:'',gateway:'192.168.140.2',port_forwards:'2222:192.168.140.128:22'}];
+    \\vnetsData={networks:def};vnetIdx=0;renderVnetList();}
+    \\async function vnetSaveAll(){const r=await apiPost('/api/vnets/save',JSON.stringify(vnetsData));if(r){document.getElementById('vnetdlg').close();setStatus('VNet settings saved.');}}
+    \\// ── Preferences ──
+    \\async function openPrefs(){const r=await fetch('/api/config');const cfg=r.ok?await r.json():{};
+    \\document.getElementById('p_theme').value=cfg.theme||'system';document.getElementById('p_mem').value=cfg.default_memory_mb||2048;
+    \\document.getElementById('p_cpu').value=cfg.default_cpu_cores||2;document.getElementById('p_ap').value=cfg.autoprotect_enabled_default?'1':'0';
+    \\document.getElementById('p_apint').value=cfg.autoprotect_interval_min_default||60;document.getElementById('p_apmax').value=cfg.autoprotect_max_default||10;
+    \\document.getElementById('prefsdlg').showModal();}
+    \\async function savePrefs(){const body=['theme','default_memory_mb','default_cpu_cores','autoprotect_enabled','autoprotect_interval','autoprotect_max']
+    \\.map(id=>{const el=document.getElementById('p_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
+    \\const r=await apiPost('/api/config',body);if(r){document.getElementById('prefsdlg').close();setStatus('Preferences saved.');}}
     \\refresh();
     \\setInterval(refresh,5000);
     \\// WebGPU/Canvas2D framebuffer display
@@ -1146,8 +1577,8 @@ const index_html =
     \\fbCtx.putImageData(img,0,0);}catch(e){}},200)};
     \\setInterval(()=>{if(sel!==null&&sel<vms.length&&vms[sel].status==='running')startFb();},2000);
     \\// Serial console
-    \\let serialWs=null,serialIdx=null;
-    \\function startSerial(idx){if(serialWs&&serialIdx===idx)return;stopSerial();
+    \\let serialWs=null,serialIdx=null,serialManualOff=false;
+    \\function startSerial(idx){if(serialManualOff)return;if(serialWs&&serialIdx===idx)return;stopSerial();
     \\if(idx===null||idx>=vms.length)return;const v=vms[idx];if(v.status!=='running'||!v.hasSerial)return;
     \\serialIdx=idx;const term=document.getElementById('serialterm');term.value='';document.getElementById('serialpanel').style.display='block';
     \\const proto=location.protocol==='https:'?'wss:':'ws:';serialWs=new WebSocket(proto+'//'+location.host+'/ws/serial/'+idx);
@@ -1155,12 +1586,81 @@ const index_html =
     \\serialWs.onclose=()=>{stopSerial();};
     \\serialWs.onerror=()=>{stopSerial();};}
     \\function stopSerial(){if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;document.getElementById('serialpanel').style.display='none';}
+    \\function manualDisconnectSerial(){serialManualOff=true;stopSerial();}
     \\document.getElementById('serialterm').addEventListener('keydown',e=>{if(!serialWs||serialWs.readyState!==WebSocket.OPEN)return;
     \\e.preventDefault();let s=e.key;if(e.key==='Enter')s='\r\n';else if(e.key==='Backspace')s='\x08';else if(e.key==='Tab')s='\t';
     \\if(s.length===1||s==='\r\n'||s==='\x08'||s==='\t')serialWs.send(s);});
-    \\setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms[sel];if(v.status==='running'&&v.hasSerial)startSerial(sel);else stopSerial();}},3000);
+    \\setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&serialIdx!==sel)serialManualOff=false;if(v.status==='running'&&v.hasSerial)startSerial(sel);else stopSerial();}},3000);
     \\</script></body></html>
 ;
+
+/// Background thread: periodically take AutoProtect snapshots for VMs that have it enabled.
+fn autoprotectTicker() void {
+    while (true) {
+        appio.sleepMs(30_000);
+        const now = time(null);
+        var i: usize = 0;
+        while (i < vm_count) : (i += 1) {
+            const v = &vms[i];
+            if (!v.autoprotect or v.status != .running or !v.hasDisk()) continue;
+            if (!autoprotect.due(true, v.autoprotect_interval_min, v.autoprotect_last_epoch, now)) continue;
+
+            const seq = v.autoprotect_last_seq;
+            v.autoprotect_last_seq = seq +% 1; // wrapping add
+            v.autoprotect_last_epoch = now;
+
+            var name_buf: [40]u8 = undefined;
+            const snap_name = autoprotect.snapName(&name_buf, seq);
+
+            // Take snapshot via HV abstraction, fall back to qemu CLI
+            if (getVmmHandle(i)) |h| {
+                g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch continue;
+            } else {
+                qemu.snapshotCreate(v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch continue;
+            }
+
+            // Prune excess AutoProtect snapshots
+            var list_buf: [4096]u8 = undefined;
+            const list_n: usize = if (getVmmHandle(i)) |h|
+                g_vmm.snapshotListFn(h, v.getDiskPathSlice(), &list_buf, std.heap.page_allocator) catch continue
+            else
+                qemu.snapshotList(v.getDiskPathSlice(), &list_buf, std.heap.page_allocator) catch continue;
+
+            if (list_n == 0 or list_n > list_buf.len) continue;
+            const list_str = list_buf[0..list_n];
+
+            // Count AutoProtect snapshots and collect oldest names
+            var auto_names: [32][]const u8 = undefined;
+            var auto_count: usize = 0;
+            var lines = std.mem.splitSequence(u8, list_str, "\n");
+            while (lines.next()) |line| {
+                const trimmed = std.mem.trim(u8, line, " \r");
+                if (trimmed.len == 0) continue;
+                const space = std.mem.indexOfScalar(u8, trimmed, ' ') orelse continue;
+                const name = trimmed[0..space];
+                if (autoprotect.isAutoName(name)) {
+                    if (auto_count < auto_names.len) {
+                        auto_names[auto_count] = name;
+                    }
+                    auto_count += 1;
+                }
+            }
+
+            const excess = autoprotect.pruneExcess(auto_count, v.autoprotect_max);
+            // Delete the oldest AutoProtect snapshots (they come first in the list)
+            var d: usize = 0;
+            while (d < excess and d < auto_names.len) : (d += 1) {
+                if (getVmmHandle(i)) |h| {
+                    g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), auto_names[d], std.heap.page_allocator) catch {};
+                } else {
+                    qemu.snapshotDelete(v.getDiskPathSlice(), auto_names[d], std.heap.page_allocator) catch {};
+                }
+            }
+
+            persist.save(&vms, vm_count, prefs) catch {};
+        }
+    }
+}
 
 pub fn main() !void {
     vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
@@ -1200,6 +1700,9 @@ pub fn main() !void {
 
     // Spawn thread to accept Unix socket connections
     _ = std.Thread.spawn(std.Thread.SpawnConfig{}, acceptLoop, .{ unix_sock }) catch {};
+
+    // Spawn autoprotect background ticker
+    _ = std.Thread.spawn(std.Thread.SpawnConfig{}, autoprotectTicker, .{}) catch {};
 
     while (true) {
         const conn = c.accept(sock, null, null);

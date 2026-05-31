@@ -321,6 +321,104 @@ and the design docs.
 | `src/main.zig` | ✅ Rename dialog (Fl_Window with input + OK/Cancel), VM menu entry, context menu entry, remote mode dispatch |
 | `src/web_server.zig` | ✅ `POST /api/rename/N` route + handleRename handler, renameGuest() JS function + "Rename" toolbar button |
 
+### 3.21 Web UI: Suspend/Clone/Import/Snapshot Toolbar Buttons ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` toolbar | ✅ Suspend, Clone, Import, Snapshot buttons added |
+| `src/web_server.zig` JS | ✅ `suspendGuest()`, `cloneGuest()`, `importGuest()`, `takeSnapshot()` functions |
+| `src/web_server.zig:handleSnapshotTake()` | ✅ Updated to parse `tag=` from body (supports both raw and key=value) |
+| `src/web_server.zig` JS | ✅ `setStatus()` helper function added |
+
+### 3.22 Web UI: Export OVF Endpoint + Button ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` route | ✅ `POST /api/export/N` — writes OVF XML + converts disk to VMDK |
+| `src/web_server.zig:handleExport()` | ✅ Uses ovf.buildDescriptor + qemu.convertDiskImage → /tmp/ovf_export |
+| `src/web_server.zig` toolbar | ✅ "Export OVF" button with exportOvf() JS function |
+
+### 3.23 Both UIs: Send Ctrl+Alt+Del Button ✅
+
+| File | Status |
+|------|--------|
+| `src/qmp.zig` | ✅ `sendCtrlAltDel()` exists (HMP `sendkey ctrl-alt-delete`) |
+| `src/main.zig` | ✅ `cadCB` callback, `sendCtrlAltDel()` + `cadViaQmp()` functions, toolbar button, VM menu entry, context menu entry |
+| `src/web_server.zig` | ✅ `POST /api/cad/N` route + `handleCad()` handler, `sendCad()` JS + toolbar button |
+
+### 3.24 Web UI: Virtual Network Editor ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` | ✅ `GET /api/vnets`, `POST /api/vnets/save`, `handleVnetsJson()`, `handleVnetsSave()` |
+| `src/web_server.zig` JS | ✅ VNet dialog with list, edit form, Add/Remove/Use Defaults/Save |
+
+### 3.25 Web UI: Preferences Editor ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` | ✅ `POST /api/config` + `handleConfigSave()` |
+| `src/web_server.zig` JS | ✅ Preferences dialog with theme, memory, CPU, autoprotect defaults |
+
+### 3.26 Web UI: Snapshot List/Revert/Delete UI ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` | ✅ API endpoints exist and JS UI complete |
+| `src/web_server.zig` JS | ✅ Snapshot dialog with Take/Revert/Delete, list rendering, confirm dialogs |
+
+### 3.27 Web UI: Favorite Toggle ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` JS | ✅ `toggleFavorite()` JS function, ★ star in VM list items, `e_favorite` in edit dialog |
+| `src/web_server.zig` API | ✅ favorite field exists in JSON, `handleSave` parses it |
+
+### 3.28 Web UI: New VM Toolbar Button ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` HTML | ✅ "+ New VM" button in toolbar (line 1068) opens `newdlg` modal |
+| `src/web_server.zig` JS | ✅ `createVm()` function and `newdlg` dialog already exist |
+
+### 3.29 Web UI: Batch Power Operations ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` HTML | ✅ "▶ Start All" and "⏹ Stop All" buttons in toolbar |
+| `src/web_server.zig` JS | ✅ `batchStart()` and `batchStop()` iterate VMs, filter by status, POST to `/api/power/N` |
+| `src/main.zig` | ✅ FLTK has batch start/stop on power toolbar |
+
+### 3.30 Web Server: Multipart File Upload Support ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` | ✅ `parseMultipart()` handles `multipart/form-data` boundary parsing, extracts filename + body from part headers |
+| `src/web_server.zig:handleImport()` | ✅ Accepts multipart file upload for disk image + optional name/mem/cpu/cpu_sockets/disk_format fields |
+| `src/web_server.zig:handleUploadDisk()` | ✅ `POST /api/vm/N/upload-disk` — multipart upload for disk2; auto-creates disk if path empty |
+
+### 3.31 Web Server: Disk Download Endpoints ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig:handleExport()` | ✅ `POST /api/export/N` — streams primary disk image as download |
+| `src/web_server.zig:handleDisk2Download()` | ✅ `GET /api/vm/N/disk2/download` — streams disk2 image as download |
+| `src/web_server.zig:index_html` JS | ✅ `exportOvf()` uses `apiPost` and shows filename from response |
+
+### 3.32 Web Server: API Key Authentication ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` | ✅ `API_KEY` const, `checkAuth()` helper reads `X-API-Key` header |
+| `src/web_server.zig` routes | ✅ All POST/PUT handlers call `checkAuth()` (GET /api/vms, /api/fb/N, /api/snapshot/list/N, WebSocket upgrade exempt) |
+
+### 3.33 Web Frontend: Fetch Error Guarding ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` JS | ✅ `apiPost()` wrapper checks `response.ok`, returns `null` on error with status bar message |
+| `src/web_server.zig` JS | ✅ All 18 POST call sites use `apiPost()` + check return before acting: powerToggle, shutdownGuest, resetGuest, pauseGuest, resumeGuest, renameGuest, suspendGuest, cloneGuest, importGuest, batchStart, batchStop, takeSnapshotFromDlg, revertSnapshot, deleteSnapshot, sendCad, exportOvf, deleteVm, saveVm, toggleFavorite, createVm, vnetSaveAll, savePrefs |
+
 ---
 
 ## Tier 5 — Architecture / Refactoring
@@ -351,6 +449,79 @@ and the design docs.
 | File | Status |
 |------|--------|
 | `AGENTS.md` | ✅ Rewritten: FLTK toolkit, cfltk bindings, flat globals, new modules (web_server, transport, hv, ovf, autoprotect, vmrun), FLTK callback conventions, absolute pixel layout, remote client/daemon mode, HV abstraction layer |
+
+---
+
+## Tier 6 — Parity Gaps (FLTK ↔ Web UI)
+
+### 6.1 FLTK: Batch Start/Stop All ✅
+
+| File | Status |
+|------|--------|
+| `src/main.zig` toolbar | ✅ "Start All" and "Stop All" buttons added (after Home) |
+| `src/main.zig` | ✅ `startAllVms()`/`stopAllVms()` implemented with HV/remote dispatch |
+| `src/web_server.zig` | ✅ batchStart()/batchStop() JS functions exist |
+
+### 6.2 Web: Status Bar Count Paused/Suspended ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` JS renderList | ✅ Status bar counts paused and suspended in addition to running |
+
+### 6.3 Web: Favorites Grouping with Separator ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` JS renderList | ✅ Favorites sorted first with "──────────" separator before non-favorites |
+| `src/appstate.zig:refreshBrowser()` | ✅ FLTK groups favorites first with "──────────" separator |
+
+### 6.4 Web: Power Button Showed Wrong Label for Paused VMs ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` JS updatePowerBtn | ✅ Fixed: paused VMs now show "⏹ Power Off" (not "▶ Resume") since isAlive() is true; separate Resume button handles unpause |
+| `src/web_server.zig` JS batchStop | ✅ Fixed: also stops paused VMs (they are alive) |
+
+### 6.5 FLTK: Missing Clone/Snapshot/Export Toolbar Buttons ⏭️
+
+| File | Status |
+|------|--------|
+| `src/main.zig` toolbar | ⏭️ Clone, Snapshot, Export OVF only in menus; web toolbar has them (skipped — toolbar already at width limit) |
+
+---
+
+## Tier 7 — Menu & UX Parity
+
+### 7.1 FLTK: Suspend Missing from VM Menu Bar and Context Menu ✅
+
+| File | Status |
+|------|--------|
+| `src/main.zig` VM menu bar | ✅ Added "Suspend VM" after "Resume Guest" |
+| `src/main.zig` context menu | ✅ Added "Suspend VM" after "Resume Guest" |
+| `src/web_server.zig` | ✅ Suspend button present in web UI |
+
+### 7.2 FLTK: Start All / Stop All Missing from Context Menu ✅
+
+| File | Status |
+|------|--------|
+| `src/main.zig` context menu | ✅ Added "Start All VMs" and "Stop All VMs" after "Delete VM" |
+| `src/main.zig` toolbar | ✅ Start All / Stop All buttons exist |
+| `src/web_server.zig` | ✅ batchStart()/batchStop() in web UI |
+
+### 7.3 Web: Status Bar Doesn't Show Selected VM Name ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` JS renderList | ✅ Status bar now shows "{name} — {status}    |    {counts}" when VM selected |
+| `src/main.zig` | ✅ Status bar shows selected VM name, status, uptime, and count |
+
+### 7.4 Web: Serial Console — Manual Disconnect Button ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` JS | ✅ Added manualDisconnectSerial() with flag to prevent auto-reconnect |
+| `src/web_server.zig` HTML | ✅ Added "Disconnect" button inside serial panel |
+| `src/main.zig` | ✅ Connect Serial button in toolbar |
 
 ---
 

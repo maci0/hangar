@@ -35,6 +35,8 @@ fn deleteVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { deleteCu
 fn renameCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { renameVm(); }
 fn cadCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { sendCtrlAltDel(); }
 fn favCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.toggleFavorite(); }
+fn startAllCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { startAllVms(); }
+fn stopAllCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { stopAllVms(); }
 fn prefsCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.prefsDialog(); }
 fn vnetCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.vnetDialog(); }
 fn quitCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { shutdown(); }
@@ -1052,6 +1054,65 @@ fn togglePower() void {
     persist.save(&app.vms, app.vm_count, app.prefs) catch {};
 }
 
+/// Power on all stopped VMs.
+fn startAllVms() void {
+    const saved_idx = app.selected_idx;
+    defer { app.selected_idx = saved_idx; }
+    for (0..app.vm_count) |i| {
+        if (app.vms[i].isAlive()) continue;
+        if (app.remote_mode) {
+            var path_buf: [32]u8 = undefined;
+            const path = std.fmt.bufPrintZ(&path_buf, "/api/power/{d}", .{i}) catch continue;
+            var out_buf: [64]u8 = undefined;
+            _ = remote.apiPost(path, "", &out_buf);
+        } else {
+            if (app.getVmmHandle(i)) |h| {
+                app.g_vmm.startFn(h, @ptrCast(&app.vms[i])) catch continue;
+            } else {
+                qemu.startVm(&app.vms[i], std.heap.page_allocator) catch continue;
+            }
+            app.vm_started[i] = 1;
+            if (app.vms[i].hasSavedState()) app.vms[i].clearSavedStatePath();
+        }
+    }
+    if (app.remote_mode) remote.remoteRefreshVmList();
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
+    app.setStatus("All stopped VMs powered on.");
+}
+
+/// Power off all running VMs.
+fn stopAllVms() void {
+    const saved_idx = app.selected_idx;
+    defer { app.selected_idx = saved_idx; }
+    for (0..app.vm_count) |i| {
+        if (!app.vms[i].isAlive()) continue;
+        if (app.remote_mode) {
+            var path_buf: [32]u8 = undefined;
+            const path = std.fmt.bufPrintZ(&path_buf, "/api/power/{d}", .{i}) catch continue;
+            var out_buf: [64]u8 = undefined;
+            _ = remote.apiPost(path, "", &out_buf);
+        } else {
+            if (app.getVmmHandle(i)) |h| {
+                app.g_vmm.forceStopFn(h);
+                app.g_vmm.reapFn(h);
+            } else {
+                qemu.forceStopVm(&app.vms[i]); qemu.reapVm(&app.vms[i]);
+            }
+        }
+    }
+    if (app.vnc_client) |vc| { vc.disconnect(); vc.free(); app.vnc_client = null; }
+    if (app.spice_client) |sc| { sc.disconnect(); sc.free(); app.spice_client = null; }
+    display_mod.clearDisplay();
+    serial.serialDisconnect();
+    if (app.remote_mode) remote.remoteRefreshVmList();
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
+    app.setStatus("All running VMs powered off.");
+}
+
 fn shutdownGuest() void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
@@ -1642,6 +1703,7 @@ pub fn main() void {
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Power On/Off", 0, @ptrCast(&powerCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Pause Guest", 0, @ptrCast(&pauseCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Resume Guest", 0, @ptrCast(&resumeCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Suspend VM", 0, @ptrCast(&suspendCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Shut Down Guest", 0, @ptrCast(&shutdownCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Reset Guest", 0, @ptrCast(&resetCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Send Ctrl+Alt+Del", 0, @ptrCast(&cadCB), null, 0);
@@ -1666,6 +1728,8 @@ pub fn main() void {
     const set_btn = cfltk.Fl_Button_new(600, tb_y + 3, 80, 34, "Settings");
     const cad_btn = cfltk.Fl_Button_new(685, tb_y + 3, 110, 34, "Ctrl+Alt+Del");
     const home_btn = cfltk.Fl_Button_new(800, tb_y + 3, 80, 34, "Home");
+    const batch_start_btn = cfltk.Fl_Button_new(885, tb_y + 3, 80, 34, "Start All");
+    const batch_stop_btn = cfltk.Fl_Button_new(970, tb_y + 3, 80, 34, "Stop All");
 
     // Tooltips
     cfltk.Fl_Button_set_tooltip(new_btn, "Create a new virtual machine (Ctrl+N)");
@@ -1678,6 +1742,8 @@ pub fn main() void {
     cfltk.Fl_Button_set_tooltip(set_btn, "Edit virtual machine settings (F2)");
     cfltk.Fl_Button_set_tooltip(cad_btn, "Send Ctrl+Alt+Del to the guest (login / unlock)");
     cfltk.Fl_Button_set_tooltip(home_btn, "Return to Home (deselect VM, Ctrl+W)");
+    cfltk.Fl_Button_set_tooltip(batch_start_btn, "Power on all stopped virtual machines");
+    cfltk.Fl_Button_set_tooltip(batch_stop_btn, "Force power off all running virtual machines");
     _ = tb;
 
     cfltk.Fl_Button_set_callback(new_btn, newVmCB, null);
@@ -1690,6 +1756,8 @@ pub fn main() void {
     cfltk.Fl_Button_set_callback(set_btn, settingsCB, null);
     cfltk.Fl_Button_set_callback(cad_btn, cadCB, null);
     cfltk.Fl_Button_set_callback(home_btn, homeCB, null);
+    cfltk.Fl_Button_set_callback(batch_start_btn, startAllCB, null);
+    cfltk.Fl_Button_set_callback(batch_stop_btn, stopAllCB, null);
 
     const body_y: i32 = 70;
     const body_h: i32 = WH - body_y - 26;
@@ -1712,6 +1780,7 @@ pub fn main() void {
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Power On/Off", 0, @ptrCast(&powerCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Pause Guest", 0, @ptrCast(&pauseCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Resume Guest", 0, @ptrCast(&resumeCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Suspend VM", 0, @ptrCast(&suspendCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Shut Down Guest", 0, @ptrCast(&shutdownCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Reset Guest", 0, @ptrCast(&resetCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Send Ctrl+Alt+Del", 0, @ptrCast(&cadCB), null, 0);
@@ -1721,6 +1790,8 @@ pub fn main() void {
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Clone", 0, @ptrCast(&cloneCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Toggle Favorite", 0, @ptrCast(&favCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Delete VM\tDEL", 0, @ptrCast(&deleteVmCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Start All VMs", 0, @ptrCast(&startAllCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Stop All VMs", 0, @ptrCast(&stopAllCB), null, 0);
 
     // Tabs
     const tabs = cfltk.Fl_Tabs_new(CX, body_y, CW, body_h, "");
