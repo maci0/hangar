@@ -88,6 +88,7 @@ and the design docs.
 | `src/qemu.zig` | ✅ `createLinkedClone()` implemented |
 | `src/hv/qemu_backend.zig` | ✅ `createLinkedCloneFn` wired |
 | `src/main.zig` | ✅ Clone dialog with Full/Linked Clone buttons |
+| `src/web_server.zig` | ✅ Clone dialog HTML/JS + `handleClone` parses `linked=1`, creates backing-file qcow2 via HV abstraction |
 
 ### 2.4 Multi-Display Support ✅
 
@@ -522,6 +523,38 @@ and the design docs.
 | `src/web_server.zig` JS | ✅ Added manualDisconnectSerial() with flag to prevent auto-reconnect |
 | `src/web_server.zig` HTML | ✅ Added "Disconnect" button inside serial panel |
 | `src/main.zig` | ✅ Connect Serial button in toolbar |
+
+### 3.34 vmrun CLI: Missing Operations ✅
+
+The vmrun CLI only supported `list`, `start`, `stop`, `restart`, `clone`, `delete`, `status`.
+Now supports all 14 missing operations matching the Web API surface.
+
+| Command | Endpoint | Status |
+|---------|----------|--------|
+| suspend  | `POST /api/suspend/N` | ✅ |
+| pause    | `POST /api/pause/N` | ✅ |
+| resume   | `POST /api/resume/N` | ✅ |
+| shutdown | `POST /api/shutdown/N` | ✅ |
+| reset    | `POST /api/reset/N` | ✅ |
+| rename   | `POST /api/rename/N` | ✅ |
+| cad      | `POST /api/cad/N` | ✅ |
+| snapshot take   | `POST /api/snapshot/take/N` | ✅ |
+| snapshot list   | `GET /api/snapshot/list/N` | ✅ |
+| snapshot revert | `POST /api/snapshot/revert/N` | ✅ |
+| snapshot delete | `POST /api/snapshot/delete/N` | ✅ |
+| linked-clone | `POST /api/clone/N` body `linked=1` | ✅ |
+| import   | `POST /api/import` | ✅ |
+| export   | `POST /api/export/N` | ✅ |
+
+| File | Status |
+|------|--------|
+| `src/vmrun.zig` | ✅ All 14 missing operations implemented; `cmdSimple()` generic helper added |
+
+### 3.35 Web Server: handleClone HV Abstraction Gap ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig:handleClone()` | ✅ Linked clone path now routes through `g_vmm.createLinkedCloneFn` with fallback to `qemu.createLinkedClone` |
 
 ---
 

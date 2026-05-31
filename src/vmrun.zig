@@ -1,15 +1,31 @@
 //! vmrun — CLI tool for managing KVMGUI VMs remotely.
 //!
 //! Connects to a KVMGUI web server via the transport abstraction layer
-//! and issues commands: list, start, stop, restart, clone, delete.
+//! and issues commands: list, start, stop, restart, clone, delete, suspend,
+//! pause, resume, shutdown, reset, rename, cad, snapshots, linked-clone,
+//! import, export.
 //!
 //! Usage:
 //!   vmrun <server-url> list
-//!   vmrun <server-url> start  <name|idx>
-//!   vmrun <server-url> stop   <name|idx>
-//!   vmrun <server-url> restart <name|idx>
-//!   vmrun <server-url> clone  <name|idx>
-//!   vmrun <server-url> delete <name|idx>
+//!   vmrun <server-url> start    <name|idx>
+//!   vmrun <server-url> stop     <name|idx>
+//!   vmrun <server-url> restart  <name|idx>
+//!   vmrun <server-url> clone    <name|idx>
+//!   vmrun <server-url> delete   <name|idx>
+//!   vmrun <server-url> suspend  <name|idx>
+//!   vmrun <server-url> pause    <name|idx>
+//!   vmrun <server-url> resume   <name|idx>
+//!   vmrun <server-url> shutdown <name|idx>
+//!   vmrun <server-url> reset    <name|idx>
+//!   vmrun <server-url> rename   <name|idx> <new-name>
+//!   vmrun <server-url> cad      <name|idx>
+//!   vmrun <server-url> linked-clone <name|idx>
+//!   vmrun <server-url> snapshot list    <name|idx>
+//!   vmrun <server-url> snapshot take    <name|idx> <tag>
+//!   vmrun <server-url> snapshot revert  <name|idx> <tag>
+//!   vmrun <server-url> snapshot delete  <name|idx> <tag>
+//!   vmrun <server-url> import <disk-path>
+//!   vmrun <server-url> export <name|idx>
 //!   vmrun <server-url> status
 
 const std = @import("std");
@@ -22,13 +38,27 @@ const usage =
     \\Usage: vmrun <server-url> <command> [args...]
     \\
     \\Commands:
-    \\  list               List all VMs
-    \\  start  <name|idx>  Power on a VM
-    \\  stop   <name|idx>  Power off a VM
-    \\  restart <name|idx> Restart a VM (stop + start)
-    \\  clone  <name|idx>  Clone a VM
-    \\  delete <name|idx>  Delete a VM
-    \\  status            Show server health
+    \\  list                    List all VMs
+    \\  start       <name|idx>  Power on a VM
+    \\  stop        <name|idx>  Power off a VM
+    \\  restart     <name|idx>  Restart a VM (stop + start)
+    \\  clone       <name|idx>  Full clone (config only)
+    \\  linked-clone <name|idx> Linked clone (qcow2 backing file)
+    \\  delete      <name|idx>  Delete a VM
+    \\  suspend     <name|idx>  Suspend VM to disk
+    \\  pause       <name|idx>  Pause guest execution
+    \\  resume      <name|idx>  Resume guest execution
+    \\  shutdown    <name|idx>  Graceful ACPI shutdown
+    \\  reset       <name|idx>  Hard reset guest
+    \\  rename      <name|idx> <new-name>  Rename a VM
+    \\  cad         <name|idx>  Send Ctrl+Alt+Del to guest
+    \\  snapshot list    <name|idx>        List snapshots
+    \\  snapshot take    <name|idx> <tag>  Take a snapshot
+    \\  snapshot revert  <name|idx> <tag>  Revert to snapshot
+    \\  snapshot delete  <name|idx> <tag>  Delete a snapshot
+    \\  import      <disk-path>  Import a VM from disk image
+    \\  export      <name|idx>   Export VM as OVF+VMDK
+    \\  status                  Show server health
     \\
     \\Server URL formats:
     \\  http://host:port   HTTP over TCP (default)
@@ -69,11 +99,64 @@ pub fn main(init: std.process.Init) !void {
         return cmdList(&conn, init.io);
     } else if (std.mem.eql(u8, command, "status")) {
         return cmdStatus(&conn, init.io);
+    } else if (std.mem.eql(u8, command, "import")) {
+        const path = args_iter.next() orelse {
+            _ = c.write(c.STDERR_FILENO, "Error: missing disk path\n", 25);
+            std.process.exit(1);
+        };
+        return cmdImport(&conn, path, init.io);
+    } else if (std.mem.eql(u8, command, "snapshot")) {
+        const sub = args_iter.next() orelse {
+            _ = c.write(c.STDERR_FILENO, "Error: snapshot command requires subcommand: list|take|revert|delete\n", 69);
+            std.process.exit(1);
+        };
+        const target = args_iter.next() orelse {
+            _ = c.write(c.STDERR_FILENO, "Error: missing VM name or index\n", 31);
+            std.process.exit(1);
+        };
+        const idx = resolveVm(&conn, target) orelse {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
+            _ = c.write(c.STDERR_FILENO, msg.ptr, msg.len);
+            std.process.exit(1);
+        };
+        if (std.mem.eql(u8, sub, "list")) {
+            return cmdSnapshotList(&conn, idx, init.io);
+        } else if (std.mem.eql(u8, sub, "take")) {
+            const tag = args_iter.next() orelse {
+                _ = c.write(c.STDERR_FILENO, "Error: missing snapshot tag\n", 28);
+                std.process.exit(1);
+            };
+            return cmdSnapshotTake(&conn, idx, tag, init.io);
+        } else if (std.mem.eql(u8, sub, "revert")) {
+            const tag = args_iter.next() orelse {
+                _ = c.write(c.STDERR_FILENO, "Error: missing snapshot tag\n", 28);
+                std.process.exit(1);
+            };
+            return cmdSnapshotRevert(&conn, idx, tag, init.io);
+        } else if (std.mem.eql(u8, sub, "delete")) {
+            const tag = args_iter.next() orelse {
+                _ = c.write(c.STDERR_FILENO, "Error: missing snapshot tag\n", 28);
+                std.process.exit(1);
+            };
+            return cmdSnapshotDelete(&conn, idx, tag, init.io);
+        } else {
+            _ = c.write(c.STDERR_FILENO, "Error: unknown snapshot subcommand (use: list|take|revert|delete)\n", 66);
+            std.process.exit(1);
+        }
     } else if (std.mem.eql(u8, command, "start") or
                std.mem.eql(u8, command, "stop") or
                std.mem.eql(u8, command, "restart") or
                std.mem.eql(u8, command, "clone") or
-               std.mem.eql(u8, command, "delete"))
+               std.mem.eql(u8, command, "linked-clone") or
+               std.mem.eql(u8, command, "delete") or
+               std.mem.eql(u8, command, "suspend") or
+               std.mem.eql(u8, command, "pause") or
+               std.mem.eql(u8, command, "resume") or
+               std.mem.eql(u8, command, "shutdown") or
+               std.mem.eql(u8, command, "reset") or
+               std.mem.eql(u8, command, "cad") or
+               std.mem.eql(u8, command, "export"))
     {
         const target = args_iter.next() orelse {
             _ = c.write(c.STDERR_FILENO, "Error: missing VM name or index\n", 31);
@@ -97,9 +180,41 @@ pub fn main(init: std.process.Init) !void {
             return cmdPower(&conn, idx, "start", init.io);
         } else if (std.mem.eql(u8, command, "clone")) {
             return cmdClone(&conn, idx, init.io);
+        } else if (std.mem.eql(u8, command, "linked-clone")) {
+            return cmdLinkedClone(&conn, idx, init.io);
         } else if (std.mem.eql(u8, command, "delete")) {
             return cmdDelete(&conn, idx, init.io);
+        } else if (std.mem.eql(u8, command, "suspend")) {
+            return cmdSimple(&conn, idx, "/api/suspend/{d}", "suspend", init.io);
+        } else if (std.mem.eql(u8, command, "pause")) {
+            return cmdSimple(&conn, idx, "/api/pause/{d}", "pause", init.io);
+        } else if (std.mem.eql(u8, command, "resume")) {
+            return cmdSimple(&conn, idx, "/api/resume/{d}", "resume", init.io);
+        } else if (std.mem.eql(u8, command, "shutdown")) {
+            return cmdSimple(&conn, idx, "/api/shutdown/{d}", "shutdown", init.io);
+        } else if (std.mem.eql(u8, command, "reset")) {
+            return cmdSimple(&conn, idx, "/api/reset/{d}", "reset", init.io);
+        } else if (std.mem.eql(u8, command, "cad")) {
+            return cmdSimple(&conn, idx, "/api/cad/{d}", "cad", init.io);
+        } else if (std.mem.eql(u8, command, "export")) {
+            return cmdExport(&conn, idx, init.io);
         }
+    } else if (std.mem.eql(u8, command, "rename")) {
+        const target = args_iter.next() orelse {
+            _ = c.write(c.STDERR_FILENO, "Error: missing VM name or index\n", 31);
+            std.process.exit(1);
+        };
+        const new_name = args_iter.next() orelse {
+            _ = c.write(c.STDERR_FILENO, "Error: missing new name\n", 23);
+            std.process.exit(1);
+        };
+        const idx = resolveVm(&conn, target) orelse {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
+            _ = c.write(c.STDERR_FILENO, msg.ptr, msg.len);
+            std.process.exit(1);
+        };
+        return cmdRename(&conn, idx, new_name, init.io);
     } else {
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: unknown command '{s}'\n", .{command}) catch "Error: unknown command\n";
@@ -183,7 +298,6 @@ fn cmdStatus(conn: *transport.Connection, io: std.Io) !void {
 
 fn cmdPower(conn: *transport.Connection, idx: usize, action: []const u8, io: std.Io) !void {
     _ = io;
-    // Both start and stop use the same /api/power/N toggle endpoint.
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/power/{d}", .{idx});
     const resp = try sendRequest(conn, "POST", path, null);
@@ -194,24 +308,121 @@ fn cmdPower(conn: *transport.Connection, idx: usize, action: []const u8, io: std
 }
 
 fn cmdClone(conn: *transport.Connection, idx: usize, io: std.Io) !void {
+    return cmdSimple(conn, idx, "/api/clone/{d}", "clone", io);
+}
+
+fn cmdLinkedClone(conn: *transport.Connection, idx: usize, io: std.Io) !void {
     _ = io;
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/clone/{d}", .{idx});
-    const resp = try sendRequest(conn, "POST", path, null);
+    const resp = try sendRequest(conn, "POST", path, "linked=1");
     defer std.heap.page_allocator.free(resp);
     var buf: [256]u8 = undefined;
-    const line = try std.fmt.bufPrint(&buf, "clone VM [{d}]: {s}\n", .{ idx, resp });
+    const line = try std.fmt.bufPrint(&buf, "linked-clone VM [{d}]: {s}\n", .{ idx, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
 fn cmdDelete(conn: *transport.Connection, idx: usize, io: std.Io) !void {
+    return cmdSimple(conn, idx, "/api/delete/{d}", "delete", io);
+}
+
+fn cmdRename(conn: *transport.Connection, idx: usize, new_name: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [32]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/delete/{d}", .{idx});
+    const path = try std.fmt.bufPrint(&path_buf, "/api/rename/{d}", .{idx});
+    var body_buf: [256]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "name={s}", .{new_name});
+    const resp = try sendRequest(conn, "POST", path, body);
+    defer std.heap.page_allocator.free(resp);
+    var buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "rename VM [{d}] -> {s}: {s}\n", .{ idx, new_name, resp });
+    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+}
+
+fn cmdImport(conn: *transport.Connection, disk_path: []const u8, io: std.Io) !void {
+    _ = io;
+    var body_buf: [vm.MAX_PATH + 64]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "path={s}", .{disk_path});
+    const resp = try sendRequest(conn, "POST", "/api/import", body);
+    defer std.heap.page_allocator.free(resp);
+    var buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "import {s}: {s}\n", .{ disk_path, resp });
+    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+}
+
+fn cmdExport(conn: *transport.Connection, idx: usize, io: std.Io) !void {
+    _ = io;
+    var path_buf: [32]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/export/{d}", .{idx});
     const resp = try sendRequest(conn, "POST", path, null);
     defer std.heap.page_allocator.free(resp);
     var buf: [256]u8 = undefined;
-    const line = try std.fmt.bufPrint(&buf, "delete VM [{d}]: {s}\n", .{ idx, resp });
+    const line = try std.fmt.bufPrint(&buf, "export VM [{d}]: {s}\n", .{ idx, resp });
+    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+}
+
+fn cmdSnapshotList(conn: *transport.Connection, idx: usize, io: std.Io) !void {
+    _ = io;
+    var path_buf: [48]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/list/{d}", .{idx});
+    const resp = try sendRequest(conn, "GET", path, null);
+    defer std.heap.page_allocator.free(resp);
+    if (resp.len == 0 or std.mem.eql(u8, resp, "(none)")) {
+        _ = c.write(c.STDOUT_FILENO, "No snapshots found.\n", 20);
+    } else {
+        _ = c.write(c.STDOUT_FILENO, resp.ptr, resp.len);
+        _ = c.write(c.STDOUT_FILENO, "\n", 1);
+    }
+}
+
+fn cmdSnapshotTake(conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
+    _ = io;
+    var path_buf: [48]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/take/{d}", .{idx});
+    var body_buf: [256]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{tag});
+    const resp = try sendRequest(conn, "POST", path, body);
+    defer std.heap.page_allocator.free(resp);
+    var buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "snapshot take [{d}] '{s}': {s}\n", .{ idx, tag, resp });
+    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+}
+
+fn cmdSnapshotRevert(conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
+    _ = io;
+    var path_buf: [48]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/revert/{d}", .{idx});
+    var body_buf: [256]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{tag});
+    const resp = try sendRequest(conn, "POST", path, body);
+    defer std.heap.page_allocator.free(resp);
+    var buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "snapshot revert [{d}] '{s}': {s}\n", .{ idx, tag, resp });
+    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+}
+
+fn cmdSnapshotDelete(conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
+    _ = io;
+    var path_buf: [48]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/delete/{d}", .{idx});
+    var body_buf: [256]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{tag});
+    const resp = try sendRequest(conn, "POST", path, body);
+    defer std.heap.page_allocator.free(resp);
+    var buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "snapshot delete [{d}] '{s}': {s}\n", .{ idx, tag, resp });
+    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+}
+
+/// Generic POST to /api/{action}/{idx} with no body.
+fn cmdSimple(conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, action: []const u8, io: std.Io) !void {
+    _ = io;
+    var path_buf: [48]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, path_fmt, .{idx});
+    const resp = try sendRequest(conn, "POST", path, null);
+    defer std.heap.page_allocator.free(resp);
+    var buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "{s} VM [{d}]: {s}\n", .{ action, idx, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
@@ -235,3 +446,5 @@ fn extractJsonInt(obj: []const u8, key: []const u8) ?usize {
                     std.mem.indexOfScalar(u8, obj[val_start..], '}') orelse obj.len - val_start;
     return std.fmt.parseInt(usize, obj[val_start..][0..val_end], 10) catch null;
 }
+
+const vm = @import("vm.zig");

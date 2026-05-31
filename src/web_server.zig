@@ -720,6 +720,7 @@ fn handleClone(req: []const u8) ![]const u8 {
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
     if (idx >= vm_count or vm_count >= MAX_VMS) return "full";
     var clone = vms[idx];
+    const src = &vms[idx];
     var name_buf: [256]u8 = undefined;
     const cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{clone.getNameSlice()}) catch return "nameerr";
     clone.setName(cn);
@@ -730,6 +731,28 @@ fn handleClone(req: []const u8) ![]const u8 {
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     clone.setMacAddress(std.mem.span(mac));
+
+    // Check for linked clone request
+    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n");
+    var linked: bool = false;
+    if (body_start) |bs| {
+        const body = req[bs + 4 ..];
+        if (std.mem.indexOf(u8, body, "linked=1") != null) linked = true;
+    }
+
+    if (linked and src.hasDisk()) {
+        const home = appio.getenv("HOME") orelse "/tmp";
+        var disk_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+        const disk_path = std.fmt.bufPrintZ(&disk_path_buf, "{s}/VMs/{s}.qcow2", .{ home, clone.getNameSlice() }) catch return "nameerr";
+        if (getVmmHandle(idx)) |h| {
+            g_vmm.createLinkedCloneFn(h, disk_path, src.getDiskPathSlice(), @intFromEnum(src.disk_format), std.heap.page_allocator) catch return "linkerr";
+        } else {
+            qemu.createLinkedClone(disk_path, src.getDiskPathSlice(), src.disk_format, std.heap.page_allocator) catch return "linkerr";
+        }
+        clone.setDiskPath(disk_path);
+        clone.disk_format = .qcow2;
+    }
+
     vms[vm_count] = clone;
     vm_count += 1;
     persist.save(&vms, vm_count, prefs) catch {};
@@ -1194,7 +1217,11 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     defer std.heap.page_allocator.free(ovf_path);
     std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch return;
 
-    qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, std.heap.page_allocator) catch return;
+    if (getVmmHandle(idx)) |h| {
+        g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), std.heap.page_allocator) catch return;
+    } else {
+        qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, std.heap.page_allocator) catch return;
+    }
 
     // Tar+gzip the export directory
     {
@@ -1398,6 +1425,9 @@ const index_html =
     \\<div style="margin-bottom:10px"><input id="s_tag" placeholder="Snapshot tag" style="width:60%"><button class="btn primary" onclick="takeSnapshotFromDlg()" style="width:35%">Take</button></div>
     \\<div id="snaplist" style="max-height:300px;overflow-y:auto;font-size:13px"><div style="color:#666">Loading...</div></div>
     \\<div class="btn-row"><button class="btn" onclick="snapdlg.close()">Close</button></div></dialog>
+    \\<dialog id="clonedlg"><h3>Clone VM</h3>
+    \\<p style="margin-bottom:12px;color:#9aa1ab">Choose clone type for <strong id="clone_name"></strong></p>
+    \\<div class="btn-row"><button class="btn" onclick="doClone(0)">Full Clone</button><button class="btn primary" onclick="doClone(1)">Linked Clone</button><button class="btn" onclick="clonedlg.close()">Cancel</button></div></dialog>
     \\<dialog id="vnetdlg"><h3>Virtual Network Editor</h3>
     \\<div style="display:flex;gap:10px"><div style="width:40%"><select id="vnet_sel" size="8" style="width:100%;height:200px;background:#16171a;color:#e6e7ea;border:1px solid #3a3e46;border-radius:4px" onchange="onVnetSelect()"></select>
     \\<div class="btn-row"><button class="btn" onclick="vnetAdd()">Add</button><button class="btn danger" onclick="vnetRemove()">Remove</button><button class="btn" onclick="vnetDefaults()">Use Defaults</button></div></div>
@@ -1475,7 +1505,8 @@ const index_html =
     \\async function resumeGuest(){if(sel===null)return;const r=await apiPost('/api/resume/'+sel);if(r){refresh();setStatus('Resumed guest — execution continued.');}}
     \\async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=prompt('Rename VM:',v.name);if(n&&n!==v.name){const r=await apiPost('/api/rename/'+sel,'name='+encodeURIComponent(n));if(r)refresh();}}
     \\async function suspendGuest(){if(sel===null)return;const r=await apiPost('/api/suspend/'+sel);if(r){refresh();setStatus('Suspended VM to disk.');}}
-    \\async function cloneGuest(){if(sel===null)return;if(!confirm('Clone this VM?'))return;const r=await apiPost('/api/clone/'+sel);if(r){refresh();setStatus('VM cloned.');}}
+    \\async function cloneGuest(){if(sel===null)return;document.getElementById('clone_name').textContent=vms[sel].name;document.getElementById('clonedlg').showModal();}
+    \\async function doClone(linked){if(sel===null)return;document.getElementById('clonedlg').close();const body=linked?'linked=1':'';const r=await apiPost('/api/clone/'+sel,body);if(r){refresh();setStatus(linked?'Linked clone created.':'VM cloned.');}}
     \\async function importGuest(){const p=prompt('Path to VM disk image (.qcow2):');if(p){const r=await apiPost('/api/import','path='+encodeURIComponent(p));if(r){refresh();setStatus('VM imported.');}}}
     \\async function batchStart(){for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){await apiPost('/api/power/'+i);}}refresh();setStatus('Batch start complete.');}
     \\async function batchStop(){for(let i=0;i<vms.length;i++){if(vms[i].status==='running'||vms[i].status==='paused'){await apiPost('/api/power/'+i);}}refresh();setStatus('Batch stop complete.');}
