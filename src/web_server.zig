@@ -16,12 +16,14 @@ const ovf = @import("ovf.zig");
 const vnet = @import("vnet.zig");
 const appio = @import("appio.zig");
 const autoprotect = @import("autoprotect.zig");
+const sync = @import("sync.zig");
 
 extern fn time(t: ?*c_long) c_long;
 
 const MAX_VMS = 64;
 var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
 var vm_count: usize = 0;
+var vms_mutex: sync.SpinMutex = .{};
 var prefs: vm.Prefs = .{};
 
 const PORT: u16 = 9080;
@@ -322,6 +324,7 @@ fn serveConfigRaw() ![]const u8 {
 }
 
 var fb_client: ?*vnc.VncClient = null;
+var fb_mutex: sync.SpinMutex = .{};
 // BMP output buffer — 54-byte header + up to 1 MB of pixel data
 var fb_bmp_buf: [1024 * 1024 + 54]u8 = undefined;
 
@@ -486,6 +489,9 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
     if (idx >= vm_count) return "no vm";
     const v = &vms[idx];
     if (!v.isAlive()) return "off";
+
+    fb_mutex.lock();
+    defer fb_mutex.unlock();
 
     if (fb_client == null) {
         fb_client = vnc.VncClient.new() orelse return "no vnc";
@@ -659,6 +665,9 @@ fn renderJson() ![]const u8 {
 }
 
 fn handlePower(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
+
     // Extract idx from /api/power/N
     const prefix = "POST /api/power/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
@@ -688,6 +697,9 @@ fn handlePower(req: []const u8) ![]const u8 {
 }
 
 fn handleNewVm(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
+
     if (vm_count >= MAX_VMS) return "full";
     // Parse body: name=...&mem=...&cpu=...&disk=...
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
@@ -713,6 +725,9 @@ fn handleNewVm(req: []const u8) ![]const u8 {
 }
 
 fn handleClone(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
+
     const prefix = "POST /api/clone/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
     const rest = req[start + prefix.len ..];
@@ -760,6 +775,9 @@ fn handleClone(req: []const u8) ![]const u8 {
 }
 
 fn handleDelete(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
+
     const prefix = "POST /api/delete/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
     const rest = req[start + prefix.len ..];
@@ -775,6 +793,9 @@ fn handleDelete(req: []const u8) ![]const u8 {
 }
 
 fn handleSave(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
+
     const prefix = "POST /api/save/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
     const rest = req[start + prefix.len ..];
@@ -842,6 +863,8 @@ fn parseIdx(req: []const u8, prefix: []const u8) ?usize {
 }
 
 fn handleSuspend(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/suspend/") orelse return "invalid";
     if (idx >= vm_count) return "invalid idx";
     const v = &vms[idx];
@@ -906,6 +929,8 @@ fn handleResume(req: []const u8) ![]const u8 {
 }
 
 fn handleRename(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/rename/") orelse return "invalid";
     if (idx >= vm_count) return "invalid idx";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
@@ -1038,10 +1063,21 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
 }
 
 fn handleImport(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
+
     if (vm_count >= MAX_VMS) return "full";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
-    const path = std.mem.trim(u8, body, " \r\n");
+    // Parse key=value from body (JS sends "path=<encoded-path>")
+    var path: []const u8 = "";
+    var pairs = std.mem.splitScalar(u8, body, '&');
+    while (pairs.next()) |pair| {
+        var kv = std.mem.splitScalar(u8, pair, '=');
+        const key = kv.next() orelse continue;
+        const val = kv.next() orelse continue;
+        if (std.mem.eql(u8, key, "path")) path = val;
+    }
     if (path.len == 0) return "no path";
     var name_buf: [vm.MAX_NAME]u8 = undefined;
     const name = blk: {
@@ -1298,6 +1334,8 @@ fn handleVnetsSave(req: []const u8) ![]const u8 {
 }
 
 fn handleConfigSave(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
     const body = getBody(req) orelse return "no body";
 
     {
