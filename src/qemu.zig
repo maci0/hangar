@@ -218,8 +218,7 @@ const ArgBuffers = struct {
     shared_buf: [vm.MAX_PATH + 128]u8 = undefined,
     disk2_buf: [vm.MAX_PATH + 64]u8 = undefined,
     usb_buf: [128]u8 = undefined,
-    nic2_dev_buf: [128]u8 = undefined,
-    nic3_dev_buf: [128]u8 = undefined,
+    nic_dev_buf: [vm.MAX_NICS][128]u8 = [_][128]u8{[_]u8{0} ** 128} ** vm.MAX_NICS,
     floppy_buf: [vm.MAX_PATH + 64]u8 = undefined,
     disp_buf: [32]u8 = undefined,
 };
@@ -407,6 +406,13 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, vga_str);
     }
 
+    // Additional displays for multi-monitor support.
+    var disp_n: u32 = 1;
+    while (disp_n < config.num_displays) : (disp_n += 1) {
+        try args.append(alloc, "-device");
+        try args.append(alloc, "virtio-gpu");
+    }
+
     if (config.enable_serial and config.hasName()) {
         const serial_str = try std.fmt.bufPrint(&bufs.serial_buf, "unix:/tmp/kvmgui-serial-{s}.sock,server=on,wait=off", .{config.getNameSlice()});
         try args.append(alloc, "-serial");
@@ -419,7 +425,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, qmp_str);
     }
 
-    switch (config.network) {
+    switch (config.nics[0].mode) {
         .user => {
             try args.append(alloc, "-device");
             if (config.hasMacAddress()) {
@@ -466,8 +472,11 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     }
 
     // Additional network adapters (VMware-style multi-NIC).
-    try appendExtraNic(args, alloc, &bufs.nic2_dev_buf, "net1", config.nic2_mode, config.getNic2MacSlice());
-    try appendExtraNic(args, alloc, &bufs.nic3_dev_buf, "net2", config.nic3_mode, config.getNic3MacSlice());
+    for (config.nics[1..], 1..) |nic, i| {
+        var id_buf: [8]u8 = undefined;
+        const net_id = std.fmt.bufPrintZ(&id_buf, "net{d}", .{i}) catch continue;
+        try appendExtraNic(args, alloc, &bufs.nic_dev_buf[i], net_id, nic.mode, nic.mac_buf[0..nic.mac_len]);
+    }
 
     if (config.firmware == .uefi) {
         const ovmf = findOvmfPath() orelse return QemuError.OvmfNotFound;
@@ -651,6 +660,21 @@ pub fn resizeDiskImage(path: []const u8, new_size_gb: u32, allocator: std.mem.Al
     runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
 }
 
+/// Convert a disk image to a different format using `qemu-img convert`.
+/// Used by OVF export to produce a VMDK stream-optimized image suitable
+/// for ESXi / VMware Workstation import.
+pub fn convertDiskImage(src_path: []const u8, src_format: vm.DiskFormat, dest_path: []const u8, allocator: std.mem.Allocator) !void {
+    const args = [_][]const u8{
+        "qemu-img", "convert",
+        "-f", std.mem.span(src_format.toStr()),
+        "-O", "vmdk",
+        "-o", "subformat=streamOptimized",
+        src_path,
+        dest_path,
+    };
+    runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+}
+
 /// Create a linked clone: a new qcow2 image backed by `backing_path`.
 /// The clone shares the backing image's blocks copy-on-write, so it is
 /// created near-instantly and consumes almost no space initially. The
@@ -696,9 +720,9 @@ test "fuzz: buildScriptStr never crashes on random configs" {
         c.disk2_format = vm.DiskFormat.fromIndex(rnd.int(usize));
         c.display = vm.DisplayType.fromIndex(rnd.int(usize));
         c.display_resolution = vm.DisplayResolution.fromIndex(rnd.int(usize));
-        c.network = vm.NetworkMode.fromIndex(rnd.int(usize));
-        c.nic2_mode = vm.NetworkMode.fromIndex(rnd.int(usize));
-        c.nic3_mode = vm.NetworkMode.fromIndex(rnd.int(usize));
+        c.nics[0].mode = vm.NetworkMode.fromIndex(rnd.int(usize));
+        c.nics[1].mode = vm.NetworkMode.fromIndex(rnd.int(usize));
+        c.nics[2].mode = vm.NetworkMode.fromIndex(rnd.int(usize));
         // .uefi would require an OVMF file on disk; pin BIOS so the fuzzer
         // exercises arg-building, not firmware discovery.
         c.firmware = .bios;
@@ -757,7 +781,7 @@ test "qemu: buildScriptStr emits core flags (user net)" {
     cfg.cpu_cores = 2;
     cfg.cpu_sockets = 1;
     cfg.setDiskPath("/tmp/disk.qcow2");
-    cfg.network = .user;
+    cfg.nics[0].mode = .user;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(std.mem.startsWith(u8, s, "#!/bin/bash"));
@@ -772,7 +796,7 @@ test "qemu: buildScriptStr emits core flags (user net)" {
 
 test "qemu: bridge network + UEFI firmware flags" {
     var cfg = vm.VmConfig{};
-    cfg.network = .bridge;
+    cfg.nics[0].mode = .bridge;
     cfg.firmware = .uefi;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
@@ -783,7 +807,7 @@ test "qemu: bridge network + UEFI firmware flags" {
 
 test "qemu: network .none omits -netdev" {
     var cfg = vm.VmConfig{};
-    cfg.network = .none;
+    cfg.nics[0].mode = .none;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(!has(s, "id=net0"));
@@ -791,7 +815,7 @@ test "qemu: network .none omits -netdev" {
 
 test "qemu: port forwards appear as hostfwd" {
     var cfg = vm.VmConfig{};
-    cfg.network = .user;
+    cfg.nics[0].mode = .user;
     cfg.setPortForwards("2222:22");
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
@@ -800,9 +824,9 @@ test "qemu: port forwards appear as hostfwd" {
 
 test "qemu: extra NICs add net1/net2 devices" {
     var cfg = vm.VmConfig{};
-    cfg.network = .user;
-    cfg.nic2_mode = .user;
-    cfg.nic3_mode = .bridge;
+    cfg.nics[0].mode = .user;
+    cfg.nics[1].mode = .user;
+    cfg.nics[2].mode = .bridge;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(has(s, "net1"));
@@ -978,7 +1002,7 @@ test "fuzz: startVm spawns real QEMU (headless/TCG) then stops + reaps" {
         cfg.memory_mb = rnd.uintLessThan(u32, 256) + 16; // small + safe
         cfg.cpu_cores = rnd.uintLessThan(u32, 4) + 1;
         cfg.cpu_sockets = 1;
-        cfg.network = vm.NetworkMode.fromIndex(rnd.int(usize));
+        cfg.nics[0].mode = vm.NetworkMode.fromIndex(rnd.int(usize));
         cfg.boot_order = vm.BootOrder.fromIndex(rnd.int(usize));
         // No disk/ISO → QEMU reaches firmware then idles ("no bootable device")
         // or exits; either way we immediately kill + reap it.
@@ -1072,9 +1096,9 @@ test "qemu: buildScriptStr with KVM disabled uses TCG" {
 
 test "qemu: buildScriptStr with all NICs disabled" {
     var cfg = vm.VmConfig{};
-    cfg.network = .none;
-    cfg.nic2_mode = .none;
-    cfg.nic3_mode = .none;
+    cfg.nics[0].mode = .none;
+    cfg.nics[1].mode = .none;
+    cfg.nics[2].mode = .none;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(!has(s, "netdev"));

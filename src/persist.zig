@@ -52,6 +52,8 @@ const VmJson = struct {
     autoprotect: bool = false,
     autoprotect_interval_min: u32 = 1440,
     autoprotect_max: u32 = 3,
+    autoprotect_last_epoch: i64 = 0,
+    autoprotect_last_seq: u32 = 0,
     floppy_path: []const u8 = "",
     display: []const u8 = "gtk",
     display_resolution: u32 = 0,
@@ -65,6 +67,7 @@ const VmJson = struct {
     vnc_port: u16 = 5900,
     spice_port: u16 = 5930,
     enable_serial: bool = true,
+    num_displays: u32 = 1,
 };
 
 // ── Config path helpers ─────────────────────────────────────────────
@@ -153,9 +156,9 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.disk2_size_gb = j.disk2_size_gb;
     cfg.disk2_format = parseDiskFormat(j.disk2_format);
     cfg.setUsbDevice(j.usb_device);
-    cfg.nic2_mode = parseNetworkMode(j.nic2_mode);
+    cfg.nics[1].mode = parseNetworkMode(j.nic2_mode);
     cfg.setNic2Mac(j.nic2_mac);
-    cfg.nic3_mode = parseNetworkMode(j.nic3_mode);
+    cfg.nics[2].mode = parseNetworkMode(j.nic3_mode);
     cfg.setNic3Mac(j.nic3_mac);
     cfg.enable_3d = j.enable_3d;
     cfg.gpu_device = parseGpuDevice(j.gpu_device);
@@ -164,10 +167,12 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.autoprotect = j.autoprotect;
     cfg.autoprotect_interval_min = j.autoprotect_interval_min;
     cfg.autoprotect_max = j.autoprotect_max;
+    cfg.autoprotect_last_epoch = j.autoprotect_last_epoch;
+    cfg.autoprotect_last_seq = j.autoprotect_last_seq;
     cfg.setFloppyPath(j.floppy_path);
     cfg.display = parseDisplayType(j.display);
     cfg.display_resolution = vm.DisplayResolution.fromIndex(j.display_resolution);
-    cfg.network = parseNetworkMode(j.network);
+    cfg.nics[0].mode = parseNetworkMode(j.network);
     cfg.firmware = parseFirmware(j.firmware);
     cfg.guest_os = parseGuestOs(j.guest_os);
     cfg.audio = parseAudioDevice(j.audio);
@@ -177,6 +182,7 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.vnc_port = j.vnc_port;
     cfg.spice_port = j.spice_port;
     cfg.enable_serial = j.enable_serial;
+    cfg.num_displays = j.num_displays;
     return cfg;
 }
 
@@ -303,7 +309,7 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"nic2_mode\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.nic2_mode.toStr()));
+    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[1].mode.toStr()));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"nic2_mac\": ");
@@ -311,7 +317,7 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"nic3_mode\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.nic3_mode.toStr()));
+    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[2].mode.toStr()));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"nic3_mac\": ");
@@ -341,6 +347,12 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emit(list, alloc, "      \"autoprotect_max\": ");
     try emitInt(list, alloc, cfg.autoprotect_max);
     try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"autoprotect_last_epoch\": ");
+    try emitInt(list, alloc, cfg.autoprotect_last_epoch);
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"autoprotect_last_seq\": ");
+    try emitInt(list, alloc, cfg.autoprotect_last_seq);
+    try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"floppy_path\": ");
     try emitJsonStr(list, alloc, cfg.getFloppyPathSlice());
@@ -355,7 +367,7 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"network\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.network.toStr()));
+    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[0].mode.toStr()));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"firmware\": ");
@@ -392,6 +404,10 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"enable_serial\": ");
     try emitBool(list, alloc, cfg.enable_serial);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"num_displays\": ");
+    try emitInt(list, alloc, cfg.num_displays);
     try emit(list, alloc, "\n");
 
     try emit(list, alloc, "    }");
@@ -425,6 +441,20 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
     emitInt(&list, alloc, prefs.default_memory_mb) catch return error.OutOfMemory;
     emit(&list, alloc, ",\n    \"default_cpu_cores\": ") catch return error.OutOfMemory;
     emitInt(&list, alloc, prefs.default_cpu_cores) catch return error.OutOfMemory;
+    emit(&list, alloc, ",\n    \"autoprotect_enabled_default\": ") catch return error.OutOfMemory;
+    emitBool(&list, alloc, prefs.autoprotect_enabled_default) catch return error.OutOfMemory;
+    emit(&list, alloc, ",\n    \"autoprotect_interval_min_default\": ") catch return error.OutOfMemory;
+    emitInt(&list, alloc, prefs.autoprotect_interval_min_default) catch return error.OutOfMemory;
+    emit(&list, alloc, ",\n    \"autoprotect_max_default\": ") catch return error.OutOfMemory;
+    emitInt(&list, alloc, prefs.autoprotect_max_default) catch return error.OutOfMemory;
+    emit(&list, alloc, ",\n    \"win_x\": ") catch return error.OutOfMemory;
+    emitInt(&list, alloc, prefs.win_x) catch return error.OutOfMemory;
+    emit(&list, alloc, ",\n    \"win_y\": ") catch return error.OutOfMemory;
+    emitInt(&list, alloc, prefs.win_y) catch return error.OutOfMemory;
+    emit(&list, alloc, ",\n    \"win_w\": ") catch return error.OutOfMemory;
+    emitInt(&list, alloc, prefs.win_w) catch return error.OutOfMemory;
+    emit(&list, alloc, ",\n    \"win_h\": ") catch return error.OutOfMemory;
+    emitInt(&list, alloc, prefs.win_h) catch return error.OutOfMemory;
     emit(&list, alloc, "\n  }") catch return error.OutOfMemory;
     emit(&list, alloc, ",\n  \"vms\": [") catch return error.OutOfMemory;
 
@@ -528,8 +558,9 @@ fn parseJsonInt(s: []const u8) ?struct { value: u32, rest: []const u8 } {
 
 /// Parse a JSON boolean value.
 fn parseJsonBool(s: []const u8) ?struct { value: bool, rest: []const u8 } {
-    if (consumeLiteral(s, "true")) |rest| return .{ .value = true, .rest = rest };
-    if (consumeLiteral(s, "false")) |rest| return .{ .value = false, .rest = rest };
+    const cur = skipWs(s);
+    if (consumeLiteral(cur, "true")) |rest| return .{ .value = true, .rest = rest };
+    if (consumeLiteral(cur, "false")) |rest| return .{ .value = false, .rest = rest };
     return null;
 }
 
@@ -696,7 +727,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic2_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nic2_mode = parseNetworkMode(r.value);
+                cfg.nics[1].mode = parseNetworkMode(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic2_mac")) {
@@ -706,7 +737,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic3_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nic3_mode = parseNetworkMode(r.value);
+                cfg.nics[2].mode = parseNetworkMode(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic3_mac")) {
@@ -749,6 +780,16 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cfg.autoprotect_max = r.value;
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "autoprotect_last_epoch")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.autoprotect_last_epoch = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "autoprotect_last_seq")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.autoprotect_last_seq = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "floppy_path")) {
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.setFloppyPath(r.value);
@@ -771,7 +812,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "network")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.network = parseNetworkMode(r.value);
+                cfg.nics[0].mode = parseNetworkMode(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "firmware")) {
@@ -839,6 +880,11 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cfg.enable_serial = r.value;
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "num_displays")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.num_displays = @intCast(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
         } else {
             // Unknown key — skip value
             cur = skipJsonValue(cur);
@@ -895,6 +941,27 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
             } else if (std.mem.eql(u8, key, "default_cpu_cores")) {
                 if (parseJsonInt(cur)) |r| { prefs_out.default_cpu_cores = r.value; cur = r.rest; }
                 else cur = cur[1..];
+            } else if (std.mem.eql(u8, key, "autoprotect_enabled_default")) {
+                if (parseJsonBool(cur)) |r| { prefs_out.autoprotect_enabled_default = r.value; cur = r.rest; }
+                else cur = cur[1..];
+            } else if (std.mem.eql(u8, key, "autoprotect_interval_min_default")) {
+                if (parseJsonInt(cur)) |r| { prefs_out.autoprotect_interval_min_default = r.value; cur = r.rest; }
+                else cur = cur[1..];
+            } else if (std.mem.eql(u8, key, "autoprotect_max_default")) {
+                if (parseJsonInt(cur)) |r| { prefs_out.autoprotect_max_default = r.value; cur = r.rest; }
+                else cur = cur[1..];
+            } else if (std.mem.eql(u8, key, "win_x")) {
+                if (parseJsonInt(cur)) |r| { prefs_out.win_x = @intCast(r.value); cur = r.rest; }
+                else cur = cur[1..];
+            } else if (std.mem.eql(u8, key, "win_y")) {
+                if (parseJsonInt(cur)) |r| { prefs_out.win_y = @intCast(r.value); cur = r.rest; }
+                else cur = cur[1..];
+            } else if (std.mem.eql(u8, key, "win_w")) {
+                if (parseJsonInt(cur)) |r| { prefs_out.win_w = @intCast(r.value); cur = r.rest; }
+                else cur = cur[1..];
+            } else if (std.mem.eql(u8, key, "win_h")) {
+                if (parseJsonInt(cur)) |r| { prefs_out.win_h = @intCast(r.value); cur = r.rest; }
+                else cur = cur[1..];
             } else {
                 cur = skipJsonValue(cur);
             }
@@ -902,7 +969,7 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
     }
 }
 
-/// Load VM configs and preferences from vms.json.
+/// Load VM configs and preferences from vms.json on disk.
 /// Returns the number of VMs loaded (0 if file doesn't exist or is invalid).
 pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out: *vm.Prefs) usize {
     prefs_out.* = .{};
@@ -918,6 +985,13 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
     ) catch return 0;
     defer allocator.free(content);
 
+    if (content.len == 0) return 0;
+    return loadFromSlice(vms, content, prefs_out);
+}
+
+/// Load VM configs and preferences from a JSON buffer (same format as vms.json).
+/// Returns the number of VMs loaded (0 if buffer is empty or invalid).
+pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out: *vm.Prefs) usize {
     if (content.len == 0) return 0;
 
     // Top-level "theme" + "prefs" keys (optional).
@@ -985,7 +1059,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.setSavedStatePath("/tmp/state.bin");
     original.display = .vnc;
     original.display_resolution = .res_1920x1080;
-    original.network = .bridge;
+    original.nics[0].mode = .bridge;
     original.firmware = .uefi;
     original.guest_os = .windows;
     original.audio = .hda;
@@ -995,6 +1069,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.vnc_port = 5901;
     original.spice_port = 5931;
     original.enable_serial = true;
+    original.num_displays = 2;
 
     const json = VmJson{
         .name = original.getNameSlice(),
@@ -1010,7 +1085,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .saved_state_path = original.getSavedStatePathSlice(),
         .display = std.mem.span(original.display.toStr()),
         .display_resolution = @as(u32, @intCast(original.display_resolution.toIndex())),
-        .network = std.mem.span(original.network.toStr()),
+        .network = std.mem.span(original.nics[0].mode.toStr()),
         .firmware = std.mem.span(original.firmware.toStr()),
         .guest_os = std.mem.span(original.guest_os.toStr()),
         .audio = std.mem.span(original.audio.toStr()),
@@ -1020,6 +1095,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .vnc_port = original.vnc_port,
         .spice_port = original.spice_port,
         .enable_serial = original.enable_serial,
+        .num_displays = original.num_displays,
     };
 
     const restored = fromVmJson(&json);
@@ -1037,7 +1113,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqualStrings("/tmp/state.bin", restored.getSavedStatePathSlice());
     try std.testing.expectEqual(vm.DisplayType.vnc, restored.display);
     try std.testing.expectEqual(vm.DisplayResolution.res_1920x1080, restored.display_resolution);
-    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.network);
+    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[0].mode);
     try std.testing.expectEqual(vm.BootFirmware.uefi, restored.firmware);
     try std.testing.expectEqual(vm.GuestOs.windows, restored.guest_os);
     try std.testing.expectEqual(vm.AudioDevice.hda, restored.audio);
@@ -1047,6 +1123,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqual(@as(u16, 5901), restored.vnc_port);
     try std.testing.expectEqual(@as(u16, 5931), restored.spice_port);
     try std.testing.expect(restored.enable_serial);
+    try std.testing.expectEqual(@as(u32, 2), restored.num_displays);
 }
 
 test "parseDiskFormat: maps strings to enums" {
@@ -1121,7 +1198,7 @@ test "emit→parse JSON text round-trip preserves all fields" {
     original.setSavedStatePath("/tmp/rt.state");
     original.display = .spice;
     original.display_resolution = .res_1280x800;
-    original.network = .bridge;
+    original.nics[0].mode = .bridge;
     original.firmware = .uefi;
     original.guest_os = .freebsd;
     original.audio = .ac97;
@@ -1137,15 +1214,17 @@ test "emit→parse JSON text round-trip preserves all fields" {
     original.disk2_format = .raw;
     original.setUsbDevice("046d:c52b");
     original.cpu_sockets = 2;
-    original.nic2_mode = .bridge;
+    original.nics[1].mode = .bridge;
     original.setNic2Mac("02:11:22:33:44:55");
-    original.nic3_mode = .user;
+    original.nics[2].mode = .user;
     original.setNic3Mac("02:66:77:88:99:AA");
     original.enable_3d = true;
     original.guest_tools = true;
     original.autoprotect = true;
     original.autoprotect_interval_min = 720;
     original.autoprotect_max = 5;
+    original.autoprotect_last_epoch = 1717000000;
+    original.autoprotect_last_seq = 42;
     original.setFloppyPath("/tmp/boot.img");
 
     // Emit to JSON text.
@@ -1171,7 +1250,7 @@ test "emit→parse JSON text round-trip preserves all fields" {
     try std.testing.expectEqualStrings("/tmp/rt.state", restored.getSavedStatePathSlice());
     try std.testing.expectEqual(vm.DisplayType.spice, restored.display);
     try std.testing.expectEqual(vm.DisplayResolution.res_1280x800, restored.display_resolution);
-    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.network);
+    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[0].mode);
     try std.testing.expectEqual(vm.BootFirmware.uefi, restored.firmware);
     try std.testing.expectEqual(vm.GuestOs.freebsd, restored.guest_os);
     try std.testing.expectEqual(vm.AudioDevice.ac97, restored.audio);
@@ -1187,15 +1266,17 @@ test "emit→parse JSON text round-trip preserves all fields" {
     try std.testing.expectEqual(vm.DiskFormat.raw, restored.disk2_format);
     try std.testing.expectEqualStrings("046d:c52b", restored.getUsbDeviceSlice());
     try std.testing.expectEqual(@as(u32, 2), restored.cpu_sockets);
-    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nic2_mode);
+    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[1].mode);
     try std.testing.expectEqualStrings("02:11:22:33:44:55", restored.getNic2MacSlice());
-    try std.testing.expectEqual(vm.NetworkMode.user, restored.nic3_mode);
+    try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[2].mode);
     try std.testing.expectEqualStrings("02:66:77:88:99:AA", restored.getNic3MacSlice());
     try std.testing.expect(restored.enable_3d);
     try std.testing.expect(restored.guest_tools);
     try std.testing.expect(restored.autoprotect);
     try std.testing.expectEqual(@as(u32, 720), restored.autoprotect_interval_min);
     try std.testing.expectEqual(@as(u32, 5), restored.autoprotect_max);
+    try std.testing.expectEqual(@as(i64, 1717000000), restored.autoprotect_last_epoch);
+    try std.testing.expectEqual(@as(u32, 42), restored.autoprotect_last_seq);
     try std.testing.expectEqualStrings("/tmp/boot.img", restored.getFloppyPathSlice());
 }
 
@@ -1367,9 +1448,9 @@ fn fuzzConfig(rnd: std.Random, sbuf: []u8) vm.VmConfig {
     c.disk2_format = vm.DiskFormat.fromIndex(rnd.int(usize));
     c.display = vm.DisplayType.fromIndex(rnd.int(usize));
     c.display_resolution = vm.DisplayResolution.fromIndex(rnd.int(usize));
-    c.network = vm.NetworkMode.fromIndex(rnd.int(usize));
-    c.nic2_mode = vm.NetworkMode.fromIndex(rnd.int(usize));
-    c.nic3_mode = vm.NetworkMode.fromIndex(rnd.int(usize));
+    c.nics[0].mode = vm.NetworkMode.fromIndex(rnd.int(usize));
+    c.nics[1].mode = vm.NetworkMode.fromIndex(rnd.int(usize));
+    c.nics[2].mode = vm.NetworkMode.fromIndex(rnd.int(usize));
     c.firmware = vm.BootFirmware.fromIndex(rnd.int(usize));
     c.guest_os = vm.GuestOs.fromIndex(rnd.int(usize));
     c.audio = vm.AudioDevice.fromIndex(rnd.int(usize));
@@ -1611,5 +1692,5 @@ test "emit→parse: empty config round-trip" {
     try std.testing.expectEqual(@as(u32, 2048), restored.memory_mb);
     try std.testing.expectEqual(vm.DiskFormat.qcow2, restored.disk_format);
     try std.testing.expect(restored.enable_kvm);
-    try std.testing.expectEqual(vm.NetworkMode.user, restored.network);
+    try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[0].mode);
 }

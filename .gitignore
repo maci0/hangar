@@ -17,6 +17,7 @@ check_syntax
 # Secrets / local env
 .env
 *.local
+.qwen/
 
 # Editor / tool caches
 .codegraph/

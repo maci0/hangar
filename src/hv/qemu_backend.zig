@@ -11,11 +11,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const vm = @import("vm.zig");
-const qemu = @import("qemu.zig");
-const qmp = @import("qmp.zig");
-const appio = @import("appio.zig");
-const hv = @import("hv/interface.zig");
+const vm = @import("../vm.zig");
+const qemu = @import("../qemu.zig");
+const qmp = @import("../qmp.zig");
+const appio = @import("../appio.zig");
+const hv = @import("interface.zig");
 
 /// Storage for a QEMU VM instance.
 pub const QemuVm = struct {
@@ -37,40 +37,31 @@ pub const AccelMode = enum {
     force_tcg,
 };
 
-/// Create a QEMU-backed Vmm for a specific VM config.
-pub fn create(config: *vm.VmConfig, mode: AccelMode, allocator: std.mem.Allocator) !hv.Vmm {
+/// Create a QEMU-backed Vmm dispatch table (no allocation).
+/// Use createHandle() separately for per-VM state.
+pub fn createVmm(mode: AccelMode) hv.Vmm {
     const accel = if (mode == .force_tcg) hv.tcgAccelerator() else hv.bestAccelerator();
-
-    // Verify the accelerator is available on this platform.
-    if (accel.hardware) {
-        if (!isAccelAvailable(accel)) {
-            // Hardware accel not available — fall back to TCG silently.
-            return create(config, .force_tcg, allocator);
-        }
+    if (accel.hardware and !isAccelAvailable(accel)) {
+        return createVmm(.force_tcg);
     }
-
-    const qv = try allocator.create(QemuVm);
-    qv.* = .{
-        .config = config,
-        .accelerator = accel,
-        .allocator = allocator,
-    };
 
     return hv.Vmm{
         .backend = .qemu,
         .accelerator = accel,
         .startFn = &start,
         .shutdownFn = &shutdown,
+        .resetFn = &resetVm,
         .forceStopFn = &forceStop,
         .isAliveFn = &isAlive,
         .reapFn = &reap,
         .pauseFn = &pause,
-        .resumeFn = &resume,
+        .resumeFn = &resumeVm,
         .getDisplayPortFn = &getDisplayPort,
         .getSerialSocketFn = &getSerialSocket,
         .createDiskFn = &createDisk,
         .resizeDiskFn = &resizeDisk,
         .createLinkedCloneFn = &createLinkedClone,
+        .convertDiskFn = &convertDisk,
         .snapshotCreateFn = &snapshotCreate,
         .snapshotApplyFn = &snapshotApply,
         .snapshotDeleteFn = &snapshotDelete,
@@ -80,6 +71,29 @@ pub fn create(config: *vm.VmConfig, mode: AccelMode, allocator: std.mem.Allocato
     };
 }
 
+/// Allocate per-VM state for the QEMU backend.
+pub fn createHandle(config: *vm.VmConfig, mode: AccelMode, allocator: std.mem.Allocator) !hv.VmmHandle {
+    const accel = if (mode == .force_tcg) hv.tcgAccelerator() else hv.bestAccelerator();
+    if (accel.hardware and !isAccelAvailable(accel)) {
+        return createHandle(config, .force_tcg, allocator);
+    }
+
+    const qv = try allocator.create(QemuVm);
+    qv.* = .{
+        .config = config,
+        .accelerator = accel,
+        .allocator = allocator,
+    };
+    return @ptrCast(qv);
+}
+
+/// Create a QEMU-backed Vmm for a specific VM config (convenience — calls createVmm + createHandle).
+pub fn create(config: *vm.VmConfig, mode: AccelMode, allocator: std.mem.Allocator) !struct { vmm: hv.Vmm, handle: hv.VmmHandle } {
+    const vmm = createVmm(mode);
+    const handle = try createHandle(config, mode, allocator);
+    return .{ .vmm = vmm, .handle = handle };
+}
+
 fn getQv(ctx: hv.VmmHandle) *QemuVm {
     return @ptrCast(@alignCast(ctx));
 }
@@ -87,15 +101,19 @@ fn getQv(ctx: hv.VmmHandle) *QemuVm {
 fn isAccelAvailable(accel: hv.Accelerator) bool {
     _ = accel;
     return switch (builtin.os.tag) {
-        .linux => std.Io.Dir.cwd().access(appio.io(), "/dev/kvm", .{}) catch false,
+        .linux => x: {
+            std.Io.Dir.cwd().access(appio.io(), "/dev/kvm", .{}) catch break :x false;
+            break :x true;
+        },
         .macos => true, // HVF is built into QEMU on macOS
         .windows => true, // WHPX is a Windows feature
         else => false,
     };
 }
 
-fn start(ctx: hv.VmmHandle, cfg: *const vm.VmConfig) hv.VmmError!void {
+fn start(ctx: hv.VmmHandle, cfg_opaque: *anyopaque) hv.VmmError!void {
     const qv = getQv(ctx);
+    const cfg: *vm.VmConfig = @constCast(@ptrCast(@alignCast(cfg_opaque)));
     qemu.startVm(cfg, qv.allocator) catch return error.SpawnFailed;
 }
 
@@ -111,6 +129,13 @@ fn shutdown(ctx: hv.VmmHandle) hv.VmmError!void {
     qv.qmp_client.powerdown() catch {
         qemu.stopVm(qv.config);
     };
+}
+
+fn resetVm(ctx: hv.VmmHandle) hv.VmmError!void {
+    const qv = getQv(ctx);
+    if (qv.config.pid == null) return;
+    ensureQmp(qv) catch return error.QmpConnectFailed;
+    qv.qmp_client.systemReset() catch return error.BackendError;
 }
 
 fn forceStop(ctx: hv.VmmHandle) void {
@@ -130,14 +155,14 @@ fn reap(ctx: hv.VmmHandle) void {
 
 fn pause(ctx: hv.VmmHandle) hv.VmmError!void {
     const qv = getQv(ctx);
-    try ensureQmp(qv);
+    ensureQmp(qv) catch return error.BackendError;
     qv.qmp_client.pause() catch return error.BackendError;
     qv.config.status = .paused;
 }
 
-fn resume(ctx: hv.VmmHandle) hv.VmmError!void {
+fn resumeVm(ctx: hv.VmmHandle) hv.VmmError!void {
     const qv = getQv(ctx);
-    try ensureQmp(qv);
+    ensureQmp(qv) catch return error.BackendError;
     qv.qmp_client.cont() catch return error.BackendError;
     qv.config.status = .running;
 }
@@ -164,17 +189,27 @@ fn getSerialSocket(ctx: hv.VmmHandle) ?[]const u8 {
     return null; // Caller should use uimath.serialSocketPath
 }
 
-fn createDisk(ctx: hv.VmmHandle, cfg: *const vm.VmConfig, alloc: std.mem.Allocator) hv.VmmError!void {
+fn createDisk(ctx: hv.VmmHandle, cfg_opaque: *anyopaque, alloc: std.mem.Allocator) hv.VmmError!void {
     _ = ctx;
+    const cfg: *const vm.VmConfig = @ptrCast(@alignCast(cfg_opaque));
     qemu.createDiskImage(cfg.getDiskPathSlice(), cfg.disk_size_gb, cfg.disk_format, alloc) catch return error.BackendError;
 }
 
-fn resizeDisk(disk_path: []const u8, new_size_gb: u32, alloc: std.mem.Allocator) hv.VmmError!void {
+fn resizeDisk(ctx: hv.VmmHandle, disk_path: []const u8, new_size_gb: u32, alloc: std.mem.Allocator) hv.VmmError!void {
+    _ = ctx;
     _ = qemu.resizeDiskImage(disk_path, new_size_gb, alloc) catch return error.BackendError;
 }
 
-fn createLinkedClone(dest: []const u8, backing: []const u8, backing_fmt: vm.DiskFormat, alloc: std.mem.Allocator) hv.VmmError!void {
+fn createLinkedClone(ctx: hv.VmmHandle, dest: []const u8, backing: []const u8, backing_fmt_u32: u32, alloc: std.mem.Allocator) hv.VmmError!void {
+    _ = ctx;
+    const backing_fmt: vm.DiskFormat = @enumFromInt(@as(u8, @intCast(backing_fmt_u32)));
     qemu.createLinkedClone(dest, backing, backing_fmt, alloc) catch return error.BackendError;
+}
+
+fn convertDisk(ctx: hv.VmmHandle, src_path: []const u8, dst_path: []const u8, src_fmt_u32: u32, alloc: std.mem.Allocator) hv.VmmError!void {
+    _ = ctx;
+    const src_fmt: vm.DiskFormat = @enumFromInt(@as(u8, @intCast(src_fmt_u32)));
+    qemu.convertDiskImage(src_path, src_fmt, dst_path, alloc) catch return error.BackendError;
 }
 
 fn snapshotCreate(ctx: hv.VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) hv.VmmError!void {
@@ -194,8 +229,9 @@ fn snapshotList(ctx: hv.VmmHandle, disk_path: []const u8, out: []u8, alloc: std.
     return qemu.snapshotList(disk_path, out, alloc) catch return error.BackendError;
 }
 
-fn buildScript(ctx: hv.VmmHandle, cfg: *const vm.VmConfig, alloc: std.mem.Allocator) hv.VmmError![]const u8 {
+fn buildScript(ctx: hv.VmmHandle, cfg_opaque: *anyopaque, alloc: std.mem.Allocator) hv.VmmError![]const u8 {
     _ = ctx;
+    const cfg: *const vm.VmConfig = @ptrCast(@alignCast(cfg_opaque));
     return qemu.buildScriptStr(cfg, alloc) catch return error.BackendError;
 }
 

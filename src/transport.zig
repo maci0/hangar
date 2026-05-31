@@ -51,24 +51,46 @@ pub const Url = struct {
     }
 };
 
+/// Shared-memory channel layout (mmap'd region).
+/// Single-producer single-consumer request/response protocol.
+const ShmChannel = extern struct {
+    /// Request: client writes data, sets len (release).
+    req_len: u32 align(4) = 0,
+    _pad1: [60]u8 = [_]u8{0} ** 60, // pad to cache line
+    req_data: [4096]u8 = [_]u8{0} ** 4096,
+
+    /// Response: server writes data, sets len (release).
+    resp_len: u32 align(4) = 0,
+    _pad2: [60]u8 = [_]u8{0} ** 60,
+    resp_data: [4096]u8 = [_]u8{0} ** 4096,
+};
+
 /// A bidirectional transport connection to the daemon.
 pub const Connection = struct {
     proto: Proto,
     fd: c.fd_t = -1,
     host: [128]u8 = [_]u8{0} ** 128,
     host_len: usize = 0,
+    /// For SHM: pointer to the mapped shared memory channel.
+    shm: ?*volatile ShmChannel = null,
 
     /// Connect to a daemon at the given URL.
     pub fn connect(url: *const Url) ?Connection {
         var conn = Connection{ .proto = url.proto };
         conn.host_len = url.host_len;
         std.mem.copyForwards(u8, &conn.host, url.host[0..url.host_len]);
-        conn.fd = switch (url.proto) {
-            .unix => connectUnixFd(url),
-            .tcp => connectTcpFd(url),
-            .shm => connectShmFd(url),
-        };
-        if (conn.fd < 0) return null;
+        if (url.proto == .shm) {
+            conn.shm = connectShm(url);
+            if (conn.shm == null) return null;
+            conn.fd = -1;
+        } else {
+            conn.fd = switch (url.proto) {
+                .unix => connectUnixFd(url),
+                .tcp => connectTcpFd(url),
+                .shm => unreachable,
+            };
+            if (conn.fd < 0) return null;
+        }
         return conn;
     }
 
@@ -76,12 +98,17 @@ pub const Connection = struct {
     pub fn request(self: *Connection, method: []const u8, path: []const u8, body: ?[]const u8, out: []u8) usize {
         return switch (self.proto) {
             .tcp => httpRequest(self.fd, self.host[0..self.host_len], method, path, body, out),
-            .unix, .shm => rawRequest(self.fd, method, path, body, out),
+            .unix => rawRequest(self.fd, method, path, body, out),
+            .shm => shmRequest(self, method, path, body, out),
         };
     }
 
     /// Close the connection.
     pub fn close(self: *Connection) void {
+        if (self.shm) |shm| {
+            _ = c.munmap(@ptrCast(@volatileCast(@alignCast(@constCast(shm)))), @sizeOf(ShmChannel));
+            self.shm = null;
+        }
         if (self.fd >= 0) { _ = c.close(self.fd); self.fd = -1; }
     }
 };
@@ -101,22 +128,74 @@ fn connectUnixFd(url: *const Url) c.fd_t {
 fn connectTcpFd(url: *const Url) c.fd_t {
     const sock = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
     if (sock < 0) return -1;
-    const hints: c.addrinfo = .{ .family = c.AF.INET, .socktype = c.SOCK.STREAM, .protocol = 0, .addrlen = 0, .addr = null, .canonname = null, .next = null, .flags = 0 };
+    var hints: c.addrinfo = std.mem.zeroes(c.addrinfo);
+    hints.family = c.AF.INET;
+    hints.socktype = c.SOCK.STREAM;
     var res: ?*c.addrinfo = null;
-    const host_z = std.fmt.bufPrintZ(&([_]u8{0} ** 128), "{s}", .{url.host[0..url.host_len]}) catch { _ = c.close(sock); return -1; };
-    if (c.getaddrinfo(host_z, null, &hints, &res) != 0) { _ = c.close(sock); return -1; }
+    var host_buf: [128]u8 = [_]u8{0} ** 128;
+    const host_z = std.fmt.bufPrintZ(&host_buf, "{s}", .{url.host[0..url.host_len]}) catch { _ = c.close(sock); return -1; };
+    if (@intFromEnum(c.getaddrinfo(host_z, null, &hints, &res)) != 0) { _ = c.close(sock); return -1; }
     defer if (res) |r| c.freeaddrinfo(r);
     const ai = res orelse { _ = c.close(sock); return -1; };
-    const in_addr: *c.sockaddr.in = @ptrCast(@alignCast(ai.addr));
+    const addr = ai.addr orelse { _ = c.close(sock); return -1; };
+    const in_addr: *c.sockaddr.in = @ptrCast(@alignCast(addr));
     in_addr.port = std.mem.nativeToBig(u16, url.port);
-    if (c.connect(sock, ai.addr, ai.addrlen) != 0) { _ = c.close(sock); return -1; }
+    if (c.connect(sock, addr, ai.addrlen) != 0) { _ = c.close(sock); return -1; }
     return sock;
 }
 
-fn connectShmFd(_: *const Url) c.fd_t {
-    // Shared memory: open a named region via shm_open
-    // For now return a sentinel; full SHM IPC needs ring buffer protocol
-    return -1;
+fn connectShm(url: *const Url) ?*volatile ShmChannel {
+    // Open a named POSIX shared memory region.
+    var shm_name_buf: [260]u8 = undefined;
+    const name = std.fmt.bufPrintZ(&shm_name_buf, "/{s}", .{url.path[0..url.path_len]}) catch return null;
+    const fd = c.shm_open(name, 2, 0o600);
+    if (fd < 0) return null;
+    // PROT_READ|PROT_WRITE = 3, MAP_SHARED = 1
+    const prot: c.PROT = @bitCast(@as(u32, 3));
+    const flags: c.MAP = @bitCast(@as(u32, 1));
+    const ptr = c.mmap(null, @sizeOf(ShmChannel), prot, flags, fd, 0);
+    _ = c.close(fd);
+    if (ptr == @as(?*anyopaque, @ptrFromInt(@as(usize, @bitCast(@as(isize, -1)))))) return null;
+    return @ptrCast(@alignCast(ptr));
+}
+
+fn shmRequest(conn: *Connection, method: []const u8, path: []const u8, body: ?[]const u8, out: []u8) usize {
+    const shm = conn.shm orelse return 0;
+
+    // Build the raw request: "METHOD /path\r\n" + optional body.
+    var req_buf: [512]u8 = undefined;
+    const req = std.fmt.bufPrintZ(&req_buf, "{s} /{s}\r\n", .{ method, path }) catch return 0;
+    const req_total: usize = if (body) |b| req.len + b.len + 2 else req.len;
+    if (req_total > shm.req_data.len) return 0;
+
+    @memcpy(shm.req_data[0..req.len], req[0..req.len]);
+    if (body) |b| {
+        @memcpy(shm.req_data[req.len..][0..b.len], b);
+        @memcpy(shm.req_data[req.len + b.len ..][0..2], "\r\n");
+    }
+    // Publish request length (release store so server sees the data).
+    @atomicStore(u32, &shm.req_len, @intCast(req_total), .release);
+
+    // Spin-wait for response (with bounded retries to avoid infinite hang).
+    var retries: u32 = 1000;
+    while (retries > 0) : (retries -= 1) {
+        const resp_len = @atomicLoad(u32, &shm.resp_len, .acquire);
+        if (resp_len > 0) {
+            const n = @min(resp_len, @as(u32, @intCast(out.len)));
+            @memcpy(out[0..n], shm.resp_data[0..n]);
+            // Reset for next request.
+            @atomicStore(u32, &shm.resp_len, 0, .release);
+            @atomicStore(u32, &shm.req_len, 0, .release);
+            return n;
+        }
+        // Busy-wait with a brief pause (nanosleep 1ms) — simpler than
+        // pulling in eventfd, and adequate for same-machine SHM IPC.
+        const ts = c.timespec{ .sec = 0, .nsec = 1_000_000 };
+        _ = c.nanosleep(&ts, null);
+    }
+    // Timeout: reset request so server doesn't process stale data.
+    @atomicStore(u32, &shm.req_len, 0, .release);
+    return 0;
 }
 
 fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u8, body: ?[]const u8, out: []u8) usize {

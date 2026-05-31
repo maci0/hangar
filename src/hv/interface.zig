@@ -32,6 +32,8 @@ pub const VmmError = error{
     Timeout,
     /// Generic backend failure.
     BackendError,
+    /// Could not connect to the QMP control socket.
+    QmpConnectFailed,
 };
 
 /// Which accelerator mode to use.
@@ -89,6 +91,9 @@ pub const Vmm = struct {
     /// Send graceful shutdown (ACPI power button via QMP or equivalent).
     shutdownFn: *const fn (ctx: VmmHandle) VmmError!void,
 
+    /// Send hard reset (QMP system_reset or equivalent).
+    resetFn: *const fn (ctx: VmmHandle) VmmError!void,
+
     /// Force-kill the VM process (SIGKILL or equivalent).
     forceStopFn: *const fn (ctx: VmmHandle) void,
 
@@ -119,6 +124,9 @@ pub const Vmm = struct {
 
     /// Create a linked clone disk.
     createLinkedCloneFn: *const fn (ctx: VmmHandle, dest: []const u8, backing: []const u8, backing_fmt: u32, alloc: std.mem.Allocator) VmmError!void,
+
+    /// Convert a disk image to a different format (e.g. qcow2 → vmdk).
+    convertDiskFn: *const fn (ctx: VmmHandle, src_path: []const u8, dst_path: []const u8, src_fmt: u32, alloc: std.mem.Allocator) VmmError!void,
 
     /// Snapshot operations (offline, via qemu-img or equivalent).
     snapshotCreateFn: *const fn (ctx: VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) VmmError!void,

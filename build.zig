@@ -52,9 +52,15 @@ pub fn build(b: *std.Build) !void {
     web_cmd.step.dependOn(&web_exe.step);
     web_run.dependOn(&web_cmd.step);
 
+    // ── vmrun CLI ──
+    const vmrun_mod = b.createModule(.{ .root_source_file = b.path("src/vmrun.zig"), .target = target, .optimize = optimize });
+    vmrun_mod.link_libc = true;
+    const vmrun_exe = b.addExecutable(.{ .name = "vmrun", .root_module = vmrun_mod, .use_llvm = true, .use_lld = true });
+    b.installArtifact(vmrun_exe);
+
     // ── Unit tests ──
     const test_step = b.step("test", "Run unit tests");
-    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport" };
+    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws" };
     for (test_mods) |mod| {
         const src_path = b.fmt("src/{s}.zig", .{mod});
         const tm = b.createModule(.{ .root_source_file = b.path(src_path), .target = target, .optimize = optimize });

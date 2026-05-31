@@ -149,7 +149,7 @@ fn refreshDetails() void {
                 const ct = std.fmt.bufPrintZ(&cbuf, "{d}", .{v.cpu_cores}) catch "---";
                 setDetail(3, "CPU", ct);
                 setDetail(4, "Hard Disk", if (v.hasDisk()) v.getDiskPathSlice() else "(none)");
-                setDetail(5, "Network", std.mem.span(v.network.label()));
+                setDetail(5, "Network", std.mem.span(v.nics[0].mode.label()));
                 setDetail(6, "CD/DVD", if (v.hasIso()) v.getIsoPathSlice() else "Auto detect");
                 setDetail(7, "Notes", if (v.hasNotes()) v.getNotesSlice() else "");
                 if (status_bar) |s| {

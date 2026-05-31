@@ -99,6 +99,27 @@ pub const NetworkMode = enum(u8) {
             .none => "None",
         };
     }
+
+    pub fn fromStr(s: []const u8) NetworkMode {
+        const lower = if (s.len < 32) blk: {
+            var buf: [32]u8 = undefined;
+            break :blk std.ascii.lowerString(&buf, s);
+        } else return .none;
+        if (std.mem.eql(u8, lower, "user")) return .user;
+        if (std.mem.eql(u8, lower, "bridge")) return .bridge;
+        return .none;
+    }
+};
+
+/// Maximum number of NICs per VM.  QEMU can support more, but this is a
+/// reasonable upper bound for any guest OS; no hypervisor-enforced limit.
+pub const MAX_NICS: usize = 8;
+
+/// A single virtual network adapter (persisted).
+pub const Nic = struct {
+    mode: NetworkMode = .none,
+    mac_buf: [18]u8 = [_]u8{0} ** 18,
+    mac_len: u16 = 0,
 };
 
 // ── Display Resolution ───────────────────────────────────────────────
@@ -412,6 +433,15 @@ pub const BootFirmware = enum(u8) {
             .uefi => "UEFI (OVMF)",
         };
     }
+
+    pub fn fromStr(s: []const u8) BootFirmware {
+        const lower = if (s.len < 32) blk: {
+            var buf: [32]u8 = undefined;
+            break :blk std.ascii.lowerString(&buf, s);
+        } else return .bios;
+        if (std.mem.eql(u8, lower, "uefi")) return .uefi;
+        return .bios;
+    }
 };
 
 /// UI theme preference (application-wide setting, not per-VM).
@@ -480,6 +510,17 @@ pub const Prefs = struct {
     default_memory_mb: u32 = 2048,
     /// Default CPU cores for new VMs.
     default_cpu_cores: u32 = 2,
+    /// AutoProtect enabled by default for new VMs.
+    autoprotect_enabled_default: bool = false,
+    /// Default snapshot interval in minutes.
+    autoprotect_interval_min_default: u32 = 60,
+    /// Default max auto-protect snapshots.
+    autoprotect_max_default: u32 = 10,
+    /// Last window geometry — x, -1 means "not saved yet".
+    win_x: i32 = -1,
+    win_y: i32 = -1,
+    win_w: i32 = 960,
+    win_h: i32 = 680,
 };
 
 // ── VM Configuration ─────────────────────────────────────────────────
@@ -502,9 +543,8 @@ pub const VmConfig = struct {
     iso_path_buf: [MAX_PATH + 1]u8 = [_]u8{0} ** (MAX_PATH + 1),
     iso_path_len: u16 = 0,
 
-    // ── Network MAC Address ──────────────────────────────────────
-    mac_buf: [18]u8 = [_]u8{0} ** 18,
-    mac_len: u16 = 0,
+    // ── Network adapters (persisted) ──────────────────────────────
+    nics: [MAX_NICS]Nic = [_]Nic{ .{ .mode = .user } } ++ [_]Nic{Nic{}} ** (MAX_NICS - 1),
 
     // ── Notes ────────────────────────────────────────────────────
     notes_buf: [4096]u8 = [_]u8{0} ** 4096,
@@ -523,7 +563,8 @@ pub const VmConfig = struct {
     disk_format: DiskFormat = .qcow2,
     display: DisplayType = .gtk,
     display_resolution: DisplayResolution = .auto,
-    network: NetworkMode = .user,
+    /// Number of virtual displays (1-4).  QEMU adds a virtio-gpu device for each.
+    num_displays: u32 = 1,
     enable_kvm: bool = true,
     firmware: BootFirmware = .bios,
     guest_os: GuestOs = .linux,
@@ -566,13 +607,6 @@ pub const VmConfig = struct {
     // ── Additional network adapters (persisted) ───────────────────
     // The primary adapter is `network`/`mac_buf` above. These are extra
     // NICs; `.none` mode means the adapter is absent.
-    nic2_mode: NetworkMode = .none,
-    nic2_mac_buf: [18]u8 = [_]u8{0} ** 18,
-    nic2_mac_len: u16 = 0,
-    nic3_mode: NetworkMode = .none,
-    nic3_mac_buf: [18]u8 = [_]u8{0} ** 18,
-    nic3_mac_len: u16 = 0,
-
     // ── 3D graphics acceleration (virgl), persisted ───────────────
     enable_3d: bool = false,
     gpu_device: GpuDevice = .virtio_vga_gl,
@@ -589,6 +623,8 @@ pub const VmConfig = struct {
     autoprotect: bool = false,
     autoprotect_interval_min: u32 = 1440, // daily
     autoprotect_max: u32 = 3, // keep newest N
+    autoprotect_last_epoch: i64 = 0, // unix timestamp of last AutoProtect snapshot
+    autoprotect_last_seq: u32 = 0, // sequence counter for snapshot naming
 
     // ── Floppy disk image path (persisted) ────────────────────────
     floppy_path_buf: [MAX_PATH + 1]u8 = [_]u8{0} ** (MAX_PATH + 1),
@@ -672,30 +708,30 @@ pub const VmConfig = struct {
         self.iso_path_len = 0;
     }
 
-    // ── MAC address accessors ────────────────────────────────────
+    // ── NIC accessors (delegate to nics[i]) ──────────────────────
 
-    /// Returns the MAC address as a null-terminated C string pointer.
+    /// Returns the MAC address of NIC 0 as a null-terminated C string pointer.
     pub fn getMacAddress(self: *const VmConfig) [*:0]const u8 {
-        return @ptrCast(&self.mac_buf);
+        return @ptrCast(&self.nics[0].mac_buf);
     }
 
-    /// Returns the MAC address as a Zig slice.
+    /// Returns the MAC address of NIC 0 as a Zig slice.
     pub fn getMacAddressSlice(self: *const VmConfig) []const u8 {
-        return self.mac_buf[0..self.mac_len];
+        return self.nics[0].mac_buf[0..self.nics[0].mac_len];
     }
 
-    /// Sets the MAC address.
+    /// Sets the MAC address of NIC 0.
     pub fn setMacAddress(self: *VmConfig, s: []const u8) void {
         const len: u16 = @intCast(@min(s.len, 17));
-        @memcpy(self.mac_buf[0..len], s[0..len]);
-        self.mac_buf[len] = 0;
-        self.mac_len = len;
+        @memcpy(self.nics[0].mac_buf[0..len], s[0..len]);
+        self.nics[0].mac_buf[len] = 0;
+        self.nics[0].mac_len = len;
     }
 
-    /// Clears the MAC address (resets to empty).
+    /// Clears the MAC address of NIC 0 (resets to empty).
     pub fn clearMacAddress(self: *VmConfig) void {
-        self.mac_buf[0] = 0;
-        self.mac_len = 0;
+        self.nics[0].mac_buf[0] = 0;
+        self.nics[0].mac_len = 0;
     }
 
     // ── Notes accessors ──────────────────────────────────────────
@@ -845,28 +881,28 @@ pub const VmConfig = struct {
     // ── Additional NIC accessors ─────────────────────────────────
 
     pub fn getNic2Mac(self: *const VmConfig) [*:0]const u8 {
-        return @ptrCast(&self.nic2_mac_buf);
+        return @ptrCast(&self.nics[1].mac_buf);
     }
     pub fn getNic2MacSlice(self: *const VmConfig) []const u8 {
-        return self.nic2_mac_buf[0..self.nic2_mac_len];
+        return self.nics[1].mac_buf[0..self.nics[1].mac_len];
     }
     pub fn setNic2Mac(self: *VmConfig, s: []const u8) void {
         const len: u16 = @intCast(@min(s.len, 17));
-        @memcpy(self.nic2_mac_buf[0..len], s[0..len]);
-        self.nic2_mac_buf[len] = 0;
-        self.nic2_mac_len = len;
+        @memcpy(self.nics[1].mac_buf[0..len], s[0..len]);
+        self.nics[1].mac_buf[len] = 0;
+        self.nics[1].mac_len = len;
     }
     pub fn getNic3Mac(self: *const VmConfig) [*:0]const u8 {
-        return @ptrCast(&self.nic3_mac_buf);
+        return @ptrCast(&self.nics[2].mac_buf);
     }
     pub fn getNic3MacSlice(self: *const VmConfig) []const u8 {
-        return self.nic3_mac_buf[0..self.nic3_mac_len];
+        return self.nics[2].mac_buf[0..self.nics[2].mac_len];
     }
     pub fn setNic3Mac(self: *VmConfig, s: []const u8) void {
         const len: u16 = @intCast(@min(s.len, 17));
-        @memcpy(self.nic3_mac_buf[0..len], s[0..len]);
-        self.nic3_mac_buf[len] = 0;
-        self.nic3_mac_len = len;
+        @memcpy(self.nics[2].mac_buf[0..len], s[0..len]);
+        self.nics[2].mac_buf[len] = 0;
+        self.nics[2].mac_len = len;
     }
 
     // ── Floppy accessors ─────────────────────────────────────────
@@ -928,9 +964,9 @@ pub const VmConfig = struct {
         return self.status == .paused;
     }
 
-    /// Returns `true` if this VM has a MAC address configured.
+    /// Returns `true` if NIC 0 has a MAC address configured.
     pub fn hasMacAddress(self: *const VmConfig) bool {
-        return self.mac_len > 0;
+        return self.nics[0].mac_len > 0;
     }
 
     /// Returns `true` if this VM has notes.
@@ -1161,7 +1197,7 @@ test "VmConfig: reset restores all defaults" {
     cfg.disk_size_gb = 500;
     cfg.disk_format = .vmdk;
     cfg.display = .vnc;
-    cfg.network = .bridge;
+    cfg.nics[0].mode = .bridge;
     cfg.firmware = .uefi;
     cfg.enable_kvm = false;
     cfg.status = .running;
@@ -1174,7 +1210,7 @@ test "VmConfig: reset restores all defaults" {
     try std.testing.expectEqual(@as(u32, 20), cfg.disk_size_gb);
     try std.testing.expectEqual(DiskFormat.qcow2, cfg.disk_format);
     try std.testing.expectEqual(DisplayType.gtk, cfg.display);
-    try std.testing.expectEqual(NetworkMode.user, cfg.network);
+    try std.testing.expectEqual(NetworkMode.user, cfg.nics[0].mode);
     try std.testing.expectEqual(BootFirmware.bios, cfg.firmware);
     try std.testing.expect(cfg.enable_kvm);
     try std.testing.expect(cfg.isStopped());
@@ -1193,7 +1229,7 @@ test "VmConfig: default values" {
     try std.testing.expectEqual(@as(u32, 20), cfg.disk_size_gb);
     try std.testing.expectEqual(DiskFormat.qcow2, cfg.disk_format);
     try std.testing.expectEqual(DisplayType.gtk, cfg.display);
-    try std.testing.expectEqual(NetworkMode.user, cfg.network);
+    try std.testing.expectEqual(NetworkMode.user, cfg.nics[0].mode);
     try std.testing.expectEqual(BootFirmware.bios, cfg.firmware);
     try std.testing.expect(cfg.enable_kvm);
     try std.testing.expectEqual(VmStatus.stopped, cfg.status);
@@ -1818,8 +1854,8 @@ test "VmConfig: clear nic2/nic3 MAC" {
     cfg.setNic3Mac("AA:BB:CC:DD:EE:02");
     cfg.setNic2Mac("");
     cfg.setNic3Mac("");
-    try std.testing.expectEqual(@as(u16, 0), cfg.nic2_mac_len);
-    try std.testing.expectEqual(@as(u16, 0), cfg.nic3_mac_len);
+    try std.testing.expectEqual(@as(u16, 0), cfg.nics[1].mac_len);
+    try std.testing.expectEqual(@as(u16, 0), cfg.nics[2].mac_len);
     try std.testing.expectEqualStrings("", cfg.getNic2MacSlice());
     try std.testing.expectEqualStrings("", cfg.getNic3MacSlice());
 }
@@ -1878,6 +1914,8 @@ test "VmConfig: autoprotect defaults" {
     try std.testing.expect(!cfg.autoprotect);
     try std.testing.expectEqual(@as(u32, 1440), cfg.autoprotect_interval_min);
     try std.testing.expectEqual(@as(u32, 3), cfg.autoprotect_max);
+    try std.testing.expectEqual(@as(i64, 0), cfg.autoprotect_last_epoch);
+    try std.testing.expectEqual(@as(u32, 0), cfg.autoprotect_last_seq);
 }
 
 test "VmConfig: guest_tools + enable_3d defaults" {
@@ -1905,6 +1943,8 @@ test "fuzz: VmConfig defaults survive random partial mutation" {
         cfg.enable_3d = rnd.boolean();
         cfg.guest_tools = rnd.boolean();
         cfg.autoprotect = rnd.boolean();
+        cfg.autoprotect_last_epoch = rnd.int(i64);
+        cfg.autoprotect_last_seq = rnd.int(u32);
         cfg.status = VmStatus.fromIndex(rnd.int(usize));
         cfg.pid = if (rnd.boolean()) @as(i32, @intCast(rnd.int(u16))) else null;
         // Reset.
@@ -1915,6 +1955,8 @@ test "fuzz: VmConfig defaults survive random partial mutation" {
         try std.testing.expectEqual(@as(?i32, null), cfg.pid);
         try std.testing.expect(!cfg.autoprotect);
         try std.testing.expectEqual(@as(u32, 1440), cfg.autoprotect_interval_min);
+        try std.testing.expectEqual(@as(i64, 0), cfg.autoprotect_last_epoch);
+        try std.testing.expectEqual(@as(u32, 0), cfg.autoprotect_last_seq);
     }
 }
 
