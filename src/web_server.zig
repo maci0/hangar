@@ -12,6 +12,7 @@ const ws = @import("ws.zig");
 const usock = @import("usock.zig");
 const hv_iface = @import("hv/interface.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
+const ovf = @import("ovf.zig");
 const appio = @import("appio.zig");
 
 const MAX_VMS = 64;
@@ -119,6 +120,9 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/save/")) {
         response = try handleSave(req);
         content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "POST /api/rename/")) {
+        response = try handleRename(req);
+        content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/save")) {
         persist.save(&vms, vm_count, prefs) catch {};
         response = "saved";
@@ -128,6 +132,12 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/suspend/")) {
         response = try handleSuspend(req);
+        content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "POST /api/pause/")) {
+        response = try handlePause(req);
+        content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "POST /api/resume/")) {
+        response = try handleResume(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/shutdown/")) {
         response = try handleShutdown(req);
@@ -149,6 +159,12 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/import")) {
         response = try handleImport(req);
+        content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "POST /api/cad/")) {
+        response = try handleCad(req);
+        content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "POST /api/export/")) {
+        response = handleExport(req) catch "export err";
         content_type = "text/plain";
     } else {
         response = index_html;
@@ -703,6 +719,61 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     return "ok";
 }
 
+fn handlePause(req: []const u8) ![]const u8 {
+    const idx = parseIdx(req, "POST /api/pause/") orelse return "invalid";
+    if (idx >= vm_count) return "invalid idx";
+    const v = &vms[idx];
+    if (!v.isAlive()) return "not running";
+    if (getVmmHandle(idx)) |h| {
+        g_vmm.pauseFn(h) catch return "qmp err";
+    } else {
+        var client = qmp.QmpClient{};
+        var sock_buf: [256]u8 = undefined;
+        const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
+        client.connect(sock) catch return "qmp err";
+        defer client.disconnect();
+        client.pause() catch return "qmp err";
+    }
+    return "ok";
+}
+
+fn handleResume(req: []const u8) ![]const u8 {
+    const idx = parseIdx(req, "POST /api/resume/") orelse return "invalid";
+    if (idx >= vm_count) return "invalid idx";
+    const v = &vms[idx];
+    if (!v.isPaused()) return "not paused";
+    if (getVmmHandle(idx)) |h| {
+        g_vmm.resumeFn(h) catch return "qmp err";
+    } else {
+        var client = qmp.QmpClient{};
+        var sock_buf: [256]u8 = undefined;
+        const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
+        client.connect(sock) catch return "qmp err";
+        defer client.disconnect();
+        client.cont() catch return "qmp err";
+    }
+    return "ok";
+}
+
+fn handleRename(req: []const u8) ![]const u8 {
+    const idx = parseIdx(req, "POST /api/rename/") orelse return "invalid";
+    if (idx >= vm_count) return "invalid idx";
+    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
+    const body = req[body_start + 4 ..];
+    var pairs = std.mem.splitScalar(u8, body, '&');
+    while (pairs.next()) |pair| {
+        var kv = std.mem.splitScalar(u8, pair, '=');
+        const key = kv.next() orelse continue;
+        const val = kv.next() orelse continue;
+        if (std.mem.eql(u8, key, "name")) {
+            vms[idx].setName(val);
+            persist.save(&vms, vm_count, prefs) catch {};
+            return "ok";
+        }
+    }
+    return "no name";
+}
+
 fn handleShutdown(req: []const u8) ![]const u8 {
     const idx = parseIdx(req, "POST /api/shutdown/") orelse return "invalid";
     if (idx >= vm_count) return "invalid idx";
@@ -746,7 +817,19 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
     if (!v.hasDisk()) return "no disk";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
-    const tag = std.mem.trim(u8, body, " \r\n");
+    var tag: []const u8 = "";
+    var pairs = std.mem.splitScalar(u8, body, '&');
+    while (pairs.next()) |pair| {
+        var kv = std.mem.splitScalar(u8, pair, '=');
+        const key = kv.next() orelse continue;
+        const val = kv.next() orelse continue;
+        if (std.mem.eql(u8, key, "tag")) {
+            tag = val;
+        }
+    }
+    if (tag.len == 0) {
+        tag = std.mem.trim(u8, body, " \r\n");
+    }
     if (tag.len == 0) return "no name";
     if (getVmmHandle(idx)) |h| {
         g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "create err";
@@ -835,6 +918,53 @@ fn handleImport(req: []const u8) ![]const u8 {
     return "ok";
 }
 
+fn handleCad(req: []const u8) ![]const u8 {
+    const idx = parseIdx(req, "POST /api/cad/") orelse return "invalid";
+    if (idx >= vm_count) return "invalid idx";
+    const v = &vms[idx];
+    if (!v.isAlive()) return "not running";
+    var client = qmp.QmpClient{};
+    var sock_buf: [256]u8 = undefined;
+    const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
+    client.connect(sock) catch return "qmp err";
+    defer client.disconnect();
+    client.sendCtrlAltDel() catch return "cad err";
+    return "ok";
+}
+
+fn handleExport(req: []const u8) ![]const u8 {
+    const idx = parseIdx(req, "POST /api/export/") orelse return "invalid";
+    if (idx >= vm_count) return "invalid idx";
+    const v = &vms[idx];
+
+    const dir_path = "/tmp/ovf_export";
+    std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {};
+
+    const vmdk_name = "disk1.vmdk";
+    var path_buf: [vm.MAX_PATH]u8 = undefined;
+    const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return "buf err";
+
+    const disk_cap: u64 = @as(u64, v.disk_size_gb) * 1024 * 1024 * 1024;
+    const spec = ovf.Spec{
+        .name = v.getNameSlice(),
+        .cpu_cores = v.cpu_cores,
+        .memory_mb = v.memory_mb,
+        .disk_capacity_bytes = disk_cap,
+        .vmdk_href = vmdk_name,
+        .vmdk_size_bytes = 0,
+        .has_network = v.nics[0].mode != .none,
+    };
+    const xml = ovf.buildDescriptor(spec, std.heap.page_allocator) catch return "ovf err";
+    defer std.heap.page_allocator.free(xml);
+
+    const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, v.getNameSlice() });
+    defer std.heap.page_allocator.free(ovf_path);
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch return "write err";
+
+    qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, std.heap.page_allocator) catch return "convert err";
+    return dir_path;
+}
+
 const index_html =
     \\<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     \\<title>KVMGUI</title><style>
@@ -860,9 +990,18 @@ const index_html =
     \\<div style="margin-top:auto"><button class="btn primary" style="width:100%" onclick="newVm()">+ New VM</button></div></aside>
     \\<main><div id="display" style="background:#000;border-radius:8px;margin-bottom:16px;display:none"><canvas id="fbcanvas" width="640" height="480" style="width:100%;max-height:400px"></canvas></div><div id="serialpanel"><textarea id="serialterm" readonly></textarea></div><div class="toolbar">
     \\<button id="powerbtn" class="btn primary" onclick="powerToggle()">▶ Power On</button>
+    \\<button class="btn" onclick="pauseGuest()">Pause</button>
+    \\<button class="btn" onclick="resumeGuest()">Resume</button>
     \\<button class="btn" onclick="shutdownGuest()">Shut Down</button>
     \\<button class="btn" onclick="resetGuest()">Reset</button>
+    \\<button class="btn" onclick="suspendGuest()">Suspend</button>
+    \\<button class="btn" onclick="sendCad()">Ctrl+Alt+Del</button>
     \\<button class="btn" onclick="editVm()">Settings</button>
+    \\<button class="btn" onclick="renameGuest()">Rename</button>
+    \\<button class="btn" onclick="cloneGuest()">Clone</button>
+    \\<button class="btn" onclick="importGuest()">Import</button>
+    \\<button class="btn" onclick="takeSnapshot()">Snapshot</button>
+    \\<button class="btn" onclick="exportOvf()">Export OVF</button>
     \\<button class="btn danger" onclick="deleteVm()">Delete</button>
     \\</div><h1 id="vmname">Select a VM</h1>
     \\<div id="details"></div></main>
@@ -891,9 +1030,31 @@ const index_html =
     \\<label style="font-size:11px;color:#9aa1ab">NIC 3</label><select id="e_nic3"><option value="none">None</option><option value="user">NAT</option><option value="bridge">Bridged</option></select>
     \\<label style="font-size:11px;color:#9aa1ab">Port Forwards</label><input id="e_pf" placeholder="tcp:2222::22,tcp:8080::80">
     \\<label style="font-size:11px;color:#9aa1ab">Notes</label><input id="e_notes" placeholder="VM notes...">
+    \\<label style="font-size:11px;color:#9aa1ab">CPU Sockets</label><input id="e_cpu_sockets" type="number" value="1">
+    \\<label style="font-size:11px;color:#9aa1ab">Disk Format</label><select id="e_disk_format"><option value="0">QCOW2</option><option value="1">Raw</option><option value="2">VMDK</option><option value="3">VDI</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">ISO Path</label><input id="e_iso_path" placeholder="/path/to/boot.iso">
+    \\<label style="font-size:11px;color:#9aa1ab">MAC Address</label><input id="e_mac_address" placeholder="52:54:00:xx:xx:xx">
+    \\<label style="font-size:11px;color:#9aa1ab">NIC 2 MAC</label><input id="e_nic2_mac" placeholder="52:54:00:xx:xx:xx">
+    \\<label style="font-size:11px;color:#9aa1ab">NIC 3 MAC</label><input id="e_nic3_mac" placeholder="52:54:00:xx:xx:xx">
+    \\<label style="font-size:11px;color:#9aa1ab">Disk 2 Format</label><select id="e_disk2_format"><option value="0">QCOW2</option><option value="1">Raw</option><option value="2">VMDK</option><option value="3">VDI</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">3D Acceleration</label><select id="e_enable_3d"><option value="0">No</option><option value="1">Yes</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">GPU Device</label><select id="e_gpu_device"><option value="0">Virtio-GPU (virgl)</option><option value="1">Virtio-VGA (virgl)</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">Display</label><select id="e_display"><option value="0">GTK</option><option value="1">SDL</option><option value="2">SPICE</option><option value="3">VNC</option><option value="4">None (headless)</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">Display Resolution</label><select id="e_display_resolution"><option value="0">Auto</option><option value="1">800x600</option><option value="2">1024x768</option><option value="3">1280x800</option><option value="4">1920x1080</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">Guest OS</label><select id="e_guest_os"><option value="0">Linux</option><option value="1">Microsoft Windows</option><option value="2">FreeBSD</option><option value="3">Apple macOS</option><option value="4">Other</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">Audio</label><select id="e_audio"><option value="0">None</option><option value="1">Intel HDA</option><option value="2">AC97</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">Boot Order</label><select id="e_boot_order"><option value="0">Hard Disk</option><option value="1">CD/DVD</option><option value="2">Network (PXE)</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">KVM Acceleration</label><select id="e_enable_kvm"><option value="0">No</option><option value="1">Yes</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">Embed Display</label><select id="e_embed_display"><option value="0">No</option><option value="1">Yes</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">VNC Port</label><input id="e_vnc_port" type="number" value="5901">
+    \\<label style="font-size:11px;color:#9aa1ab">SPICE Port</label><input id="e_spice_port" type="number" value="5900">
+    \\<label style="font-size:11px;color:#9aa1ab">Serial Console</label><select id="e_enable_serial"><option value="0">No</option><option value="1">Yes</option></select>
+    \\<label style="font-size:11px;color:#9aa1ab">Num Displays</label><input id="e_num_displays" type="number" value="1">
+    \\<label style="font-size:11px;color:#9aa1ab">Favorite</label><select id="e_favorite"><option value="0">No</option><option value="1">Yes</option></select>
     \\</div><div class="btn-row"><button class="btn" onclick="editdlg.close()">Cancel</button><button class="btn primary" onclick="saveVm()">Save</button></div></dialog>
     \\<script>
     \\let vms=[]; let sel=null;
+    \\function setStatus(s){document.getElementById('statusbar').textContent=s;}
     \\async function refresh(){const r=await fetch('/api/vms');vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}
     \\function filterList(){const f=document.getElementById('search').value.toLowerCase();renderList(f);}
     \\function renderList(filter){const e=document.getElementById('vmlist');const f=(filter||'').toLowerCase();let h='';for(let i=0;i<vms.length;i++){const v=vms[i];if(f&&!v.name.toLowerCase().includes(f))continue;
@@ -928,6 +1089,15 @@ const index_html =
     \\async function powerToggle(){if(sel===null)return;await fetch('/api/power/'+sel,{method:'POST'});refresh();}
     \\async function shutdownGuest(){if(sel===null)return;await fetch('/api/shutdown/'+sel,{method:'POST'});setStatus('Shut down guest — ACPI power button sent.');}
     \\async function resetGuest(){if(sel===null)return;await fetch('/api/reset/'+sel,{method:'POST'});setStatus('Reset guest — system_reset sent.');}
+    \\async function pauseGuest(){if(sel===null)return;await fetch('/api/pause/'+sel,{method:'POST'});refresh();setStatus('Paused guest — execution frozen.');}
+    \\async function resumeGuest(){if(sel===null)return;await fetch('/api/resume/'+sel,{method:'POST'});refresh();setStatus('Resumed guest — execution continued.');}
+    \\async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=prompt('Rename VM:',v.name);if(n&&n!==v.name){await fetch('/api/rename/'+sel,{method:'POST',body:'name='+encodeURIComponent(n)});refresh();}}
+    \\async function suspendGuest(){if(sel===null)return;await fetch('/api/suspend/'+sel,{method:'POST'});refresh();setStatus('Suspended VM to disk.');}
+    \\async function cloneGuest(){if(sel===null)return;if(!confirm('Clone this VM?'))return;await fetch('/api/clone/'+sel,{method:'POST'});refresh();setStatus('VM cloned.');}
+    \\async function importGuest(){const p=prompt('Path to VM disk image (.qcow2):');if(p){await fetch('/api/import',{method:'POST',body:encodeURIComponent(p)});refresh();setStatus('VM imported.');}}
+    \\async function takeSnapshot(){if(sel===null)return;const t=prompt('Snapshot tag name:');if(t){await fetch('/api/snapshot/take/'+sel,{method:'POST',body:'tag='+encodeURIComponent(t)});refresh();setStatus('Snapshot taken: '+t);}}
+    \\async function sendCad(){if(sel===null)return;await fetch('/api/cad/'+sel,{method:'POST'});setStatus('Ctrl+Alt+Del sent to guest.');}
+    \\async function exportOvf(){if(sel===null)return;const r=await fetch('/api/export/'+sel,{method:'POST'});const p=await r.text();setStatus('OVF exported to: '+p);}
     \\function updatePowerBtn(){const b=document.getElementById('powerbtn');if(sel===null||sel>=vms.length){b.textContent='▶ Power On';b.className='btn primary';return;}
     \\const v=vms[sel];if(v.status==='running'){b.textContent='⏹ Power Off';b.className='btn danger';}else if(v.status==='paused'){b.textContent='▶ Resume';b.className='btn primary';}else{b.textContent='▶ Power On';b.className='btn primary';}}
     \\function newVm(){document.getElementById('newdlg').showModal();}
@@ -945,10 +1115,23 @@ const index_html =
     \\document.getElementById('e_d2path').value=v.disk2_path||'';document.getElementById('e_d2size').value=v.disk2_size||0;
     \\document.getElementById('e_floppy').value=v.floppy_path||'';document.getElementById('e_nic2').value=v.nic2_mode||'none';
     \\document.getElementById('e_nic3').value=v.nic3_mode||'none';document.getElementById('e_pf').value=v.port_forwards||'';
-    \\document.getElementById('e_notes').value=v.notes||'';document.getElementById('editdlg').showModal();}
+    \\document.getElementById('e_notes').value=v.notes||'';
+    \\document.getElementById('e_cpu_sockets').value=v.cpu_sockets||1;document.getElementById('e_disk_format').value=v.disk_format||0;
+    \\document.getElementById('e_iso_path').value=v.iso_path||'';document.getElementById('e_mac_address').value=v.mac_address||'';
+    \\document.getElementById('e_disk2_format').value=v.disk2_format||0;document.getElementById('e_enable_3d').value=v.enable_3d==='true'?'1':'0';
+    \\document.getElementById('e_gpu_device').value=v.gpu_device||0;document.getElementById('e_display').value=v.display||0;
+    \\document.getElementById('e_display_resolution').value=v.display_resolution||0;document.getElementById('e_guest_os').value=v.guest_os||0;
+    \\document.getElementById('e_audio').value=v.audio||0;document.getElementById('e_boot_order').value=v.boot_order||0;
+    \\document.getElementById('e_enable_kvm').value=v.enable_kvm==='true'?'1':'0';document.getElementById('e_embed_display').value=v.embed_display==='true'?'1':'0';
+    \\document.getElementById('e_vnc_port').value=v.vnc_port||5900;document.getElementById('e_spice_port').value=v.spice_port||5901;
+    \\document.getElementById('e_enable_serial').value=v.enable_serial==='true'?'1':'0';document.getElementById('e_num_displays').value=v.num_displays||1;
+    \\document.getElementById('e_favorite').value=v.favorite==='true'?'1':'0';document.getElementById('e_nic2_mac').value=v.nic2_mac||'';
+    \\document.getElementById('e_nic3_mac').value=v.nic3_mac||'';document.getElementById('editdlg').showModal();}
     \\async function saveVm(){if(sel===null)return;
-    \\const body=['name','mem','cpu','disk','network','firmware','shared_folder','usb','guest_tools','autoprotect',
-    \\'ap_interval','ap_max','disk2_path','disk2_size','floppy','nic2','nic3','portfw','notes']
+    \\const body=['name','mem','cpu','cpu_sockets','disk','disk_format','iso_path','mac_address','network','firmware','shared_folder','usb','guest_tools','autoprotect',
+    \\'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','nic2','nic2_mac','nic3','nic3_mac','portfw','notes',
+    \\'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order',
+    \\'enable_kvm','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite']
     \\.map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
     \\await fetch('/api/save/'+sel,{method:'POST',body});document.getElementById('editdlg').close();refresh();}
     \\refresh();

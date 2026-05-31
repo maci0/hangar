@@ -25,11 +25,15 @@ fn powerCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { togglePower
 fn shutdownCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { shutdownGuest(); }
 fn resetCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { resetGuest(); }
 fn suspendCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { suspendVm(); }
+fn pauseCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { pauseGuest(); }
+fn resumeCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { resumeGuest(); }
 fn settingsCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { editVmDialog(); }
 fn importCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { importVm(); }
 fn cloneCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { cloneVm(); }
 fn snapshotCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { snapDialog(); }
 fn deleteVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { deleteCurrentVm(); }
+fn renameCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { renameVm(); }
+fn cadCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { sendCtrlAltDel(); }
 fn favCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.toggleFavorite(); }
 fn prefsCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.prefsDialog(); }
 fn vnetCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.vnetDialog(); }
@@ -1108,6 +1112,155 @@ fn resetViaQmp(idx: usize) !void {
     try client.systemReset();
 }
 
+fn pauseGuest() void {
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+    if (!app.vms[idx].isAlive()) { app.setStatus("VM is not running"); return; }
+    if (app.vms[idx].isPaused()) { app.setStatus("VM is already paused"); return; }
+
+    if (app.remote_mode) {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrintZ(&path_buf, "/api/pause/{d}", .{idx}) catch return;
+        var out_buf: [64]u8 = undefined;
+        _ = remote.apiPost(path, "", &out_buf);
+        app.setStatus("Paused guest (remote).");
+        return;
+    }
+    if (app.getVmmHandle(idx)) |h| {
+        app.g_vmm.pauseFn(h) catch { app.setStatus("Pause failed"); return; };
+    } else {
+        pauseViaQmp(idx) catch { app.setStatus("Pause failed"); return; };
+    }
+    app.setStatus("Paused guest — execution frozen.");
+}
+
+fn resumeGuest() void {
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+    if (!app.vms[idx].isPaused()) { app.setStatus("VM is not paused"); return; }
+
+    if (app.remote_mode) {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrintZ(&path_buf, "/api/resume/{d}", .{idx}) catch return;
+        var out_buf: [64]u8 = undefined;
+        _ = remote.apiPost(path, "", &out_buf);
+        app.setStatus("Resumed guest (remote).");
+        return;
+    }
+    if (app.getVmmHandle(idx)) |h| {
+        app.g_vmm.resumeFn(h) catch { app.setStatus("Resume failed"); return; };
+    } else {
+        resumeViaQmp(idx) catch { app.setStatus("Resume failed"); return; };
+    }
+    app.setStatus("Resumed guest — execution continued.");
+}
+
+fn sendCtrlAltDel() void {
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+    if (!app.vms[idx].isAlive()) { app.setStatus("VM is not running"); return; }
+
+    if (app.remote_mode) {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrintZ(&path_buf, "/api/cad/{d}", .{idx}) catch return;
+        var out_buf: [64]u8 = undefined;
+        _ = remote.apiPost(path, "", &out_buf);
+        app.setStatus("Ctrl+Alt+Del sent to guest (remote).");
+        return;
+    }
+    cadViaQmp(idx) catch { app.setStatus("Ctrl+Alt+Del failed"); return; };
+    app.setStatus("Ctrl+Alt+Del sent to guest.");
+}
+
+fn cadViaQmp(idx: usize) !void {
+    var client = qmp.QmpClient{};
+    var sock_buf: [256]u8 = undefined;
+    const sock = qmp.socketPath(app.vms[idx].getNameSlice(), &sock_buf) orelse return error.SocketPath;
+    try client.connect(sock);
+    defer client.disconnect();
+    try client.sendCtrlAltDel();
+}
+
+fn renameVm() void {
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+
+    const rw = cfltk.Fl_Window_new_wh(340, 110, "Rename VM");
+    _ = cfltk.Fl_Box_new(10, 10, 320, 20, "Enter new name for the virtual machine:");
+
+    const ni = cfltk.Fl_Input_new(10, 35, 320, 30, "");
+    _ = cfltk.Fl_Input_set_value(ni, app.vms[idx].getNameSlice().ptr);
+
+    var ok = false;
+    const RDlg = struct {
+        dlg: ?*cfltk.Fl_Window,
+        input: ?*cfltk.Fl_Input,
+        ok: *bool,
+        fn okCB(_: ?*cfltk.Fl_Widget, data: ?*anyopaque) callconv(.c) void {
+            const rd: *@This() = @ptrCast(@alignCast(data orelse return));
+            rd.ok.* = true;
+            if (rd.dlg) |d| cfltk.Fl_Window_hide(d);
+        }
+        fn cancelCB(_: ?*cfltk.Fl_Widget, data: ?*anyopaque) callconv(.c) void {
+            const rd: *@This() = @ptrCast(@alignCast(data orelse return));
+            rd.ok.* = false;
+            if (rd.dlg) |d| cfltk.Fl_Window_hide(d);
+        }
+    };
+    var rd = RDlg{ .dlg = @ptrCast(rw), .input = @ptrCast(ni), .ok = &ok };
+
+    const ok_btn = cfltk.Fl_Button_new(90, 75, 70, 25, "OK");
+    cfltk.Fl_Button_set_callback(ok_btn, &RDlg.okCB, &rd);
+    const cancel_btn = cfltk.Fl_Button_new(180, 75, 70, 25, "Cancel");
+    cfltk.Fl_Button_set_callback(cancel_btn, &RDlg.cancelCB, &rd);
+
+    cfltk.Fl_Window_end(@ptrCast(rw));
+    cfltk.Fl_Window_show(@ptrCast(rw));
+    while (cfltk.Fl_Window_shown(@ptrCast(rw)) != 0) { _ = cfltk.Fl_wait(); }
+
+    if (!ok) return;
+
+    const new_name = std.mem.span(cfltk.Fl_Input_value(ni));
+    if (new_name.len == 0) return;
+    if (std.mem.eql(u8, new_name, app.vms[idx].getNameSlice())) return;
+
+    // Remote mode: post via API
+    if (app.remote_mode) {
+        var body_buf: [280]u8 = undefined;
+        const body = std.fmt.bufPrint(&body_buf, "name={s}", .{new_name}) catch return;
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrintZ(&path_buf, "/api/rename/{d}", .{idx}) catch return;
+        var out_buf: [64]u8 = undefined;
+        _ = remote.apiPost(path, body, &out_buf);
+        app.refreshBrowser();
+        app.refreshDetails();
+        return;
+    }
+
+    app.vms[idx].setName(new_name);
+    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
+    app.refreshBrowser();
+    app.refreshDetails();
+}
+
+fn pauseViaQmp(idx: usize) !void {
+    var client = qmp.QmpClient{};
+    var sock_buf: [256]u8 = undefined;
+    const sock = qmp.socketPath(app.vms[idx].getNameSlice(), &sock_buf) orelse return error.NoSocket;
+    try client.connect(sock);
+    defer client.disconnect();
+    try client.pause();
+}
+
+fn resumeViaQmp(idx: usize) !void {
+    var client = qmp.QmpClient{};
+    var sock_buf: [256]u8 = undefined;
+    const sock = qmp.socketPath(app.vms[idx].getNameSlice(), &sock_buf) orelse return error.NoSocket;
+    try client.connect(sock);
+    defer client.disconnect();
+    try client.cont();
+}
+
 fn suspendVm() void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
@@ -1306,12 +1459,17 @@ fn kbHandler(event: c_int) callconv(.c) c_int {
     if (event != 8) return 0; // FL_KEYDOWN = 8
     const key = cfltk.Fl_event_key();
     const ctrl = cfltk.Fl_event_ctrl() != 0;
-    if (ctrl and key == 'n') { newVmDialog(); return 1; }
+    const shift = cfltk.Fl_event_shift() != 0;
+    if (ctrl and key == 'n') { if (shift) { cloneVm(); } else { newVmDialog(); } return 1; }
     if (ctrl and key == 'q') { shutdown(); return 1; }
+    if (ctrl and key == 'e') { editVmDialog(); return 1; }
+    if (ctrl and key == 'i') { importVm(); return 1; }
     if (key == 0xffbf) { editVmDialog(); return 1; } // F2
     if (key == 0xffff) { deleteCurrentVm(); return 1; } // DEL
     if (key == 0xffc8) { if (app.win_handle) |w| { const cur = cfltk.Fl_Window_fullscreen_active(w); cfltk.Fl_Window_fullscreen(w, if (cur != 0) @as(c_uint, 0) else 1); } return 1; } // F11 toggle
     if (ctrl and key == 'w') { app.selected_idx = null; app.refreshBrowser(); app.refreshDetails(); return 1; }
+    if (key == 0xff0d) { togglePower(); return 1; } // Enter → Power On/Off
+    if (key == 0xff1b) { app.selected_idx = null; app.refreshBrowser(); app.refreshDetails(); return 1; } // Escape → Home
     return 0;
 }
 
@@ -1482,9 +1640,13 @@ pub fn main() void {
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "Edit/Preferences...", 0, @ptrCast(&prefsCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "Edit/Virtual Network Editor...", 0, @ptrCast(&vnetCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Power On/Off", 0, @ptrCast(&powerCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Pause Guest", 0, @ptrCast(&pauseCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Resume Guest", 0, @ptrCast(&resumeCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Shut Down Guest", 0, @ptrCast(&shutdownCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Reset Guest", 0, @ptrCast(&resetCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Send Ctrl+Alt+Del", 0, @ptrCast(&cadCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Settings...\tF2", 0, @ptrCast(&settingsCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Rename...", 0, @ptrCast(&renameCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Snapshot Manager...", 0, @ptrCast(&snapshotCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Clone", 0, @ptrCast(&cloneCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Delete VM\tDEL", 0, @ptrCast(&deleteVmCB), null, 0);
@@ -1497,27 +1659,36 @@ pub fn main() void {
     const new_btn = cfltk.Fl_Button_new(5, tb_y + 3, 80, 34, "New VM");
     const start_btn = cfltk.Fl_Button_new(90, tb_y + 3, 80, 34, "Power On");
     const susp_btn = cfltk.Fl_Button_new(175, tb_y + 3, 80, 34, "Suspend");
-    const sd_btn = cfltk.Fl_Button_new(260, tb_y + 3, 80, 34, "Shut Down");
-    const rst_btn = cfltk.Fl_Button_new(345, tb_y + 3, 80, 34, "Reset");
-    const set_btn = cfltk.Fl_Button_new(430, tb_y + 3, 80, 34, "Settings");
-    const home_btn = cfltk.Fl_Button_new(515, tb_y + 3, 80, 34, "Home");
+    const pause_btn = cfltk.Fl_Button_new(260, tb_y + 3, 80, 34, "Pause");
+    const resume_btn = cfltk.Fl_Button_new(345, tb_y + 3, 80, 34, "Resume");
+    const sd_btn = cfltk.Fl_Button_new(430, tb_y + 3, 80, 34, "Shut Down");
+    const rst_btn = cfltk.Fl_Button_new(515, tb_y + 3, 80, 34, "Reset");
+    const set_btn = cfltk.Fl_Button_new(600, tb_y + 3, 80, 34, "Settings");
+    const cad_btn = cfltk.Fl_Button_new(685, tb_y + 3, 110, 34, "Ctrl+Alt+Del");
+    const home_btn = cfltk.Fl_Button_new(800, tb_y + 3, 80, 34, "Home");
 
     // Tooltips
     cfltk.Fl_Button_set_tooltip(new_btn, "Create a new virtual machine (Ctrl+N)");
     cfltk.Fl_Button_set_tooltip(start_btn, "Power on or off the selected virtual machine");
     cfltk.Fl_Button_set_tooltip(susp_btn, "Suspend the selected virtual machine to disk");
+    cfltk.Fl_Button_set_tooltip(pause_btn, "Freeze guest execution (QMP stop)");
+    cfltk.Fl_Button_set_tooltip(resume_btn, "Resume paused guest execution (QMP cont)");
     cfltk.Fl_Button_set_tooltip(sd_btn, "Send ACPI shutdown to the guest (graceful power off)");
     cfltk.Fl_Button_set_tooltip(rst_btn, "Hard reset the guest via QMP system_reset");
     cfltk.Fl_Button_set_tooltip(set_btn, "Edit virtual machine settings (F2)");
+    cfltk.Fl_Button_set_tooltip(cad_btn, "Send Ctrl+Alt+Del to the guest (login / unlock)");
     cfltk.Fl_Button_set_tooltip(home_btn, "Return to Home (deselect VM, Ctrl+W)");
     _ = tb;
 
     cfltk.Fl_Button_set_callback(new_btn, newVmCB, null);
     cfltk.Fl_Button_set_callback(start_btn, powerCB, null);
     cfltk.Fl_Button_set_callback(susp_btn, suspendCB, null);
+    cfltk.Fl_Button_set_callback(pause_btn, pauseCB, null);
+    cfltk.Fl_Button_set_callback(resume_btn, resumeCB, null);
     cfltk.Fl_Button_set_callback(sd_btn, shutdownCB, null);
     cfltk.Fl_Button_set_callback(rst_btn, resetCB, null);
     cfltk.Fl_Button_set_callback(set_btn, settingsCB, null);
+    cfltk.Fl_Button_set_callback(cad_btn, cadCB, null);
     cfltk.Fl_Button_set_callback(home_btn, homeCB, null);
 
     const body_y: i32 = 70;
@@ -1539,9 +1710,13 @@ pub fn main() void {
     const ctx_menu = cfltk.Fl_Menu_Button_new(0, 0, 0, 0, "");
     app.ctx_menu_handle = @ptrCast(ctx_menu);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Power On/Off", 0, @ptrCast(&powerCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Pause Guest", 0, @ptrCast(&pauseCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Resume Guest", 0, @ptrCast(&resumeCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Shut Down Guest", 0, @ptrCast(&shutdownCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Reset Guest", 0, @ptrCast(&resetCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Send Ctrl+Alt+Del", 0, @ptrCast(&cadCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Settings...", 0, @ptrCast(&settingsCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Rename...", 0, @ptrCast(&renameCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Snapshot Manager...", 0, @ptrCast(&snapshotCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Clone", 0, @ptrCast(&cloneCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Toggle Favorite", 0, @ptrCast(&favCB), null, 0);

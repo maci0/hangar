@@ -280,46 +280,46 @@ and the design docs.
 
 ## Tier 3.5 — New Gaps (post-FLTK migration)
 
-### 3.17 Web Frontend: Edit VM Dialog Missing Fields ❌
+### 3.17 Web Frontend: Edit VM Dialog Missing Fields ✅
 
 | File | Status |
 |------|--------|
 | `src/web_server.zig:handleSave()` | ✅ Already parses all ~40 VmConfig fields |
-| `src/web_server.zig:editVm()` JS | ❌ Only populates 19 fields — missing: cpu_sockets, disk_format, iso_path, mac, nic2_mac, nic3_mac, disk2_format, enable_3d, gpu, display, display_resolution, guest_os, audio, boot_order, enable_kvm, embed_display, vnc_port, spice_port, enable_serial, num_displays, favorite |
-| `src/web_server.zig:saveVm()` JS | ❌ Same 19 fields in POST body — ignores 21 parseable fields |
-| `src/web_server.zig` edit HTML form | ❌ Missing input fields for all 21 additional VmConfig keys |
+| `src/web_server.zig:editVm()` JS | ✅ Populates all 40 fields including 21 new: cpu_sockets, disk_format, iso_path, mac_address, nic2_mac, nic3_mac, disk2_format, enable_3d, gpu_device, display, display_resolution, guest_os, audio, boot_order, enable_kvm, embed_display, vnc_port, spice_port, enable_serial, num_displays, favorite |
+| `src/web_server.zig:saveVm()` JS | ✅ POST body includes all 40 fields |
+| `src/web_server.zig` edit HTML form | ✅ Input fields for all 21 additional VmConfig keys |
 
-### 3.18 VM Pause/Resume (Freeze Guest Execution) ❌
+### 3.18 VM Pause/Resume (Freeze Guest Execution) ✅
 
 | File | Status |
 |------|--------|
 | `src/qmp.zig` | ✅ `pauseVm()` and `resumeVm()` exist (QMP `stop`/`cont`) |
 | `src/hv/interface.zig` | ✅ `pauseFn` and `resumeFn` declared |
 | `src/hv/qemu_backend.zig` | ✅ Implemented |
-| `src/main.zig` toolbar | ❌ No Pause or Resume buttons |
-| `src/main.zig` menu | ❌ No Pause/Resume in VM menu or context menu |
-| `src/web_server.zig` | ❌ No `/api/pause/N` or `/api/resume/N` endpoints |
+| `src/main.zig` toolbar | ✅ Pause ⏸ and Resume ▶ buttons added |
+| `src/main.zig` menu | ✅ Pause/Resume in VM menu and context menu |
+| `src/web_server.zig` | ✅ `POST /api/pause/N` and `POST /api/resume/N` endpoints + handlers + JS toolbar buttons |
 
-### 3.19 Keyboard Shortcuts ❌
+### 3.19 Keyboard Shortcuts ✅
 
 | Shortcut | Action |
 |----------|--------|
 | Ctrl+Q | ✅ Quit |
 | Ctrl+W | ✅ Deselect VM / Home |
-| Del | ❌ Delete selected VM (with confirmation) |
-| Ctrl+E | ❌ Edit/Settings for selected VM |
-| Enter | ❌ Power On/Off toggle for selected VM |
-| Ctrl+N | ❌ New VM |
-| Ctrl+Shift+N | ❌ New VM (clone) |
-| Ctrl+I | ❌ Import VM |
-| Escape | ❌ Deselect VM / Home |
+| Del | ✅ Delete selected VM (with confirmation) |
+| Ctrl+E | ✅ Edit/Settings for selected VM |
+| Enter | ✅ Power On/Off toggle for selected VM |
+| Ctrl+N | ✅ New VM |
+| Ctrl+Shift+N | ✅ Clone VM |
+| Ctrl+I | ✅ Import VM |
+| Escape | ✅ Deselect VM / Home |
 
-### 3.20 VM Rename ❌
+### 3.20 VM Rename ✅
 
 | File | Status |
 |------|--------|
-| `src/main.zig` | ❌ No rename dialog or inline rename in VM list |
-| `src/web_server.zig` | ❌ No `/api/rename/N` endpoint |
+| `src/main.zig` | ✅ Rename dialog (Fl_Window with input + OK/Cancel), VM menu entry, context menu entry, remote mode dispatch |
+| `src/web_server.zig` | ✅ `POST /api/rename/N` route + handleRename handler, renameGuest() JS function + "Rename" toolbar button |
 
 ---
 
