@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Small synchronisation primitives.
 //!
 //! Zig 0.16 removed `std.Thread.Mutex`; the blocking mutex now lives at

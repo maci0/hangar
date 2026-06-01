@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Virtual Machine configuration data model.
 //!
 //! Defines all types needed to describe a QEMU virtual machine's hardware
@@ -507,6 +508,60 @@ pub const GpuDevice = enum(u8) {
     pub fn label(self: GpuDevice) [*:0]const u8 { return switch (self) { .virtio_gpu_gl => "Virtio-GPU (virgl)", .virtio_vga_gl => "Virtio-VGA (virgl)", }; }
 };
 
+// ── Accelerator ─────────────────────────────────────────────────────
+
+/// Which virtualisation accelerator to use.
+/// `auto` picks the best hardware accelerator available on this platform,
+/// falling back to TCG (software emulation) if none is found.
+pub const VmAccel = enum(u8) {
+    auto = 0,
+    tcg = 1,
+    kvm = 2,
+    hvf = 3,
+    whpx = 4,
+
+    pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
+
+    pub fn toIndex(self: VmAccel) usize {
+        return @intFromEnum(self);
+    }
+
+    pub fn fromIndex(i: usize) VmAccel {
+        if (i >= count) return .auto;
+        return @enumFromInt(@as(u8, @intCast(i)));
+    }
+
+    pub fn toStr(self: VmAccel) [*:0]const u8 {
+        return switch (self) {
+            .auto => "auto",
+            .tcg => "tcg",
+            .kvm => "kvm",
+            .hvf => "hvf",
+            .whpx => "whpx",
+        };
+    }
+
+    pub fn label(self: VmAccel) [*:0]const u8 {
+        return switch (self) {
+            .auto => "Auto (best available)",
+            .tcg => "TCG (software)",
+            .kvm => "KVM (Linux)",
+            .hvf => "HVF (macOS)",
+            .whpx => "WHPX (Windows)",
+        };
+    }
+
+    /// Returns the platform-appropriate hardware accelerator for the current OS.
+    pub fn platformDefault() VmAccel {
+        return switch (builtin.os.tag) {
+            .linux => .kvm,
+            .macos => .hvf,
+            .windows => .whpx,
+            else => .tcg,
+        };
+    }
+};
+
 // ── Application Preferences ──────────────────────────────────────────
 
 /// Application-wide preferences (persisted in vms.json alongside VMs).
@@ -575,7 +630,9 @@ pub const VmConfig = struct {
     display_resolution: DisplayResolution = .auto,
     /// Number of virtual displays (1-4).  QEMU adds a virtio-gpu device for each.
     num_displays: u32 = 1,
-    enable_kvm: bool = true,
+    /// Which accelerator to use.  `.auto` picks the best hardware accelerator
+    /// available on this platform, falling back to TCG if none is found.
+    accel: VmAccel = .auto,
     firmware: BootFirmware = .bios,
     guest_os: GuestOs = .linux,
     audio: AudioDevice = .none,
@@ -996,24 +1053,14 @@ pub const VmConfig = struct {
 
     // ── Platform accelerator helpers ─────────────────────────────
 
-    /// Returns the human-readable name of the platform accelerator.
+    /// Returns the human-readable name of the platform's best hardware accelerator.
     pub fn accelName() [*:0]const u8 {
-        return switch (builtin.os.tag) {
-            .linux => "KVM",
-            .macos => "HVF",
-            .windows => "WHPX",
-            else => "TCG",
-        };
+        return VmAccel.platformDefault().label();
     }
 
-    /// Returns the QEMU `-machine accel=` flag value.
+    /// Returns the QEMU `-machine accel=` flag value for the platform's best HW accelerator.
     pub fn accelFlag() [*:0]const u8 {
-        return switch (builtin.os.tag) {
-            .linux => "kvm",
-            .macos => "hvf",
-            .windows => "whpx",
-            else => "tcg",
-        };
+        return VmAccel.platformDefault().toStr();
     }
 };
 
@@ -1209,7 +1256,7 @@ test "VmConfig: reset restores all defaults" {
     cfg.display = .vnc;
     cfg.nics[0].mode = .bridge;
     cfg.firmware = .uefi;
-    cfg.enable_kvm = false;
+    cfg.accel = .tcg;
     cfg.status = .running;
     cfg.pid = 12345;
 
@@ -1222,7 +1269,7 @@ test "VmConfig: reset restores all defaults" {
     try std.testing.expectEqual(DisplayType.gtk, cfg.display);
     try std.testing.expectEqual(NetworkMode.user, cfg.nics[0].mode);
     try std.testing.expectEqual(BootFirmware.bios, cfg.firmware);
-    try std.testing.expect(cfg.enable_kvm);
+    try std.testing.expectEqual(VmAccel.auto, cfg.accel);
     try std.testing.expect(cfg.isStopped());
     try std.testing.expect(!cfg.hasName());
     try std.testing.expect(!cfg.hasDisk());
@@ -1241,7 +1288,7 @@ test "VmConfig: default values" {
     try std.testing.expectEqual(DisplayType.gtk, cfg.display);
     try std.testing.expectEqual(NetworkMode.user, cfg.nics[0].mode);
     try std.testing.expectEqual(BootFirmware.bios, cfg.firmware);
-    try std.testing.expect(cfg.enable_kvm);
+    try std.testing.expectEqual(VmAccel.auto, cfg.accel);
     try std.testing.expectEqual(VmStatus.stopped, cfg.status);
     try std.testing.expect(!cfg.hasDisk());
     try std.testing.expect(!cfg.hasIso());
@@ -1948,7 +1995,7 @@ test "fuzz: VmConfig defaults survive random partial mutation" {
         cfg.cpu_sockets = rnd.int(u32);
         cfg.memory_mb = rnd.int(u32);
         cfg.disk_size_gb = rnd.int(u32);
-        cfg.enable_kvm = rnd.boolean();
+        cfg.accel = VmAccel.fromIndex(rnd.int(usize));
         cfg.enable_serial = rnd.boolean();
         cfg.embed_display = rnd.boolean();
         cfg.enable_3d = rnd.boolean();
@@ -1961,7 +2008,7 @@ test "fuzz: VmConfig defaults survive random partial mutation" {
         // Reset.
         cfg = VmConfig{};
         try std.testing.expectEqual(@as(u32, 2), cfg.cpu_cores);
-        try std.testing.expect(cfg.enable_kvm);
+        try std.testing.expectEqual(VmAccel.auto, cfg.accel);
         try std.testing.expectEqual(VmStatus.stopped, cfg.status);
         try std.testing.expectEqual(@as(?i32, null), cfg.pid);
         try std.testing.expect(!cfg.autoprotect);

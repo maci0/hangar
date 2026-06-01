@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! SPICE display client — pure-Zig wrapper around spice-client-glib-2.0.
 //!
 //! Runs on the GLib main loop (which IUP/GTK already provides), so all

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Pure UI geometry / formatting helpers, extracted from the IUP-coupled
 //! modules (display.zig, dialogs.zig, serial.zig) so they can be unit-tested
 //! and fuzzed without IupOpen / a display / a socket. Same rationale as

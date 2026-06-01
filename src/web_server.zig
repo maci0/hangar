@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! KVMGUI — Web Frontend (HTTP server + HTML/CSS UI)
 //! Serves a VMware WS7-style UI via embedded HTTP server.
 //! Open http://localhost:9080 in any browser.
@@ -16,6 +17,7 @@ const ovf = @import("ovf.zig");
 const vnet = @import("vnet.zig");
 const appio = @import("appio.zig");
 const autoprotect = @import("autoprotect.zig");
+const snapparse = @import("snapparse.zig");
 const sync = @import("sync.zig");
 
 extern fn time(t: ?*c_long) c_long;
@@ -53,8 +55,7 @@ var g_vmm_handles: [MAX_VMS]?hv_iface.VmmHandle = [_]?hv_iface.VmmHandle{null} *
 fn getVmmHandle(idx: usize) ?hv_iface.VmmHandle {
     if (idx >= vm_count) return null;
     if (g_vmm_handles[idx] == null) {
-        const mode: hv_backend.AccelMode = if (vms[idx].enable_kvm) .auto else .force_tcg;
-        g_vmm_handles[idx] = hv_backend.createHandle(&vms[idx], mode, std.heap.page_allocator) catch return null;
+        g_vmm_handles[idx] = hv_backend.createHandle(&vms[idx], vms[idx].accel, std.heap.page_allocator) catch return null;
     }
     return g_vmm_handles[idx];
 }
@@ -97,6 +98,12 @@ fn checkAuth(req: []const u8) bool {
     return std.mem.eql(u8, provided, API_KEY);
 }
 
+/// Log a message to stderr (best-effort, thread-safe via atomic write).
+fn logErr(msg: []const u8) void {
+    _ = std.c.write(2, msg.ptr, msg.len);
+    _ = std.c.write(2, "\n", 1);
+}
+
 /// Write exactly `len` bytes to fd, retrying on short writes. Returns false on failure.
 fn writeAll(conn: c.fd_t, buf: [*]const u8, len: usize) bool {
     var written: usize = 0;
@@ -106,6 +113,12 @@ fn writeAll(conn: c.fd_t, buf: [*]const u8, len: usize) bool {
         written += @intCast(n);
     }
     return true;
+}
+
+/// Format an error message as a JSON object: {"error":"<msg>"}.
+/// Returns a slice of `buf`; buffer must be at least msg.len + 16 bytes.
+fn jsonErr(buf: []u8, msg: []const u8) []const u8 {
+    return std.fmt.bufPrint(buf, "{{\"error\":\"{s}\"}}", .{msg}) catch "{\"error\":\"internal\"}";
 }
 
 /// Write an HTTP response with status code, content type, CORS headers, and body.
@@ -232,19 +245,25 @@ fn serveHtml(conn: c.fd_t) void {
 
     // ── WebSocket VNC Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/vnc/")) {
-        handleWsVnc(conn, req) catch {};
+        handleWsVnc(conn, req) catch {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "VNC proxy failed");
+        };
         return;
     }
 
     // ── WebSocket Serial Console ──
     if (std.mem.startsWith(u8, req, "GET /ws/serial/")) {
-        handleWsSerial(conn, req) catch {};
+        handleWsSerial(conn, req) catch {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "Serial proxy failed");
+        };
         return;
     }
 
     // ── File download (streaming) routes — handled first ──
     if (std.mem.startsWith(u8, req, "GET /api/vm/") and std.mem.indexOf(u8, req, "/disk2/download") != null) {
-        handleDisk2Download(conn, req) catch {};
+        handleDisk2Download(conn, req) catch {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "Download failed");
+        };
         return;
     }
     if (std.mem.startsWith(u8, req, "POST /api/vm/") and std.mem.indexOf(u8, req, "/upload-disk") != null) {
@@ -321,7 +340,7 @@ fn serveHtml(conn: c.fd_t) void {
         response = try handleRename(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/save")) {
-        persist.save(&vms, vm_count, prefs) catch {};
+        persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
         response = "saved";
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/create")) {
@@ -392,17 +411,27 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/html; charset=utf-8";
     }
 
-    // Map known error strings to HTTP status codes (only for text/plain API responses,
-    // not for text/html like index_html which may contain "err" in JS/CSS).
+    var json_err_buf: [256]u8 = undefined;
+
+    // Map known error strings to HTTP status codes and JSON error responses.
+    // Previously returned plain text; now unified as `{"error":"..."}`.
     if (std.mem.eql(u8, content_type, "text/plain")) {
         if (std.mem.eql(u8, response, "invalid") or std.mem.eql(u8, response, "invalid idx")) {
             status = HTTP_NOT_FOUND;
+            response = jsonErr(&json_err_buf, response);
+            content_type = "application/json; charset=utf-8";
         } else if (std.mem.eql(u8, response, "no disk") or std.mem.eql(u8, response, "not running") or std.mem.eql(u8, response, "off")) {
             status = HTTP_BAD_REQUEST;
+            response = jsonErr(&json_err_buf, response);
+            content_type = "application/json; charset=utf-8";
         } else if (std.mem.eql(u8, response, "no vnc") or std.mem.eql(u8, response, "no spice")) {
             status = HTTP_INTERNAL_ERROR;
+            response = jsonErr(&json_err_buf, response);
+            content_type = "application/json; charset=utf-8";
         } else if (std.mem.indexOf(u8, response, "err") != null or std.mem.indexOf(u8, response, "Err") != null) {
             status = HTTP_INTERNAL_ERROR;
+            response = jsonErr(&json_err_buf, response);
+            content_type = "application/json; charset=utf-8";
         }
     }
 
@@ -683,7 +712,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) []const u8 {
 
     // Remaining fields
     const part2 = std.fmt.bufPrint(buf[w..],
-        \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"enable_kvm":{s},"embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+        \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
     , .{
         if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
         std.mem.span(v.nics[1].mode.toStr()),
@@ -699,7 +728,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) []const u8 {
         v.guest_os.toIndex(),
         v.audio.toIndex(),
         v.boot_order.toIndex(),
-        if (v.enable_kvm) "true" else "false",
+        std.mem.span(v.accel.toStr()),
         if (v.embed_display) "true" else "false",
         v.vnc_port,
         v.spice_port,
@@ -755,7 +784,7 @@ fn renderJson(buf: []u8) usize {
 
         // Remaining fields
         const part2 = std.fmt.bufPrint(buf[w..],
-            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"enable_kvm":{s},"embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
         , .{
             if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
             std.mem.span(v.nics[1].mode.toStr()),
@@ -771,7 +800,7 @@ fn renderJson(buf: []u8) usize {
             v.guest_os.toIndex(),
             v.audio.toIndex(),
             v.boot_order.toIndex(),
-            if (v.enable_kvm) "true" else "false",
+            std.mem.span(v.accel.toStr()),
             if (v.embed_display) "true" else "false",
             v.vnc_port,
             v.spice_port,
@@ -808,12 +837,12 @@ fn handlePower(req: []const u8) ![]const u8 {
         destroyVmmHandle(idx);
     } else {
         if (getVmmHandle(idx)) |h| {
-            g_vmm.startFn(h, @ptrCast(v)) catch {};
+            g_vmm.startFn(h, @ptrCast(v)) catch return "start err";
         } else {
-            qemu.startVm(v, std.heap.page_allocator) catch {};
+            qemu.startVm(v, std.heap.page_allocator) catch return "start err";
         }
     }
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -841,7 +870,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     cfg.setMacAddress(std.mem.span(mac));
     vms[vm_count] = cfg;
     vm_count += 1;
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -891,7 +920,7 @@ fn handleClone(req: []const u8) ![]const u8 {
 
     vms[vm_count] = clone;
     vm_count += 1;
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -909,7 +938,7 @@ fn handleDelete(req: []const u8) ![]const u8 {
     var i = idx;
     while (i + 1 < vm_count) : (i += 1) vms[i] = vms[i + 1];
     vm_count -= 1;
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -964,7 +993,8 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "guest_os")) v.guest_os = vm.GuestOs.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.guest_os.toIndex());
         if (std.mem.eql(u8, key, "audio")) v.audio = vm.AudioDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.audio.toIndex());
         if (std.mem.eql(u8, key, "boot_order")) v.boot_order = vm.BootOrder.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.boot_order.toIndex());
-        if (std.mem.eql(u8, key, "enable_kvm")) v.enable_kvm = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "accel")) v.accel = persist.parseAccel(val);
+        if (std.mem.eql(u8, key, "enable_kvm")) { if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg; }
         if (std.mem.eql(u8, key, "embed_display")) v.embed_display = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "vnc_port")) v.vnc_port = std.fmt.parseInt(u16, val, 10) catch v.vnc_port;
         if (std.mem.eql(u8, key, "spice_port")) v.spice_port = std.fmt.parseInt(u16, val, 10) catch v.spice_port;
@@ -972,7 +1002,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "num_displays")) v.num_displays = std.fmt.parseInt(u32, val, 10) catch v.num_displays;
         if (std.mem.eql(u8, key, "favorite")) v.favorite = std.mem.eql(u8, val, "1");
     }
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -1009,7 +1039,7 @@ fn handleSuspend(req: []const u8) ![]const u8 {
         qemu.reapVm(v);
     }
     destroyVmmHandle(idx);
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -1067,7 +1097,7 @@ fn handleRename(req: []const u8) ![]const u8 {
         const val = kv.next() orelse continue;
         if (std.mem.eql(u8, key, "name")) {
             vms[idx].setName(val);
-            persist.save(&vms, vm_count, prefs) catch {};
+            persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
             return "ok";
         }
     }
@@ -1155,7 +1185,7 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-fn handleSnapshotList(req: []const u8, buf: []u8) []const u8 {
+fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
     vms_mutex.lock();
     defer vms_mutex.unlock();
     const idx = parseIdx(req, "GET /api/snapshot/list/") orelse return "invalid";
@@ -1163,11 +1193,25 @@ fn handleSnapshotList(req: []const u8, buf: []u8) []const u8 {
     const v = &vms[idx];
     if (!v.hasDisk()) return "no disk";
     const n: usize = if (getVmmHandle(idx)) |h|
-        g_vmm.snapshotListFn(h, v.getDiskPathSlice(), buf, std.heap.page_allocator) catch 0
+        g_vmm.snapshotListFn(h, v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch 0
     else
-        qemu.snapshotList(v.getDiskPathSlice(), buf, std.heap.page_allocator) catch 0;
-    if (n > 0 and n <= buf.len) return buf[0..n];
-    return "(none)";
+        qemu.snapshotList(v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch 0;
+    if (n == 0 or n > raw_buf.len) return "(none)";
+
+    const nodes = snapparse.parse(raw_buf[0..n]);
+    if (nodes.count == 0) return "(none)";
+
+    // Emit snapshot names one per line into raw_buf, reusing it for output.
+    var w: usize = 0;
+    for (0..nodes.count) |i| {
+        const name = nodes.nameSlice(i);
+        if (w + name.len + 1 > raw_buf.len) break;
+        @memcpy(raw_buf[w..][0..name.len], name);
+        w += name.len;
+        raw_buf[w] = '\n';
+        w += 1;
+    }
+    return raw_buf[0..w];
 }
 
 fn handleSnapshotRevert(req: []const u8) ![]const u8 {
@@ -1246,7 +1290,7 @@ fn handleImport(req: []const u8) ![]const u8 {
     cfg.setMacAddress(std.mem.span(mac));
     vms[vm_count] = cfg;
     vm_count += 1;
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -1370,7 +1414,7 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
         std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
         vms[idx].setDisk2Path(dest);
     }
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -1406,8 +1450,8 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         .vmdk_size_bytes = 0,
         .has_network = v.nics[0].mode != .none,
     };
-    const xml = ovf.buildDescriptor(spec, std.heap.page_allocator) catch return;
-    defer std.heap.page_allocator.free(xml);
+    var ovf_buf: [ovf.max_descriptor_len]u8 = undefined;
+    const xml = ovf.buildDescriptor(spec, &ovf_buf) catch return;
 
     const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, v.getNameSlice() });
     defer std.heap.page_allocator.free(ovf_path);
@@ -1607,7 +1651,7 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
         if (v.len > 0) prefs.autoprotect_max_default = std.fmt.parseInt(u32, v, 10) catch prefs.autoprotect_max_default;
     }
 
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -1679,7 +1723,7 @@ fn autoprotectTicker() void {
                 }
             }
 
-            persist.save(&vms, vm_count, prefs) catch {};
+            persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
         }
         vms_mutex.unlock();
     }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! URL-encoded body builder for HTTP POST requests.
 //!
 //! Pure string-formatting logic extracted from buildSaveBody so it can be

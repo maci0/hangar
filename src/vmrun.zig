@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! vmrun — CLI tool for managing KVMGUI VMs remotely.
 //!
 //! Connects to a KVMGUI web server via the transport abstraction layer

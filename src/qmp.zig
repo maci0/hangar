@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! QEMU Machine Protocol (QMP) client.
 //!
 //! Connects to QEMU's QMP Unix domain socket and provides a high-level API
@@ -252,6 +253,48 @@ pub const QmpClient = struct {
             appio.sleepMs(500);
         }
         return error.MigrateTimeout;
+    }
+
+    /// Start live migration to a destination URI (e.g. "tcp:10.0.0.2:4444").
+    /// Uses QMP's native `migrate` command; returns immediately (detached).
+    pub fn liveMigrate(self: *QmpClient, dest_uri: []const u8) !void {
+        if (!self.connected) return error.ConnectionFailed;
+
+        var cmd_buf: [256]u8 = undefined;
+        const cmd = std.fmt.bufPrint(
+            &cmd_buf,
+            "{{\"execute\":\"migrate\",\"arguments\":{{\"uri\":\"{s}\"}}}}\n",
+            .{dest_uri},
+        ) catch return error.BufferTooSmall;
+
+        try self.writeAll(cmd);
+        const resp = try self.readResponse();
+        if (std.mem.indexOf(u8, resp, "\"error\"") != null) {
+            return error.CommandFailed;
+        }
+    }
+
+    /// Query live migration status via QMP `query-migrate`.
+    /// Returns the status string (e.g. "active", "completed", "failed", "cancelled")
+    /// in the caller-provided output buffer.
+    pub fn queryMigrateStatus(self: *QmpClient, out: []u8) ![]const u8 {
+        if (!self.connected) return error.ConnectionFailed;
+        try self.writeAll("{\"execute\":\"query-migrate\"}\n");
+        const resp = try self.readResponse();
+        if (std.mem.indexOf(u8, resp, "\"error\"") != null) {
+            return error.CommandFailed;
+        }
+        return extractJsonString(resp, "status", out);
+    }
+
+    /// Cancel an active live migration via QMP `migrate_cancel`.
+    pub fn cancelMigrate(self: *QmpClient) !void {
+        if (!self.connected) return error.ConnectionFailed;
+        try self.writeAll("{\"execute\":\"migrate_cancel\"}\n");
+        const resp = try self.readResponse();
+        if (std.mem.indexOf(u8, resp, "\"error\"") != null) {
+            return error.CommandFailed;
+        }
     }
 
     // ── HMP tunneling (for snapshot management) ─────────────────

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! WebSocket implementation for the embedded HTTP server.
 //!
 //! Provides upgrade handshake parsing and frame read/write.

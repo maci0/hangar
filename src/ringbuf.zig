@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Pure ring-buffer append for the serial console.
 //!
 //! Split out of `serial.zig` (which `@cImport`s IUP) so the index math can be

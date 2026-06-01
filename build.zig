@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) !void {
     exe_link.addArg("deps/cfltk/build_manual/libcfltk.a");
     exe_link.addArg("-lfltk_images");
     exe_link.addArg("-lfltk");
-    exe_link.addArgs(&.{ "-lX11", "-lXext", "-lXinerama", "-lXcursor", "-lXrender", "-lXfixes", "-lXft", "-lfontconfig", "-lpango-1.0", "-lpangoxft-1.0", "-lpangoft2-1.0", "-lpangocairo-1.0", "-lcairo", "-lgobject-2.0", "-lglib-2.0", "-lharfbuzz", "-lfreetype", "-lwayland-client", "-lwayland-cursor", "-lxkbcommon", "-ldbus-1", "-ldecor-0", "-ldl", "-lpthread", "-lm", "-ljpeg", "-lpng", "-lz", "-lvncclient", "-lspice-client-glib-2.0", "-lgio-2.0" });
+    exe_link.addArgs(&.{ "-lX11", "-lXext", "-lXinerama", "-lXcursor", "-lXrender", "-lXfixes", "-lXft", "-lfontconfig", "-lpango-1.0", "-lpangoxft-1.0", "-lpangoft2-1.0", "-lpangocairo-1.0", "-lcairo", "-lgobject-2.0", "-lglib-2.0", "-lharfbuzz", "-lfreetype", "-lwayland-client", "-lwayland-cursor", "-lxkbcommon", "-ldbus-1", "-ldecor-0", "-ldl", "-lpthread", "-lm", "-ljpeg", "-lpng", "-lz", "-lvncclient", "-lspice-client-glib-2.0", "-lgio-2.0", "-lfltk_gl", "-lGL" });
     const exe_output = exe_link.addPrefixedOutputFileArg("-o", "kvmgui");
     const exe_install = b.addInstallBinFile(exe_output, "kvmgui");
     b.getInstallStep().dependOn(&exe_install.step);
@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) !void {
 
     // ── Unit tests ──
     const test_step = b.step("test", "Run unit tests");
-    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "remote", "filter", "urlencode", "spice_client", "vnc_client", "hv_qemu_backend_test", "form_parsers", "path_helpers", "vnet_label" };
+    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "remote", "filter", "urlencode", "spice_client", "vnc_client", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "vnet_label" };
     for (test_mods) |mod| {
         const src_path = b.fmt("src/{s}.zig", .{mod});
         const tm = b.createModule(.{ .root_source_file = b.path(src_path), .target = target, .optimize = optimize });
@@ -78,12 +78,10 @@ pub fn build(b: *std.Build) !void {
         const run_tests = b.addRunArtifact(tests);
         test_step.dependOn(&run_tests.step);
     }
-    // HV tests
-    const hv_tm = b.createModule(.{ .root_source_file = b.path("src/hv/interface.zig"), .target = target, .optimize = optimize });
-    hv_tm.link_libc = true;
-    const hv_tests = b.addTest(.{ .root_module = hv_tm, .use_llvm = true, .use_lld = true });
-    const run_hv = b.addRunArtifact(hv_tests);
-    test_step.dependOn(&run_hv.step);
+    // HV interface tests — compiled via wrapper at src/ so that
+    // @import("../vm.zig") inside hv/interface.zig resolves within
+    // the module root (src/).
+    // Already covered by hv_interface_test in test_mods above.
 
     // ── GUI smoke/fuzz test steps ──
     const smoke = b.step("smoke", "Run GUI smoke test (Xvfb)");

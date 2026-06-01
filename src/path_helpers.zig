@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Pure path-manipulation helpers extracted from main.zig and dialogs.zig.
 //!
 //! Functions for deriving filenames, clone disk paths, and VMDK hrefs.

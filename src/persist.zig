@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! VM configuration persistence — JSON save/load to disk.
 //!
 //! Saves VM configurations to `~/.config/kvmgui/vms.json` and loads
@@ -62,7 +63,7 @@ const VmJson = struct {
     guest_os: []const u8 = "linux",
     audio: []const u8 = "none",
     boot_order: []const u8 = "cdn",
-    enable_kvm: bool = true,
+    accel: []const u8 = "auto",
     embed_display: bool = true,
     vnc_port: u16 = 5900,
     spice_port: u16 = 5930,
@@ -135,6 +136,16 @@ fn parseBootOrder(s: []const u8) vm.BootOrder {
     return .disk_first;
 }
 
+pub fn parseAccel(s: []const u8) vm.VmAccel {
+    // Old format: "enable_kvm": true → "auto", false → "tcg" handled elsewhere.
+    if (std.mem.eql(u8, s, "auto")) return .auto;
+    if (std.mem.eql(u8, s, "tcg")) return .tcg;
+    if (std.mem.eql(u8, s, "kvm")) return .kvm;
+    if (std.mem.eql(u8, s, "hvf")) return .hvf;
+    if (std.mem.eql(u8, s, "whpx")) return .whpx;
+    return .auto;
+}
+
 // ── Conversion: VmJson → VmConfig ───────────────────────────────────
 
 fn fromVmJson(j: *const VmJson) vm.VmConfig {
@@ -177,7 +188,7 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.guest_os = parseGuestOs(j.guest_os);
     cfg.audio = parseAudioDevice(j.audio);
     cfg.boot_order = parseBootOrder(j.boot_order);
-    cfg.enable_kvm = j.enable_kvm;
+    cfg.accel = parseAccel(j.accel);
     cfg.embed_display = j.embed_display;
     cfg.vnc_port = j.vnc_port;
     cfg.spice_port = j.spice_port;
@@ -386,8 +397,8 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emitJsonStr(list, alloc, std.mem.span(cfg.boot_order.toStr()));
     try emit(list, alloc, ",\n");
 
-    try emit(list, alloc, "      \"enable_kvm\": ");
-    try emitBool(list, alloc, cfg.enable_kvm);
+    try emit(list, alloc, "      \"accel\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.accel.toStr()));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"embed_display\": ");
@@ -865,9 +876,16 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cfg.spice_port = @intCast(r.value & 0xFFFF);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "accel")) {
+            if (parseJsonString(cur, &key_buf)) |r| {
+                cfg.accel = parseAccel(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "enable_kvm")) {
+            // Backward compat: old configs used "enable_kvm": true/false.
+            // true → "auto" (best HW accel), false → "tcg".
             if (parseJsonBool(cur)) |r| {
-                cfg.enable_kvm = r.value;
+                cfg.accel = if (r.value) .auto else .tcg;
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "embed_display")) {
@@ -1064,7 +1082,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.guest_os = .windows;
     original.audio = .hda;
     original.boot_order = .cdrom_first;
-    original.enable_kvm = false;
+    original.accel = .tcg;
     original.embed_display = true;
     original.vnc_port = 5901;
     original.spice_port = 5931;
@@ -1090,7 +1108,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .guest_os = std.mem.span(original.guest_os.toStr()),
         .audio = std.mem.span(original.audio.toStr()),
         .boot_order = std.mem.span(original.boot_order.toStr()),
-        .enable_kvm = original.enable_kvm,
+        .accel = std.mem.span(original.accel.toStr()),
         .embed_display = original.embed_display,
         .vnc_port = original.vnc_port,
         .spice_port = original.spice_port,
@@ -1118,7 +1136,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqual(vm.GuestOs.windows, restored.guest_os);
     try std.testing.expectEqual(vm.AudioDevice.hda, restored.audio);
     try std.testing.expectEqual(vm.BootOrder.cdrom_first, restored.boot_order);
-    try std.testing.expect(!restored.enable_kvm);
+    try std.testing.expectEqual(vm.VmAccel.tcg, restored.accel);
     try std.testing.expect(restored.embed_display);
     try std.testing.expectEqual(@as(u16, 5901), restored.vnc_port);
     try std.testing.expectEqual(@as(u16, 5931), restored.spice_port);
@@ -1203,7 +1221,7 @@ test "emit→parse JSON text round-trip preserves all fields" {
     original.guest_os = .freebsd;
     original.audio = .ac97;
     original.boot_order = .network_first;
-    original.enable_kvm = false;
+    original.accel = .tcg;
     original.embed_display = false;
     original.vnc_port = 5905;
     original.spice_port = 5935;
@@ -1255,7 +1273,7 @@ test "emit→parse JSON text round-trip preserves all fields" {
     try std.testing.expectEqual(vm.GuestOs.freebsd, restored.guest_os);
     try std.testing.expectEqual(vm.AudioDevice.ac97, restored.audio);
     try std.testing.expectEqual(vm.BootOrder.network_first, restored.boot_order);
-    try std.testing.expect(!restored.enable_kvm);
+    try std.testing.expectEqual(vm.VmAccel.tcg, restored.accel);
     try std.testing.expect(!restored.embed_display);
     try std.testing.expectEqual(@as(u16, 5905), restored.vnc_port);
     try std.testing.expectEqual(@as(u16, 5935), restored.spice_port);
@@ -1455,7 +1473,7 @@ fn fuzzConfig(rnd: std.Random, sbuf: []u8) vm.VmConfig {
     c.guest_os = vm.GuestOs.fromIndex(rnd.int(usize));
     c.audio = vm.AudioDevice.fromIndex(rnd.int(usize));
     c.boot_order = vm.BootOrder.fromIndex(rnd.int(usize));
-    c.enable_kvm = rnd.boolean();
+    c.accel = vm.VmAccel.fromIndex(rnd.int(usize));
     c.embed_display = rnd.boolean();
     c.enable_serial = rnd.boolean();
     c.enable_3d = rnd.boolean();
@@ -1691,6 +1709,6 @@ test "emit→parse: empty config round-trip" {
     try std.testing.expectEqual(@as(u32, 2), restored.cpu_cores);
     try std.testing.expectEqual(@as(u32, 2048), restored.memory_mb);
     try std.testing.expectEqual(vm.DiskFormat.qcow2, restored.disk_format);
-    try std.testing.expect(restored.enable_kvm);
+    try std.testing.expectEqual(vm.VmAccel.auto, restored.accel);
     try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[0].mode);
 }

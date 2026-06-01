@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Minimal blocking Unix-domain stream socket.
 //!
 //! Zig 0.16 gutted `std.posix` socket helpers and moved networking behind the

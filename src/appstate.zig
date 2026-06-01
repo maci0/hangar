@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Shared global state for the FLTK frontend.
 //!
 //! All widgets, VM arrays, session state, VNC/SPICE clients, serial state,
@@ -176,6 +177,7 @@ pub var win_handle: ?*cfltk.Fl_Window = null;
 pub var ctx_menu_handle: ?*cfltk.Fl_Menu_Button = null;
 pub var console_widget: ?*cfltk.Fl_Browser = null;
 pub var display_box: ?*cfltk.Fl_Box = null;
+pub var gl_display: ?*cfltk.Fl_Gl_Window = null;
 pub var search_input: ?*cfltk.Fl_Input = null;
 pub var filter_text: [64]u8 = [_]u8{0} ** 64;
 pub var filter_len: usize = 0;
@@ -225,8 +227,7 @@ pub fn setDetail(i: usize, value: []const u8) void {
 pub fn getVmmHandle(idx: usize) ?hv_iface.VmmHandle {
     if (idx >= vm_count) return null;
     if (g_vmm_handles[idx] == null) {
-        const mode: hv_backend.AccelMode = if (vms[idx].enable_kvm) .auto else .force_tcg;
-        g_vmm_handles[idx] = hv_backend.createHandle(&vms[idx], mode, std.heap.page_allocator) catch return null;
+        g_vmm_handles[idx] = hv_backend.createHandle(&vms[idx], vms[idx].accel, std.heap.page_allocator) catch return null;
     }
     return g_vmm_handles[idx];
 }

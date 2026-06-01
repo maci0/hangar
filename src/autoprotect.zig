@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! AutoProtect — scheduled automatic snapshots (VMware Workstation feature).
 //!
 //! Pure scheduling/naming/pruning logic, separated from the timer + qemu-img/QMP

@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: MIT
 //! QEMU hypervisor backend.
 //!
 //! Wraps `qemu.zig` and `qmp.zig` behind the `Vmm` interface.
 //! Supports all QEMU platform accelerators: KVM (Linux), HVF (macOS),
 //! WHPX (Windows), and TCG (software, all platforms).
 //!
-//! The accelerator is selected by `AccelMode`:
+//! The accelerator is selected by `vm.VmAccel`:
 //!   `.auto`  → best hardware accelerator for the platform, TCG fallback
-//!   `.force_tcg` → always TCG, for testing or platforms without /dev/kvm
+//!   `.tcg`   → always TCG, for testing or platforms without hardware accel
+//!   `.kvm` / `.hvf` / `.whpx` → specific hardware backend (TCG fallback if unavailable)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -29,25 +31,14 @@ pub const QemuVm = struct {
     allocator: std.mem.Allocator,
 };
 
-/// Which accelerator to use.
-pub const AccelMode = enum {
-    /// Use the best hardware accelerator available, fall back to TCG.
-    auto,
-    /// Force TCG (software emulation) regardless of platform.
-    force_tcg,
-};
-
 /// Create a QEMU-backed Vmm dispatch table (no allocation).
 /// Use createHandle() separately for per-VM state.
-pub fn createVmm(mode: AccelMode) hv.Vmm {
-    const accel = if (mode == .force_tcg) hv.tcgAccelerator() else hv.bestAccelerator();
-    if (accel.hardware and !isAccelAvailable(accel)) {
-        return createVmm(.force_tcg);
-    }
+pub fn createVmm(accel: vm.VmAccel) hv.Vmm {
+    const resolved = hv.resolveAccel(accel, &isAccelAvailable);
 
     return hv.Vmm{
         .backend = .qemu,
-        .accelerator = accel,
+        .accelerator = resolved,
         .startFn = &start,
         .shutdownFn = &shutdown,
         .resetFn = &resetVm,
@@ -56,6 +47,9 @@ pub fn createVmm(mode: AccelMode) hv.Vmm {
         .reapFn = &reap,
         .pauseFn = &pause,
         .resumeFn = &resumeVm,
+        .liveMigrateFn = &liveMigrateVmm,
+        .queryMigrateStatusFn = &queryMigrateStatusVmm,
+        .cancelMigrateFn = &cancelMigrateVmm,
         .getDisplayPortFn = &getDisplayPort,
         .getSerialSocketFn = &getSerialSocket,
         .createDiskFn = &createDisk,
@@ -72,25 +66,22 @@ pub fn createVmm(mode: AccelMode) hv.Vmm {
 }
 
 /// Allocate per-VM state for the QEMU backend.
-pub fn createHandle(config: *vm.VmConfig, mode: AccelMode, allocator: std.mem.Allocator) !hv.VmmHandle {
-    const accel = if (mode == .force_tcg) hv.tcgAccelerator() else hv.bestAccelerator();
-    if (accel.hardware and !isAccelAvailable(accel)) {
-        return createHandle(config, .force_tcg, allocator);
-    }
+pub fn createHandle(config: *vm.VmConfig, accel: vm.VmAccel, allocator: std.mem.Allocator) !hv.VmmHandle {
+    const resolved = hv.resolveAccel(accel, &isAccelAvailable);
 
     const qv = try allocator.create(QemuVm);
     qv.* = .{
         .config = config,
-        .accelerator = accel,
+        .accelerator = resolved,
         .allocator = allocator,
     };
     return @ptrCast(qv);
 }
 
 /// Create a QEMU-backed Vmm for a specific VM config (convenience — calls createVmm + createHandle).
-pub fn create(config: *vm.VmConfig, mode: AccelMode, allocator: std.mem.Allocator) !struct { vmm: hv.Vmm, handle: hv.VmmHandle } {
-    const vmm = createVmm(mode);
-    const handle = try createHandle(config, mode, allocator);
+pub fn create(config: *vm.VmConfig, accel: vm.VmAccel, allocator: std.mem.Allocator) !struct { vmm: hv.Vmm, handle: hv.VmmHandle } {
+    const vmm = createVmm(accel);
+    const handle = try createHandle(config, accel, allocator);
     return .{ .vmm = vmm, .handle = handle };
 }
 
@@ -165,6 +156,24 @@ fn resumeVm(ctx: hv.VmmHandle) hv.VmmError!void {
     ensureQmp(qv) catch return error.BackendError;
     qv.qmp_client.cont() catch return error.BackendError;
     qv.config.status = .running;
+}
+
+fn liveMigrateVmm(ctx: hv.VmmHandle, dest_uri: []const u8) hv.VmmError!void {
+    const qv = getQv(ctx);
+    ensureQmp(qv) catch return error.BackendError;
+    qv.qmp_client.liveMigrate(dest_uri) catch return error.BackendError;
+}
+
+fn queryMigrateStatusVmm(ctx: hv.VmmHandle, out: []u8) hv.VmmError![]const u8 {
+    const qv = getQv(ctx);
+    ensureQmp(qv) catch return error.BackendError;
+    return qv.qmp_client.queryMigrateStatus(out) catch return error.BackendError;
+}
+
+fn cancelMigrateVmm(ctx: hv.VmmHandle) hv.VmmError!void {
+    const qv = getQv(ctx);
+    ensureQmp(qv) catch return error.BackendError;
+    qv.qmp_client.cancelMigrate() catch return error.BackendError;
 }
 
 fn ensureQmp(qv: *QemuVm) !void {
@@ -257,10 +266,29 @@ test "tcgAccelerator is always software" {
     try std.testing.expectEqualStrings("TCG", std.mem.span(accel.name));
 }
 
-test "AccelMode enum values" {
-    try std.testing.expectEqual(@as(usize, 0), @intFromEnum(AccelMode.auto));
-    try std.testing.expectEqual(@as(usize, 1), @intFromEnum(AccelMode.force_tcg));
+test "resolveAccel: auto chooses best platform accelerator" {
+    const accel = hv.resolveAccel(.auto, &alwaysOk);
+    try std.testing.expectEqualStrings(std.mem.span(hv.bestAccelerator().flag), std.mem.span(accel.flag));
 }
+
+test "resolveAccel: tcg is always tcg" {
+    const accel = hv.resolveAccel(.tcg, &alwaysOk);
+    try std.testing.expectEqualStrings("tcg", std.mem.span(accel.flag));
+    try std.testing.expect(!accel.hardware);
+}
+
+test "resolveAccel: specific HW falls back to TCG when unavailable" {
+    const accel = hv.resolveAccel(.kvm, &alwaysNo);
+    try std.testing.expectEqualStrings("tcg", std.mem.span(accel.flag));
+}
+
+test "resolveAccel: specific HW succeeds when available" {
+    const accel = hv.resolveAccel(.hvf, &alwaysOk);
+    try std.testing.expectEqualStrings("hvf", std.mem.span(accel.flag));
+}
+
+fn alwaysOk(_: hv.Accelerator) bool { return true; }
+fn alwaysNo(_: hv.Accelerator) bool { return false; }
 
 test "Backend enum has qemu as default" {
     try std.testing.expectEqual(hv.Backend.qemu, @as(hv.Backend, @enumFromInt(0)));

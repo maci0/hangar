@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! VNC client — thread-safe pure-Zig wrapper around libvncclient.
 //!
 //! A background thread polls the VNC socket and updates a mutex-protected

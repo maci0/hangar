@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Virtual network model + persistence — the data behind the Virtual Network
 //! Editor (VMware Workstation-style "VMnet" switches).
 //!
@@ -371,6 +372,53 @@ fn readString(s: []const u8, out: []u8) ?struct { value: []const u8, rest: []con
     return null;
 }
 
+/// Validates an IPv4 address string (e.g. "192.168.1.1"). Returns true
+/// iff the string consists of four decimal octets (0–255) separated by dots.
+fn isValidIpv4(s: []const u8) bool {
+    if (s.len == 0 or s.len > 15) return false;
+    var octets: u8 = 0;
+    var cur: u16 = 0;
+    var digits: u8 = 0;
+    for (s) |c| {
+        if (c == '.') {
+            if (digits == 0 or cur > 255) return false;
+            octets += 1;
+            cur = 0;
+            digits = 0;
+            continue;
+        }
+        if (c < '0' or c > '9') return false;
+        if (digits > 0 and cur == 0) return false; // leading zero
+        cur = cur * 10 + (c - '0');
+        digits += 1;
+    }
+    if (digits == 0 or cur > 255) return false;
+    octets += 1;
+    return octets == 4;
+}
+
+/// Validates a subnet mask in dotted-decimal form (e.g. "255.255.255.0").
+/// A valid mask has all 1-bits contiguous from the left (CIDR-style).
+fn isValidSubnetMask(s: []const u8) bool {
+    if (!isValidIpv4(s)) return false;
+    // Parse the 4 octets directly; we know they are valid from isValidIpv4.
+    var bits: u32 = 0;
+    var octet: u32 = 0;
+    for (s) |c| {
+        if (c == '.') {
+            bits = (bits << 8) | octet;
+            octet = 0;
+        } else {
+            octet = octet * 10 + (c - '0');
+        }
+    }
+    bits = (bits << 8) | octet;
+    // A valid mask is all 1s then all 0s: bits | (bits - 1) == all-ones (except 0)
+    if (bits == 0) return false;
+    const inv: u32 = ~bits;
+    return (inv & (inv +% 1)) == 0;
+}
+
 /// Within a single object slice `obj`, find `"key"` and read the string value
 /// that follows `:`. Writes into `out`, returns the slice (empty if absent).
 fn fieldStr(obj: []const u8, key: []const u8, out: []u8) []const u8 {
@@ -456,8 +504,10 @@ pub fn fromJson(content: []const u8) NetworkSet {
         n.setName(fieldStr(obj, "name", &tmp));
         var tbuf: [IP_CAP]u8 = undefined;
         n.vtype = VNetType.fromStr(fieldStr(obj, "type", &tbuf));
-        n.setSubnet(fieldStr(obj, "subnet", &tmp));
-        n.setMask(fieldStr(obj, "mask", &tmp));
+        const subnet_val = fieldStr(obj, "subnet", &tmp);
+        n.setSubnet(if (isValidIpv4(subnet_val)) subnet_val else "");
+        const mask_val = fieldStr(obj, "mask", &tmp);
+        n.setMask(if (isValidSubnetMask(mask_val)) mask_val else "");
         n.dhcp = fieldBool(obj, "dhcp");
         n.setDhcpStart(fieldStr(obj, "dhcp_start", &tmp));
         n.setDhcpEnd(fieldStr(obj, "dhcp_end", &tmp));
@@ -768,4 +818,68 @@ test "vnet: setBuf clamps to buffer capacity" {
     n.setPortForwards(huge);
     try testing.expect(n.getNameSlice().len <= 15); // NAME_CAP - 1
     try testing.expect(n.getPortForwardsSlice().len <= 255); // PORTFWD_CAP - 1
+}
+
+test "isValidIpv4: valid addresses" {
+    try testing.expect(isValidIpv4("192.168.1.1"));
+    try testing.expect(isValidIpv4("0.0.0.0"));
+    try testing.expect(isValidIpv4("255.255.255.255"));
+    try testing.expect(isValidIpv4("10.0.0.1"));
+    try testing.expect(isValidIpv4("172.16.254.1"));
+}
+
+test "isValidIpv4: invalid addresses" {
+    try testing.expect(!isValidIpv4(""));
+    try testing.expect(!isValidIpv4("256.1.1.1"));
+    try testing.expect(!isValidIpv4("1.2.3.256"));
+    try testing.expect(!isValidIpv4("1.2.3"));
+    try testing.expect(!isValidIpv4("1.2.3.4.5"));
+    try testing.expect(!isValidIpv4("01.1.1.1"));
+    try testing.expect(!isValidIpv4("abc.def.ghi.jkl"));
+    try testing.expect(!isValidIpv4("1.2.3."));
+    try testing.expect(!isValidIpv4(".1.2.3"));
+}
+
+test "isValidSubnetMask: valid masks" {
+    try testing.expect(isValidSubnetMask("255.255.255.0"));
+    try testing.expect(isValidSubnetMask("255.0.0.0"));
+    try testing.expect(isValidSubnetMask("255.255.0.0"));
+    try testing.expect(isValidSubnetMask("255.255.255.128"));
+    try testing.expect(isValidSubnetMask("255.255.255.192"));
+    try testing.expect(isValidSubnetMask("255.255.255.252"));
+    try testing.expect(isValidSubnetMask("128.0.0.0"));
+}
+
+test "isValidSubnetMask: invalid masks" {
+    try testing.expect(!isValidSubnetMask(""));
+    try testing.expect(!isValidSubnetMask("0.0.0.0"));
+    try testing.expect(!isValidSubnetMask("255.0.0.255"));
+    try testing.expect(!isValidSubnetMask("255.255.1.0"));
+    try testing.expect(!isValidSubnetMask("192.168.1.0"));
+    try testing.expect(!isValidSubnetMask("abc"));
+}
+
+test "vnet: fromJson rejects invalid subnet and mask" {
+    const json = "{\"networks\": [{\"name\": \"VMnet0\", \"type\": \"nat\", \"subnet\": \"not.an.ip\", \"mask\": \"garbage\"}]}";
+    const set = fromJson(json);
+    try testing.expectEqual(@as(usize, 1), set.count);
+    try testing.expectEqualStrings("VMnet0", set.nets[0].getNameSlice());
+    // Invalid subnet → should be empty
+    try testing.expectEqual(@as(usize, 0), set.nets[0].getSubnetSlice().len);
+    // Invalid mask → should be empty
+    try testing.expectEqual(@as(usize, 0), set.nets[0].getMaskSlice().len);
+}
+
+test "vnet: fromJson accepts valid subnet and mask" {
+    const json = "{\"networks\": [{\"name\": \"VMnet8\", \"type\": \"nat\", \"subnet\": \"192.168.140.0\", \"mask\": \"255.255.255.0\"}]}";
+    const set = fromJson(json);
+    try testing.expectEqualStrings("192.168.140.0", set.nets[0].getSubnetSlice());
+    try testing.expectEqualStrings("255.255.255.0", set.nets[0].getMaskSlice());
+}
+
+test "vnet: fromJson rejects non-contiguous mask" {
+    const json = "{\"networks\": [{\"name\": \"bad\", \"type\": \"nat\", \"subnet\": \"10.0.0.0\", \"mask\": \"255.255.1.0\"}]}";
+    const set = fromJson(json);
+    try testing.expectEqualStrings("10.0.0.0", set.nets[0].getSubnetSlice()); // subnet is valid
+    try testing.expectEqual(@as(usize, 0), set.nets[0].getMaskSlice().len); // mask rejected
 }

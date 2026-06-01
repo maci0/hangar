@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Process-wide `std.Io` instance and small timing helpers.
 //!
 //! Zig 0.16 routes filesystem, process, and networking calls through the

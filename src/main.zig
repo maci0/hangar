@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! KVMGUI — FLTK Frontend (VM operation callbacks, remaining dialogs, main loop)
 const std = @import("std");
 const vm = @import("vm.zig");
@@ -12,11 +13,13 @@ const autoprotect = @import("autoprotect.zig");
 const app = @import("appstate.zig");
 const serial = @import("serial_console.zig");
 const display_mod = @import("display.zig");
+const display_gl = @import("display_gl.zig");
 const remote = @import("remote.zig");
 const dialogs = @import("dialogs.zig");
 const urlencode = @import("urlencode.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
 const web_server = @import("web_server.zig");
+const snapparse = @import("snapparse.zig");
 const cfltk = @import("cfltk_import.zig").c;
 
 extern fn time(t: ?*c_long) c_long;
@@ -50,6 +53,7 @@ fn fullScreenCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
     }
 }
 fn exportOvfCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.exportOvfDialog(); }
+fn migrateCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { migrateVm(); }
 fn homeCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { app.selected_idx = null; app.refreshBrowser(); app.refreshDetails(); }
 fn connectRemoteCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.remoteConnectDialog(); }
 fn webStartCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { startWebServer(); }
@@ -401,7 +405,7 @@ fn buildSaveBody(buf: []u8, dd: *const anyopaque) ![]const u8 {
     if (ed.n3m) |nm| try urlencode.appendPair(buf, &pos, "nic3", std.mem.span(cfltk.Fl_Input_value(nm)));
     if (ed.pf) |pfi| try urlencode.appendPair(buf, &pos, "portfw", std.mem.span(cfltk.Fl_Input_value(pfi)));
     if (ed.cs) |csi| try urlencode.appendPair(buf, &pos, "cpu_sockets", std.mem.span(cfltk.Fl_Input_value(csi)));
-    if (ed.kv) |kvi| try urlencode.appendPair(buf, &pos, "enable_kvm", if (cfltk.Fl_Check_Button_is_checked(kvi) != 0) "1" else "0");
+    if (ed.kv) |kvi| try urlencode.appendPair(buf, &pos, "accel", if (cfltk.Fl_Check_Button_is_checked(kvi) != 0) "auto" else "tcg");
     if (ed.os) |osi| try urlencode.appendPair(buf, &pos, "guest_os", std.mem.span(cfltk.Fl_Input_value(osi)));
     if (ed.bo) |boi| try urlencode.appendPair(buf, &pos, "boot_order", std.mem.span(cfltk.Fl_Input_value(boi)));
     if (ed.dp) |dpi| try urlencode.appendPair(buf, &pos, "display", std.mem.span(cfltk.Fl_Input_value(dpi)));
@@ -615,7 +619,7 @@ fn editVmDialog() void {
     const cs_input = cfltk.Fl_Input_new(130, 1106, 150, 24, cs_str);
     const kvm_input = cfltk.Fl_Check_Button_new(300, 1111, 170, 24, "Enable KVM");
     cfltk.Fl_Check_Button_set_label_color(kvm_input, app.pal.text);
-    if (cfg.enable_kvm) cfltk.Fl_Check_Button_set_checked(kvm_input, 1);
+    if (cfg.accel != .tcg) cfltk.Fl_Check_Button_set_checked(kvm_input, 1);
 
     const lb30 = cfltk.Fl_Box_new(10, 1138, 110, 20, "Guest OS:");
     cfltk.Fl_Box_set_label_font(lb30, 1); cfltk.Fl_Box_set_label_color(lb30, app.pal.text_dim);
@@ -771,7 +775,7 @@ fn editVmDialog() void {
         if (dd.pf) |pfi| { const s = std.mem.span(cfltk.Fl_Input_value(pfi)); if (s.len > 0) dd.v.setPortForwards(s) else dd.v.clearPortForwards(); }
         // ── New fields: sockets, kvm, os, boot, display, res, 3d, gpu, embed, serial, vnc, spice, diskfmt, mac, audio, fav ──
         if (dd.cs) |csi| dd.v.cpu_sockets = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(csi)), 10) catch dd.v.cpu_sockets);
-        if (dd.kv) |kvi| dd.v.enable_kvm = cfltk.Fl_Check_Button_is_checked(kvi) != 0;
+        if (dd.kv) |kvi| dd.v.accel = if (cfltk.Fl_Check_Button_is_checked(kvi) != 0) .auto else .tcg;
         if (dd.os) |osi| {
             const s = std.mem.span(cfltk.Fl_Input_value(osi));
             // Match against label() values displayed in the dialog
@@ -906,7 +910,25 @@ fn snapDialog() void {
                 app.g_vmm.snapshotListFn(h, s.v.getDiskPathSlice(), &buf, std.heap.page_allocator) catch 0
             else
                 qemu.snapshotList(s.v.getDiskPathSlice(), &buf, std.heap.page_allocator) catch 0;
-            if (s.r) |rr| { if (n > 0) cfltk.Fl_Box_set_label(rr, @ptrCast(&buf)); }
+            if (s.r) |rr| {
+                if (n > 0) {
+                    const nodes = snapparse.parse(buf[0..n]);
+                    if (nodes.count > 0) {
+                        var fmt_buf: [4096]u8 = undefined;
+                        var w: usize = 0;
+                        for (0..nodes.count) |i| {
+                            const name = nodes.nameSlice(i);
+                            const line = std.fmt.bufPrint(fmt_buf[w..], "{s}\n", .{name}) catch break;
+                            w += line.len;
+                        }
+                        cfltk.Fl_Box_set_label(rr, @ptrCast(fmt_buf[0..w]));
+                    } else {
+                        cfltk.Fl_Box_set_label(rr, "(none)");
+                    }
+                } else {
+                    cfltk.Fl_Box_set_label(rr, "(none)");
+                }
+            }
         }
     }};
     const RK = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
@@ -1373,6 +1395,31 @@ fn suspendVm() void {
     app.setStatus("VM suspended to file — ready to resume on power-on");
 }
 
+fn migrateVm() void {
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+
+    // Remote mode: dispatch to server.
+    if (app.remote_mode) {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrintZ(&path_buf, "/api/migrate/{d}", .{idx}) catch return;
+        var out_buf: [64]u8 = undefined;
+        _ = remote.apiPost(path, "", &out_buf);
+        remote.remoteRefreshVmList();
+        app.refreshBrowser();
+        app.refreshDetails();
+        return;
+    }
+
+    const v = &app.vms[idx];
+    if (!v.isAlive()) {
+        app.setStatus("VM is not running — cannot migrate");
+        return;
+    }
+
+    dialogs.migrateDialog();
+}
+
 fn newVmDialog() void {
     const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 460, 2), @divTrunc(cfltk.Fl_h() - 260, 2), 460, 260, "New Virtual Machine");
     cfltk.Fl_Window_make_modal(dlg, 1);
@@ -1813,9 +1860,10 @@ pub fn main() void {
 
     const vnet_btn = cfltk.Fl_Button_new(300, utb_y + 3, 70, 34, "VNet");
     const pref_btn = cfltk.Fl_Button_new(375, utb_y + 3, 70, 34, "Prefs");
+    const migrate_btn = cfltk.Fl_Button_new(450, utb_y + 3, 70, 34, "Migrate");
 
-    const ws_start_btn = cfltk.Fl_Button_new(450, utb_y + 3, 70, 34, "Web Start");
-    const ws_stop_btn = cfltk.Fl_Button_new(525, utb_y + 3, 70, 34, "Web Stop");
+    const ws_start_btn = cfltk.Fl_Button_new(525, utb_y + 3, 70, 34, "Web Start");
+    const ws_stop_btn = cfltk.Fl_Button_new(600, utb_y + 3, 70, 34, "Web Stop");
 
     // Tooltips
     cfltk.Fl_Button_set_tooltip(import_btn, "Import a VM from a .vmdk or .qcow2 disk image");
@@ -1824,6 +1872,7 @@ pub fn main() void {
     cfltk.Fl_Button_set_tooltip(fav_btn, "Toggle favorite (pin to top of VM Library)");
     cfltk.Fl_Button_set_tooltip(vnet_btn, "Virtual Network Editor (manage VMnet switch configurations)");
     cfltk.Fl_Button_set_tooltip(pref_btn, "Preferences (theme, default folder, display, audio)");
+    cfltk.Fl_Button_set_tooltip(migrate_btn, "Live-migrate the selected running VM to another QEMU instance");
     cfltk.Fl_Button_set_tooltip(ws_start_btn, "Start the web UI server on http://localhost:9080");
     cfltk.Fl_Button_set_tooltip(ws_stop_btn, "Stop the web UI server");
 
@@ -1834,6 +1883,7 @@ pub fn main() void {
     cfltk.Fl_Button_set_color(fav_btn, app.pal.gray_btn);       cfltk.Fl_Button_set_label_color(fav_btn, app.pal.amber);
     cfltk.Fl_Button_set_color(vnet_btn, app.pal.gray_btn);       cfltk.Fl_Button_set_label_color(vnet_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(pref_btn, app.pal.gray_btn);       cfltk.Fl_Button_set_label_color(pref_btn, app.pal.accent_text);
+    cfltk.Fl_Button_set_color(migrate_btn, app.pal.accent);       cfltk.Fl_Button_set_label_color(migrate_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(ws_start_btn, app.pal.success);    cfltk.Fl_Button_set_label_color(ws_start_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(ws_stop_btn, app.pal.danger);       cfltk.Fl_Button_set_label_color(ws_stop_btn, app.pal.accent_text);
 
@@ -1844,6 +1894,7 @@ pub fn main() void {
     cfltk.Fl_Button_set_callback(fav_btn, favCB, null);
     cfltk.Fl_Button_set_callback(vnet_btn, vnetCB, null);
     cfltk.Fl_Button_set_callback(pref_btn, prefsCB, null);
+    cfltk.Fl_Button_set_callback(migrate_btn, migrateCB, null);
     cfltk.Fl_Button_set_callback(ws_start_btn, webStartCB, null);
     cfltk.Fl_Button_set_callback(ws_stop_btn, webStopCB, null);
 
@@ -1929,6 +1980,12 @@ pub fn main() void {
     cfltk.Fl_Box_set_color(db, app.pal.surface);
     cfltk.Fl_Box_set_label_color(db, app.pal.text_dim);
     app.display_box = @ptrCast(db);
+    const glw = cfltk.Fl_Gl_Window_new(CX + 5, body_y + 25, CW - 10, body_h - 30, "");
+    if (glw != null) {
+        app.gl_display = @ptrCast(glw);
+        cfltk.Fl_Gl_Window_set_mode(app.gl_display.?, 0x0003); // FL_RGB | FL_DOUBLE
+        cfltk.Fl_Gl_Window_hide(app.gl_display.?);
+    }
     cfltk.Fl_Group_end(@ptrCast(dg));
 
     // Console tab

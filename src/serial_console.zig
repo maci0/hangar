@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Serial console reader and connection management.
 //!
 //! Spawns a background reader thread for the VM's Unix-domain serial socket,
@@ -24,7 +25,7 @@ fn serialReader() void {
 /// Connect to the VM's serial Unix socket and start the reader thread.
 pub fn serialConnect(vm_name: []const u8) void {
     if (app.serial_fd != null) return;
-    var path_buf: [256]u8 = undefined;
+    var path_buf: [320]u8 = undefined;
     const path = std.fmt.bufPrintZ(&path_buf, "/tmp/kvmgui-serial-{s}.sock", .{vm_name}) catch return;
     const stream = usock.UnixStream.connect(path) catch return;
     app.serial_fd = stream.fd;

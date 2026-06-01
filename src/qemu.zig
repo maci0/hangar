@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! QEMU process management.
 //!
 //! Provides functions to build the QEMU command line from a `VmConfig`,
@@ -260,18 +261,14 @@ fn appendExtraNic(
 fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc: std.mem.Allocator, bufs: *ArgBuffers) !void {
     try args.append(alloc, "qemu-system-x86_64");
 
-    if (config.enable_kvm) {
-        try args.append(alloc, "-machine");
-        const mach_str = try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,accel={s}", .{std.mem.span(vm.VmConfig.accelFlag())});
-        try args.append(alloc, mach_str);
-        try args.append(alloc, "-cpu");
-        try args.append(alloc, "host");
-    } else {
-        try args.append(alloc, "-machine");
-        try args.append(alloc, "type=q35,accel=tcg");
-        try args.append(alloc, "-cpu");
-        try args.append(alloc, "qemu64");
-    }
+    // Resolve accelerator: TCG → software, all others → hardware with host CPU.
+    const is_tcg = config.accel == .tcg;
+    const accel_flag = config.accel.toStr();
+    try args.append(alloc, "-machine");
+    const mach_str = try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,accel={s}", .{std.mem.span(accel_flag)});
+    try args.append(alloc, mach_str);
+    try args.append(alloc, "-cpu");
+    try args.append(alloc, if (is_tcg) "qemu64" else "host");
 
     // QEMU rejects -smp 0 and -m 0; clamp to a sane range. The upper bound also
     // prevents `sockets * cores` from overflowing u32 when the UI passes huge
@@ -747,7 +744,7 @@ test "fuzz: buildScriptStr never crashes on random configs" {
         c.guest_os = vm.GuestOs.fromIndex(rnd.int(usize));
         c.audio = vm.AudioDevice.fromIndex(rnd.int(usize));
         c.boot_order = vm.BootOrder.fromIndex(rnd.int(usize));
-        c.enable_kvm = rnd.boolean();
+        c.accel = vm.VmAccel.fromIndex(rnd.int(usize));
         c.embed_display = rnd.boolean();
         c.enable_serial = rnd.boolean();
         c.enable_3d = rnd.boolean();
@@ -1021,7 +1018,7 @@ test "fuzz: startVm spawns real QEMU (headless/TCG) then stops + reaps" {
         var cfg = vm.VmConfig{};
         cfg.display = .none; // no window
         cfg.embed_display = false; // no VNC/SPICE server
-        cfg.enable_kvm = false; // TCG — no /dev/kvm needed
+        cfg.accel = .tcg; // TCG — no /dev/kvm needed
         cfg.firmware = .bios;
         cfg.memory_mb = rnd.uintLessThan(u32, 256) + 16; // small + safe
         cfg.cpu_cores = rnd.uintLessThan(u32, 4) + 1;
@@ -1112,7 +1109,7 @@ test "qemu: buildScriptStr with floppy" {
 
 test "qemu: buildScriptStr with KVM disabled uses TCG" {
     var cfg = vm.VmConfig{};
-    cfg.enable_kvm = false;
+    cfg.accel = .tcg;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(has(s, "accel=tcg"));

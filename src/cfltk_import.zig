@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Single @cImport of cfltk shared by all modules.
 //!
 //! Every FLTK widget pointer must flow through THIS file's types, otherwise

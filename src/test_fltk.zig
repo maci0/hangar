@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Direct @cImport of cfltk — FLTK toolchain verified.
 const cfltk = @cImport({
     @cInclude("cfltk/cfl.h");

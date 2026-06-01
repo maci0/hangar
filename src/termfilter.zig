@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Pure terminal-output sanitizer for the serial console. The guest emits
 //! arbitrary bytes over the serial socket (binary, ANSI escapes, control
 //! chars); before they reach the IUP text widget they are filtered to a safe

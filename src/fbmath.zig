@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Pure framebuffer geometry math + pixel conversion helpers.
 //!
 //! Split out of `display.zig` so it can be fuzzed without pulling in IUP.

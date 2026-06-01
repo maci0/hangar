@@ -35,11 +35,11 @@ const viz=vms.map((v,i)=>({i,show:!f||v.name.toLowerCase().includes(f),fav:v.fav
 let hasFavs=false,hasNon=false;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;}
 for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star fav" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}
+h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star fav" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}
 if(hasFavs&&hasNon)h+='<div style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
 if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}}
+h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}}
 e.innerHTML=h||'<div style="color:var(--text-dim);font-size:12px">No VMs</div>';
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+' virtual machine(s)';if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
@@ -97,8 +97,8 @@ const r=await apiPost('/api/snapshot/take/'+sel,'tag='+encodeURIComponent(t));if
 async function openSnapshots(){if(sel===null)return;document.getElementById('snapdlg').showModal();loadSnapshots();}
 async function loadSnapshots(){if(sel===null)return;const r=await fetch('/api/snapshot/list/'+sel);const t=await r.text();
 const el=document.getElementById('snaplist');if(!t||t==='(none)'){el.innerHTML='<div style="color:var(--text-dim)">No snapshots</div>';return;}
-const lines=t.split('\n');let h='';for(const ln of lines){if(!ln.trim())continue;if(/^\s*(ID|Snapshot)\s/.test(ln))continue;const parts=ln.trim().split(/\s+/);const tag=parts[1]||ln;const rest=parts.slice(2).join(' ');
-h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"><span title="${rest}">${tag}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" onclick="revertSnapshot('${tag}')">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" onclick="deleteSnapshot('${tag}')">Del</button></span></div>`;}
+const lines=t.split('\n');let h='';for(const ln of lines){const tag=ln.trim();if(!tag)continue;
+h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"><span>${tag}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" data-action="revertSnapshot" data-snap-tag="${tag}">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" data-action="deleteSnapshot" data-snap-tag="${tag}">Del</button></span></div>`;}
 el.innerHTML=h;}
 async function revertSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Revert to snapshot "'+tag+'"? This will discard current state.'))return;
 const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);snapdlg.close();}}
@@ -124,7 +124,7 @@ const fields=[
 ['Guest OS','e_guest_os','select',v.guest_os||0],['Display','e_display','select',v.display||0],
 ['Display Res','e_display_resolution','select',v.display_resolution||0],['Audio','e_audio','select',v.audio||0],
 ['Boot Order','e_boot_order','select',v.boot_order||0],['3D Accel','e_enable_3d','select',v.enable_3d==='true'?'1':'0'],
-['GPU Device','e_gpu_device','select',v.gpu_device||0],['KVM','e_enable_kvm','select',v.enable_kvm==='true'?'1':'0'],
+['GPU Device','e_gpu_device','select',v.gpu_device||0],['Accelerator','e_accel','select',v.accel||'auto'],
 ['Embed Display','e_embed_display','select',v.embed_display==='true'?'1':'0'],['VNC Port','e_vnc_port','number',v.vnc_port||5900],
 ['SPICE Port','e_spice_port','number',v.spice_port||5901],['Serial','e_enable_serial','select',v.enable_serial==='true'?'1':'0'],
 ['Num Displays','e_num_displays','number',v.num_displays||1],['Favorite','e_favorite','select',v.favorite==='true'?'1':'0'],
@@ -144,7 +144,7 @@ e_display:[['0','GTK'],['1','SDL'],['2','SPICE'],['3','VNC'],['4','None']],
 e_display_resolution:[['0','Auto'],['1','800x600'],['2','1024x768'],['3','1280x800'],['4','1920x1080']],
 e_guest_os:[['0','Linux'],['1','Windows'],['2','FreeBSD'],['3','macOS'],['4','Other']],
 e_audio:[['0','None'],['1','Intel HDA'],['2','AC97']],e_boot_order:[['0','Hard Disk'],['1','CD/DVD'],['2','PXE']],
-e_enable_kvm:[['0','No'],['1','Yes']],e_embed_display:[['0','No'],['1','Yes']],
+e_accel:[['auto','Auto (best available)'],['tcg','TCG (software)'],['kvm','KVM (Linux)'],['hvf','HVF (macOS)'],['whpx','WHPX (Windows)']],e_embed_display:[['0','No'],['1','Yes']],
 e_enable_serial:[['0','No'],['1','Yes']],e_favorite:[['0','No'],['1','Yes']],
 e_guest_tools:[['0','No'],['1','Yes']],e_autoprotect:[['0','Off'],['1','On']],
 e_nic2:[['none','None'],['user','NAT'],['bridge','Bridged']],
@@ -156,13 +156,13 @@ if(type==='select'&&selects[id]){h+=`<select id="${id}">`;
 for(const[ov,ol]of selects[id])h+=`<option value="${ov}"${ov===String(val)?' selected':''}>${ol}</option>`;
 h+='</select>';}else{h+=`<input id="${id}" type="${type}" value="${val}">`;}
 h+='</div>';}
-h+='</div><div class="btn-row" style="margin-top:20px"><button class="btn primary" onclick="saveVm()">Save Changes</button></div>';
+h+='</div><div class="btn-row" style="margin-top:20px"><button class="btn primary" data-action="saveVm">Save Changes</button></div>';
 document.getElementById('tabSettings').innerHTML=h;}
 async function saveVm(){if(sel===null)return;
 const body=['name','mem','cpu','cpu_sockets','disk','disk_format','iso_path','mac_address','network','firmware','shared_folder','usb','guest_tools','autoprotect',
 'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','nic2','nic2_mac','nic3','nic3_mac','portfw','notes',
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order',
-'enable_kvm','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite']
+'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite']
 .map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
 const r=await apiPost('/api/save/'+sel,body);if(r){switchTab('summary');await refresh();setStatus('Settings saved.');}}
 // ── VNet Editor ──
@@ -251,15 +251,248 @@ if(e.key==='Enter'){if(sel!==null)powerToggle();return;}
 // ── Periodic Refresh ──
 refresh();
 setInterval(refresh,5000);
-// WebGPU/Canvas2D framebuffer display
-let fbCanvas=document.getElementById('fbcanvas'),fbCtx=fbCanvas.getContext('2d'),fbInterval=null;
-async function startFb(){if(sel===null){document.getElementById('display').style.display='none';if(fbInterval)clearInterval(fbInterval);return;}
-document.getElementById('display').style.display='block';
-if(fbInterval)clearInterval(fbInterval);fbInterval=setInterval(async()=>{if(sel===null||sel>=vms.length)return;const v=vms[sel];if(v.status!=='running')return;
-try{const r=await fetch('/api/fb/'+sel);if(!r.ok)return;const buf=await r.arrayBuffer();if(buf.byteLength<54)return;
-const blob=new Blob([buf],{type:'image/bmp'});const url=URL.createObjectURL(blob);
-const img=new Image();img.onload=function(){fbCanvas.width=img.width;fbCanvas.height=img.height;fbCtx.drawImage(img,0,0);URL.revokeObjectURL(url);};
-img.onerror=function(){URL.revokeObjectURL(url);};img.src=url;}catch(e){}},200)};
+// ── GPU-accelerated framebuffer display ──
+// Detects WebGPU → WebGL2 → WebGL → Canvas2D and renders VM framebuffer
+// with hardware-accelerated BMP decode + texture upload.
+
+var fbCanvas = document.getElementById('fbcanvas'), fbInterval = null;
+var gpuRenderer = null; // GpuRenderer instance
+
+/** Abstraction over WebGPU / WebGL / Canvas2D backends. */
+class GpuRenderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.backend = 'none';
+    this.gl = null;
+    this.program = null;
+    this.texture = null;
+    this.vbo = null;
+
+    this._initWebGPU(canvas) || this._initWebGL2(canvas) || this._initWebGL(canvas) || this._initCanvas2D(canvas);
+  }
+
+  // ── WebGPU ──────────────────────────────────────────────
+  _initWebGPU(c) {
+    if (!navigator.gpu) return false;
+    // WebGPU init is async; schedule it and use Canvas2D until ready.
+    this.backend = 'webgpu-pending';
+    this._ctx2d = c.getContext('2d'); // fallback until GPU ready
+    this._initWebGPUAsync(c);
+    return true;
+  }
+
+  async _initWebGPUAsync(c) {
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) { this._fallbackToGL(c); return; }
+      const device = await adapter.requestDevice();
+      const ctx = c.getContext('webgpu');
+      if (!ctx) { this._fallbackToGL(c); return; }
+      const format = navigator.gpu.getPreferredCanvasFormat();
+      ctx.configure({ device, format, alphaMode: 'premultiplied' });
+      this.device = device;
+      this.wgpuCtx = ctx;
+      this.wgpuFormat = format;
+      // BGRA→RGBA swizzle pipeline
+      this.wgpuModule = device.createShaderModule({ code: `
+        @group(0) @binding(0) var t: texture_2d<f32>;
+        @group(0) @binding(1) var s: sampler;
+        struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f; }
+        @vertex fn vs(@builtin(vertex_index) vid: u32) -> VSOut {
+          let x = f32((vid & 1u) << 2) - 1.0;  // -1, 3
+          let y = f32((vid >> 1u) << 2) - 1.0;  // -1, 3
+          return VSOut(vec4f(x, y, 0.0, 1.0), vec2f((x+1.0)*0.5, 1.0-(y+1.0)*0.5));
+        }
+        @fragment fn fs(in: VSOut) -> @location(0) vec4f {
+          let c = textureSample(t, s, in.uv);
+          return c.bgra; // swizzle BGRA input → RGBA output
+        }
+      ` });
+      this.wgpuBindGroupLayout = device.createBindGroupLayout({
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+          { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} }
+        ]
+      });
+      this.wgpuPipeline = device.createRenderPipeline({
+        layout: device.createPipelineLayout({ bindGroupLayouts: [this.wgpuBindGroupLayout] }),
+        vertex: { module: this.wgpuModule, entryPoint: 'vs' },
+        fragment: { module: this.wgpuModule, entryPoint: 'fs', targets: [{ format }] },
+        primitive: { topology: 'triangle-strip' }
+      });
+      this.wgpuSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+      this.backend = 'webgpu';
+    } catch (e) { console.warn('WebGPU init failed, falling back:', e); this._fallbackToGL(c); }
+  }
+
+  _fallbackToGL(c) {
+    this.backend = 'none';
+    this._initWebGL2(c) || this._initWebGL(c) || this._initCanvas2D(c);
+  }
+
+  // ── WebGL2 ──────────────────────────────────────────────
+  _initWebGL2(c) {
+    const gl = c.getContext('webgl2', { premultipliedAlpha: false });
+    if (!gl) return false;
+    this.gl = gl;
+    this.backend = 'webgl2';
+    this._setupGL(gl, '#version 300 es\n');
+    return true;
+  }
+
+  _initWebGL(c) {
+    const gl = c.getContext('webgl', { premultipliedAlpha: false });
+    if (!gl) return false;
+    this.gl = gl;
+    this.backend = 'webgl';
+    this._setupGL(gl, '');
+    return true;
+  }
+
+  _setupGL(gl, ver) {
+    const vs = ver + 'in vec2 aPos;in vec2 aUV;out vec2 vUV;void main(){gl_Position=vec4(aPos,0.0,1.0);vUV=aUV;}';
+    const fs = ver + 'precision highp float;in vec2 vUV;out vec4 fragColor;uniform sampler2D uTex;void main(){fragColor=texture(uTex,vUV).bgra;}';
+    function makeShader(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, makeShader(gl.VERTEX_SHADER, vs));
+    gl.attachShader(prog, makeShader(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog);
+    this.program = prog;
+    this.texture = gl.createTexture();
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,1,0,0, 1,1,1,0, -1,-1,0,1, 1,-1,1,1]), gl.STATIC_DRAW);
+    this.vbo = buf;
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  }
+
+  // ── Canvas2D fallback ───────────────────────────────────
+  _initCanvas2D(c) {
+    this.ctx2d = c.getContext('2d');
+    this.backend = 'canvas2d';
+    return true;
+  }
+
+  // ── Resize canvas ───────────────────────────────────────
+  resize(w, h) {
+    if (this.backend === 'webgpu' || this.backend === 'webgpu-pending') {
+      this.canvas.width = w; this.canvas.height = h;
+    }
+    if (this.gl) {
+      this.canvas.width = w; this.canvas.height = h;
+      this.gl.viewport(0, 0, w, h);
+    }
+    if (this.ctx2d) { this.canvas.width = w; this.canvas.height = h; }
+  }
+
+  // ── Draw raw BGRA pixel data to canvas ──────────────────
+  drawRaw(pixels, w, h) {
+    if (this.backend === 'webgpu' && this.device) {
+      const tex = this.device.createTexture({
+        size: [w, h], format: 'bgra8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+      });
+      this.device.queue.writeTexture({ texture: tex }, pixels, { bytesPerRow: w * 4, rowsPerImage: h }, [w, h]);
+      const bg = this.device.createBindGroup({
+        layout: this.wgpuBindGroupLayout, entries: [
+          { binding: 0, resource: tex.createView() },
+          { binding: 1, resource: this.wgpuSampler }
+        ]
+      });
+      const ce = this.wgpuCtx.getCurrentTexture().createView();
+      const encoder = this.device.createCommandEncoder();
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{ view: ce, loadOp: 'clear', storeOp: 'store' }]
+      });
+      pass.setPipeline(this.wgpuPipeline);
+      pass.setBindGroup(0, bg);
+      pass.draw(4, 1, 0, 0);
+      pass.end();
+      this.device.queue.submit([encoder.finish()]);
+      tex.destroy();
+      return;
+    }
+    if (this.gl && this.program) {
+      const gl = this.gl;
+      gl.useProgram(this.program);
+      gl.bindTexture(gl.TEXTURE_2D, this.texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(pixels));
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
+      const posLoc = gl.getAttribLocation(this.program, 'aPos');
+      const uvLoc = gl.getAttribLocation(this.program, 'aUV');
+      gl.enableVertexAttribArray(posLoc); gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 16, 0);
+      gl.enableVertexAttribArray(uvLoc); gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 16, 8);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      return;
+    }
+    // Canvas2D: wrap BGRA in ImageData and put (browser handles swizzle on put)
+    if (this.ctx2d) {
+      const imgData = new ImageData(new Uint8ClampedArray(pixels), w, h);
+      window.createImageBitmap(imgData).then(function(bmp) {
+        if (this.ctx2d) { this.ctx2d.drawImage(bmp, 0, 0); }
+      }.bind(this)).catch(function() {});
+    }
+  }
+}
+
+// BMP header parsing → returns { pixels: Uint8Array, w: number, h: number }
+function parseBmp(buf) {
+  if (buf.byteLength < 54) return null;
+  const dv = new DataView(buf);
+  if (dv.getUint16(0, true) !== 0x4D42) return null; // not 'BM'
+  const offBits = dv.getUint32(10, true);
+  const w = dv.getInt32(18, true);
+  var h = dv.getInt32(22, true);
+  const topDown = h < 0;
+  if (topDown) h = -h;
+  const bpp = dv.getUint16(28, true);
+  if (bpp !== 32) return null;
+  const rowBytes = ((w * 32 + 31) >>> 5) << 2;
+  const pixelLen = rowBytes * h;
+  if (offBits + pixelLen > buf.byteLength) return null;
+  // Copy pixels into a contiguous buffer, flipping rows if stored bottom-up.
+  var pixels = new Uint8Array(w * h * 4);
+  var srcOff = offBits;
+  for (var y = 0; y < h; y++) {
+    var dstY = topDown ? y : h - 1 - y;
+    var row = new Uint8Array(buf, srcOff, w * 4);
+    pixels.set(row, dstY * w * 4);
+    srcOff += rowBytes;
+  }
+  return { pixels: pixels, w: w, h: h };
+}
+
+function initGpuRenderer() {
+  if (!gpuRenderer && fbCanvas) gpuRenderer = new GpuRenderer(fbCanvas);
+}
+
+function startFb() {
+  if (sel === null) {
+    document.getElementById('display').style.display = 'none';
+    if (fbInterval) { clearInterval(fbInterval); fbInterval = null; }
+    return;
+  }
+  document.getElementById('display').style.display = 'block';
+  initGpuRenderer();
+  if (fbInterval) clearInterval(fbInterval);
+  fbInterval = setInterval(async function() {
+    if (sel === null || sel >= vms.length) return;
+    var v = vms[sel];
+    if (v.status !== 'running') return;
+    try {
+      var r = await fetch('/api/fb/' + sel);
+      if (!r.ok) return;
+      var buf = await r.arrayBuffer();
+      if (buf.byteLength < 54) return;
+      var parsed = parseBmp(new Uint8Array(buf));
+      if (!parsed) return;
+      gpuRenderer.resize(parsed.w, parsed.h);
+      gpuRenderer.drawRaw(parsed.pixels.buffer, parsed.w, parsed.h);
+    } catch (e) { /* retry next poll */ }
+  }, 200);
+}
 setInterval(()=>{if(sel!==null&&sel<vms.length&&vms[sel].status==='running')startFb();},2000);
 // Serial console
 let serialWs=null,serialIdx=null,serialManualOff=false;
@@ -295,3 +528,52 @@ if(e.ctrlKey&&!e.altKey&&!e.metaKey){
 }
 if(s)serialWs.send(s);});
 setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&serialIdx!==sel)serialManualOff=false;if(v.status==='running'&&v.hasSerial)startSerial(sel);else stopSerial();}},3000);
+// ── Event Delegation (CSP-safe: no inline handlers) ──
+var actionHandlers={
+ toggleSidebar:function(){toggleSidebar();},deselectVm:function(){deselectVm();},
+ powerToggle:function(){powerToggle();},pauseGuest:function(){pauseGuest();},
+ resumeGuest:function(){resumeGuest();},shutdownGuest:function(){shutdownGuest();},
+ resetGuest:function(){resetGuest();},suspendGuest:function(){suspendGuest();},
+ sendCad:function(){sendCad();},editVm:function(){editVm();},
+ renameGuest:function(){renameGuest();},cloneGuest:function(){cloneGuest();},
+ importGuest:function(){importGuest();},takeSnapshot:function(){takeSnapshot();},
+ exportOvf:function(){exportOvf();},openVnets:function(){openVnets();},
+ openPrefs:function(){openPrefs();},openAbout:function(){openAbout();},
+ batchStart:function(){batchStart();},batchStop:function(){batchStop();},
+ deleteVm:function(){deleteVm();},clearSearch:function(){clearSearch();},
+ newVm:function(){newVm();},createVm:function(){createVm();},
+ takeSnapshotFromDlg:function(){takeSnapshotFromDlg();},
+ manualDisconnectSerial:function(){manualDisconnectSerial();},
+ savePrefs:function(){savePrefs();},saveVm:function(){saveVm();},
+ vnetAdd:function(){vnetAdd();},vnetRemove:function(){vnetRemove();},
+ vnetDefaults:function(){vnetDefaults();},vnetSaveCurrent:function(){vnetSaveCurrent();},
+ vnetSaveAll:function(){vnetSaveAll();},
+ select:function(el){var i=parseInt(el.getAttribute('data-vm-index'));if(!isNaN(i))select(i);},
+ toggleFavorite:function(el){var parent=el.closest('.vm-item');if(!parent)return;var i=parseInt(parent.getAttribute('data-vm-index'));if(!isNaN(i))toggleFavorite(i);},
+ revertSnapshot:function(el){revertSnapshot(el.getAttribute('data-snap-tag')||'');},
+ deleteSnapshot:function(el){deleteSnapshot(el.getAttribute('data-snap-tag')||'');},
+ doClone:function(el){doClone(parseInt(el.getAttribute('data-clone-linked')));},
+ switchTab:function(el){switchTab(el.getAttribute('data-tab')||'summary');},
+ closeDlg:function(el){var id=el.getAttribute('data-dialog');if(id){var d=document.getElementById(id);if(d)d.close();}},
+ applyTheme:function(el){applyTheme(el.value);},
+ filterList:function(){filterList();},
+ onVnetSelect:function(){onVnetSelect();}
+};
+document.body.addEventListener('click',function(e){
+ var el=e.target.closest('[data-action]');if(!el)return;
+ var action=el.getAttribute('data-action');var h=actionHandlers[action];if(h)h(el);
+});
+document.body.addEventListener('input',function(e){
+ var el=e.target.closest('[data-action="filterList"]');if(el)filterList();
+});
+document.body.addEventListener('change',function(e){
+ var el=e.target.closest('[data-action]');if(!el)return;
+ var action=el.getAttribute('data-action');
+ if(action==='onVnetSelect')onVnetSelect();
+ else if(action==='applyTheme')applyTheme(el.value);
+});
+document.body.addEventListener('keydown',function(e){
+ if(e.key==='Enter'&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'&&e.target.tagName!=='SELECT'){
+  var el=e.target.closest('[data-action="select"]');if(el){var i=parseInt(el.getAttribute('data-vm-index'));if(!isNaN(i))select(i);}
+ }
+});

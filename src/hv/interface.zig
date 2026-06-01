@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Hypervisor abstraction layer.
 //!
 //! Each backend implements the `Vmm` interface for a specific hypervisor
@@ -10,11 +11,13 @@
 //!   Windows → WHPX (if available, else TCG)
 //!
 //! The `enable_kvm` flag in VmConfig is renamed conceptually to
-//! `enable_accel` — it means "use hardware acceleration if available."
-//! When false, TCG (software emulation) is forced.
+//! `accel` — `VmAccel.auto` means "pick best available hardware accelerator."
+//! `VmAccel.tcg` forces software emulation. Single-accelerator variants
+//! (`.kvm`, `.hvf`, `.whpx`) request a specific hardware backend.
 
 const std = @import("std");
 const builtin = @import("builtin");
+const vm = @import("../vm.zig");
 
 /// Opaque handle returned by `create`. The backend stores per-VM
 /// state behind this pointer.
@@ -34,14 +37,6 @@ pub const VmmError = error{
     BackendError,
     /// Could not connect to the QMP control socket.
     QmpConnectFailed,
-};
-
-/// Which accelerator mode to use.
-pub const AccelMode = enum {
-    /// Use the best hardware accelerator available, fall back to TCG.
-    auto,
-    /// Force TCG (software emulation) regardless of platform.
-    force_tcg,
 };
 
 /// Which hypervisor backend to use.
@@ -76,6 +71,33 @@ pub fn tcgAccelerator() Accelerator {
     return .{ .flag = "tcg", .name = "TCG", .hardware = false };
 }
 
+/// Resolve a VmAccel enum to the actual Accelerator to use.
+/// `.auto` picks the platform's best hardware accelerator,
+/// falling back to TCG if unavailable. `.kvm`/`.hvf`/`.whpx`
+/// select a specific hardware backend. `.tcg` is always available.
+/// `checkAvail` is a caller-provided function (for /dev/kvm etc.).
+pub fn resolveAccel(accel: vm.VmAccel, checkAvail: *const fn (Accelerator) bool) Accelerator {
+    // Helper: try an HW accelerator; fall back to TCG if unavailable.
+    const tryHw = struct {
+        fn tryHw(hw: Accelerator, cb: *const fn (Accelerator) bool) Accelerator {
+            if (cb(hw)) return hw;
+            return tcgAccelerator();
+        }
+    }.tryHw;
+
+    return switch (accel) {
+        .auto => x: {
+            const best = bestAccelerator();
+            if (best.hardware and !checkAvail(best)) return tcgAccelerator();
+            break :x best;
+        },
+        .tcg => tcgAccelerator(),
+        .kvm => tryHw(.{ .flag = "kvm", .name = "KVM", .hardware = true }, checkAvail),
+        .hvf => tryHw(.{ .flag = "hvf", .name = "HVF", .hardware = true }, checkAvail),
+        .whpx => tryHw(.{ .flag = "whpx", .name = "WHPX", .hardware = true }, checkAvail),
+    };
+}
+
 /// The Vmm interface that every hypervisor backend must implement.
 pub const Vmm = struct {
     /// Backend identifier.
@@ -108,6 +130,15 @@ pub const Vmm = struct {
 
     /// Resume a paused VM (QMP `cont` or equivalent).
     resumeFn: *const fn (ctx: VmmHandle) VmmError!void,
+
+    /// Start live migration to a destination URI.
+    liveMigrateFn: *const fn (ctx: VmmHandle, dest_uri: []const u8) VmmError!void,
+
+    /// Query live migration status. Returns "active", "completed", "failed", etc.
+    queryMigrateStatusFn: *const fn (ctx: VmmHandle, out: []u8) VmmError![]const u8,
+
+    /// Cancel an active live migration.
+    cancelMigrateFn: *const fn (ctx: VmmHandle) VmmError!void,
 
     /// Get the display port for VNC/SPICE connection, if applicable.
     getDisplayPortFn: *const fn (ctx: VmmHandle) ?u16,
@@ -156,10 +187,30 @@ test "tcgAccelerator is always software" {
     try std.testing.expectEqualStrings("TCG", std.mem.span(accel.name));
 }
 
-test "AccelMode enum values" {
-    try std.testing.expectEqual(@as(usize, 0), @intFromEnum(AccelMode.auto));
-    try std.testing.expectEqual(@as(usize, 1), @intFromEnum(AccelMode.force_tcg));
+test "resolveAccel: auto picks platform default" {
+    const accel = resolveAccel(.auto, &alwaysOk_hv);
+    try std.testing.expectEqualStrings(std.mem.span(bestAccelerator().flag), std.mem.span(accel.flag));
 }
+
+test "resolveAccel: tcg always returns tcg" {
+    const accel = resolveAccel(.tcg, &alwaysOk_hv);
+    try std.testing.expectEqualStrings("tcg", std.mem.span(accel.flag));
+    try std.testing.expect(!accel.hardware);
+}
+
+test "resolveAccel: kvm falls back to tcg when check fails" {
+    const accel = resolveAccel(.kvm, &alwaysNo_hv);
+    try std.testing.expectEqualStrings("tcg", std.mem.span(accel.flag));
+}
+
+test "resolveAccel: whpx succeeds when check passes" {
+    const accel = resolveAccel(.whpx, &alwaysOk_hv);
+    try std.testing.expectEqualStrings("whpx", std.mem.span(accel.flag));
+    try std.testing.expect(accel.hardware);
+}
+
+fn alwaysOk_hv(_: Accelerator) bool { return true; }
+fn alwaysNo_hv(_: Accelerator) bool { return false; }
 
 test "Backend enum has qemu as default" {
     try std.testing.expectEqual(Backend.qemu, @as(Backend, @enumFromInt(0)));

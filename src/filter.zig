@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Case-insensitive VM name filter helper.
 //!
 //! Pure logic extracted from appstate.zig so it can be unit-tested without

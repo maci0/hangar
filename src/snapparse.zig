@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Pure parser for the snapshot tables printed by `qemu-img snapshot -l` and
 //! QMP `info snapshots`. Extracted from dialogs.zig (which is IUP-coupled) so
 //! the parsing can be unit-tested + fuzzed without a display. The Snapshot
@@ -25,7 +26,17 @@ pub const SnapNodes = struct {
 /// number, i.e. the snapshot ID), take the 2nd whitespace column as the tag.
 pub fn parse(output: []const u8) SnapNodes {
     var nodes = SnapNodes{};
-    var lines = std.mem.splitScalar(u8, output, '\n');
+    // Normalize \r\n → \n and lone \r → \n for robust line splitting.
+    var buf: [4096]u8 = undefined;
+    const normalized = if (output.len < buf.len) blk: {
+        @memcpy(buf[0..output.len], output);
+        for (buf[0..output.len]) |*c| {
+            if (c.* == '\r') c.* = '\n';
+        }
+        break :blk buf[0..output.len];
+    } else output;
+
+    var lines = std.mem.splitScalar(u8, normalized, '\n');
     while (lines.next()) |line| {
         if (nodes.count >= MAX_SNAP_NODES) break;
         const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -143,4 +154,64 @@ test "snapparse: Max name length exactly at cap" {
     const n = parse(line);
     try t.expectEqual(@as(usize, 1), n.count);
     try t.expect(n.nameSlice(0).len <= SNAP_NAME_CAP - 1);
+}
+
+test "snapparse: HMP output with 'VM SIZE' as column prefix" {
+    // Some QEMU versions print "VM SIZE" as the size column header.
+    const out =
+        \\ID        TAG                 VM SIZE                DATE       VM CLOCK
+        \\--        ---                 -------                ----       --------
+        \\1         Base                     0 B 2024-01-01 00:00:00   00:00:00.000
+    ;
+    const n = parse(out);
+    try t.expectEqual(@as(usize, 1), n.count);
+    try t.expectEqualStrings("Base", n.nameSlice(0));
+}
+
+test "snapparse: tags with spaces are truncated to first token only" {
+    const n = parse("1 Before Update 0 B\n");
+    try t.expectEqual(@as(usize, 1), n.count);
+    try t.expectEqualStrings("Before", n.nameSlice(0));
+}
+
+test "snapparse: empty tag after numeric ID" {
+    // "1  0 B" — second token is "0" (a valid tag name).
+    const n = parse("1  0 B\n");
+    try t.expectEqual(@as(usize, 1), n.count);
+    try t.expectEqualStrings("0", n.nameSlice(0));
+}
+
+test "snapparse: truly empty tag (single token row)" {
+    // Row with an ID but no second token — skipped.
+    const n = parse("1\n");
+    try t.expectEqual(@as(usize, 0), n.count);
+}
+
+test "snapparse: Carriage return only line endings" {
+    const n = parse("1 Snap\r2 Other\r");
+    try t.expectEqual(@as(usize, 2), n.count);
+    try t.expectEqualStrings("Snap", n.nameSlice(0));
+    try t.expectEqualStrings("Other", n.nameSlice(1));
+}
+
+test "snapparse: mix of empty lines and headers" {
+    const out =
+        \\
+        \\Snapshot list:
+        \\
+        \\ID        TAG                 VM SIZE                DATE
+        \\--        ---                 -------                ----
+        \\
+        \\1         Fresh                 0 B 2024-01-01 00:00:00   00:00:00.000
+        \\
+    ;
+    const n = parse(out);
+    try t.expectEqual(@as(usize, 1), n.count);
+    try t.expectEqualStrings("Fresh", n.nameSlice(0));
+}
+
+test "snapparse: row without size/date columns (minimal format)" {
+    const n = parse("1 JustATag\n");
+    try t.expectEqual(@as(usize, 1), n.count);
+    try t.expectEqualStrings("JustATag", n.nameSlice(0));
 }

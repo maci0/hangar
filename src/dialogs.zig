@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Dialog functions extracted from main.zig.
 //!
 //! Each function creates and manages a modal FLTK dialog window.
@@ -8,6 +9,7 @@ const std = @import("std");
 const vm = @import("vm.zig");
 const persist = @import("persist.zig");
 const qemu = @import("qemu.zig");
+const qmp = @import("qmp.zig");
 const ovf = @import("ovf.zig");
 const vnet = @import("vnet.zig");
 const appio = @import("appio.zig");
@@ -325,11 +327,11 @@ pub fn exportOvfDialog() void {
         .has_network = v.nics[0].mode != .none,
     };
 
-    const xml = ovf.buildDescriptor(spec, std.heap.page_allocator) catch {
+    var ovf_buf: [ovf.max_descriptor_len]u8 = undefined;
+    const xml = ovf.buildDescriptor(spec, &ovf_buf) catch {
         app.setStatus("Failed to generate OVF descriptor");
         return;
     };
-    defer std.heap.page_allocator.free(xml);
 
     std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = save_path, .data = xml }) catch {
         app.setStatus("Failed to write OVF file");
@@ -454,6 +456,162 @@ pub fn remoteConnectDialog() void {
     cfltk.Fl_Window_end(dlg);
     cfltk.Fl_Window_show(dlg);
     while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
+}
+
+pub fn migrateDialog() void {
+    const idx = app.selected_idx orelse return;
+    if (idx >= app.vm_count) return;
+    const v = &app.vms[idx];
+
+    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 460, 2), @divTrunc(cfltk.Fl_h() - 240, 2), 460, 240, "Live Migrate VM");
+    cfltk.Fl_Window_make_modal(dlg, 1);
+    cfltk.Fl_Window_set_color(dlg, app.pal.bg);
+
+    const vm_name = cfltk.Fl_Box_new(10, 10, 440, 20, "");
+    {
+        var buf: [512]u8 = undefined;
+        const label = std.fmt.bufPrintZ(&buf, "Migrating: {s}", .{v.getNameSlice()}) catch "Migrating VM";
+        cfltk.Fl_Box_set_label(vm_name, label.ptr);
+    }
+    cfltk.Fl_Box_set_label_font(vm_name, 1);
+    cfltk.Fl_Box_set_label_color(vm_name, app.pal.header);
+
+    const uri_label = cfltk.Fl_Box_new(10, 40, 440, 20, "Destination URI (e.g. tcp:host:4444, unix:/path/socket, exec:cmd):");
+    cfltk.Fl_Box_set_label_font(uri_label, 1);
+    cfltk.Fl_Box_set_label_color(uri_label, app.pal.text_dim);
+
+    const uri_input = cfltk.Fl_Input_new(10, 65, 440, 24, "");
+    cfltk.Fl_Input_set_text_font(uri_input, 4);
+
+    const migrate_btn = cfltk.Fl_Button_new(100, 195, 110, 30, "Migrate");
+    cfltk.Fl_Button_set_color(migrate_btn, app.pal.accent);
+    cfltk.Fl_Button_set_label_color(migrate_btn, app.pal.accent_text);
+
+    const cancel_btn = cfltk.Fl_Button_new(250, 195, 110, 30, "Cancel Migration");
+    cfltk.Fl_Button_set_color(cancel_btn, app.pal.danger);
+    cfltk.Fl_Button_set_label_color(cancel_btn, app.pal.accent_text);
+
+    const status_label = cfltk.Fl_Box_new(10, 155, 440, 20, "Enter a destination URI and click Migrate.");
+    cfltk.Fl_Box_set_label_color(status_label, app.pal.text_dim);
+
+    const MD = struct {
+        uri: ?*cfltk.Fl_Input,
+        status: ?*cfltk.Fl_Box,
+        dlg: ?*cfltk.Fl_Window,
+        idx: usize,
+        qc: qmp.QmpClient,
+    };
+    var md = MD{
+        .uri = @ptrCast(uri_input),
+        .status = @ptrCast(status_label),
+        .dlg = @ptrCast(dlg),
+        .idx = idx,
+        .qc = qmp.QmpClient{},
+    };
+
+    const MigrateFn = struct {
+        fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
+            const mdp: *MD = @ptrCast(@alignCast(d orelse return));
+            if (mdp.uri) |u| {
+                const dest = std.mem.span(cfltk.Fl_Input_value(u));
+                if (dest.len == 0) {
+                    if (mdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: enter a destination URI");
+                    return;
+                }
+
+                // Connect QMP
+                var sock_buf: [256]u8 = undefined;
+                const sock = qmp.socketPath(app.vms[mdp.idx].getNameSlice(), &sock_buf) orelse {
+                    if (mdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: failed to build QMP socket path");
+                    return;
+                };
+                mdp.qc.connect(sock) catch {
+                    if (mdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: failed to connect QMP — VM may not be running");
+                    return;
+                };
+
+                // Start live migration
+                mdp.qc.liveMigrate(dest) catch {
+                    if (mdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: migration command failed");
+                    mdp.qc.disconnect();
+                    return;
+                };
+
+                if (mdp.status) |sl| {
+                    cfltk.Fl_Box_set_label(sl, "Migration started — polling status...");
+                    cfltk.Fl_Box_set_label_color(sl, app.pal.accent);
+                }
+
+                // Poll migration status every 500ms (non-blocking via Fl::wait)
+                var done = false;
+                var timeout: usize = 600; // 5 minutes max (600 * 500ms)
+                while (!done and timeout > 0) : (timeout -= 1) {
+                    _ = cfltk.Fl_wait_for(0.5);
+                    var out_buf: [64]u8 = undefined;
+                    const status = mdp.qc.queryMigrateStatus(&out_buf) catch break;
+                    if (std.mem.eql(u8, status, "completed")) {
+                        if (mdp.status) |sl| {
+                            cfltk.Fl_Box_set_label(sl, "Migration completed successfully.");
+                            cfltk.Fl_Box_set_label_color(sl, app.pal.success);
+                        }
+                        done = true;
+                    } else if (std.mem.eql(u8, status, "failed") or std.mem.eql(u8, status, "cancelled")) {
+                        if (mdp.status) |sl| {
+                            var buf: [128]u8 = undefined;
+                            const lbl = std.fmt.bufPrintZ(&buf, "Migration {s}.", .{status}) catch "Migration finished.";
+                            cfltk.Fl_Box_set_label(sl, lbl.ptr);
+                            cfltk.Fl_Box_set_label_color(sl, app.pal.danger);
+                        }
+                        done = true;
+                    } else {
+                        if (mdp.status) |sl| {
+                            var buf: [128]u8 = undefined;
+                            const lbl = std.fmt.bufPrintZ(&buf, "Migration status: {s}...", .{status}) catch "Migrating...";
+                            cfltk.Fl_Box_set_label(sl, lbl.ptr);
+                        }
+                    }
+                }
+                if (!done) {
+                    if (mdp.status) |sl| {
+                        cfltk.Fl_Box_set_label(sl, "Migration timed out.");
+                        cfltk.Fl_Box_set_label_color(sl, app.pal.danger);
+                    }
+                }
+                mdp.qc.disconnect();
+            }
+        }
+    };
+
+    const CancelFn = struct {
+        fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
+            const mdp: *MD = @ptrCast(@alignCast(d orelse return));
+            // Connect QMP and cancel
+            var sock_buf: [256]u8 = undefined;
+            const sock = qmp.socketPath(app.vms[mdp.idx].getNameSlice(), &sock_buf) orelse return;
+            mdp.qc.connect(sock) catch {
+                if (mdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: failed to connect QMP to cancel");
+                return;
+            };
+            mdp.qc.cancelMigrate() catch {
+                if (mdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: cancel command failed");
+                mdp.qc.disconnect();
+                return;
+            };
+            if (mdp.status) |sl| {
+                cfltk.Fl_Box_set_label(sl, "Migration cancelled.");
+                cfltk.Fl_Box_set_label_color(sl, app.pal.amber);
+            }
+            mdp.qc.disconnect();
+        }
+    };
+
+    cfltk.Fl_Button_set_callback(migrate_btn, &MigrateFn.go, &md);
+    cfltk.Fl_Button_set_callback(cancel_btn, &CancelFn.go, &md);
+
+    cfltk.Fl_Window_end(dlg);
+    cfltk.Fl_Window_show(dlg);
+    while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
+    md.qc.disconnect();
 }
 
 pub fn toggleFavorite() void {

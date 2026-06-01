@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Pure string-to-enum parsers extracted from main.zig editVmDialog and dialogs.zig.
 //!
 //! These functions map UI label strings (case-insensitive) to their corresponding

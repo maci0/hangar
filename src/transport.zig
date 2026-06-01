@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! KVMGUI — Transport Abstraction Layer
 //! Supports Unix sockets, TCP/HTTP, and shared memory for client↔daemon communication.
 const std = @import("std");

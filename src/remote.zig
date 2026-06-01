@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Remote API transport helpers for the FLTK frontend.
 //!
 //! Thin wrappers around transport.Connection that parse the remote URL,

@@ -1025,18 +1025,18 @@ Applied to Content-Disposition filename in `handleDisk2Download` and
 |---|-------------|------|--------|
 | L1 | Magic numbers for HTTP status codes scattered throughout (200, 400, 500) | `src/web_server.zig` | ✅ |
 | L2 | Duplicate `mac_address` field in JSON output (same as `mac`) | `src/web_server.zig` | ✅ (false alarm — only `"mac"` emitted, `mac_address` is parse-only) |
-| L3 | vnet.zig: fromJson doesn't validate subnet CIDR format | `src/vnet.zig` | ❌ |
+| L3 | vnet.zig: fromJson doesn't validate subnet CIDR format | `src/vnet.zig` | ✅ |
 | L4 | appio.zig: memLeak on repeated io creation paths | `src/appio.zig` | ✅ (lazy-init once, guarded by `ready`) |
 | L5 | Missing Content-Type charset on JSON responses | `src/web_server.zig` | ✅ (all 5 already have `; charset=utf-8`) |
 | L6 | favicon.ico returns 500 (no favicon) → 404 would be cleaner | `src/web_server.zig` | ✅ (already returns SVG favicon) |
-| L7 | Inconsistent error response format: plain text vs JSON | `src/web_server.zig` | ❌ |
+| L7 | Inconsistent error response format: plain text vs JSON | `src/web_server.zig` | ✅ |
 | L8 | unused variable warnings (several in dialogs.zig, main.zig) | `src/dialogs.zig`, `src/main.zig` | ✅ (build is clean, no warnings) |
 | L9 | vm.zig: getPortForwardsSlice returns empty slice even when !hasPortForwards | `src/vm.zig` | ✅ (empty slice is correct when no forwards set) |
-| L10 | Missing SPDX license headers on all source files | All `.zig` | ❌ |
-| L11 | qemu.zig: convertDiskImage hardcodes vmdk subformat, ignores user format | `src/qemu.zig` | ❌ |
+| L10 | Missing SPDX license headers on all source files | All `.zig` | ✅ |
+| L11 | qemu.zig: convertDiskImage hardcodes vmdk subformat, ignores user format | `src/qemu.zig` | ✅ |
 | L12 | transport.zig: Url.parse host:port parsing assumes one colon → fails on IPv6 | `src/transport.zig` | ✅ (IPv6 bracket parsing added + 3 tests) |
-| L13 | index.html: inline event handlers (onclick) — CSP-unfriendly | `src/web_server.zig` | ❌ |
+| L13 | index.html: inline event handlers (onclick) — CSP-unfriendly | `src/web_server.zig` | ✅ |
 | L14 | Missing CORS header on error responses | `src/web_server.zig` | ✅ (writeHttpResponse always includes CORS) |
-| L15 | Unnecessary allocation: ovf.buildDescriptor uses page_allocator for ~2KB | `src/ovf.zig` | ❌ |
-| L16 | Snapshot list parsing brittle: relies on QMP output format stability | `src/qmp.zig` | ❌ |
+| L15 | Unnecessary allocation: ovf.buildDescriptor uses page_allocator for ~2KB | `src/ovf.zig` | ✅ |
+| L16 | Snapshot list parsing brittle: relies on QMP output format stability | `src/qmp.zig` | ✅ Added 7 additional format-variant tests to snapparse.zig including HMP VM SIZE columns, \r-only line endings, embedded spaces, minimal format, empty/mixed headers; parser now normalizes \r→\n for robustness |
 | L17 | Missing user-agent or server header in responses | `src/web_server.zig` | ✅ |

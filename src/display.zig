@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! VNC/SPICE framebuffer display rendering for the FLTK frontend.
 //!
 //! Polls the active VNC or SPICE client for dirty framebuffer pixels,
@@ -7,12 +8,39 @@
 const std = @import("std");
 const fbmath = @import("fbmath.zig");
 const app = @import("appstate.zig");
+const display_gl = @import("display_gl.zig");
 const cfltk = @import("cfltk_import.zig").c;
 
 /// Polling callback (100 ms). Reads the VNC or SPICE framebuffer,
-/// converts it to an Fl_RGB_Image, and updates the display box.
+/// renders it via GPU (OpenGL) if available, falling back to software.
 pub fn displayTimerCB(_: ?*anyopaque) callconv(.c) void {
-    if (app.display_box) |db| {
+    if (app.gl_display != null) {
+        // GL path: render directly to the Fl_Gl_Window
+        if (app.vnc_client) |vc| {
+            if (vc.checkDirty()) {
+                if (vc.lockFb()) |fb| {
+                    defer vc.unlockFb();
+                    var fw: c_int = 0;
+                    var fh: c_int = 0;
+                    if (vc.getSize(&fw, &fh)) {
+                        display_gl.renderGL(fb, fw, fh);
+                    }
+                }
+            }
+        } else if (app.spice_client) |sc| {
+            if (sc.checkDirty()) {
+                if (sc.getFb()) |fb| {
+                    var fw: c_int = 0;
+                    var fh: c_int = 0;
+                    if (sc.getSize(&fw, &fh)) {
+                        // SPICE has stride; GL renderer handles this by reading full fb
+                        display_gl.renderGL(fb, fw, fh);
+                    }
+                }
+            }
+        }
+    } else if (app.display_box) |db| {
+        // Software path: BGRA→RGBA + Fl_RGB_Image
         const box_w = cfltk.Fl_Box_width(db);
         const box_h = cfltk.Fl_Box_height(db);
         if (app.vnc_client) |vc| {

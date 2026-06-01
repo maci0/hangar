@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Virtual network label formatter extracted from dialogs.zig vnetDialog.
 //!
 //! Formats a human-readable label for a VirtualNetwork switch (bridged, host-only, NAT).

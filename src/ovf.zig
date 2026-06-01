@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! OVF (Open Virtualization Format) descriptor generation.
 //!
 //! Exports a VM as a standard OVF 1.0 directory: a `<name>.ovf` XML envelope
@@ -7,6 +8,9 @@
 //! lives in the GUI layer and calls `buildDescriptor`.
 
 const std = @import("std");
+
+/// Maximum output size of a descriptor (~2 KB; 4 KB is plenty).
+pub const max_descriptor_len = 4096;
 
 pub const Spec = struct {
     name: []const u8,
@@ -22,23 +26,14 @@ pub const Spec = struct {
     has_network: bool,
 };
 
-/// XML-escape `s` into `list` (&,<,>," and ').
-fn esc(list: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
-    for (s) |c| switch (c) {
-        '&' => try list.appendSlice(alloc, "&amp;"),
-        '<' => try list.appendSlice(alloc, "&lt;"),
-        '>' => try list.appendSlice(alloc, "&gt;"),
-        '"' => try list.appendSlice(alloc, "&quot;"),
-        '\'' => try list.appendSlice(alloc, "&apos;"),
-        else => try list.append(alloc, c),
-    };
-}
-
-/// Build a minimal but valid OVF 1.0 envelope for `spec`. Caller owns the slice.
-pub fn buildDescriptor(spec: Spec, allocator: std.mem.Allocator) ![]u8 {
+/// Build a minimal but valid OVF 1.0 envelope for `spec` into `buf`.
+/// Returns the written slice. `buf` must be at least `max_descriptor_len`.
+pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
+    var fba = std.heap.FixedBufferAllocator.init(buf);
+    const a = fba.allocator();
     var list: std.ArrayList(u8) = .empty;
-    errdefer list.deinit(allocator);
-    const a = allocator;
+    errdefer list.deinit(a);
+
     const w = struct {
         fn s(l: *std.ArrayList(u8), al: std.mem.Allocator, txt: []const u8) !void {
             try l.appendSlice(al, txt);
@@ -110,7 +105,19 @@ pub fn buildDescriptor(spec: Spec, allocator: std.mem.Allocator) ![]u8 {
     }
 
     try w(&list, a, "    </VirtualHardwareSection>\n  </VirtualSystem>\n</Envelope>\n");
-    return list.toOwnedSlice(allocator);
+    return list.toOwnedSlice(a);
+}
+
+/// XML-escape `s` into `list` (&,<,>," and ').
+fn esc(list: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
+    for (s) |c| switch (c) {
+        '&' => try list.appendSlice(alloc, "&amp;"),
+        '<' => try list.appendSlice(alloc, "&lt;"),
+        '>' => try list.appendSlice(alloc, "&gt;"),
+        '"' => try list.appendSlice(alloc, "&quot;"),
+        '\'' => try list.appendSlice(alloc, "&apos;"),
+        else => try list.append(alloc, c),
+    };
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -118,6 +125,7 @@ pub fn buildDescriptor(spec: Spec, allocator: std.mem.Allocator) ![]u8 {
 const t = std.testing;
 
 test "ovf: descriptor contains required envelope elements" {
+    var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
         .name = "Test VM",
         .cpu_cores = 4,
@@ -127,20 +135,20 @@ test "ovf: descriptor contains required envelope elements" {
         .vmdk_size_bytes = 1234567,
         .has_network = true,
     };
-    const xml = try buildDescriptor(spec, t.allocator);
-    defer t.allocator.free(xml);
+    const xml = try buildDescriptor(spec, &buf);
     try t.expect(std.mem.startsWith(u8, xml, "<?xml"));
     try t.expect(std.mem.indexOf(u8, xml, "<Envelope") != null);
     try t.expect(std.mem.indexOf(u8, xml, "</Envelope>") != null);
     try t.expect(std.mem.indexOf(u8, xml, "test-disk1.vmdk") != null);
     try t.expect(std.mem.indexOf(u8, xml, "Test VM") != null);
     try t.expect(std.mem.indexOf(u8, xml, "ovf:size=\"1234567\"") != null);
-    try t.expect(std.mem.indexOf(u8, xml, "<rasd:VirtualQuantity>4</rasd:VirtualQuantity>") != null); // cpu
-    try t.expect(std.mem.indexOf(u8, xml, "<rasd:VirtualQuantity>4096</rasd:VirtualQuantity>") != null); // mem
+    try t.expect(std.mem.indexOf(u8, xml, "<rasd:VirtualQuantity>4</rasd:VirtualQuantity>") != null);
+    try t.expect(std.mem.indexOf(u8, xml, "<rasd:VirtualQuantity>4096</rasd:VirtualQuantity>") != null);
     try t.expect(std.mem.indexOf(u8, xml, "E1000") != null);
 }
 
 test "ovf: no network omits the Ethernet item + NetworkSection" {
+    var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
         .name = "NoNet",
         .cpu_cores = 1,
@@ -150,13 +158,13 @@ test "ovf: no network omits the Ethernet item + NetworkSection" {
         .vmdk_size_bytes = 10,
         .has_network = false,
     };
-    const xml = try buildDescriptor(spec, t.allocator);
-    defer t.allocator.free(xml);
+    const xml = try buildDescriptor(spec, &buf);
     try t.expect(std.mem.indexOf(u8, xml, "NetworkSection") == null);
     try t.expect(std.mem.indexOf(u8, xml, "E1000") == null);
 }
 
 test "ovf: name with XML metacharacters is escaped" {
+    var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
         .name = "a<b>&\"c'",
         .cpu_cores = 1,
@@ -166,20 +174,20 @@ test "ovf: name with XML metacharacters is escaped" {
         .vmdk_size_bytes = 1,
         .has_network = false,
     };
-    const xml = try buildDescriptor(spec, t.allocator);
-    defer t.allocator.free(xml);
+    const xml = try buildDescriptor(spec, &buf);
     try t.expect(std.mem.indexOf(u8, xml, "a&lt;b&gt;&amp;&quot;c&apos;") != null);
-    try t.expect(std.mem.indexOf(u8, xml, "<b>") == null); // raw metachar must not leak
+    try t.expect(std.mem.indexOf(u8, xml, "<b>") == null);
 }
 
 test "fuzz: buildDescriptor never crashes on random specs" {
+    var buf: [max_descriptor_len]u8 = undefined;
     var prng = std.Random.DefaultPrng.init(0x0FF_C0DE);
     const rnd = prng.random();
     var namebuf: [64]u8 = undefined;
     var iter: usize = 0;
     while (iter < 3000) : (iter += 1) {
         const n = rnd.uintLessThan(usize, namebuf.len);
-        for (namebuf[0..n]) |*c| c.* = rnd.int(u8); // arbitrary bytes incl. <>&"'
+        for (namebuf[0..n]) |*c| c.* = rnd.int(u8);
         const spec = Spec{
             .name = namebuf[0..n],
             .cpu_cores = rnd.int(u32),
@@ -189,13 +197,13 @@ test "fuzz: buildDescriptor never crashes on random specs" {
             .vmdk_size_bytes = rnd.int(u64),
             .has_network = rnd.boolean(),
         };
-        const xml = buildDescriptor(spec, t.allocator) catch continue;
-        defer t.allocator.free(xml);
+        const xml = buildDescriptor(spec, &buf) catch continue;
         try t.expect(std.mem.endsWith(u8, xml, "</Envelope>\n"));
     }
 }
 
 test "ovf: zero disk capacity" {
+    var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
         .name = "Zero",
         .cpu_cores = 1,
@@ -205,27 +213,27 @@ test "ovf: zero disk capacity" {
         .vmdk_size_bytes = 0,
         .has_network = false,
     };
-    const xml = try buildDescriptor(spec, t.allocator);
-    defer t.allocator.free(xml);
+    const xml = try buildDescriptor(spec, &buf);
     try t.expect(std.mem.indexOf(u8, xml, "capacity=\"0\"") != null);
 }
 
 test "ovf: max u64 disk capacity" {
+    var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
         .name = "Huge",
         .cpu_cores = 1,
         .memory_mb = 1,
-        .disk_capacity_bytes = 18446744073709551615, // max u64
+        .disk_capacity_bytes = 18446744073709551615,
         .vmdk_href = "d.vmdk",
         .vmdk_size_bytes = 1,
         .has_network = false,
     };
-    const xml = try buildDescriptor(spec, t.allocator);
-    defer t.allocator.free(xml);
+    const xml = try buildDescriptor(spec, &buf);
     try t.expect(std.mem.indexOf(u8, xml, "capacity=\"18446744073709551615\"") != null);
 }
 
 test "ovf: name with only safe characters" {
+    var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
         .name = "SimpleVM_2024-v2",
         .cpu_cores = 1,
@@ -235,12 +243,12 @@ test "ovf: name with only safe characters" {
         .vmdk_size_bytes = 1,
         .has_network = false,
     };
-    const xml = try buildDescriptor(spec, t.allocator);
-    defer t.allocator.free(xml);
+    const xml = try buildDescriptor(spec, &buf);
     try t.expect(std.mem.indexOf(u8, xml, "SimpleVM_2024-v2") != null);
 }
 
 test "ovf: network section omitted when has_network is false" {
+    var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
         .name = "NoNet",
         .cpu_cores = 1,
@@ -250,12 +258,12 @@ test "ovf: network section omitted when has_network is false" {
         .vmdk_size_bytes = 1,
         .has_network = false,
     };
-    const xml = try buildDescriptor(spec, t.allocator);
-    defer t.allocator.free(xml);
+    const xml = try buildDescriptor(spec, &buf);
     try t.expect(std.mem.indexOf(u8, xml, "NetworkSection") == null);
 }
 
 test "ovf: network section present when has_network is true" {
+    var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
         .name = "WithNet",
         .cpu_cores = 1,
@@ -265,25 +273,26 @@ test "ovf: network section present when has_network is true" {
         .vmdk_size_bytes = 1,
         .has_network = true,
     };
-    const xml = try buildDescriptor(spec, t.allocator);
-    defer t.allocator.free(xml);
+    const xml = try buildDescriptor(spec, &buf);
     try t.expect(std.mem.indexOf(u8, xml, "E1000") != null);
 }
 
 test "fuzz: esc function handles all byte values" {
+    var buf: [max_descriptor_len]u8 = undefined;
     var prng = std.Random.DefaultPrng.init(0x0FF_5EED);
     const rnd = prng.random();
-    var buf: [256]u8 = undefined;
+    var raw: [256]u8 = undefined;
     var iter: usize = 0;
     while (iter < 1000) : (iter += 1) {
-        const n = rnd.uintLessThan(usize, buf.len);
-        for (buf[0..n]) |*c| c.* = rnd.int(u8);
+        const n = rnd.uintLessThan(usize, raw.len);
+        for (raw[0..n]) |*c| c.* = rnd.int(u8);
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        const a = fba.allocator();
         var list: std.ArrayList(u8) = .empty;
-        // esc must never crash on arbitrary bytes.
-        esc(&list, t.allocator, buf[0..n]) catch {
-            list.deinit(t.allocator);
+        esc(&list, a, raw[0..n]) catch {
+            list.deinit(a);
             continue;
         };
-        list.deinit(t.allocator);
+        list.deinit(a);
     }
 }
