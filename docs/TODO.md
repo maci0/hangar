@@ -483,11 +483,11 @@ and the design docs.
 | `src/web_server.zig` JS updatePowerBtn | ✅ Fixed: paused VMs now show "⏹ Power Off" (not "▶ Resume") since isAlive() is true; separate Resume button handles unpause |
 | `src/web_server.zig` JS batchStop | ✅ Fixed: also stops paused VMs (they are alive) |
 
-### 6.5 FLTK: Missing Clone/Snapshot/Export Toolbar Buttons ⏭️
+### 6.5 FLTK: Missing Clone/Snapshot/Export Toolbar Buttons ✅
 
 | File | Status |
 |------|--------|
-| `src/main.zig` toolbar | ⏭️ Clone, Snapshot, Export OVF only in menus; web toolbar has them (skipped — toolbar already at width limit) |
+| `src/main.zig` toolbar | ✅ Export OVF (685, 75px), Clone (765, 70px), Snapshot (840, 75px) — all three added; window widened to 1200px to accommodate |
 
 ---
 
@@ -555,6 +555,327 @@ Now supports all 14 missing operations matching the Web API surface.
 | File | Status |
 |------|--------|
 | `src/web_server.zig:handleClone()` | ✅ Linked clone path now routes through `g_vmm.createLinkedCloneFn` with fallback to `qemu.createLinkedClone` |
+
+---
+
+## Tier 8 — Code Quality & Polish (ongoing)
+
+### 8.1 bodyVal Off-By-One Bug ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig:bodyVal()` | ✅ Fixed `orelse body.len` → `orelse (body.len - start)` — last parameter with no trailing `&` caused index out of bounds |
+| Test coverage | ✅ 6 targeted tests including the exact failing case `bodyVal("name=myvm&mem=2048&cpu=4", "cpu")` |
+
+### 8.2 Web Server & vmrun Fuzz Tests ✅
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` | ✅ 3 fuzz tests: bodyVal (4K iters structured key=value), getBody (4K iters random bytes), parseIdx (4K iters random URLs) |
+| `src/vmrun.zig` | ✅ 2 fuzz tests: extractJsonString (4K iters random JSON-like), extractJsonInt (4K iters random JSON-like) |
+| Test count | ✅ 16 web_server tests (13 unit + 3 fuzz), 13 vmrun tests (11 unit + 2 fuzz) |
+
+### 8.3 FLTK Desktop UI Visual Polish ✅
+
+| Change | Detail |
+|--------|--------|
+| Global palette | `Fl_background` (240,242,245), `Fl_background2` (255,255,255), `Fl_foreground` (40,40,45), `Fl_selection_color` (66,133,244 blue) |
+| Toolbar | `Fl_Box_set_box(4)` FL_THIN_UP_BOX + `set_color` (0xe8eaf0 light blue-gray) |
+| Sidebar header | Bold font ("VM Library"), FL_THIN_UP_BOX, dark label color (0x404550) |
+| Status bar | FL_THIN_UP_BOX, colored background (0xe0e2e8), gray label (0x606670) |
+| Summary tab | Field labels now bold + colored (0x707880), better key-value hierarchy |
+| Display tab | FL_BORDER_BOX frame (8) around display area with light background (0xfafbfc) |
+| Default window | 1080×700 (up from 960×680) to comfortably fit toolbar buttons |
+
+### 8.4 Remaining Modules — Pure Function Coverage Assessment ✅
+
+| Module | Assessment |
+|--------|------------|
+| `src/remote.zig` | Thin `transport.Connection` wrappers — all I/O, no pure functions |
+| `src/serial_console.zig` | File descriptor I/O + thread spawning — no pure functions |
+| `src/display.zig` | FLTK `Fl_RGB_Image` + framebuffer rendering — no pure functions (uses `fbmath.fbFits` which is already tested) |
+| `src/dialogs.zig` | All FLTK dialog construction code — no testable pure functions |
+
+---
+
+## Tier 9 — Visual Polish & End-to-End Testing
+
+### 9.1 Web UI: Light Theme Support ✅
+
+| File | Status |
+|------|--------|
+| `src/index.html` | ✅ `:root.light` CSS block with full light-mode palette (bg, surface, raised, border, text, accent, danger, success, warn, pause, shadows) |
+| `src/index.html` JS | ✅ `applyTheme()` IIFE: loads from localStorage, sets `<html class="light">`, listens to `prefers-color-scheme` for system mode |
+| `src/index.html` prefs dialog | ✅ `onchange="applyTheme(this.value)"` live preview; `savePrefs()` persists choice to localStorage |
+
+### 9.2 FLTK: Dialog Visual Polish ✅
+
+| Dialog | Widgets | Status |
+|--------|---------|--------|
+| `editVmDialog()` | ~42 fields | ✅ Palette-colored section headers, bold labels with text_dim, separators, Fl_Scroll wrapper with fixed 720px max height and pinned Save/Cancel buttons |
+| `newVmDialog()` | 4 fields | ✅ Section header "Basic", bold labels, separator, palette buttons |
+| `prefsDialog()` | 6 fields | ✅ Section header, bold labels, resized to 320px |
+| `vnetDialog()` | 10 fields + list | ✅ Bold section header |
+| `snapDialog()` | list + 2 buttons | ✅ Bold label for "Snapshot name:" |
+| `aboutDialog()` | 5 labels + OK | ✅ Bold header (size 18, header color), dim description text |
+| `remoteConnectDialog()` | 3 fields + 2 buttons | ✅ Bold labels with text_dim, palette accent/text_dim on status |
+| `exportOvfDialog()` | file chooser | ✅ Native dialog — no changes needed |
+| `renameDialog()` | input + OK/Cancel | ✅ Bold label with text_dim |
+
+### 9.3 FLTK: Summary Tab Card Styling ✅
+
+| Item | Detail | Status |
+|------|--------|--------|
+| Card frames | `Fl_Box` with `FL_THIN_UP_BOX` (box 4) and surface color | ✅ |
+| Label hierarchy | Bold field name (text_dim) + regular value | ✅ |
+| Color coding | Running=success, Paused=amber, Suspended=warn, Stopped=text_dim | ✅ |
+| Grid layout | Single column with consistent spacing | ✅ |
+| Separator under name | `FL_FLAT_BOX` + border color | ✅ |
+
+### 9.4 End-to-End: FLTK GUI Smoke Test (Xvfb + XTEST) ✅
+
+| Test | Description | Status |
+|------|-------------|--------|
+| Smoke test | Launch kvmgui under Xvfb, inject keystrokes via XTEST to create a VM, edit settings, delete it | ✅ `tests/smoke_gui.sh` updated for FLTK, passes |
+| Fuzz modals | Open each dialog and inject random key/click sequences | ✅ `tests/fuzz_modals.sh` |
+| Callback fuzz | Direct-fuzz main.zig callbacks via XTEST | ✅ `tests/fuzz_modals.sh` |
+
+### 9.5 Web Server: bodyVal Coverage Gaps ✅
+
+`bodyVal()` is covered by 14 unit + 3 fuzz tests. Added 8 edge case tests:
+- Empty body (already present)
+- Key with empty value (`name=&mem=2048`)
+- Key at very end with empty value (`key=`)
+- Percent-encoded key names (`na%6De=value`)
+- Value containing equals sign (`name=foo=bar`)
+- Value containing percent-encoded ampersand (`foo%26bar`)
+- Key prefix of another key (`prefix` vs `prefix2`)
+- Long body near 4KB with target at end
+
+### 9.6 FLTK: Font & Typography Polish ✅
+
+FLTK defaults to `FL_HELVETICA` 14pt. The summary tab and dialogs could benefit
+from:
+
+| Item | Detail | Status |
+|------|--------|--------|
+| Title/labels | `FL_HELVETICA_BOLD` for section headers | ✅ Already in place |
+| Monospace | `FL_COURIER` for paths, MAC addresses, port numbers | ✅ Applied to Summary detail values (disk/CD/shared/USB) and edit dialog inputs (ISO, shared, USB, disk2, floppy, MAC, port forwards, remote URL/token) |
+| Size hierarchy | 18pt titles, 14pt body, 12pt small labels | ✅ 18pt VM name, 14pt section headers (bumped from 13), 14pt body (FLTK default) |
+| Anti-aliasing | Already enabled by default in FLTK 1.4 | ✅ n/a |
+
+### 9.7 FLTK: Check Button Label Colors ✅
+
+| Button | Location | Status |
+|--------|----------|--------|
+| "Auto-mount virtio-win" | editVmDialog Guest Tools | ✅ `app.pal.text` |
+| "Enabled" | editVmDialog AutoProtect | ✅ `app.pal.text` |
+| "3D Acceleration" | editVmDialog Display | ✅ `app.pal.text` |
+| "Embed Display" | editVmDialog Display | ✅ `app.pal.text` |
+| "Enable Serial" | editVmDialog Display | ✅ `app.pal.text` |
+| "Enable KVM" | editVmDialog Advanced | ✅ `app.pal.text` |
+| "Favorite" | editVmDialog Advanced | ✅ `app.pal.text` |
+| "Linked clone (COW...)" | cloneVmDialog | ✅ `app.pal.text` |
+
+### 9.8 FLTK: Edit Dialog Overflow Fix ✅
+
+| Change | Detail |
+|--------|--------|
+| `Fl_Scroll` wrapper | Content scrollable; 720px max height |
+| Pinned button bar | Save/Cancel below scroll, always visible |
+| Label/input alignment | 120px labels, 140px inputs (was 110/130) |
+| Separator widths | 470px for 500px dialog (was 460px for 480px) |
+| `Fl_Window_size_range` | Min 400px height constraint |
+| Test script coords | Updated `smoke_gui.sh` and `fuzz_modals.sh` for new dialog size |
+
+### 9.9 Smoke & Fuzz Test Pass Rate ✅
+
+| Test | Result |
+|------|--------|
+| `zig build` | ✅ Pass |
+| `zig build test` | ✅ All tests pass |
+| `tests/smoke_gui.sh` | ✅ Survives create + settings + about |
+| `tests/fuzz_modals.sh` | ✅ 7/7 modals open and dismiss |
+
+---
+
+## Tier 10 — Bugs, Polish & Missing Tests (new gaps)
+
+### 10.1 Web Server: Crash-Prone Error Handling ✅
+
+| Issue | Detail | Status |
+|-------|--------|--------|
+| `fb_client.?` panic | `src/web_server.zig:499` — `fb_client.?` is null-checked via `if` guard; false alarm | ✅ Verified safe |
+| `g_vmm` undefined | `src/web_server.zig:36` — `var g_vmm = undefined;` initialized in `main()` before handlers; false alarm | ✅ Verified safe |
+| HTTP error codes | 57+ `catch return "string"` sites return HTTP 200 with plain-text body; should return 400/500 with proper status line | ✅ Fixed: `writeAll()` retry helper + case-insensitive Err/error→500 mapping |
+| `c.write()` unchecked | All ~39 `c.write()` calls now use `writeAll()` wrapper that retries on short writes, returns false on failure | ✅ Fixed: `writeAll()` added to `writeHttpResponse` + `writeStreamHeaders` |
+
+### 10.2 FLTK: Dark Theme Support ✅
+
+| Issue | Detail | Status |
+|-------|--------|--------|
+| Single hardcoded palette | `src/appstate.zig` now has `pal_light`/`pal_dark` consts and mutable `pal` var | ✅ pal_light + pal_dark (Catppuccin-inspired) |
+| No Theme selector | `src/dialogs.zig:prefsDialog()` now has Theme dropdown (Light/Dark) using Fl_Choice | ✅ Fl_Choice dropdown in prefs dialog |
+| Persist theme choice | `persist.zig` already had `"theme"` key support + `vm.Theme` enum; `main.zig` calls `applyTheme()` on startup | ✅ Wired: save + load + apply at startup |
+| Live theme switching | `appstate.applyTheme()` copies palette + updates all registered widget colors via `updateWidgetColors()` | ✅ Live: prefs save applies theme immediately |
+
+### 10.3 FLTK: Missing Toolbar/Menu Controls ✅
+
+| Feature | FLTK | Web UI | Status |
+|---------|------|--------|--------|
+| Import VM toolbar button | Menu only → Now toolbar (second row) | Yes | ✅ |
+| Rename toolbar button | Menu only → Now toolbar (second row) | Yes | ✅ |
+| VNet Editor toolbar button | Menu only → Now toolbar (second row) | Yes | ✅ |
+| Preferences toolbar button | Menu only → Now toolbar (second row) | Yes | ✅ |
+| Delete VM toolbar button | Menu only → Now toolbar (second row) | Yes | ✅ |
+| Web server start/stop | Missing → Now toolbar buttons + `app.web_running` state | N/A | ✅ |
+
+### 10.4 FLTK: Safety Fixes ✅
+
+| Bug | Detail | Status |
+|-----|--------|--------|
+| `persist.save()` silent failures | 7+ sites use `catch {}` — save failures are invisible to user; should `setStatus()` on error | ✅ All 12 sites now report "Failed to save VM configuration" |
+| `auto_names` uninitialized | `src/main.zig:1555` — `var auto_names: [16][]const u8 = undefined;` dereferenced after partial init; should be `[16][]const u8 = @splat("")` | ✅ Fixed: `@splat("")` zero-initializes all entries |
+| Unsafe `@ptrCast` slice | `src/main.zig:1501` — casts `[64]u8` to `[]u8` for `lowerString`, which can write beyond intended slice into full buffer | ✅ Fixed: Uses `@memcpy` + bounded slice on `filter_text[0..n]` |
+
+### 10.5 Missing Test Coverage ✅
+
+| Module | Lines | Priority | Status |
+|--------|-------|----------|--------|
+| `src/main.zig` | 1854 | High — zero tests; pure helpers extractable | ✅ All pure helpers already extracted: form_parsers.zig (enum parsers), path_helpers.zig (disk/clone path ops), vnet_label.zig (VNet label), filter.zig (filterMatch), urlencode.zig (appendPair), autoprotect.zig (due/snapName/pruneExcess). Remaining 60 functions are FLTK/I/O orchestration. |
+| `src/dialogs.zig` | 423 | High — 6 pure dialog builders can be unit-tested | ✅ All pure builders already extracted: vnet_label.zig (formatVnetLabel), path_helpers.zig (deriveVmdkHref), snapparse.zig (parse). Remaining functions are FLTK widget construction. |
+| `src/display.zig` | 98 | Medium — framebuffer math already tested via fbmath | ✅ fbmath.zig covers fbFits + bgraToRgba (5 tests + fuzz). display.zig is pure FLTK rendering. |
+| `src/serial_console.zig` | 44 | Low — all I/O | ✅ ringbuf.zig covers append logic. uimath.zig covers serialSocketPath. serial_console.zig is pure I/O orchestration. |
+| `src/remote.zig` | 43 | Low — thin transport wrapper | ✅ transport.zig covers Url.parse. remote.zig is thin I/O wrappers around transport.Connection. |
+| `src/index.html` web UI | ~2400 | High — zero visual/screenshot tests | ✅ Visual tests added: tests/visual/e2e_web_screenshots.mjs (Puppeteer screenshots of all dialogs + interaction flow) |
+
+### 10.6 FLTK: Visual Polish — Menu & Keyboard Shortcut Parity ✅
+
+| Item | Detail | Status |
+|------|--------|--------|
+| Import VM shortcut | `Ctrl+I` works; toolbar button now present (second row) | ✅ Toolbar button added |
+| Keyboard shortcut help | About dialog now includes full keyboard shortcut reference (Ctrl+N, F2, DEL, Ctrl+W, F5, etc.) | ✅ About dialog expanded with shortcuts |
+| Status bar dirty indicator | Auto-save architecture saves on every change — no "unsaved" period; not applicable | ✅ N/A — auto-save |
+| Missing shortcuts | Added Ctrl+F (search focus) and F5 (refresh browser) to kbHandler | ✅ F5 + Ctrl+F now wired |
+
+### 10.7 Web UI: Visual Tests ✅
+
+| Test | Description | Status |
+|------|-------------|--------|
+| Web screenshot test | Launch web server, take screenshot of home page (VM list) | ✅ |
+| Web dialog test | Screenshot all modal dialogs (New VM, Edit Settings, Clone, Snapshot, Prefs, VNet, Import) | ✅ |
+| Web interaction test | Automated click-through: create VM, edit settings, take snapshot, delete VM | ✅ |
+
+---
+
+## Tier 11 — Remaining Polish & Gaps
+
+### 11.1 Dead Code: cbfuzz.zig ✅
+
+`src/cbfuzz.zig` imported `iup.h` and called `main.fuzzCallbacks()` / `main.fuzzModalCallbacks()` which didn't exist in the FLTK version. Removed the file and cleaned up all references.
+
+| File | Status |
+|------|--------|
+| `src/cbfuzz.zig` | ✅ Removed |
+| `AGENTS.md` | ✅ No references found |
+| `docs/TODO.md` | ✅ Line 641 updated to reference fuzz_modals.sh |
+
+### 11.2 Web UI: Loading States for Async Operations ✅
+
+The web UI has no visual feedback during API calls (no spinners, no button disable states, no loading indicators). Buttons should show loading state while waiting for API response.
+
+| Change | Status |
+|--------|--------|
+| `apiPost()` show spinner / disable button | ✅ Shows "⏳ Working..." in status bar with pulsing animation during requests |
+| Visual loading indicator in toolbar/status bar | ✅ `setStatusLoading()` with CSS `loading` class + `status-pulse` keyframes |
+
+### 11.3 Web UI: Dialog Backdrop Click-to-Close ✅
+
+Native `<dialog>` elements don't close when clicking the backdrop. Add backdrop click handlers to all dialogs.
+
+| Change | Status |
+|--------|--------|
+| Add backdrop click handler to all 5 dialogs | ✅ `click` event listener on all 5 dialogs (newdlg, snapdlg, clonedlg, vnetdlg, prefsdlg) checks `e.target === dlg` |
+
+### 11.4 Web UI: Keyboard Shortcuts ✅
+
+No keyboard shortcuts in web UI. The FLTK version has Ctrl+N, Del, Ctrl+E, Escape, etc.
+
+| Shortcut | Action | Status |
+|----------|--------|--------|
+| Ctrl+N | New VM | ✅ |
+| Delete | Delete selected VM | ✅ |
+| Ctrl+E | Edit Settings | ✅ |
+| Enter | Power toggle | ✅ |
+| Escape | Deselect / close dialog | ✅ |
+
+### 11.5 Web UI: Toolbar Button Tooltips ✅
+
+Toolbar buttons lack `title` attributes for hover tooltips. Add descriptive tooltips to all toolbar buttons.
+
+| Change | Status |
+|--------|--------|
+| Add `title` attributes to ~20 toolbar buttons | ✅ All 20 toolbar buttons have descriptive title attributes |
+
+### 11.6 Missing Build Steps: Smoke/Fuzz GUI Tests ✅
+
+`tests/smoke_gui.sh`, `tests/fuzz_gui.sh`, `tests/fuzz_modals.sh` exist but aren't registered as `zig build` steps. Add `smoke`, `fuzzgui`, and `fuzzmodals` build steps.
+
+| Step | Status |
+|------|--------|
+| `zig build smoke` → runs smoke_gui.sh | ✅ |
+| `zig build fuzzgui` → runs fuzz_gui.sh | ✅ |
+| `zig build fuzzmodals` → runs fuzz_modals.sh | ✅ |
+
+### 11.7 Web Server: Favicon ✅
+
+Browser requests `/favicon.ico` return 404. Add a simple SVG favicon (the "K" logo already used in sidebar).
+
+| Change | Status |
+|--------|--------|
+| Add `/favicon.ico` route with inline SVG | ✅ Route serves `image/svg+xml` with gradient "K" logo matching sidebar branding |
+
+### 11.8 FLTK: Visual Screenshot Regression Test ✅
+
+The web UI has 11 automated screenshots; FLTK only has 1 (manual). Add an automated FLTK screenshot test covering all dialogs.
+
+| Change | Status |
+|--------|--------|
+| `tests/visual/e2e_fltk_screenshots.sh` script | ✅ Xvfb-based, raises all 22 dialogs via `screenshot_all_dialogs.py`, verifies non-blank |
+
+### 11.9 Web UI: Responsive Layout Improvements ✅
+
+The web UI is designed for 1280px+ but could benefit from a collapsible sidebar for narrower viewports.
+
+| Change | Status |
+|--------|--------|
+| Collapsible sidebar toggle | ✅ Hamburger button (☰) in toolbar, `toggleSidebar()` JS, CSS transition | 
+| Mobile-friendly media queries | ✅ `@media(max-width:900px)` collapses sidebar, fixed overlay with backdrop click-to-close |
+
+### 11.10 Web UI: Empty State Improvements ✅
+
+The empty states (no VM selected, no VMs created) could be more visually engaging with better illustrations.
+
+| Change | Status |
+|--------|--------|
+| Enhanced empty state with SVG illustration | ✅ SVG monitor icon (Summary tab) + gear icon (Settings tab), styled via `.empty-state svg` with `opacity:0.18` |
+
+### 11.11 Web UI: Toast Notifications ✅
+
+Status messages go to the status bar but are easy to miss. Add toast notifications for transient messages.
+
+| Change | Status |
+|--------|--------|
+| Toast notification system with auto-dismiss | ✅ `showToast()` with 3.5s auto-dismiss, success/error/info variants, slide-in animation via CSS |
+
+### 11.12 Web Server: Static File Serving ✅
+
+The web server serves everything from `@embedFile` index.html. For a more polished setup, serve static assets (CSS, JS, images) as separate files with proper caching headers.
+
+| Change | Status |
+|--------|--------|
+| Split CSS/JS from index.html | ✅ `app_css`/`app_js` from `src/web/`, `@embedFile`, served at `/app.css`/`/app.js` |
+| Add `Cache-Control` headers | ✅ `Cache-Control: public, max-age=86400` for CSS/JS in `writeHttpResponse`/`writeStreamHeaders` |
 
 ---
 

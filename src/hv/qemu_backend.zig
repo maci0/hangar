@@ -245,8 +245,8 @@ fn deinit(ctx: hv.VmmHandle) void {
 
 test "bestAccelerator returns platform-appropriate accelerator" {
     const accel = hv.bestAccelerator();
-    try std.testing.expect(accel.flag.len > 0);
-    try std.testing.expect(accel.name.len > 0);
+    try std.testing.expect(std.mem.span(accel.flag).len > 0);
+    try std.testing.expect(std.mem.span(accel.name).len > 0);
 }
 
 test "tcgAccelerator is always software" {

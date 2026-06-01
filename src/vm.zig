@@ -519,8 +519,8 @@ pub const Prefs = struct {
     /// Last window geometry — x, -1 means "not saved yet".
     win_x: i32 = -1,
     win_y: i32 = -1,
-    win_w: i32 = 960,
-    win_h: i32 = 680,
+    win_w: i32 = 0,
+    win_h: i32 = 0,
 };
 
 // ── VM Configuration ─────────────────────────────────────────────────
@@ -2036,5 +2036,54 @@ test "fuzz: isValidMac never crashes on arbitrary input" {
         for (buf[0..n]) |*c| c.* = rnd.int(u8);
         _ = isValidMac(buf[0..n]); // must not crash
     }
+}
+
+test "GpuDevice: fromIndex round-trip" {
+    for (0..GpuDevice.count) |i| {
+        const d = GpuDevice.fromIndex(i);
+        try std.testing.expectEqual(i, d.toIndex());
+    }
+}
+
+test "GpuDevice: toIndex inverts fromIndex" {
+    const variants = [_]GpuDevice{ .virtio_gpu_gl, .virtio_vga_gl };
+    for (variants) |v| {
+        try std.testing.expectEqual(v, GpuDevice.fromIndex(v.toIndex()));
+    }
+}
+
+test "GpuDevice: toStr values" {
+    try std.testing.expectEqualStrings("virtio_gpu_gl", std.mem.span(GpuDevice.virtio_gpu_gl.toStr()));
+    try std.testing.expectEqualStrings("virtio_vga_gl", std.mem.span(GpuDevice.virtio_vga_gl.toStr()));
+}
+
+test "GpuDevice: label values" {
+    try std.testing.expectEqualStrings("Virtio-GPU (virgl)", std.mem.span(GpuDevice.virtio_gpu_gl.label()));
+    try std.testing.expectEqualStrings("Virtio-VGA (virgl)", std.mem.span(GpuDevice.virtio_vga_gl.label()));
+}
+
+test "GpuDevice: out-of-range fromIndex defaults" {
+    try std.testing.expectEqual(GpuDevice.virtio_vga_gl, GpuDevice.fromIndex(99));
+}
+
+test "NetworkMode: fromStr values" {
+    try std.testing.expectEqual(NetworkMode.user, NetworkMode.fromStr("user"));
+    try std.testing.expectEqual(NetworkMode.bridge, NetworkMode.fromStr("bridge"));
+    try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromStr("none"));
+}
+
+test "NetworkMode: fromStr unknown defaults to none" {
+    try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromStr("invalid"));
+    try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromStr(""));
+}
+
+test "BootFirmware: fromStr values" {
+    try std.testing.expectEqual(BootFirmware.bios, BootFirmware.fromStr("bios"));
+    try std.testing.expectEqual(BootFirmware.uefi, BootFirmware.fromStr("uefi"));
+}
+
+test "BootFirmware: fromStr unknown defaults to bios" {
+    try std.testing.expectEqual(BootFirmware.bios, BootFirmware.fromStr("invalid"));
+    try std.testing.expectEqual(BootFirmware.bios, BootFirmware.fromStr(""));
 }
 

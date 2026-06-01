@@ -412,6 +412,7 @@ def take_screenshot(display: str, output_path: Path, region: str = "") -> Path:
     env = os.environ.copy()
     env["DISPLAY"] = display
     env["GDK_BACKEND"] = "x11"
+    env["FLTK_BACKEND"] = "x11"  # FLTK 1.4+: force X11 backend
     # Strip Wayland so ImageMagick targets the Xvfb, not the host compositor
     for var in ("WAYLAND_DISPLAY", "XDG_SESSION_TYPE"):
         env.pop(var, None)
@@ -523,6 +524,7 @@ class TestHarness:
     x11: Optional[X11] = None
     results: list = field(default_factory=list)
     keep_xvfb: bool = False
+    _config_backup: Optional[str] = None
     # (content_x, content_y, content_w, content_h) — set after app launches
     win_pos: tuple = (0, 0, 900, 600)
 
@@ -574,15 +576,17 @@ class TestHarness:
     def _make_x11_env(self) -> dict:
         """Build an environment dict that forces X11 on the virtual display.
 
-        Strips Wayland variables so GTK doesn't bypass Xvfb and connect
-        to the host Wayland compositor instead.
+        Strips Wayland variables so GTK/FLTK don't bypass Xvfb and connect
+        to the host Wayland compositor instead. Forces FLTK to its X11
+        backend (FLTK 1.4+ auto-detects Wayland otherwise).
         """
         env = os.environ.copy()
         env["DISPLAY"] = self.display
         env["GDK_BACKEND"] = "x11"  # force X11, not Wayland
+        env["FLTK_BACKEND"] = "x11"  # FLTK 1.4+: force X11 backend
         env["GTK_THEME"] = "Adwaita"  # consistent theme
         env["NO_AT_BRIDGE"] = "1"  # suppress accessibility warnings
-        # Remove Wayland variables so GTK can't find the host compositor
+        # Remove Wayland variables so toolkits can't find the host compositor
         for var in ("WAYLAND_DISPLAY", "XDG_SESSION_TYPE"):
             env.pop(var, None)
         return env
@@ -623,6 +627,42 @@ class TestHarness:
                 self.wm_proc.kill()
             self.wm_proc = None
 
+    def _reset_window_prefs(self):
+        """Temporarily reset win_w/win_h in config so the app uses 1200x700.
+
+        Saves a backup of the original config and rewrites the prefs so
+        the FLTK layout is predictable for screenshot coordinate math.
+        """
+        import json as _json
+        config_path = Path.home() / ".config" / "kvmgui" / "vms.json"
+        self._config_backup = None
+
+        if not config_path.exists():
+            return
+
+        try:
+            raw = config_path.read_text()
+            cfg = _json.loads(raw) if raw.strip() else {}
+        except Exception:
+            return
+
+        # Save backup
+        self._config_backup = raw
+        # Force default window size
+        cfg["win_w"] = 0
+        cfg["win_h"] = 0
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(_json.dumps(cfg, indent=2))
+        print("  Config: reset win_w/win_h to 0 (force 1200x700 default)")
+
+    def _restore_config(self):
+        """Restore the original config backed up by _reset_window_prefs."""
+        if self._config_backup is not None:
+            config_path = Path.home() / ".config" / "kvmgui" / "vms.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(self._config_backup)
+            self._config_backup = None
+
     def start_app(self):
         """Launch kvmgui on the virtual display."""
         if not BINARY.exists():
@@ -631,6 +671,11 @@ class TestHarness:
             )
 
         env = self._make_x11_env()
+
+        # Force the app to use 1200x700 defaults so screenshot coordinates
+        # are predictable. The saved config may have a smaller size from a
+        # previous run, which shifts all widget positions.
+        self._reset_window_prefs()
 
         print(f"  Launching {BINARY.name}...")
         self.app_proc = subprocess.Popen(
@@ -650,7 +695,7 @@ class TestHarness:
         print(f"  App running (PID {self.app_proc.pid})")
 
     def stop_app(self):
-        """Stop the kvmgui process."""
+        """Stop the kvmgui process and restore original config."""
         if self.app_proc:
             self.app_proc.terminate()
             try:
@@ -658,6 +703,8 @@ class TestHarness:
             except subprocess.TimeoutExpired:
                 self.app_proc.kill()
             self.app_proc = None
+        # Restore the original config (window size prefs)
+        self._restore_config()
 
     def init_x11(self):
         """Initialise the X11 input simulation layer."""

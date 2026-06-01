@@ -263,3 +263,20 @@ test "Url parse: no scheme defaults to tcp" {
     try std.testing.expectEqualStrings("192.168.1.1", u.host[0..u.host_len]);
     try std.testing.expectEqual(@as(u16, 9080), u.port);
 }
+
+test "fuzz: Url.parse never panics on random inputs" {
+    var prng = std.Random.DefaultPrng.init(0x7A0A5A0B);
+    const rnd = prng.random();
+    var iter: usize = 0;
+    while (iter < 5000) : (iter += 1) {
+        var buf: [256]u8 = undefined;
+        const n = rnd.uintLessThan(usize, 256);
+        for (buf[0..n]) |*b| b.* = rnd.int(u8);
+        if (Url.parse(buf[0..n])) |u| {
+            // Invariants: the result must always be self-consistent.
+            try std.testing.expect(u.proto == .tcp or u.proto == .unix or u.proto == .shm);
+            try std.testing.expect(u.host_len <= u.host.len);
+            try std.testing.expect(u.path_len <= u.path.len);
+        }
+    }
+}

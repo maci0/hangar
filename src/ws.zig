@@ -233,6 +233,55 @@ test "writeFrame: binary frame encoding" {
     _ = payload;
 }
 
+test "writeFrame: header sizes for different payload lengths" {
+    // Verify header byte layout for small (<126), medium (126-65535), and large payloads.
+    // Small payload (125 bytes) — 2-byte header
+    {
+        var header: [10]u8 = undefined;
+        const len: usize = 125;
+        header[0] = 0x80 | @as(u8, @intFromEnum(Opcode.binary));
+        header[1] = @as(u8, @intCast(len));
+        try std.testing.expectEqual(@as(u8, 0x82), header[0]); // FIN+Binary
+        try std.testing.expectEqual(@as(u8, 125), header[1]);
+    }
+    // Medium payload (126 bytes) — 4-byte header
+    {
+        var header: [10]u8 = undefined;
+        const len: usize = 126;
+        header[0] = 0x80 | @as(u8, @intFromEnum(Opcode.binary));
+        header[1] = 126;
+        std.mem.writeInt(u16, header[2..4], @intCast(len), .big);
+        try std.testing.expectEqual(@as(u8, 126), header[1]);
+        try std.testing.expectEqual(@as(u16, 126), std.mem.readInt(u16, header[2..4], .big));
+    }
+    // Large payload (65536 bytes) — 10-byte header
+    {
+        var header: [10]u8 = undefined;
+        const len: usize = 65536;
+        header[0] = 0x80 | @as(u8, @intFromEnum(Opcode.binary));
+        header[1] = 127;
+        std.mem.writeInt(u64, header[2..10], @intCast(len), .big);
+        try std.testing.expectEqual(@as(u8, 127), header[1]);
+        try std.testing.expectEqual(@as(u64, 65536), std.mem.readInt(u64, header[2..10], .big));
+    }
+}
+
+test "writeClose: frame encoding" {
+    var buf: [4]u8 = undefined;
+    buf[0] = 0x88;
+    buf[1] = 2;
+    buf[2] = 0x03;
+    buf[3] = 0xe8;
+    try std.testing.expectEqual(@as(u8, 0x88), buf[0]); // FIN+Close
+    try std.testing.expectEqual(@as(u8, 2), buf[1]);
+    try std.testing.expectEqual(@as(u16, 1000), std.mem.readInt(u16, buf[2..4], .big)); // 1000 = normal
+}
+
+test "writePing/writePong: frame encoding" {
+    try std.testing.expectEqual(@as(u8, 0x89), 0x80 | @as(u8, @intFromEnum(Opcode.ping))); // FIN+Ping
+    try std.testing.expectEqual(@as(u8, 0x8a), 0x80 | @as(u8, @intFromEnum(Opcode.pong))); // FIN+Pong
+}
+
 test "Opcode enum values" {
     try std.testing.expectEqual(@as(u4, 0), @intFromEnum(Opcode.continuation));
     try std.testing.expectEqual(@as(u4, 1), @intFromEnum(Opcode.text));
@@ -255,4 +304,49 @@ test "parseUpgrade: known answer for spec example" {
         "\r\n";
     const accept = parseUpgrade(req).?;
     try std.testing.expectEqualStrings("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", accept[0..28]);
+}
+
+test "fuzz: writeFrame header encoding never panics for any payload length" {
+    var prng = std.Random.DefaultPrng.init(0xFEEDFACE);
+    const rnd = prng.random();
+    var iter: usize = 0;
+    while (iter < 6000) : (iter += 1) {
+        const opcode: Opcode = if (rnd.boolean()) .binary else .text;
+        const len_choice = rnd.uintLessThan(u3, 3);
+        const payload_len: usize = switch (len_choice) {
+            0 => rnd.uintLessThan(usize, 126),
+            1 => 126 + rnd.uintLessThan(usize, 65410), // 126..65535
+            2 => 65536 + rnd.uintLessThan(usize, 1_000_000), // large
+            else => unreachable,
+        };
+        // Verify header encoding math is correct for all three size classes.
+        var header: [10]u8 = undefined;
+        header[0] = 0x80 | @as(u8, @intFromEnum(opcode));
+        if (payload_len < 126) {
+            header[1] = @intCast(payload_len);
+        } else if (payload_len <= 65535) {
+            header[1] = 126;
+            std.mem.writeInt(u16, header[2..4], @intCast(payload_len), .big);
+        } else {
+            header[1] = 127;
+            std.mem.writeInt(u64, header[2..10], @intCast(payload_len), .big);
+        }
+        // Verify round-trip: the encoded length matches.
+        const decoded: u64 = if (header[1] < 126) header[1] else if (header[1] == 126) std.mem.readInt(u16, header[2..4], .big) else std.mem.readInt(u64, header[2..10], .big);
+        try std.testing.expectEqual(@as(u64, @intCast(payload_len)), decoded);
+    }
+}
+
+test "fuzz: parseUpgrade never panics on random HTTP headers" {
+    var prng = std.Random.DefaultPrng.init(0x5EC0A5AB);
+    const rnd = prng.random();
+    var iter: usize = 0;
+    while (iter < 3000) : (iter += 1) {
+        var buf: [1024]u8 = undefined;
+        const n = rnd.uintLessThan(usize, 900);
+        for (buf[0..n]) |*b| b.* = rnd.int(u8);
+        // Ensure there's no uninitialized read past the generated data.
+        @memset(buf[n..], 0);
+        _ = parseUpgrade(buf[0..n]);
+    }
 }

@@ -13,6 +13,109 @@ const spice = @import("spice_client.zig");
 const hv_iface = @import("hv/interface.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
 const cfltk = @import("cfltk_import.zig").c;
+const filter_ = @import("filter.zig");
+
+// ── Visual palette ─────────────────────────────────────────────────
+pub const Palette = struct {
+    bg: c_uint,
+    surface: c_uint,
+    text: c_uint,
+    text_dim: c_uint,
+    accent: c_uint,
+    accent_text: c_uint,
+    danger: c_uint,
+    warn: c_uint,
+    amber: c_uint,
+    gray_btn: c_uint,
+    border: c_uint,
+    header: c_uint,
+    success: c_uint,
+    dark_text: c_uint,
+};
+
+pub const pal_light: Palette = .{
+    .bg = 0xf5f6f900,
+    .surface = 0xffffff00,
+    .text = 0x1e1e2400,
+    .text_dim = 0x6e6e7a00,
+    .accent = 0x1565c000,
+    .accent_text = 0xffffff00,
+    .danger = 0xc6282800,
+    .warn = 0xe6510000,
+    .amber = 0xf9a82500,
+    .gray_btn = 0x75757500,
+    .border = 0xe0e0e600,
+    .header = 0x1a1a3a00,
+    .success = 0x2e7d3200,
+    .dark_text = 0x00000000,
+};
+
+pub const pal_dark: Palette = .{
+    .bg = 0x1e1e2e00,
+    .surface = 0x31324400,
+    .text = 0xcdd6f400,
+    .text_dim = 0x9399b200,
+    .accent = 0x89b4fa00,
+    .accent_text = 0x1e1e2e00,
+    .danger = 0xf38ba800,
+    .warn = 0xfab38700,
+    .amber = 0xf9e2af00,
+    .gray_btn = 0x585b7000,
+    .border = 0x45475a00,
+    .header = 0xcdd6f400,
+    .success = 0xa6e3a100,
+    .dark_text = 0xcdd6f400,
+};
+
+pub var pal: Palette = pal_light;
+pub var current_theme: vm.Theme = .light;
+
+pub fn applyTheme(t: vm.Theme) void {
+    current_theme = t;
+    pal = switch (t) {
+        .light, .system => pal_light,
+        .dark => pal_dark,
+    };
+    updateWidgetColors();
+}
+
+/// Re-apply colors to all registered widgets. Called after theme change.
+fn updateWidgetColors() void {
+    // Status bar
+    if (status_bar) |sb| {
+        cfltk.Fl_Box_set_color(sb, pal.border);
+        cfltk.Fl_Box_set_label_color(sb, pal.text_dim);
+    }
+    // Browser (VM list)
+    if (browser) |b| {
+        cfltk.Fl_Browser_set_color(b, pal.surface);
+    }
+    // Search input
+    if (search_input) |si| {
+        cfltk.Fl_Input_set_color(si, pal.surface);
+        cfltk.Fl_Input_set_text_color(si, pal.text);
+    }
+    // Detail labels
+    for (&detail_labels) |*dl| {
+        if (dl.*) |l| {
+            cfltk.Fl_Box_set_color(l, pal.surface);
+            cfltk.Fl_Box_set_label_color(l, pal.text);
+        }
+    }
+    // Summary name
+    if (sum_name) |l| {
+        cfltk.Fl_Box_set_label_color(l, pal.header);
+    }
+    // Console widget
+    if (console_widget) |w| {
+        cfltk.Fl_Browser_set_color(w, pal.surface);
+    }
+    // Display box
+    if (display_box) |db| {
+        cfltk.Fl_Box_set_color(db, pal.surface);
+        cfltk.Fl_Box_set_label_color(db, pal.text_dim);
+    }
+}
 
 pub const MAX_VMS = 64;
 
@@ -46,6 +149,8 @@ pub var serial_fd: ?std.c.fd_t = null;
 pub var remote_mode: bool = false;
 pub var remote_url: [128]u8 = [_]u8{0} ** 128;
 pub var remote_url_len: usize = 0;
+pub var web_running: bool = false;
+pub var web_thread: ?std.Thread = null;
 
 /// Set the status bar text.
 pub fn setStatus(msg: []const u8) void {
@@ -89,12 +194,9 @@ pub fn destroyVmmHandle(idx: usize) void {
 }
 
 /// Check whether a VM matches the current filter string (case-insensitive).
+/// Delegates to the pure-logic filter.zig module.
 pub fn filterMatch(v: *const vm.VmConfig, filter: []const u8) bool {
-    if (filter.len == 0) return true;
-    const name = v.getNameSlice();
-    var lower_buf: [128]u8 = undefined;
-    const lower = std.ascii.lowerString(&lower_buf, name);
-    return std.mem.indexOf(u8, lower, filter) != null;
+    return filter_.filterMatch(v, filter);
 }
 
 /// Select the VM at the clicked browser line (handles favorites + separator).
@@ -191,15 +293,20 @@ pub fn refreshDetails() void {
                 const v = &vms[idx];
                 cfltk.Fl_Box_set_label(l, v.getName());
                 setDetail(0, std.mem.span(v.status.label()));
-                // Color-code the state label
+                // Color-code the state card: bg + fg
                 if (detail_labels[0]) |dl| {
                     const color: u32 = switch (v.status) {
-                        .running => 0x00AA00,
-                        .paused => 0xFF8800,
-                        .suspended => 0xCC6600,
-                        .stopped => 0x888888,
+                        .running => pal.success,
+                        .paused => pal.amber,
+                        .suspended => pal.warn,
+                        .stopped => pal.text_dim,
                     };
-                    cfltk.Fl_Box_set_label_color(dl, color);
+                    const fg: u32 = switch (v.status) {
+                        .paused => pal.dark_text,
+                        else => pal.accent_text,
+                    };
+                    cfltk.Fl_Box_set_label_color(dl, fg);
+                    cfltk.Fl_Box_set_color(dl, color);
                 }
                 setDetail(1, std.mem.span(v.guest_os.label()));
                 var mbuf: [32]u8 = undefined;

@@ -60,20 +60,8 @@ pub fn renderFramebuffer(
     defer std.heap.c_allocator.free(rgba);
 
     const dst_stride: usize = @as(usize, @intCast(fw)) * 4;
-    var y: c_int = 0;
-    while (y < fh) : (y += 1) {
-        const src_row = fb[@as(usize, @intCast(y)) * stride ..];
-        const dst_row = rgba[@as(usize, @intCast(y)) * dst_stride ..];
-        var x: usize = 0;
-        while (x < @as(usize, @intCast(fw))) : (x += 1) {
-            const si = x * 4;
-            const di = x * 4;
-            dst_row[di + 0] = src_row[si + 2]; // R ← B
-            dst_row[di + 1] = src_row[si + 1]; // G ← G
-            dst_row[di + 2] = src_row[si + 0]; // B ← R
-            dst_row[di + 3] = src_row[si + 3]; // A ← A
-        }
-    }
+    const src_slice: []const u8 = fb[0 .. @as(usize, @intCast(fh)) * stride];
+    fbmath.bgraToRgba(rgba, src_slice, @intCast(fw), @intCast(fh), stride, dst_stride);
 
     const img = cfltk.Fl_RGB_Image_new(@ptrCast(rgba.ptr), fw, fh, 4, 0);
     if (img == null) return;

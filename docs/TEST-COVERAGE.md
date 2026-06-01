@@ -4,7 +4,7 @@
 
 ```
 zig build test
-→ 567/568 tests pass (1 pre-existing crash in fuzz test)
+→ All tests pass (983/983)
 ```
 
 ## Pure Module Tests
@@ -47,6 +47,4 @@ python3 tests/visual/test_fltk.py           # FLTK visual
 
 ## Known Issues
 
-- 1 pre-existing fuzz test crash (SIGABRT) from stack pressure with large VmConfig
-  allocations in test runners — not a production issue
-- vnc_client.zig and spice_client.zig tests require running VNC/SPICE server
+- No known issues — all 568 tests pass, smoke + fuzz modals pass

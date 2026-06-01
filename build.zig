@@ -60,11 +60,20 @@ pub fn build(b: *std.Build) !void {
 
     // ── Unit tests ──
     const test_step = b.step("test", "Run unit tests");
-    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws" };
+    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "filter", "urlencode", "spice_client", "vnc_client", "hv_qemu_backend_test", "form_parsers", "path_helpers", "vnet_label" };
     for (test_mods) |mod| {
         const src_path = b.fmt("src/{s}.zig", .{mod});
         const tm = b.createModule(.{ .root_source_file = b.path(src_path), .target = target, .optimize = optimize });
         tm.link_libc = true;
+        if (std.mem.eql(u8, mod, "spice_client")) {
+            tm.linkSystemLibrary("spice-client-glib-2.0", .{});
+            tm.linkSystemLibrary("gio-2.0", .{});
+            tm.linkSystemLibrary("gobject-2.0", .{});
+            tm.linkSystemLibrary("glib-2.0", .{});
+        }
+        if (std.mem.eql(u8, mod, "vnc_client")) {
+            tm.linkSystemLibrary("libvncclient", .{});
+        }
         const tests = b.addTest(.{ .root_module = tm, .use_llvm = true, .use_lld = true });
         const run_tests = b.addRunArtifact(tests);
         test_step.dependOn(&run_tests.step);
@@ -75,4 +84,20 @@ pub fn build(b: *std.Build) !void {
     const hv_tests = b.addTest(.{ .root_module = hv_tm, .use_llvm = true, .use_lld = true });
     const run_hv = b.addRunArtifact(hv_tests);
     test_step.dependOn(&run_hv.step);
+
+    // ── GUI smoke/fuzz test steps ──
+    const smoke = b.step("smoke", "Run GUI smoke test (Xvfb)");
+    smoke.dependOn(&exe_install.step);
+    const smoke_cmd = b.addSystemCommand(&.{ "bash", "tests/smoke_gui.sh" });
+    smoke.dependOn(&smoke_cmd.step);
+
+    const fuzzgui = b.step("fuzzgui", "Run GUI fuzz test (Xvfb)");
+    fuzzgui.dependOn(&exe_install.step);
+    const fuzzgui_cmd = b.addSystemCommand(&.{ "bash", "tests/fuzz_gui.sh" });
+    fuzzgui.dependOn(&fuzzgui_cmd.step);
+
+    const fuzzmodals = b.step("fuzzmodals", "Run modal fuzz test (Xvfb)");
+    fuzzmodals.dependOn(&exe_install.step);
+    const fuzzmodals_cmd = b.addSystemCommand(&.{ "bash", "tests/fuzz_modals.sh" });
+    fuzzmodals.dependOn(&fuzzmodals_cmd.step);
 }

@@ -448,3 +448,118 @@ fn extractJsonInt(obj: []const u8, key: []const u8) ?usize {
 }
 
 const vm = @import("vm.zig");
+
+// ── Tests ──────────────────────────────────────────────────────────
+
+test "extractJsonString: extracts quoted value" {
+    const obj = "{\"name\":\"myvm\",\"status\":\"running\"}";
+    const name = extractJsonString(obj, "name");
+    try std.testing.expect(name != null);
+    try std.testing.expectEqualStrings("myvm", name.?);
+    const status = extractJsonString(obj, "status");
+    try std.testing.expect(status != null);
+    try std.testing.expectEqualStrings("running", status.?);
+}
+
+test "extractJsonString: returns null for missing key" {
+    const obj = "{\"name\":\"myvm\"}";
+    const result = extractJsonString(obj, "nonexistent");
+    try std.testing.expect(result == null);
+}
+
+test "extractJsonString: handles empty string value" {
+    const obj = "{\"notes\":\"\",\"name\":\"test\"}";
+    const notes = extractJsonString(obj, "notes");
+    try std.testing.expect(notes != null);
+    try std.testing.expectEqualStrings("", notes.?);
+}
+
+test "extractJsonString: handles key with common prefix" {
+    const obj = "{\"name\":\"foo\",\"name_long\":\"bar\"}";
+    const name = extractJsonString(obj, "name");
+    try std.testing.expect(name != null);
+    try std.testing.expectEqualStrings("foo", name.?);
+}
+
+test "extractJsonString: returns null for key that is a prefix of another" {
+    // "name" should not match "name_long"
+    const obj = "{\"name_long\":\"bar\"}";
+    const result = extractJsonString(obj, "name");
+    try std.testing.expect(result == null);
+}
+
+test "extractJsonInt: extracts integer value" {
+    const obj = "{\"mem\":2048,\"cpu\":4}";
+    const mem = extractJsonInt(obj, "mem");
+    try std.testing.expect(mem != null);
+    try std.testing.expectEqual(@as(usize, 2048), mem.?);
+    const cpu = extractJsonInt(obj, "cpu");
+    try std.testing.expect(cpu != null);
+    try std.testing.expectEqual(@as(usize, 4), cpu.?);
+}
+
+test "extractJsonInt: returns null for missing key" {
+    const obj = "{\"mem\":2048}";
+    const result = extractJsonInt(obj, "nonexistent");
+    try std.testing.expect(result == null);
+}
+
+test "extractJsonInt: handles value ending at closing brace" {
+    const obj = "{\"disk\":40}";
+    const disk = extractJsonInt(obj, "disk");
+    try std.testing.expectEqual(@as(usize, 40), disk.?);
+}
+
+test "extractJsonInt: handles value ending at comma" {
+    const obj = "{\"cpu\":8,\"mem\":4096}";
+    const cpu = extractJsonInt(obj, "cpu");
+    try std.testing.expectEqual(@as(usize, 8), cpu.?);
+}
+
+test "extractJsonInt: returns null for non-numeric value" {
+    const obj = "{\"name\":\"notanumber\"}";
+    const result = extractJsonInt(obj, "name");
+    try std.testing.expect(result == null);
+}
+
+test "extractJsonInt: handles zero value" {
+    const obj = "{\"vnc_port\":0,\"spice_port\":5900}";
+    const port = extractJsonInt(obj, "vnc_port");
+    try std.testing.expectEqual(@as(usize, 0), port.?);
+}
+
+// ── Fuzz tests ──────────────────────────────────────────────────────
+
+test "fuzz: extractJsonString never panics on random JSON-like input" {
+    var prng = std.Random.DefaultPrng.init(0xDEAD_BEEF);
+    const rnd = prng.random();
+    var buf: [1024]u8 = undefined;
+
+    const keys = [_][]const u8{ "name", "status", "notes", "mac", "iso", "tag", "error" };
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        for (keys) |k| {
+            if (extractJsonString(buf[0..len], k)) |result| {
+                try std.testing.expect(result.len <= len);
+            }
+        }
+    }
+}
+
+test "fuzz: extractJsonInt never panics on random JSON-like input" {
+    var prng = std.Random.DefaultPrng.init(0xCAFE_BABE);
+    const rnd = prng.random();
+    var buf: [1024]u8 = undefined;
+
+    const keys = [_][]const u8{ "mem", "cpu", "disk", "vnc_port", "spice_port", "ap_interval", "ap_max" };
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        for (keys) |k| {
+            _ = extractJsonInt(buf[0..len], k);
+        }
+    }
+}

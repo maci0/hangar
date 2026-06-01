@@ -1,26 +1,18 @@
 #!/usr/bin/env bash
-# GUI integration smoke test — drives the real app under Xvfb via XTEST so the
-# IUP callbacks (onMenu*, onSave*, onSnap*, onVNet*, onTheme*, onListAction, …)
-# and the full builder/refresh paths in main.zig + dialogs.zig actually execute.
-# These cannot be reached by `zig test` (need a mapped display + event loop) nor
-# by `zig build itest` (which only constructs widgets, it doesn't click them).
-#
+# Smoke test for the FLTK GUI — drives the real app under Xvfb via XTEST.
 # Asserts: the process survives every interaction, a created VM is persisted,
-# and the window renders non-black frames. Requires: Xvfb, ffmpeg, python-Xlib.
+# and the window renders non-black frames.
 #
+# Requires: Xvfb, ffmpeg, python-Xlib
 # Usage: tests/smoke_gui.sh   (run from repo root; builds first)
 set -u
 cd "$(dirname "$0")/.."
 
-# Isolate config + disks to a throwaway HOME so the test never touches (and
-# never deletes) the real ~/.config/kvmgui/vms.json. Keep zig's global cache
-# warm via XDG_CACHE_HOME so the build isn't recompiled from scratch.
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-ISOHOME="$(mktemp -d /tmp/kvmgui-testhome.XXXXXX)"
+ISOHOME="$(mktemp -d /tmp/kvmgui-smokehome.XXXXXX)"
 export HOME="$ISOHOME"
 
 CFG="$HOME/.config/kvmgui/vms.json"
-DISK="$HOME/VMs/smoke.qcow2"
 fail() { echo "SMOKE FAIL: $1"; cleanup; exit 1; }
 cleanup() { pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; rm -rf "$ISOHOME"; }
 trap cleanup EXIT
@@ -31,48 +23,122 @@ python3 -c "import Xlib" 2>/dev/null || { echo "SKIP: python-Xlib missing"; exit
 
 zig build || fail "build failed"
 mkdir -p "$HOME/.config/kvmgui" "$HOME/VMs"
-rm -f "$CFG" "$DISK"
+rm -f "$CFG"
 
 pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; sleep 1
 Xvfb :99 -screen 0 1280x800x24 -ac >/dev/null 2>&1 &
 sleep 2
-env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE GDK_BACKEND=x11 DISPLAY=:99 \
+env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE FLTK_BACKEND=x11 DISPLAY=:99 \
     ./zig-out/bin/kvmgui >/tmp/kvmgui-smoke.log 2>&1 &
 APP=$!
 sleep 4
 kill -0 "$APP" 2>/dev/null || fail "app died on startup"
 
-# Drive callbacks: open New VM wizard (Ctrl+N) and Finish; open each menu.
+# Drive callbacks: discover window geometry, click toolbar buttons, create a VM.
 DISPLAY=:99 python3 - <<'PY' || true
-import time
+import time, os
 from Xlib import display, X, XK
 from Xlib.ext import xtest
-d=display.Display(':99')
-def click(x,y):
-    xtest.fake_input(d,X.MotionNotify,x=x,y=y); d.sync(); time.sleep(0.2)
-    xtest.fake_input(d,X.ButtonPress,1); d.sync(); xtest.fake_input(d,X.ButtonRelease,1); d.sync(); time.sleep(0.4)
+
+d = display.Display(':99')
+SCR_W, SCR_H = 1280, 800
+
+# Find KVMGUI window position
+root = d.screen().root
+WX, WY = 0, 0
+for c in root.query_tree().children:
+    try:
+        name = c.get_wm_name()
+        if name and 'KVMGUI' in name:
+            geom = c.get_geometry()
+            WX, WY = geom.x, geom.y
+            print(f"Found KVMGUI at ({WX},{WY})", flush=True)
+            break
+    except:
+        pass
+else:
+    print("WARNING: KVMGUI window not found, using (0,0)", flush=True)
+
+def click(x, y):
+    xtest.fake_input(d, X.MotionNotify, x=x, y=y); d.sync(); time.sleep(0.15)
+    xtest.fake_input(d, X.ButtonPress, 1); d.sync()
+    xtest.fake_input(d, X.ButtonRelease, 1); d.sync(); time.sleep(0.4)
+
 def key(sym, mods=[]):
-    for m in mods: xtest.fake_input(d,X.KeyPress,d.keysym_to_keycode(m)); d.sync()
-    kc=d.keysym_to_keycode(sym)
-    xtest.fake_input(d,X.KeyPress,kc); d.sync(); xtest.fake_input(d,X.KeyRelease,kc); d.sync()
-    for m in reversed(mods): xtest.fake_input(d,X.KeyRelease,d.keysym_to_keycode(m)); d.sync()
+    for m in mods:
+        xtest.fake_input(d, X.KeyPress, d.keysym_to_keycode(m)); d.sync()
+    kc = d.keysym_to_keycode(sym)
+    xtest.fake_input(d, X.KeyPress, kc); d.sync()
+    xtest.fake_input(d, X.KeyRelease, kc); d.sync()
+    for m in reversed(mods):
+        xtest.fake_input(d, X.KeyRelease, d.keysym_to_keycode(m)); d.sync()
     time.sleep(0.5)
-key(XK.XK_n,[XK.XK_Control_L]); time.sleep(0.8)   # onMenuNewVm + builder
-click(826,670); time.sleep(1.0)                   # Finish → onSaveNewVm + appAddVm + refresh
-for mx in (189,228,268,310): click(mx,84); time.sleep(0.2); key(XK.XK_Escape)  # open File/Edit/VM/View menus
-print("driven")
+
+def dlg_center(dw, dh):
+    return (SCR_W - dw) // 2, (SCR_H - dh) // 2
+
+# 1. Click "New VM" toolbar button (window-rel ~(45, 48))
+click(WX + 45, WY + 48)
+time.sleep(1.0)
+
+# 2. Type a VM name into the New VM dialog
+kc = d.keysym_to_keycode(XK.XK_s)
+xtest.fake_input(d, X.KeyPress, kc); d.sync(); xtest.fake_input(d, X.KeyRelease, kc); d.sync()
+time.sleep(0.1)
+kc = d.keysym_to_keycode(XK.XK_m)
+xtest.fake_input(d, X.KeyPress, kc); d.sync(); xtest.fake_input(d, X.KeyRelease, kc); d.sync()
+time.sleep(0.1)
+kc = d.keysym_to_keycode(XK.XK_o)
+xtest.fake_input(d, X.KeyPress, kc); d.sync(); xtest.fake_input(d, X.KeyRelease, kc); d.sync()
+time.sleep(0.1)
+kc = d.keysym_to_keycode(XK.XK_k)
+xtest.fake_input(d, X.KeyPress, kc); d.sync(); xtest.fake_input(d, X.KeyRelease, kc); d.sync()
+time.sleep(0.1)
+kc = d.keysym_to_keycode(XK.XK_e)
+xtest.fake_input(d, X.KeyPress, kc); d.sync(); xtest.fake_input(d, X.KeyRelease, kc); d.sync()
+time.sleep(0.3)
+
+# 3. Click "Create" button: dlg 460x260, Create btn rel (280+40, 215+15)
+dx, dy = dlg_center(460, 260)
+click(dx + 320, dy + 230)
+time.sleep(2.0)
+
+# 4. Open menus via keyboard — Ctrl+N then Escape to dismiss
+key(XK.XK_n, [XK.XK_Control_L]); time.sleep(0.8)
+key(XK.XK_Escape); time.sleep(0.3)
+
+# 5. Click Settings toolbar button
+click(WX + 640, WY + 48)
+time.sleep(1.0)
+# Cancel button below scroll area (dlg 500x720, Cancel at rel 395, 663)
+dx, dy = dlg_center(500, 720)
+click(dx + 395, dy + 663)
+time.sleep(0.5)
+
+# 6. Open About via Help menu
+click(WX + 230, WY + 5)  # Help menu
+time.sleep(0.3)
+key(XK.XK_Down); time.sleep(0.2)
+key(XK.XK_Return); time.sleep(1.0)
+# Close About: dlg 400x250, OK btn rel (310+40, 210+15)
+dx, dy = dlg_center(400, 250)
+click(dx + 350, dy + 225)
+time.sleep(0.5)
+
+print("driven", flush=True)
 PY
 
 sleep 1
 kill -0 "$APP" 2>/dev/null || fail "app crashed during interaction"
 
+# Capture frame and verify non-black
 DISPLAY=:99 ffmpeg -f x11grab -video_size 1280x800 -i :99.0 -frames:v 1 -update 1 /tmp/smoke_frame.png -y >/dev/null 2>&1
 [ -s /tmp/smoke_frame.png ] || fail "no frame captured"
-# Non-black: mean brightness must exceed a floor.
 MEAN=$(ffmpeg -i /tmp/smoke_frame.png -vf "format=gray,signalstats" -f null - 2>&1 | grep -o 'YAVG:[0-9.]*' | head -1 | cut -d: -f2)
 echo "frame YAVG=$MEAN"
 
-[ -s "$CFG" ] || fail "New VM was not persisted to vms.json"
+# Verify config persisted
+[ -s "$CFG" ] || fail "VM was not persisted to vms.json"
 grep -q '"vms"' "$CFG" || fail "vms.json missing vms array"
 
-echo "SMOKE OK — app survived New VM create + menu interactions; config persisted"
+echo "SMOKE OK — app survived New VM create + Settings + About dialog; config persisted"
