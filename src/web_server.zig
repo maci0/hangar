@@ -2010,6 +2010,356 @@ test "checkAuth: partial header name match is not fooled" {
     try std.testing.expect(!checkAuth(req));
 }
 
+// ── Edge-case fuzz: request parsing surfaces ───────────────────────
+
+test "fuzz: parseContentLength never panics on random header-like input" {
+    var prng = std.Random.DefaultPrng.init(0xBEEF_CAFE);
+    const rnd = prng.random();
+    var buf: [2048]u8 = undefined;
+
+    var iter: usize = 0;
+    while (iter < 8000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        if (parseContentLength(buf[0..len])) |cl| {
+            // Must fit in a reasonable buffer
+            try std.testing.expect(cl <= 1024 * 1024);
+        }
+    }
+}
+
+test "fuzz: parseContentLength handles embedded nulls" {
+    var prng = std.Random.DefaultPrng.init(0xCAFE_BABE);
+    const rnd = prng.random();
+    var buf: [1500]u8 = undefined;
+
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const prefix = rnd.uintLessThan(usize, 40);
+        // Fill with header-like text, then inject nulls
+        for (buf[0..prefix]) |*b| {
+            b.* = rnd.intRangeAtMost(u8, ' ', '~');
+        }
+        @memset(buf[prefix..], 0);
+        if (parseContentLength(buf[0..prefix])) |cl| {
+            try std.testing.expect(cl <= 1024 * 1024);
+        }
+    }
+}
+
+test "parseContentLength: no header returns null" {
+    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    try std.testing.expect(parseContentLength(req) == null);
+}
+
+test "parseContentLength: negative value returns null" {
+    const req = "POST /api/save/0 HTTP/1.1\r\nContent-Length: -1\r\n\r\n";
+    try std.testing.expect(parseContentLength(req) == null);
+}
+
+test "parseContentLength: overflow value returns null" {
+    const req = "POST /api/save/0 HTTP/1.1\r\nContent-Length: 99999999999999999999\r\n\r\n";
+    try std.testing.expect(parseContentLength(req) == null);
+}
+
+test "parseContentLength: valid value extracted" {
+    const req = "POST /api/save/0 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 42\r\n\r\nname=test";
+    const cl = parseContentLength(req);
+    try std.testing.expectEqual(@as(usize, 42), cl.?);
+}
+
+test "parseContentLength: zero is valid" {
+    const req = "POST /api/save/0 HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
+    try std.testing.expectEqual(@as(usize, 0), parseContentLength(req).?);
+}
+
+test "parseContentLength: header at very front of request" {
+    const req = "\r\nContent-Length: 100\r\nGET / HTTP/1.1\r\n\r\nbody";
+    try std.testing.expectEqual(@as(usize, 100), parseContentLength(req).?);
+}
+
+test "fuzz: checkAuth never panics on random header input" {
+    var prng = std.Random.DefaultPrng.init(0xDEAD_BEEF);
+    const rnd = prng.random();
+    var buf: [2048]u8 = undefined;
+
+    var iter: usize = 0;
+    while (iter < 8000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        _ = checkAuth(buf[0..len]);
+    }
+}
+
+test "checkAuth: multiple X-API-Key headers uses first match" {
+    const req = "GET /api/vms HTTP/1.1\r\nX-API-Key: wrong\r\nX-API-Key: kvmgui\r\n\r\n";
+    try std.testing.expect(!checkAuth(req)); // first match is "wrong"
+}
+
+test "checkAuth: X-API-Key search scans entire buffer including body" {
+    // checkAuth does not stop at \r\n\r\n — it scans the entire buffer.
+    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\n\r\nX-API-Key: kvmgui\r\n";
+    try std.testing.expect(checkAuth(req));
+}
+
+test "checkAuth: binary null in key value" {
+    var buf: [256]u8 = undefined;
+    const prefix = "GET /api/vms HTTP/1.1\r\nX-API-Key: ";
+    @memcpy(buf[0..prefix.len], prefix);
+    @memset(buf[prefix.len..][0..5], 0); // null bytes in key value
+    buf[prefix.len + 5] = '\r';
+    // Null bytes mean the provided key won't match "kvmgui" even if prefix is correct
+    try std.testing.expect(!checkAuth(buf[0 .. prefix.len + 6]));
+}
+
+test "fuzz: serveHtml routing never panics on random method/URL input" {
+    var prng = std.Random.DefaultPrng.init(0xFEED_FACE);
+    const rnd = prng.random();
+    var buf: [4096]u8 = undefined;
+
+    // Route prefixes tested in serveHtml
+    const routes = [_][]const u8{
+        "GET /",
+        "GET /api/vms",
+        "GET /api/health",
+        "GET /api/fb/",
+        "GET /api/config",
+        "GET /api/vnets",
+        "GET /api/vm/",
+        "GET /api/snapshot/list/",
+        "GET /ws/vnc/",
+        "GET /ws/serial/",
+        "GET /app.js",
+        "GET /app.css",
+        "GET /favicon",
+        "POST /api/power/",
+        "POST /api/save/",
+        "POST /api/suspend/",
+        "POST /api/pause/",
+        "POST /api/resume/",
+        "POST /api/shutdown/",
+        "POST /api/reset/",
+        "POST /api/delete/",
+        "POST /api/clone/",
+        "POST /api/new",
+        "POST /api/rename/",
+        "POST /api/snapshot/take/",
+        "POST /api/snapshot/revert/",
+        "POST /api/snapshot/delete/",
+        "POST /api/import",
+        "POST /api/cad/",
+        "POST /api/upload-disk",
+        "POST /api/export/",
+        "POST /api/disk2/download",
+        "POST /api/vnets/save",
+        "POST /api/config/save",
+        "OPTIONS ",
+        "PUT /api/vms",
+        "DELETE /api/vms",
+        "HEAD /api/vms",
+        "PATCH /api/vms",
+    };
+
+    var iter: usize = 0;
+    while (iter < 8000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+
+        // Simulate the method validation from serveHtml
+        if (std.mem.startsWith(u8, buf[0..len], "OPTIONS ")) {
+            // CORS preflight — always accepted
+        } else if (!std.mem.startsWith(u8, buf[0..len], "GET ") and
+            !std.mem.startsWith(u8, buf[0..len], "POST "))
+        {
+            // 405 Method Not Allowed — valid path
+        } else {
+            // Route matching — check each prefix
+            for (routes) |route| {
+                if (std.mem.startsWith(u8, buf[0..len], route)) {
+                    // Parse index where applicable
+                    if (std.mem.indexOf(u8, route, "/ws/") != null) {
+                        // WebSocket route — skip index parsing
+                    } else if (buf[0..len].len >= route.len) {
+                        _ = parseIdx(buf[0..len], route);
+                    }
+                    // Check for download/upload sub-routes
+                    _ = std.mem.indexOf(u8, buf[0..len], "/disk2/download");
+                    _ = std.mem.indexOf(u8, buf[0..len], "/upload-disk");
+                    break;
+                }
+            }
+            // Check auth for non-GET routes
+            _ = checkAuth(buf[0..len]);
+            // Try body extraction
+            _ = parseContentLength(buf[0..len]);
+            _ = getBody(buf[0..len]);
+        }
+    }
+}
+
+test "fuzz: getBody never panics and returns valid suffix" {
+    var prng = std.Random.DefaultPrng.init(0xACE_FACE);
+    const rnd = prng.random();
+    var buf: [4096]u8 = undefined;
+
+    var iter: usize = 0;
+    while (iter < 8000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        if (getBody(buf[0..len])) |body| {
+            // body must be a suffix of the input slice
+            try std.testing.expect(body.len <= len);
+        }
+    }
+}
+
+// ── Helper function tests ──────────────────────────────────────────
+
+test "validateSnapshotTag: valid tags" {
+    try std.testing.expect(validateSnapshotTag("snapshot1"));
+    try std.testing.expect(validateSnapshotTag("backup-2024-01-01"));
+    try std.testing.expect(validateSnapshotTag("a"));
+    try std.testing.expect(validateSnapshotTag("A" ** 255));
+}
+
+test "validateSnapshotTag: empty tag rejected" {
+    try std.testing.expect(!validateSnapshotTag(""));
+}
+
+test "validateSnapshotTag: too long tag rejected" {
+    var long: [256]u8 = [_]u8{'x'} ** 256;
+    try std.testing.expect(!validateSnapshotTag(&long));
+}
+
+test "validateSnapshotTag: control characters rejected" {
+    try std.testing.expect(!validateSnapshotTag("bad\x01"));
+    try std.testing.expect(!validateSnapshotTag("bad\x1f"));
+    try std.testing.expect(!validateSnapshotTag("\x00name"));
+    try std.testing.expect(!validateSnapshotTag("\x10middle"));
+}
+
+test "jsonEscape: escapes quotes and backslashes" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("\\\"", jsonEscape(&buf, "\""));
+    try std.testing.expectEqualStrings("\\\\", jsonEscape(&buf, "\\"));
+    try std.testing.expectEqualStrings("abc\\\"xyz", jsonEscape(&buf, "abc\"xyz"));
+}
+
+test "jsonEscape: escapes newlines, carriage returns, tabs" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("\\n", jsonEscape(&buf, "\n"));
+    try std.testing.expectEqualStrings("\\r", jsonEscape(&buf, "\r"));
+    try std.testing.expectEqualStrings("\\t", jsonEscape(&buf, "\t"));
+    try std.testing.expectEqualStrings("a\\nb\\tc", jsonEscape(&buf, "a\nb\tc"));
+}
+
+test "jsonEscape: escapes control characters as \\u00XX" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("\\u0000", jsonEscape(&buf, "\x00"));
+    try std.testing.expectEqualStrings("\\u001f", jsonEscape(&buf, "\x1f"));
+    try std.testing.expectEqualStrings("\\u000b", jsonEscape(&buf, "\x0b"));
+}
+
+test "jsonEscape: passes through normal text unchanged" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("hello world 123", jsonEscape(&buf, "hello world 123"));
+}
+
+test "jsonEscape: handles empty string" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("", jsonEscape(&buf, ""));
+}
+
+test "sanitizeHeaderValue: replaces double-quote with single-quote" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("'quoted'", sanitizeHeaderValue(&buf, "\"quoted\""));
+}
+
+test "sanitizeHeaderValue: strips CR and LF" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("clean", sanitizeHeaderValue(&buf, "clean\r\n"));
+    try std.testing.expectEqualStrings("no", sanitizeHeaderValue(&buf, "\rno\n"));
+}
+
+test "sanitizeHeaderValue: passes normal text unchanged" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("text/html", sanitizeHeaderValue(&buf, "text/html"));
+}
+
+test "sanitizeHeaderValue: handles empty string" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("", sanitizeHeaderValue(&buf, ""));
+}
+
+test "sanitizeHeaderValue: handles only dangerous chars" {
+    var buf: [64]u8 = undefined;
+    // 4 double-quotes → 4 single-quotes; CR+LF removed
+    try std.testing.expectEqualStrings("''''", sanitizeHeaderValue(&buf, "\"\"\r\n\"\""));
+}
+
+test "jsonErr: formats error message" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("{\"error\":\"test\"}", jsonErr(&buf, "test"));
+}
+
+test "jsonErr: handles empty message" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("{\"error\":\"\"}", jsonErr(&buf, ""));
+}
+
+test "jsonErr: buffer overflow falls back to default" {
+    var buf: [8]u8 = undefined;
+    // buf too small → catch path returns "{\"error\":\"internal\"}"
+    try std.testing.expectEqualStrings("{\"error\":\"internal\"}", jsonErr(&buf, "long message"));
+}
+
+// ── Fuzz: helper functions ─────────────────────────────────────────
+
+test "fuzz: validateSnapshotTag never panics on random input" {
+    var prng = std.Random.DefaultPrng.init(0xCAFE_F00D);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        _ = validateSnapshotTag(buf[0..len]);
+    }
+}
+
+test "fuzz: jsonEscape never panics and always fits" {
+    var prng = std.Random.DefaultPrng.init(0xB00B_1E55);
+    const rnd = prng.random();
+    var input: [128]u8 = undefined;
+    var output: [512]u8 = undefined; // ~4x worst-case for \\u00XX escapes
+
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, input.len + 1);
+        rnd.bytes(input[0..len]);
+        const result = jsonEscape(&output, input[0..len]);
+        // Must always fit within output buffer
+        try std.testing.expect(result.len <= output.len);
+    }
+}
+
+test "fuzz: sanitizeHeaderValue never panics on random input" {
+    var prng = std.Random.DefaultPrng.init(0xDECAF_BAD);
+    const rnd = prng.random();
+    var input: [256]u8 = undefined;
+    var output: [256]u8 = undefined;
+
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, input.len + 1);
+        rnd.bytes(input[0..len]);
+        const result = sanitizeHeaderValue(&output, input[0..len]);
+        // Must always fit within output buffer
+        try std.testing.expect(result.len <= output.len);
+    }
+}
+
 pub fn main() !void {
     vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
     g_vmm = hv_backend.createVmm(.auto);

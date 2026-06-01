@@ -110,7 +110,8 @@ pub fn renderFramebuffer(
 pub fn clearDisplay() void {
     if (app.display_box) |db| {
         cfltk.Fl_Box_set_image(db, null);
-        cfltk.Fl_Box_set_label(db, "VNC/SPICE display renders here when a VM is running.");
+        cfltk.Fl_Box_set_label(db, "▸ Power on a VM to start display\n▸ VNC and SPICE displays appear here");
+        cfltk.Fl_Box_set_align(db, 16 | 5); // FL_ALIGN_INSIDE | FL_ALIGN_CENTER
         cfltk.Fl_Box_redraw(db);
     }
 }

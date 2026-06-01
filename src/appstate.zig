@@ -216,6 +216,24 @@ pub fn setStatus(msg: []const u8) void {
     }
 }
 
+/// Set status with a Unicode icon prefix.
+pub fn setStatusIcon(icon: []const u8, msg: []const u8) void {
+    if (status_bar) |sb| {
+        const icon_len = icon.len;
+        const msg_len = if (msg.len <= 255 - icon_len) msg.len else 255 - icon_len;
+        var offset: usize = 0;
+        @memcpy(status_buf[0..icon_len], icon);
+        offset += icon_len;
+        @memcpy(status_buf[offset .. offset + msg_len], msg[0..msg_len]);
+        offset += msg_len;
+        status_buf[offset] = 0;
+        cfltk.Fl_Box_set_label(sb, @ptrCast(&status_buf));
+    }
+}
+
+pub fn setStatusErr(msg: []const u8) void { setStatusIcon("✗ ", msg); }
+pub fn setStatusOk(msg: []const u8) void { setStatusIcon("✓ ", msg); }
+
 /// Set a detail label value by index (used by refreshDetails).
 pub fn setDetail(i: usize, value: []const u8) void {
     if (i < detail_labels.len and i < detail_buf.len) {

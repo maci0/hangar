@@ -16,7 +16,8 @@ var vms=[]; var sel=null; var activeTab='summary';
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function setStatus(s){document.getElementById('statusbar').textContent=s;document.getElementById('statusbar').classList.remove('loading');}
 function setStatusLoading(s){var el=document.getElementById('statusbar');el.textContent='⏳ '+s;el.classList.add('loading');}
-function showToast(msg,type){type=type||'info';var c=document.getElementById('toast-container');var t=document.createElement('div');t.className='toast '+type;t.textContent=msg;c.appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity 300ms ease';setTimeout(function(){if(t.parentNode)c.removeChild(t);},300);},3500);}
+var toastIcons={success:'✓',error:'✗',info:'ℹ',warn:'⚠'};
+function showToast(msg,type){type=type||'info';var c=document.getElementById('toast-container');if(!c)return;var t=document.createElement('div');t.className='toast '+type;var icon=toastIcons[type]||toastIcons.info;t.innerHTML='<span class=\"toast-icon\">'+icon+'</span><span class=\"toast-msg\">'+escHtml(msg)+'</span>';c.appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity 300ms ease';setTimeout(function(){if(t.parentNode)c.removeChild(t);},300);},3500);}
 var apiPostPending=0;
 async function apiPost(url,body){var prev=document.getElementById('statusbar').textContent;setStatusLoading('Working...');apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':'kvmgui'}};var r=await fetch(url,opts);if(!r.ok)throw new Error(r.status);apiPostPending--;if(apiPostPending<=0)setStatus(prev);return r;}catch(e){apiPostPending--;if(apiPostPending<=0)setStatus('Error: '+e.message);showToast(e.message||'Request failed','error');return null;}}
 var sidebarOpen=false;
@@ -29,7 +30,7 @@ document.getElementById('tabSettings').style.display=tab==='settings'?'block':'n
 const btns=document.querySelectorAll('.tab-btn');btns.forEach(b=>b.classList.remove('active'));
 if(tab==='summary')btns[0].classList.add('active');else btns[1].classList.add('active');
 if(tab==='settings'&&sel!==null)editVm();}
-async function refresh(){try{const r=await fetch('/api/vms');if(!r.ok)return;vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){console.error('refresh failed:',e);}}
+async function refresh(){try{var listEl=document.getElementById('vmlist');if(!vms.length){var skHtml='';for(var i=0;i<6;i++){skHtml+='<div class=\"skeleton sk-item\"></div>';}listEl.innerHTML=skHtml;}const r=await fetch('/api/vms');if(!r.ok)return;vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){console.error('refresh failed:',e);}}
 function filterList(){const f=document.getElementById('search').value;const clr=document.getElementById('searchClear');clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
 function renderList(filter){const e=document.getElementById('vmlist');const f=(filter||'').toLowerCase();let h='';
 const viz=vms.map((v,i)=>({i,show:!f||v.name.toLowerCase().includes(f),fav:v.favorite==='true',v}));
@@ -80,9 +81,9 @@ if(v.notes)h+=`<div class="summary-card"><div class="card-label">Notes</div><div
 h+='</div>';
 document.getElementById('tabSummary').innerHTML=h;
 updatePowerBtn();}
-async function powerToggle(){if(sel===null)return;const r=await apiPost('/api/power/'+sel);if(r)await refresh();}
-async function shutdownGuest(){if(sel===null)return;const r=await apiPost('/api/shutdown/'+sel);if(r)setStatus('Shut down guest — ACPI power button sent.');}
-async function resetGuest(){if(sel===null)return;const r=await apiPost('/api/reset/'+sel);if(r)setStatus('Reset guest — system_reset sent.');}
+async function powerToggle(){if(sel===null)return;const v=vms[sel];if(v&&(v.status==='running'||v.status==='paused')){if(!confirm('Power off VM "'+v.name+'"?\nUnsaved data may be lost.'))return;}const r=await apiPost('/api/power/'+sel);if(r)await refresh();}
+async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!confirm('Send ACPI shutdown to "'+v.name+'"?'))return;const r=await apiPost('/api/shutdown/'+sel);if(r)setStatus('Shut down guest — ACPI power button sent.');}
+async function resetGuest(){if(sel===null)return;const v=vms[sel];if(!confirm('Reset guest "'+v.name+'"?\nUnsaved data in the guest may be lost.'))return;const r=await apiPost('/api/reset/'+sel);if(r)setStatus('Reset guest — system_reset sent.');}
 async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/pause/'+sel);if(r){await refresh();setStatus('Paused guest — execution frozen.');}}
 async function resumeGuest(){if(sel===null)return;const r=await apiPost('/api/resume/'+sel);if(r){await refresh();setStatus('Resumed guest — execution continued.');}}
 async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=prompt('Rename VM:',v.name);if(n&&n!==v.name){const r=await apiPost('/api/rename/'+sel,'name='+encodeURIComponent(n));if(r)await refresh();}}
@@ -91,16 +92,17 @@ async function cloneGuest(){if(sel===null)return;document.getElementById('clone_
 async function doClone(linked){if(sel===null)return;document.getElementById('clonedlg').close();const body=linked?'linked=1':'';const r=await apiPost('/api/clone/'+sel,body);if(r){await refresh();setStatus(linked?'Linked clone created.':'VM cloned.');}}
 async function importGuest(){const p=prompt('Path to VM disk image (.qcow2):');if(p){const r=await apiPost('/api/import','path='+encodeURIComponent(p));if(r){await refresh();setStatus('VM imported.');}}}
 async function batchStart(){for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){await apiPost('/api/power/'+i);}}await refresh();setStatus('Batch start complete.');}
-async function batchStop(){for(let i=0;i<vms.length;i++){if(vms[i].status==='running'||vms[i].status==='paused'){await apiPost('/api/power/'+i);}}await refresh();setStatus('Batch stop complete.');}
+async function batchStop(){if(!confirm('Power off ALL running VMs?\nUnsaved data may be lost.'))return;for(let i=0;i<vms.length;i++){if(vms[i].status==='running'||vms[i].status==='paused'){await apiPost('/api/power/'+i);}}await refresh();setStatus('Batch stop complete.');}
 async function takeSnapshot(){if(sel===null)return;openSnapshots();}
 async function takeSnapshotFromDlg(){if(sel===null)return;const t=document.getElementById('s_tag').value;if(!t){alert('Enter a tag name');return;}
 const r=await apiPost('/api/snapshot/take/'+sel,'tag='+encodeURIComponent(t));if(r){document.getElementById('s_tag').value='';loadSnapshots();setStatus('Snapshot taken: '+t);}}
 async function openSnapshots(){if(sel===null)return;document.getElementById('snapdlg').showModal();loadSnapshots();}
-async function loadSnapshots(){if(sel===null)return;const r=await fetch('/api/snapshot/list/'+sel);const t=await r.text();
-const el=document.getElementById('snaplist');if(!t||t==='(none)'){el.innerHTML='<div style="color:var(--text-dim)">No snapshots</div>';return;}
+async function loadSnapshots(){if(sel===null)return;const el=document.getElementById('snaplist');
+try{const r=await fetch('/api/snapshot/list/'+sel);if(!r.ok){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';return;}const t=await r.text();
+if(!t||t==='(none)'){el.innerHTML='<div style="color:var(--text-dim)">No snapshots</div>';return;}
 const lines=t.split('\n');let h='';for(const ln of lines){const tag=ln.trim();if(!tag)continue;
 h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"><span>${escHtml(tag)}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}">Del</button></span></div>`;}
-el.innerHTML=h;}
+el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
 async function revertSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Revert to snapshot "'+tag+'"? This will discard current state.'))return;
 const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);snapdlg.close();}}
 async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Delete snapshot "'+tag+'"?'))return;
@@ -169,7 +171,7 @@ const r=await apiPost('/api/save/'+sel,body);if(r){switchTab('summary');await re
 // ── VNet Editor ──
 let vnetsData=[],vnetIdx=-1;
 async function openVnets(){await loadVnets();document.getElementById('vnetdlg').showModal();}
-async function loadVnets(){const r=await fetch('/api/vnets');if(r.ok)vnetsData=await r.json();renderVnetList();}
+async function loadVnets(){try{const r=await fetch('/api/vnets');if(r.ok)vnetsData=await r.json();}catch(e){vnetsData={networks:[]};}renderVnetList();}
 function renderVnetList(){const sel=document.getElementById('vnet_sel');let h='';if(!vnetsData.networks)vnetsData={networks:[]};
 for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const line=n.name+' — '+n.type;h+=`<option value="${i}"${i===vnetIdx?' selected':''}>${line}</option>`;}
 sel.innerHTML=h;if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length)showVnetFields(vnetIdx);}
@@ -238,10 +240,11 @@ document.getElementById('vmlist').addEventListener('contextmenu',function(e){
 // ── Keyboard Shortcuts ──
 document.addEventListener('keydown',function(e){if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
 if(e.key==='Escape'){
-  var anyOpen=false;['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg'].forEach(function(id){var d=document.getElementById(id);if(d.open){d.close();anyOpen=true;}});
+  var anyOpen=false;['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','shortcutsdlg'].forEach(function(id){var d=document.getElementById(id);if(d.open){d.close();anyOpen=true;}});
   if(!anyOpen&&sel!==null){sel=null;renderList();showEmptyState();}
   return;
 }
+if(e.key==='?'&&!e.ctrlKey&&!e.metaKey){e.preventDefault();showShortcutsModal();return;}
 if(e.ctrlKey&&e.key==='n'){e.preventDefault();newVm();return;}
 if(e.ctrlKey&&e.key==='e'){e.preventDefault();if(sel!==null)editVm();return;}
 if(e.ctrlKey&&e.key==='w'){e.preventDefault();deselectVm();return;}
@@ -249,6 +252,11 @@ if(e.ctrlKey&&e.key==='Enter'){e.preventDefault();if(sel!==null)editVm();return;
 if(e.key==='Delete'){if(sel!==null)deleteVm();return;}
 if(e.key==='Enter'){if(sel!==null)powerToggle();return;}
 });
+function showShortcutsModal(){
+  var d=document.getElementById('shortcutsdlg');
+  if(!d){var html='<dialog id=\"shortcutsdlg\"><h3>Keyboard Shortcuts</h3><div class=\"dialog-body\"><table class=\"shortcuts-table\"><tr><td><kbd>Ctrl+N</kbd></td><td>New VM</td></tr><tr><td><kbd>Ctrl+E</kbd></td><td>Edit Settings</td></tr><tr><td><kbd>Enter</kbd></td><td>Power On / Off</td></tr><tr><td><kbd>Delete</kbd></td><td>Delete VM</td></tr><tr><td><kbd>Ctrl+W</kbd></td><td>Deselect VM</td></tr><tr><td><kbd>Escape</kbd></td><td>Close Dialog / Deselect</td></tr><tr><td><kbd>?</kbd></td><td>Show this help</td></tr></table></div><div class=\"btn-row\"><button class=\"btn\" onclick=\"document.getElementById(\'shortcutsdlg\').close()\">Close</button></div></dialog>';document.body.insertAdjacentHTML('beforeend',html);d=document.getElementById('shortcutsdlg');}
+  d.showModal();
+}
 // ── Periodic Refresh ──
 refresh();
 setInterval(refresh,5000);

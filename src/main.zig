@@ -103,7 +103,7 @@ fn shutdown() void {
             app.prefs.win_h = @intCast(wh);
         }
     }
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
     // Clean up all Vmm handles.
     for (0..app.vm_count) |i| app.destroyVmmHandle(i);
     if (app.vnc_client) |vc| { vc.disconnect(); vc.free(); app.vnc_client = null; }
@@ -123,7 +123,7 @@ fn startWebServer() void {
     // Run web_server.main() in its own thread since it blocks on accept().
     app.web_thread = std.Thread.spawn(.{}, webServerThreadMain, .{}) catch {
         app.web_running = false;
-        app.setStatus("Failed to start web server thread");
+        app.setStatusErr("Failed to start web server thread");
         return;
     };
     app.setStatus("Web server started on http://localhost:9080");
@@ -268,7 +268,7 @@ fn cloneVm() void {
     app.selected_idx = app.vm_count - 1;
     app.refreshBrowser();
     app.refreshDetails();
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
 }
 
 fn importVm() void {
@@ -331,7 +331,7 @@ fn importVm() void {
     app.selected_idx = app.vm_count - 1;
     app.refreshBrowser();
     app.refreshDetails();
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
     app.setStatus("VM imported from disk image");
 }
 
@@ -367,7 +367,7 @@ fn deleteCurrentVm() void {
     app.selected_idx = if (app.vm_count > 0) @min(idx, app.vm_count - 1) else null;
     app.refreshBrowser();
     app.refreshDetails();
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
 }
 
 /// Build URL-encoded body for remote VM save requests from FLTK input fields.
@@ -846,7 +846,7 @@ fn editVmDialog() void {
         }
         if (dd.fv) |fvi| dd.v.favorite = cfltk.Fl_Check_Button_is_checked(fvi) != 0;
         app.refreshBrowser(); app.refreshDetails();
-        persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+        persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
         if (dd.dl) |dl2| cfltk.Fl_Window_hide(dl2);
     }};
     const C = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
@@ -897,10 +897,10 @@ fn snapDialog() void {
                 _ = remote.apiPost(path, std.mem.span(cfltk.Fl_Input_value(nn)), &out_buf);
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Created (remote).");
             } else if (app.getVmmHandle(s.idx)) |h| {
-                app.g_vmm.snapshotCreateFn(h, s.v.getDiskPathSlice(), std.mem.span(cfltk.Fl_Input_value(nn)), std.heap.page_allocator) catch { app.setStatus("Snapshot create failed"); };
+                app.g_vmm.snapshotCreateFn(h, s.v.getDiskPathSlice(), std.mem.span(cfltk.Fl_Input_value(nn)), std.heap.page_allocator) catch { app.setStatusErr("Snapshot create failed"); };
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Created.");
             } else {
-                qemu.snapshotCreate(s.v.getDiskPathSlice(), std.mem.span(cfltk.Fl_Input_value(nn)), std.heap.page_allocator) catch { app.setStatus("Snapshot create failed"); };
+                qemu.snapshotCreate(s.v.getDiskPathSlice(), std.mem.span(cfltk.Fl_Input_value(nn)), std.heap.page_allocator) catch { app.setStatusErr("Snapshot create failed"); };
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Created.");
             }
         }
@@ -950,6 +950,10 @@ fn snapDialog() void {
         if (s.n) |nn| {
             const tag = std.mem.span(cfltk.Fl_Input_value(nn));
             if (tag.len == 0) return;
+            // Confirm before reverting
+            var rmsg_buf: [128]u8 = undefined;
+            const rmsg = std.fmt.bufPrintZ(&rmsg_buf, "Revert to snapshot '{s}'?\nCurrent VM state will be discarded.", .{tag}) catch "Revert to this snapshot?";
+            if (cfltk.Fl_choice2(rmsg.ptr, "Cancel", "Revert", null) != 1) return;
             if (s.remote) {
                 var path_buf: [64]u8 = undefined;
                 const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/revert/{d}", .{s.idx}) catch return;
@@ -957,10 +961,10 @@ fn snapDialog() void {
                 _ = remote.apiPost(path, tag, &out_buf);
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Reverted (remote).");
             } else if (app.getVmmHandle(s.idx)) |h| {
-                app.g_vmm.snapshotApplyFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatus("Snapshot revert failed"); };
+                app.g_vmm.snapshotApplyFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatusErr("Snapshot revert failed"); };
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Reverted.");
             } else {
-                qemu.snapshotApply(s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatus("Snapshot revert failed"); };
+                qemu.snapshotApply(s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatusErr("Snapshot revert failed"); };
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Reverted.");
             }
         }
@@ -970,6 +974,10 @@ fn snapDialog() void {
         if (s.n) |nn| {
             const tag = std.mem.span(cfltk.Fl_Input_value(nn));
             if (tag.len == 0) return;
+            // Confirm before deleting
+            var dmsg_buf: [128]u8 = undefined;
+            const dmsg = std.fmt.bufPrintZ(&dmsg_buf, "Delete snapshot '{s}'?\nThis cannot be undone.", .{tag}) catch "Delete this snapshot?";
+            if (cfltk.Fl_choice2(dmsg.ptr, "Cancel", "Delete", null) != 1) return;
             if (s.remote) {
                 var path_buf: [64]u8 = undefined;
                 const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/delete/{d}", .{s.idx}) catch return;
@@ -977,10 +985,10 @@ fn snapDialog() void {
                 _ = remote.apiPost(path, tag, &out_buf);
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Deleted (remote).");
             } else if (app.getVmmHandle(s.idx)) |h| {
-                app.g_vmm.snapshotDeleteFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatus("Snapshot delete failed"); };
+                app.g_vmm.snapshotDeleteFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatusErr("Snapshot delete failed"); };
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Deleted.");
             } else {
-                qemu.snapshotDelete(s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatus("Snapshot delete failed"); };
+                qemu.snapshotDelete(s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatusErr("Snapshot delete failed"); };
                 if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Deleted.");
             }
         }
@@ -1024,6 +1032,10 @@ fn togglePower() void {
     }
 
     if (app.vms[idx].isAlive()) {
+        // Confirm before force power-off
+        var pmsg_buf: [128]u8 = undefined;
+        const pmsg = std.fmt.bufPrintZ(&pmsg_buf, "Power off VM '{s}'?\nUnsaved data may be lost.", .{app.vms[idx].getNameSlice()}) catch "Power off this VM?";
+        if (cfltk.Fl_choice2(pmsg.ptr, "Cancel", "Power Off", null) != 1) return;
         // Power off: kill the QEMU process and clean up connections
         if (app.getVmmHandle(idx)) |h| {
             app.g_vmm.forceStopFn(h);
@@ -1039,12 +1051,12 @@ fn togglePower() void {
         // Power on: start QEMU (handles -incoming for resume from suspended state)
         if (app.getVmmHandle(idx)) |h| {
             app.g_vmm.startFn(h, @ptrCast(&app.vms[idx])) catch {
-                app.setStatus("Failed to start VM");
+                app.setStatusErr("Failed to start VM");
                 return;
             };
         } else {
             qemu.startVm(&app.vms[idx], std.heap.page_allocator) catch {
-                app.setStatus("Failed to start VM");
+                app.setStatusErr("Failed to start VM");
                 return;
             };
         }
@@ -1056,7 +1068,7 @@ fn togglePower() void {
     }
     app.refreshBrowser();
     app.refreshDetails();
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
 }
 
 /// Power on all stopped VMs.
@@ -1083,12 +1095,15 @@ fn startAllVms() void {
     if (app.remote_mode) remote.remoteRefreshVmList();
     app.refreshBrowser();
     app.refreshDetails();
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
     app.setStatus("All stopped VMs powered on.");
 }
 
 /// Power off all running VMs.
 fn stopAllVms() void {
+    // Confirm before force-stopping all VMs
+    if (cfltk.Fl_choice2("Power off ALL running VMs?\nUnsaved data may be lost.", "Cancel", "Power Off All", null) != 1) return;
+
     const saved_idx = app.selected_idx;
     defer { app.selected_idx = saved_idx; }
     for (0..app.vm_count) |i| {
@@ -1114,7 +1129,7 @@ fn stopAllVms() void {
     if (app.remote_mode) remote.remoteRefreshVmList();
     app.refreshBrowser();
     app.refreshDetails();
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
     app.setStatus("All running VMs powered off.");
 }
 
@@ -1122,6 +1137,11 @@ fn shutdownGuest() void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
     if (!app.vms[idx].isAlive()) { app.setStatus("VM is not running"); return; }
+
+    // Confirm before ACPI shutdown
+    var smsg_buf: [128]u8 = undefined;
+    const smsg = std.fmt.bufPrintZ(&smsg_buf, "Send ACPI shutdown to '{s}'?", .{app.vms[idx].getNameSlice()}) catch "Shut down guest?";
+    if (cfltk.Fl_choice2(smsg.ptr, "Cancel", "Shut Down", null) != 1) return;
 
     if (app.remote_mode) {
         var path_buf: [32]u8 = undefined;
@@ -1143,6 +1163,11 @@ fn resetGuest() void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
     if (!app.vms[idx].isAlive()) { app.setStatus("VM is not running"); return; }
+
+    // Confirm before reset
+    var rmsg_buf: [128]u8 = undefined;
+    const rmsg = std.fmt.bufPrintZ(&rmsg_buf, "Reset guest '{s}'?\nUnsaved data in the guest may be lost.", .{app.vms[idx].getNameSlice()}) catch "Reset guest?";
+    if (cfltk.Fl_choice2(rmsg.ptr, "Cancel", "Reset", null) != 1) return;
 
     if (app.remote_mode) {
         var path_buf: [32]u8 = undefined;
@@ -1314,7 +1339,7 @@ fn renameVm() void {
     }
 
     app.vms[idx].setName(new_name);
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
     app.refreshBrowser();
     app.refreshDetails();
 }
@@ -1411,7 +1436,7 @@ fn suspendVm() void {
 
     app.refreshBrowser();
     app.refreshDetails();
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
     app.setStatus("VM suspended to file — ready to resume on power-on");
 }
 
@@ -1545,7 +1570,7 @@ fn newVmDialog() void {
             app.selected_idx = app.vm_count - 1;
             app.refreshBrowser();
             app.refreshDetails();
-            persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+            persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
             if (dd.dlg) |d| cfltk.Fl_Window_hide(d);
         }
     };
@@ -1685,9 +1710,9 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                 const snap_name = autoprotect.snapName(&name_buf, seq);
                 if (snap_name.len > 0) {
                     if (app.getVmmHandle(i)) |h| {
-                        app.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch { app.setStatus("AutoProtect snapshot create failed"); };
+                        app.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch { app.setStatusErr("AutoProtect snapshot create failed"); };
                     } else {
-                        qemu.snapshotCreate(v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch { app.setStatus("AutoProtect snapshot create failed"); };
+                        qemu.snapshotCreate(v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch { app.setStatusErr("AutoProtect snapshot create failed"); };
                     }
 
                     // Prune excess AutoProtect snapshots
@@ -1728,7 +1753,7 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                         }
                     } else |_| {}
                 }
-                persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
+                persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
             }
         }
     }
@@ -2002,10 +2027,11 @@ pub fn main() void {
 
     // Display tab
     const dg = cfltk.Fl_Group_new(CX, body_y + 20, CW, body_h - 20, "Display");
-    const db = cfltk.Fl_Box_new(CX + 5, body_y + 25, CW - 10, body_h - 30, "VNC/SPICE display renders here when a VM is running.");
+    const db = cfltk.Fl_Box_new(CX + 5, body_y + 25, CW - 10, body_h - 30, "▸ Power on a VM to start display\n▸ VNC and SPICE displays appear here");
     cfltk.Fl_Box_set_box(db, 8); // FL_BORDER_BOX
     cfltk.Fl_Box_set_color(db, app.pal.surface);
     cfltk.Fl_Box_set_label_color(db, app.pal.text_dim);
+    cfltk.Fl_Box_set_align(db, 16 | 5); // FL_ALIGN_INSIDE | FL_ALIGN_CENTER
     app.display_box = @ptrCast(db);
     const glw = cfltk.Fl_Gl_Window_new(CX + 5, body_y + 25, CW - 10, body_h - 30, "");
     if (glw != null) {

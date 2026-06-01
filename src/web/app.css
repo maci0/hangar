@@ -25,7 +25,7 @@
   --shadow-sm:0 1px 2px rgba(0,0,0,0.06);
   --shadow-lg:0 20px 55px rgba(0,0,0,0.12),0 0 0 1px var(--border);
 }
-body{font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;height:100vh;background:var(--bg);color:var(--text);overflow:hidden;-webkit-font-smoothing:antialiased}
+body{font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;height:100vh;background:var(--bg);color:var(--text);overflow:hidden;-webkit-font-smoothing:antialiased;transition:background var(--transition),color var(--transition)}
 /* ─── Sidebar ─── */
 aside{width:244px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .sidebar-header{padding:18px 16px 10px;display:flex;align-items:center;gap:10px}
@@ -133,14 +133,21 @@ aside .vm-item .dot.running{animation:pulse-dot 2s ease-in-out infinite}
 aside .vm-item .star.fav{color:var(--warn)}
 /* ─── Toast Notifications ─── */
 #toast-container{position:fixed;top:60px;right:16px;z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none}
-.toast{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px;font-size:13px;box-shadow:var(--shadow-lg);animation:toast-in 200ms ease;max-width:360px;pointer-events:auto}
-.toast.success{border-left:3px solid var(--success)}
-.toast.error{border-left:3px solid var(--danger)}
-.toast.info{border-left:3px solid var(--accent)}
+.toast{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px;font-size:13px;box-shadow:var(--shadow-lg);animation:toast-in 200ms ease;max-width:360px;pointer-events:auto;display:flex;align-items:center;gap:0}
+.toast .toast-icon{font-size:15px;margin-right:8px;flex-shrink:0;line-height:1}
+.toast .toast-msg{flex:1;word-break:break-word}
+.toast.success{border-left:3px solid var(--success)}.toast.success .toast-icon{color:var(--success)}
+.toast.error{border-left:3px solid var(--danger)}.toast.error .toast-icon{color:var(--danger)}
+.toast.info{border-left:3px solid var(--accent)}.toast.info .toast-icon{color:var(--accent)}
 @keyframes toast-in{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
 /* ─── Loading Pulse ─── */
 @keyframes status-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
 #statusbar .loading{animation:status-pulse 800ms ease-in-out infinite}
+/* ─── Skeleton Loading ─── */
+@keyframes shimmer{0%{background-position:-200px 0}100%{background-position:calc(200px + 100%) 0}}
+.skeleton{background:linear-gradient(90deg,var(--surface) 25%,var(--raised) 37%,var(--surface) 63%);background-size:200px 100%;animation:shimmer 1.4s ease infinite;border-radius:var(--radius)}
+.sk-item{height:34px;margin-bottom:2px;border-radius:var(--radius)}
+.sk-card{height:60px;border-radius:var(--radius)}
 /* ─── Hamburger / Responsive Sidebar ─── */
 .hamburger{display:none;background:transparent;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;padding:4px 8px;border-radius:var(--radius);transition:all 120ms ease;line-height:1}
 .hamburger:hover{color:var(--text);background:var(--raised)}
@@ -155,6 +162,12 @@ aside .vm-item .star.fav{color:var(--warn)}
 .empty-state svg{width:72px;height:72px;margin-bottom:18px;opacity:0.18;color:var(--text-dim)}
 /* ─── focus-visible on selects ─── */
 dialog select:focus-visible,.settings-form select:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--border-focus)}
+/* ─── Shortcuts Table ─── */
+.shortcuts-table{width:100%;border-collapse:collapse}
+.shortcuts-table td{padding:6px 0;font-size:13px}
+.shortcuts-table td:first-child{width:120px;font-weight:550;color:var(--text)}
+.shortcuts-table td:last-child{color:var(--text-muted)}
+kbd{background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:12px;font-family:inherit;white-space:nowrap}
 /* ─── Reduced motion ─── */
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important}

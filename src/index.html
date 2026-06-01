@@ -108,4 +108,15 @@ Enter Power Toggle &nbsp;·&nbsp; Ctrl+W Deselect &nbsp;·&nbsp; Escape Close Di
 </p>
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="aboutdlg">Close</button></div></dialog>
+<dialog id="shortcutsdlg"><h3>Keyboard Shortcuts</h3>
+<div class="dialog-body"><table class="shortcuts-table">
+<tr><td><kbd>Ctrl+N</kbd></td><td>New VM</td></tr>
+<tr><td><kbd>Ctrl+E</kbd></td><td>Edit Settings</td></tr>
+<tr><td><kbd>Enter</kbd></td><td>Power On / Off</td></tr>
+<tr><td><kbd>Delete</kbd></td><td>Delete VM</td></tr>
+<tr><td><kbd>Ctrl+W</kbd></td><td>Deselect VM</td></tr>
+<tr><td><kbd>Escape</kbd></td><td>Close Dialog / Deselect</td></tr>
+<tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
+</table></div>
+<div class="btn-row"><button class="btn" onclick="document.getElementById('shortcutsdlg').close()">Close</button></div></dialog>
 <script src="/app.js"></script></body></html>

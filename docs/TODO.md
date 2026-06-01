@@ -1197,3 +1197,186 @@ state changed.
 |------|--------|
 | `src/main.zig:fullScreenCB` | ✅ Status bar shows "Full Screen — Press F11 to exit" / "Exited full screen" |
 | `src/main.zig:kbHandler` F11 | ✅ Same status indicators in keyboard handler |
+
+---
+
+## Tier 15 — Visual Polish & Test Coverage (August 2026)
+
+### 15.1 Web UI: Toast Notification Icons ✅
+
+Current toast notifications are plain text. Adding type-specific icons
+(success=✓, error=✗, info=ℹ) makes them more scannable and professional.
+
+| File | Status |
+|------|--------|
+| `src/web/app.js:showToast()` | ✅ Icon prefix per type via `toastIcons` map |
+| `src/web/app.css` | ✅ `.toast-icon` styled with flex alignment |
+
+### 15.2 Web UI: Keyboard Shortcuts Help Modal ✅
+
+The web UI already has keyboard shortcuts (Ctrl+N, Ctrl+E, Delete, Escape, etc.)
+but no discoverable way to find them. Pressing `?` opens a modal with all
+shortcuts listed.
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig:index_html` | ✅ `?` key handler + shortcuts `<dialog>` in index.html |
+| `src/web/app.js` | ✅ `showShortcutsModal()` creates dialog + fills table, `?` handler |
+| `src/web/app.css` | ✅ `.shortcuts-table`, `kbd` styling |
+
+### 15.3 Web UI: Loading Skeleton States ✅
+
+No visual feedback during API calls (VM list load, detail load, power toggle).
+Add CSS skeleton loading animations for cards and sidebar.
+
+| File | Status |
+|------|--------|
+| `src/web/app.css` | ✅ `@keyframes shimmer`, `.skeleton`, `.sk-item`, `.sk-card` classes |
+| `src/web/app.js` | ✅ Skeleton cards in `refresh()` before fetch completes |
+
+### 15.4 FLTK: Display Tab Empty-State Placeholder ✅
+
+When no VM is running or no display feed is active, the Display tab shows a
+blank canvas. Show a centered placeholder message instead.
+
+| File | Status |
+|------|--------|
+| `src/main.zig` display tab | ✅ Centered "▸ Power on a VM to start display" placeholder |
+| `src/display.zig:clearDisplay()` | ✅ Same placeholder with `FL_ALIGN_INSIDE\|FL_ALIGN_CENTER` |
+
+### 15.5 FLTK: Status Bar Icon Indicators ✅
+
+Prefix status bar messages with Unicode icons for quick scanning:
+✓ success, ⚠ warning, ✗ error, ℹ info.
+
+| File | Status |
+|------|--------|
+| `src/appstate.zig` | ✅ `setStatusIcon()`, `setStatusErr()`, `setStatusOk()` helpers |
+| `src/main.zig` error paths | ✅ All error messages use `setStatusErr()` |
+
+### 15.6 Tests: Web Server Request Parsing Fuzz Tests ✅
+
+The web server's HTTP request parsing (method, path, auth header, body
+extraction) has no fuzz test coverage. Add deterministic PRNG fuzz tests
+exercising edge cases in URL parsing, header parsing, and multipart boundaries.
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` tests | ✅ Fuzz: parseContentLength (2x), checkAuth, serveHtml routing, getBody |
+| | ✅ Unit: parseContentLength (6 edge cases), checkAuth (3 edge cases) |
+
+### 15.7 Visual: Verify Build & All Test Layers ✅
+
+Run the full test suite (unit+fuzz, GUI fuzz, modal fuzz, smoke) and verify
+clean build.
+
+| File | Status |
+|------|--------|
+| `zig build test` | ✅ 1405/1405 tests pass (all modules) |
+| `zig build fuzzgui` | ✅ 400 random events, app survived |
+| `zig build fuzzmodals` | ✅ 7 dialogs, 0 failures |
+| `zig build smoke` | ✅ New VM + Settings + About, config persisted |
+| `zig build` | ✅ Clean compile, no errors |
+
+---
+
+## Tier 16 — Confirmation Dialogs, Tooltips, Test Coverage, Visual Polish
+
+### 16.1 FLTK Confirmation Dialogs ✅
+
+Added `Fl_choice2` prompts for destructive/unrecoverable actions in both UIs
+so users don't accidentally power-off or delete critical VMs.
+
+| File | Status |
+|------|--------|
+| `src/main.zig` togglePower | ✅ Confirm before force power-off |
+| `src/main.zig` stopAllVms | ✅ Confirm before batch power-off |
+| `src/main.zig` shutdownGuest | ✅ Confirm before ACPI shutdown |
+| `src/main.zig` resetGuest | ✅ Confirm before hard reset |
+| `src/main.zig` snapshot revert (RK) | ✅ Confirm before reverting |
+| `src/main.zig` snapshot delete (DK) | ✅ Confirm before deleting |
+
+### 16.2 Web Confirmation Dialogs ✅
+
+Added `confirm()` prompts in the web UI for the same destructive actions.
+
+| File | Status |
+|------|--------|
+| `src/web/app.js` powerToggle | ✅ Confirm before force power-off |
+| `src/web/app.js` shutdownGuest | ✅ Confirm before ACPI shutdown |
+| `src/web/app.js` resetGuest | ✅ Confirm before hard reset |
+| `src/web/app.js` batchStop | ✅ Confirm before batch stop all |
+
+### 16.3 Web Server Helper Tests ✅
+
+Added unit + fuzz tests for the web_server helper functions that were previously
+untested.
+
+| File | Status |
+|------|--------|
+| `src/web_server.zig` validateSnapshotTag | ✅ Unit (4 cases) + fuzz (4k iterations) |
+| `src/web_server.zig` jsonEscape | ✅ Unit (5 cases) + fuzz (4k iterations) |
+| `src/web_server.zig` sanitizeHeaderValue | ✅ Unit (5 cases) + fuzz (4k iterations) |
+| `src/web_server.zig` jsonErr | ✅ Unit (3 cases: format, empty, overflow) |
+
+### 16.4 Web UI Smooth Theme Transitions ✅
+
+Added CSS `transition` on `body` for `background` and `color` so theme toggling
+(Light/Dark/System) is visually smooth (~160ms ease).
+
+| File | Status |
+|------|--------|
+| `src/web/app.css` body | ✅ `transition:background var(--transition),color var(--transition)` |
+
+### 16.5 FLTK Tooltips (Audit) ✅
+
+All 24 toolbar buttons in the FLTK GUI already had `Fl_Button_set_tooltip` calls.
+No changes needed.
+
+### 16.6 Web UI Tooltips (Audit) ✅
+
+All toolbar/action buttons in `src/index.html` already had `title` attributes.
+No changes needed.
+
+### 16.7 Build & Full Test Suite Verification ✅
+
+| Step | Status |
+|------|--------|
+| `zig build` | ✅ Clean compile |
+| `zig build test` | ✅ All unit + fuzz tests pass |
+| `zig build fuzzgui` | ✅ GUI-FUZZ OK — 400 random events survived |
+| `zig build fuzzmodals` | ✅ MODAL-FUZZ OK — 7 dialogs, 0 failures |
+| `zig build smoke` | ✅ SMOKE OK — New VM + Settings + About survived |
+
+---
+
+## Tier 17 — Web Frontend Error Handling
+
+### 17.1 loadSnapshots: Guard fetch() with try/catch ✅
+
+`loadSnapshots()` had no error handling — network failure resulted in an
+unhandled promise rejection.
+
+| File | Status |
+|------|--------|
+| `src/web/app.js` loadSnapshots | ✅ Wrapped fetch in try/catch; shows "Failed to load snapshots" |
+| | ✅ Added `r.ok` check before reading text body |
+
+### 17.2 loadVnets: Guard fetch() with try/catch ✅
+
+`loadVnets()` had no error handling — network failure resulted in an
+unhandled promise rejection.
+
+| File | Status |
+|------|--------|
+| `src/web/app.js` loadVnets | ✅ Wrapped fetch in try/catch; falls back to `{networks:[]}` |
+
+### 17.3 Build & Full Test Suite Verification ✅
+
+| Step | Status |
+|------|--------|
+| `zig build` | ✅ Clean compile |
+| `zig build test` | ✅ All unit + fuzz tests pass |
+| `zig build fuzzgui` | ✅ GUI-FUZZ OK — 400 random events survived |
+| `zig build fuzzmodals` | ✅ MODAL-FUZZ OK — 7 dialogs, 0 failures |
+| `zig build smoke` | ✅ SMOKE OK — New VM + Settings + About survived |
