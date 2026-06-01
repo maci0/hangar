@@ -1040,3 +1040,160 @@ Applied to Content-Disposition filename in `handleDisk2Download` and
 | L15 | Unnecessary allocation: ovf.buildDescriptor uses page_allocator for ~2KB | `src/ovf.zig` | ✅ |
 | L16 | Snapshot list parsing brittle: relies on QMP output format stability | `src/qmp.zig` | ✅ Added 7 additional format-variant tests to snapparse.zig including HMP VM SIZE columns, \r-only line endings, embedded spaces, minimal format, empty/mixed headers; parser now normalizes \r→\n for robustness |
 | L17 | Missing user-agent or server header in responses | `src/web_server.zig` | ✅ |
+
+---
+
+## Tier 14 — Code Quality Audit (July 2026)
+
+Comprehensive audit of all source files found new critical/high/medium/low bugs
+and test-coverage gaps. All items below are fresh and need resolution.
+
+### 14.1 Critical — Stack Buffer Dangling Pointers in setStatus/setDetail ✅
+
+`appstate.zig` `setStatus()` and `setDetail()` format into stack-local `[256]u8`
+buffers and pass `@ptrCast(&buf)` to `cfltk.Fl_Box_set_label`. FLTK's `label()`
+stores the pointer directly (does NOT copy). After the function returns, the
+widget holds a dangling pointer. Same bug in `consoleTimerCB` where
+`Fl_Browser_add` receives a pointer to stack memory.
+
+| File | Status |
+|------|--------|
+| `src/appstate.zig:setStatus()` | ✅ Uses module-level `status_buf` |
+| `src/appstate.zig:setDetail()` | ✅ Uses module-level `detail_buf` |
+| `src/main.zig:consoleTimerCB` | ✅ Uses persistent `console_line_buf` |
+| `src/main.zig:refreshDetails` bufPrintZ sites | ✅ Verified safe — IupSetStrAttribute copies |
+
+### 14.2 Critical — Modal Dialogs Never Freed (Memory Leak) ✅
+
+Every modal dialog in `main.zig` and `dialogs.zig` follows the pattern
+`Fl_Window_show(dlg)` + `Fl_wait()` loop but never calls `Fl_delete_widget(dlg)`.
+Over a long session this leaks entire widget trees.
+
+| File | Status |
+|------|--------|
+| `src/main.zig` — all 10 modal dialogs | ✅ `Fl_delete_widget` after all 5 modal `Fl_wait` loops |
+| `src/dialogs.zig` — all 4 modal dialogs | ✅ `Fl_delete_widget` after all 5 modal `Fl_wait` loops |
+
+### 14.3 High — Silent catch{} on Snapshot Create/Apply/Delete ✅
+
+Snapshot operations in FLTK use `catch {}` with zero user feedback. If a QMP
+snapshot command fails (VM not running, disk full, QMP timeout), the user sees
+no error and believes the operation succeeded.
+
+| File | Status |
+|------|--------|
+| `src/main.zig:884,887` snapshotCreate | ✅ `catch { app.setStatus("Snapshot create failed"); }` |
+| `src/main.zig:945,948` snapshotApply | ✅ `catch { app.setStatus("Snapshot revert failed"); }` |
+| `src/main.zig:965,968` snapshotDelete | ✅ `catch { app.setStatus("Snapshot delete failed"); }` |
+
+### 14.4 High — Serial Reader Thread Silent Death ✅
+
+`serial_console.zig:serialReader` breaks out of its read loop on EOF or error
+but leaves `serial_running = true` and `serial_fd` set. The next
+`serialConnect()` sees the stale fd and returns early. The serial console
+silently stops updating with no user feedback.
+
+| File | Status |
+|------|--------|
+| `src/serial_console.zig` | ✅ Reader thread now resets `serial_running` + closes fd on abnormal exit |
+
+### 14.5 Medium — VNC/SPICE Port Collision on Add/Delete ✅
+
+New VMs get ports `5900+vmid` / `5930+vmid` where `vmid` is the current
+`vm_count`. If VMs are deleted and new ones created, port numbers can collide
+with still-running VMs that were created earlier.
+
+| File | Status |
+|------|--------|
+| `src/main.zig:cloneVm` port allocation | ✅ `findUnusedVncPort`/`findUnusedSpicePort` scan existing VMs |
+| `src/web_server.zig:handleNewVm` port allocation | ✅ Same scanning helpers (new VM, clone, import) |
+
+### 14.6 Medium — Nested Event Loop Re-entrancy ✅
+
+Dialog `Fl_wait()` loops block the main thread but FLTK still dispatches timer
+callbacks (2s `timerCB`, 100ms `displayTimerCB`). These callbacks access global
+state (`app.vms`, `app.selected_idx`, `app.vnc_client`) while dialogs are
+mid-operation.
+
+| File | Status |
+|------|--------|
+| `src/appstate.zig` — add modal_active flag | ✅ |
+| `src/main.zig` — guard timerCB, consoleTimerCB, set modal_active around all 5 dialogs | ✅ |
+| `src/display.zig` — guard displayTimerCB | ✅ |
+| `src/dialogs.zig` — set modal_active around all 5 dialogs | ✅ |
+
+### 14.7 Medium — XSS via VM Names in Web UI ✅
+
+`renderList()` builds the VM list sidebar with `innerHTML` without escaping VM
+names. A malicious VM name containing `<script>` or event handlers would execute
+in the browser. Defense-in-depth: the web API should sanitize VM names.
+
+| File | Status |
+|------|--------|
+| `src/web/app.js:renderList()` | ✅ `escHtml()` escapes `&<>"'` on all user-controlled strings |
+| `src/web_server.zig:handleNewVm()` and `handleRename()` | ✅ Reject names containing `<>&"'` chars |
+
+### 14.8 Medium — consoleTimerCB Dangling Stack Pointer ✅
+
+`consoleTimerCB` in `main.zig` passes a slice of stack-local `tmp` buffer
+to `Fl_Browser_add`. FLTK stores the pointer; after the timer returns, it's
+dangling. Causes garbled text or crashes in the Console tab.
+
+| File | Status |
+|------|--------|
+| `src/main.zig:consoleTimerCB` | ✅ Uses persistent module-level `console_line_buf` |
+
+### 14.9 Low — Web UI: Hardcoded Color in .summary-card:hover ✅
+
+CSS uses `#363d48` (dark-theme color) for hover border. In light theme this is
+nearly invisible. Should use `var(--text-dim)`.
+
+| File | Status |
+|------|--------|
+| `src/web/app.css` | ✅ Changed to `var(--border-focus)` for visibility in both themes |
+
+### 14.10 Low — Web UI: No prefers-reduced-motion Support ✅
+
+Animations (`dialog-in`, `toast-in`, `pulse-dot`, `status-pulse`) are not
+wrapped in `@media (prefers-reduced-motion: reduce)`.
+
+| File | Status |
+|------|--------|
+| `src/web/app.css` | ✅ Added `@media(prefers-reduced-motion:reduce)` disabling animations, pulse, and loading pulse |
+
+### 14.11 Low — Web UI: No focus-visible on select Elements ✅
+
+`<select>` elements lack `:focus-visible` styles. Keyboard users get no
+visual indication of which dropdown is focused.
+
+| File | Status |
+|------|--------|
+| `src/web/app.css` | ✅ Added `dialog select:focus-visible, .settings-form select:focus-visible` with accent outline |
+
+### 14.12 Low — Web UI: No Debounce on Search Input ✅
+
+Search input calls `renderList()` on every `input` event with no debounce.
+With many VMs, each keystroke triggers a full DOM rebuild.
+
+| File | Status |
+|------|--------|
+| `src/web/app.js` | ✅ Added 180ms debounce via `filterTimer`+`setTimeout` on input listener |
+
+### 14.13 Low — Web UI: word-break on Serial Terminal Breaks ANSI ✅
+
+`#serialterm` uses `word-break: break-all` which can split ANSI escape
+sequences mid-sequence, garbling colored output.
+
+| File | Status |
+|------|--------|
+| `src/web/app.css` | ✅ Changed to `word-break: break-word` to preserve ANSI sequences |
+
+### 14.14 Low — FLTK: Fullscreen Mode Has No Visual Indicator ✅
+
+F11 toggles fullscreen with no toolbar/status indication. User may not realize
+state changed.
+
+| File | Status |
+|------|--------|
+| `src/main.zig:fullScreenCB` | ✅ Status bar shows "Full Screen — Press F11 to exit" / "Exited full screen" |
+| `src/main.zig:kbHandler` F11 | ✅ Same status indicators in keyboard handler |

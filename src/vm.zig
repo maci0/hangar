@@ -1122,6 +1122,32 @@ pub fn isValidDisplayPort(port: u16) bool {
     return port >= 5900 and port <= 5999;
 }
 
+/// Find an unused VNC port by scanning existing VMs. Falls back to 5900 + count.
+pub fn findUnusedVncPort(vms: []VmConfig) u16 {
+    var port: u16 = 5900;
+    while (port <= 5999) : (port += 1) {
+        var used = false;
+        for (vms) |*v| {
+            if (v.vnc_port == port) { used = true; break; }
+        }
+        if (!used) return port;
+    }
+    return 5900;
+}
+
+/// Find an unused SPICE port by scanning existing VMs. Falls back to 5930 + count.
+pub fn findUnusedSpicePort(vms: []VmConfig) u16 {
+    var port: u16 = 5930;
+    while (port <= 5999) : (port += 1) {
+        var used = false;
+        for (vms) |*v| {
+            if (v.spice_port == port) { used = true; break; }
+        }
+        if (!used) return port;
+    }
+    return 5930;
+}
+
 /// Clamp memory to a sane range (1 MB to 1 TB). Zero is replaced with min.
 pub fn clampMemory(mb: u32) u32 {
     return std.math.clamp(mb, 1, 1048576);

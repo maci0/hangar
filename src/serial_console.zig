@@ -20,6 +20,12 @@ fn serialReader() void {
         app.serial_len = ringbuf.append(&app.serial_buf, app.serial_len, buf[0..@intCast(n)]);
         app.serial_mutex.unlock();
     }
+    // Clean up after unexpected exit (VM died, socket error, etc.).
+    // If serialDisconnect already set running=false, skip — it handles cleanup.
+    if (@atomicRmw(bool, &app.serial_running, .Xchg, false, .seq_cst)) {
+        _ = std.c.close(fd);
+        app.serial_fd = null;
+    }
 }
 
 /// Connect to the VM's serial Unix socket and start the reader thread.

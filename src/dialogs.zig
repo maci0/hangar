@@ -62,7 +62,10 @@ pub fn aboutDialog() void {
     cfltk.Fl_Button_set_callback(cb, &OK.g, @ptrCast(@alignCast(dlg)));
     cfltk.Fl_Window_end(dlg);
     cfltk.Fl_Window_show(dlg);
+    app.modal_active = true;
     while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
+    app.modal_active = false;
+    cfltk.Fl_delete_widget(@ptrCast(dlg));
 }
 
 pub fn prefsDialog() void {
@@ -182,7 +185,10 @@ pub fn prefsDialog() void {
 
     cfltk.Fl_Window_end(dlg);
     cfltk.Fl_Window_show(dlg);
+    app.modal_active = true;
     while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
+    app.modal_active = false;
+    cfltk.Fl_delete_widget(@ptrCast(dlg));
 }
 
 pub fn vnetDialog() void {
@@ -293,7 +299,10 @@ pub fn vnetDialog() void {
     cfltk.Fl_Button_set_callback(close_btn, &CloseCB.go, &vd);
     cfltk.Fl_Window_end(dlg);
     cfltk.Fl_Window_show(dlg);
+    app.modal_active = true;
     while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
+    app.modal_active = false;
+    cfltk.Fl_delete_widget(@ptrCast(dlg));
 }
 
 pub fn exportOvfDialog() void {
@@ -455,7 +464,10 @@ pub fn remoteConnectDialog() void {
     cfltk.Fl_Button_set_callback(local_btn, &LocalFn.go, &rd);
     cfltk.Fl_Window_end(dlg);
     cfltk.Fl_Window_show(dlg);
+    app.modal_active = true;
     while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
+    app.modal_active = false;
+    cfltk.Fl_delete_widget(@ptrCast(dlg));
 }
 
 pub fn migrateDialog() void {
@@ -610,7 +622,10 @@ pub fn migrateDialog() void {
 
     cfltk.Fl_Window_end(dlg);
     cfltk.Fl_Window_show(dlg);
+    app.modal_active = true;
     while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
+    app.modal_active = false;
+    cfltk.Fl_delete_widget(@ptrCast(dlg));
     md.qc.disconnect();
 }
 

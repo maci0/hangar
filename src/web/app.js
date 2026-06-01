@@ -13,6 +13,7 @@ window.matchMedia('(prefers-color-scheme:light)').addEventListener('change',func
 });
 })();
 var vms=[]; var sel=null; var activeTab='summary';
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function setStatus(s){document.getElementById('statusbar').textContent=s;document.getElementById('statusbar').classList.remove('loading');}
 function setStatusLoading(s){var el=document.getElementById('statusbar');el.textContent='⏳ '+s;el.classList.add('loading');}
 function showToast(msg,type){type=type||'info';var c=document.getElementById('toast-container');var t=document.createElement('div');t.className='toast '+type;t.textContent=msg;c.appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity 300ms ease';setTimeout(function(){if(t.parentNode)c.removeChild(t);},300);},3500);}
@@ -35,15 +36,15 @@ const viz=vms.map((v,i)=>({i,show:!f||v.name.toLowerCase().includes(f),fav:v.fav
 let hasFavs=false,hasNon=false;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;}
 for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star fav" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}
+h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${escHtml(x.v.name)}<span class="star fav" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}
 if(hasFavs&&hasNon)h+='<div style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
 if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}}
+h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${escHtml(x.v.name)}<span class="star" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}}
 e.innerHTML=h||'<div style="color:var(--text-dim);font-size:12px">No VMs</div>';
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+' virtual machine(s)';if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
-if(sel!==null&&sel<vms.length){const v=vms[sel];document.getElementById('statusbar').textContent=v.name+' — '+v.status+'    |    '+parts;}
+if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+' — '+v.status;if(v.started&&v.started>0&&v.status==='running'){const elapsed=Math.floor(Date.now()/1000)-v.started;const hrs=Math.floor(elapsed/3600);const mins=Math.floor((elapsed%3600)/60);const secs=elapsed%60;st+=' | Uptime: '+hrs+':'+String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');}st+='    |    '+parts;document.getElementById('statusbar').textContent=st;}
 else document.getElementById('statusbar').textContent=parts;}
 async function toggleFavorite(i){if(i>=vms.length)return;const v=vms[i];const fav=v.favorite==='true'?'0':'1';
 const r=await apiPost('/api/save/'+i,'favorite='+fav);if(r){v.favorite=fav==='1'?'true':'false';renderList();if(sel===i)renderDetails();}}
@@ -63,19 +64,19 @@ h+=`<div class="summary-card"><div class="card-label">Guest OS</div><div class="
 h+=`<div class="summary-card"><div class="card-label">Memory</div><div class="card-value">${v.mem} MB</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">CPU</div><div class="card-value">${v.cpu} cores</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">Hard Disk</div><div class="card-value">${v.disk} GB</div></div>`;
-if(v.iso_path)h+=`<div class="summary-card"><div class="card-label">CD/DVD</div><div class="card-value">${v.iso_path}</div></div>`;
+if(v.iso_path)h+=`<div class="summary-card"><div class="card-label">CD/DVD</div><div class="card-value">${escHtml(v.iso_path)}</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">Network</div><div class="card-value">${v.net}</div></div>`;
-if(v.mac)h+=`<div class="summary-card"><div class="card-label">MAC</div><div class="card-value">${v.mac}</div></div>`;
+if(v.mac)h+=`<div class="summary-card"><div class="card-label">MAC</div><div class="card-value">${escHtml(v.mac)}</div></div>`;
 if(v.nic2_mode&&v.nic2_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 2</div><div class="card-value">${v.nic2_mode}</div></div>`;
 if(v.nic3_mode&&v.nic3_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 3</div><div class="card-value">${v.nic3_mode}</div></div>`;
-if(v.shared_folder)h+=`<div class="summary-card"><div class="card-label">Shared Folder</div><div class="card-value">${v.shared_folder}</div></div>`;
-if(v.usb_device)h+=`<div class="summary-card"><div class="card-label">USB Device</div><div class="card-value">${v.usb_device}</div></div>`;
+if(v.shared_folder)h+=`<div class="summary-card"><div class="card-label">Shared Folder</div><div class="card-value">${escHtml(v.shared_folder)}</div></div>`;
+if(v.usb_device)h+=`<div class="summary-card"><div class="card-label">USB Device</div><div class="card-value">${escHtml(v.usb_device)}</div></div>`;
 if(v.guest_tools==='true')h+=`<div class="summary-card"><div class="card-label">Guest Tools</div><div class="card-value">✓ installed</div></div>`;
 if(v.autoprotect==='true')h+=`<div class="summary-card"><div class="card-label">AutoProtect</div><div class="card-value">every ${v.autoprotect_interval} min, keep ${v.autoprotect_max}</div></div>`;
 if(v.hasDisk2==='true')h+=`<div class="summary-card"><div class="card-label">Disk 2</div><div class="card-value">${v.disk2_size} GB</div></div>`;
 if(v.hasFloppy==='true')h+=`<div class="summary-card"><div class="card-label">Floppy</div><div class="card-value">attached</div></div>`;
-if(v.port_forwards)h+=`<div class="summary-card"><div class="card-label">Port Forwards</div><div class="card-value">${v.port_forwards}</div></div>`;
-if(v.notes)h+=`<div class="summary-card"><div class="card-label">Notes</div><div class="card-value">${v.notes}</div></div>`;
+if(v.port_forwards)h+=`<div class="summary-card"><div class="card-label">Port Forwards</div><div class="card-value">${escHtml(v.port_forwards)}</div></div>`;
+if(v.notes)h+=`<div class="summary-card"><div class="card-label">Notes</div><div class="card-value">${escHtml(v.notes)}</div></div>`;
 h+='</div>';
 document.getElementById('tabSummary').innerHTML=h;
 updatePowerBtn();}
@@ -98,7 +99,7 @@ async function openSnapshots(){if(sel===null)return;document.getElementById('sna
 async function loadSnapshots(){if(sel===null)return;const r=await fetch('/api/snapshot/list/'+sel);const t=await r.text();
 const el=document.getElementById('snaplist');if(!t||t==='(none)'){el.innerHTML='<div style="color:var(--text-dim)">No snapshots</div>';return;}
 const lines=t.split('\n');let h='';for(const ln of lines){const tag=ln.trim();if(!tag)continue;
-h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"><span>${tag}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" data-action="revertSnapshot" data-snap-tag="${tag}">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" data-action="deleteSnapshot" data-snap-tag="${tag}">Del</button></span></div>`;}
+h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"><span>${escHtml(tag)}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}">Del</button></span></div>`;}
 el.innerHTML=h;}
 async function revertSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Revert to snapshot "'+tag+'"? This will discard current state.'))return;
 const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);snapdlg.close();}}
@@ -559,12 +560,16 @@ var actionHandlers={
  filterList:function(){filterList();},
  onVnetSelect:function(){onVnetSelect();}
 };
+var filterTimer=null;
 document.body.addEventListener('click',function(e){
  var el=e.target.closest('[data-action]');if(!el)return;
  var action=el.getAttribute('data-action');var h=actionHandlers[action];if(h)h(el);
 });
 document.body.addEventListener('input',function(e){
- var el=e.target.closest('[data-action="filterList"]');if(el)filterList();
+ var el=e.target.closest('[data-action="filterList"]');if(el){
+  if(filterTimer)clearTimeout(filterTimer);
+  filterTimer=setTimeout(filterList,180);
+ }
 });
 document.body.addEventListener('change',function(e){
  var el=e.target.closest('[data-action]');if(!el)return;

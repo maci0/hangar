@@ -198,27 +198,32 @@ pub var remote_url: [128]u8 = [_]u8{0} ** 128;
 pub var remote_url_len: usize = 0;
 pub var web_running: bool = false;
 pub var web_thread: ?std.Thread = null;
+pub var modal_active: bool = false;
+
+/// Persistent buffers for FLTK labels — FLTK's label() stores pointers
+/// directly, so values must outlive the call site.
+var status_buf: [256]u8 = [_]u8{0} ** 256;
+var detail_buf: [12][256]u8 = [_][256]u8{[_]u8{0} ** 256} ** 12;
+var status_detail_buf: [200]u8 = [_]u8{0} ** 200;
 
 /// Set the status bar text.
 pub fn setStatus(msg: []const u8) void {
     if (status_bar) |sb| {
-        var buf: [256]u8 = undefined;
         const truncated = if (msg.len <= 255) msg else msg[0..255];
-        @memcpy(buf[0..truncated.len], truncated);
-        buf[truncated.len] = 0;
-        cfltk.Fl_Box_set_label(sb, @ptrCast(&buf));
+        @memcpy(status_buf[0..truncated.len], truncated);
+        status_buf[truncated.len] = 0;
+        cfltk.Fl_Box_set_label(sb, @ptrCast(&status_buf));
     }
 }
 
 /// Set a detail label value by index (used by refreshDetails).
 pub fn setDetail(i: usize, value: []const u8) void {
-    if (i < detail_labels.len) {
+    if (i < detail_labels.len and i < detail_buf.len) {
         if (detail_labels[i]) |dl| {
-            var buf: [256]u8 = undefined;
             const truncated = if (value.len <= 255) value else value[0..255];
-            @memcpy(buf[0..truncated.len], truncated);
-            buf[truncated.len] = 0;
-            cfltk.Fl_Box_set_label(dl, @ptrCast(&buf));
+            @memcpy(detail_buf[i][0..truncated.len], truncated);
+            detail_buf[i][truncated.len] = 0;
+            cfltk.Fl_Box_set_label(dl, @ptrCast(&detail_buf[i]));
         }
     }
 }
@@ -377,17 +382,16 @@ pub fn refreshDetails() void {
                     setDetail(11, "Disabled");
                 }
                 if (status_bar) |s| {
-                    var sbuf: [200]u8 = undefined;
                     if (v.isAlive() and vm_started[idx] > 0) {
                         const elapsed: u64 = @intCast(vm_started[idx]);
                         const hrs = elapsed / 3600;
                         const mins = (elapsed % 3600) / 60;
                         const secs = elapsed % 60;
-                        const st = std.fmt.bufPrintZ(&sbuf, "{s} — {s} | Uptime: {d}:{d:0>2}:{d:0>2} | {d} VM(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), hrs, mins, secs, vm_count }) catch "Running";
-                        cfltk.Fl_Box_set_label(s, st.ptr);
+                        _ = std.fmt.bufPrintZ(&status_detail_buf, "{s} — {s} | Uptime: {d}:{d:0>2}:{d:0>2} | {d} VM(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), hrs, mins, secs, vm_count }) catch {};
+                        cfltk.Fl_Box_set_label(s, @ptrCast(&status_detail_buf));
                     } else {
-                        const st = std.fmt.bufPrintZ(&sbuf, "{s} — {s}    |    {d} virtual machine(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), vm_count }) catch "Ready";
-                        cfltk.Fl_Box_set_label(s, st.ptr);
+                        _ = std.fmt.bufPrintZ(&status_detail_buf, "{s} — {s}    |    {d} virtual machine(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), vm_count }) catch {};
+                        cfltk.Fl_Box_set_label(s, @ptrCast(&status_detail_buf));
                     }
                 }
                 return;
@@ -396,9 +400,8 @@ pub fn refreshDetails() void {
         cfltk.Fl_Box_set_label(l, "No virtual machine selected.");
         for (&detail_labels) |*dl| { if (dl.*) |d| cfltk.Fl_Box_set_label(d, ""); }
         if (status_bar) |s| {
-            var sbuf: [64]u8 = undefined;
-            const st = std.fmt.bufPrintZ(&sbuf, "{d} virtual machine(s)", .{vm_count}) catch "Ready";
-            cfltk.Fl_Box_set_label(s, st.ptr);
+            _ = std.fmt.bufPrintZ(&status_detail_buf, "{d} virtual machine(s)", .{vm_count}) catch {};
+            cfltk.Fl_Box_set_label(s, @ptrCast(&status_detail_buf));
         }
     }
 }

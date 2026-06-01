@@ -14,6 +14,7 @@ const cfltk = @import("cfltk_import.zig").c;
 /// Polling callback (100 ms). Reads the VNC or SPICE framebuffer,
 /// renders it via GPU (OpenGL) if available, falling back to software.
 pub fn displayTimerCB(_: ?*anyopaque) callconv(.c) void {
+    if (app.modal_active) { _ = cfltk.Fl_repeat_timeout(0.1, displayTimerCB, null); return; }
     if (app.gl_display != null) {
         // GL path: render directly to the Fl_Gl_Window
         if (app.vnc_client) |vc| {

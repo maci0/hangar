@@ -35,6 +35,7 @@ const HTTP_INTERNAL_ERROR: u16 = 500;
 
 var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
 var vm_count: usize = 0;
+var vm_started: [MAX_VMS]i64 = [_]i64{0} ** MAX_VMS;
 var vms_mutex: sync.SpinMutex = .{};
 var prefs: vm.Prefs = .{};
 
@@ -784,7 +785,7 @@ fn renderJson(buf: []u8) usize {
 
         // Remaining fields
         const part2 = std.fmt.bufPrint(buf[w..],
-            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}}}
         , .{
             if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
             std.mem.span(v.nics[1].mode.toStr()),
@@ -805,6 +806,7 @@ fn renderJson(buf: []u8) usize {
             v.vnc_port,
             v.spice_port,
             if (v.favorite) "true" else "false",
+            vm_started[i],
         }) catch break;
         w += part2.len;
     }
@@ -835,12 +837,14 @@ fn handlePower(req: []const u8) ![]const u8 {
             qemu.reapVm(v);
         }
         destroyVmmHandle(idx);
+        vm_started[idx] = 0;
     } else {
         if (getVmmHandle(idx)) |h| {
             g_vmm.startFn(h, @ptrCast(v)) catch return "start err";
         } else {
             qemu.startVm(v, std.heap.page_allocator) catch return "start err";
         }
+        vm_started[idx] = time(null);
     }
     persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
@@ -860,7 +864,10 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         var kv = std.mem.splitScalar(u8, pair, '=');
         const key = kv.next() orelse continue;
         const val = kv.next() orelse continue;
-        if (std.mem.eql(u8, key, "name")) cfg.setName(val);
+        if (std.mem.eql(u8, key, "name")) {
+            if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
+            cfg.setName(val);
+        }
         if (std.mem.eql(u8, key, "mem")) cfg.memory_mb = std.fmt.parseInt(u32, val, 10) catch 2048;
         if (std.mem.eql(u8, key, "cpu")) cfg.cpu_cores = std.fmt.parseInt(u32, val, 10) catch 2;
         if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = std.fmt.parseInt(u32, val, 10) catch 20;
@@ -868,6 +875,8 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     cfg.setMacAddress(std.mem.span(mac));
+    cfg.vnc_port = vm.findUnusedVncPort(vms[0..vm_count]);
+    cfg.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
     vms[vm_count] = cfg;
     vm_count += 1;
     persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
@@ -891,8 +900,8 @@ fn handleClone(req: []const u8) ![]const u8 {
     clone.setName(cn);
     clone.status = .stopped;
     clone.pid = null;
-    clone.vnc_port = 5900 + @as(u16, @intCast(vm_count));
-    clone.spice_port = 5930 + @as(u16, @intCast(vm_count));
+    clone.vnc_port = vm.findUnusedVncPort(vms[0..vm_count]);
+    clone.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     clone.setMacAddress(std.mem.span(mac));
@@ -960,7 +969,10 @@ fn handleSave(req: []const u8) ![]const u8 {
         var kv = std.mem.splitScalar(u8, pair, '=');
         const key = kv.next() orelse continue;
         const val = kv.next() orelse continue;
-        if (std.mem.eql(u8, key, "name")) v.setName(val);
+        if (std.mem.eql(u8, key, "name")) {
+            if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
+            v.setName(val);
+        }
         if (std.mem.eql(u8, key, "mem")) v.memory_mb = std.fmt.parseInt(u32, val, 10) catch v.memory_mb;
         if (std.mem.eql(u8, key, "cpu")) v.cpu_cores = std.fmt.parseInt(u32, val, 10) catch v.cpu_cores;
         if (std.mem.eql(u8, key, "cpu_sockets")) v.cpu_sockets = std.fmt.parseInt(u32, val, 10) catch v.cpu_sockets;
@@ -1096,6 +1108,7 @@ fn handleRename(req: []const u8) ![]const u8 {
         const key = kv.next() orelse continue;
         const val = kv.next() orelse continue;
         if (std.mem.eql(u8, key, "name")) {
+            if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
             vms[idx].setName(val);
             persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
             return "ok";
@@ -1288,6 +1301,8 @@ fn handleImport(req: []const u8) ![]const u8 {
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     cfg.setMacAddress(std.mem.span(mac));
+    cfg.vnc_port = vm.findUnusedVncPort(vms[0..vm_count]);
+    cfg.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
     vms[vm_count] = cfg;
     vm_count += 1;
     persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
