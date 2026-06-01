@@ -18,7 +18,9 @@ function setStatusLoading(s){var el=document.getElementById('statusbar');el.text
 function showToast(msg,type){type=type||'info';var c=document.getElementById('toast-container');var t=document.createElement('div');t.className='toast '+type;t.textContent=msg;c.appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity 300ms ease';setTimeout(function(){if(t.parentNode)c.removeChild(t);},300);},3500);}
 var apiPostPending=0;
 async function apiPost(url,body){var prev=document.getElementById('statusbar').textContent;setStatusLoading('Working...');apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':'kvmgui'}};var r=await fetch(url,opts);if(!r.ok)throw new Error(r.status);apiPostPending--;if(apiPostPending<=0)setStatus(prev);return r;}catch(e){apiPostPending--;if(apiPostPending<=0)setStatus('Error: '+e.message);showToast(e.message||'Request failed','error');return null;}}
-function toggleSidebar(){const aside=document.querySelector('aside');aside.classList.toggle('open');document.body.classList.toggle('sidebar-overlay');}
+var sidebarOpen=false;
+function toggleSidebar(){sidebarOpen=!sidebarOpen;const aside=document.querySelector('aside');if(sidebarOpen){aside.classList.add('open');document.body.classList.add('sidebar-overlay');}else{aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}}
+function closeSidebar(){if(!sidebarOpen)return;sidebarOpen=false;const aside=document.querySelector('aside');aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}
 function clearSearch(){document.getElementById('search').value='';filterList();}
 function switchTab(tab){if(activeTab===tab)return;activeTab=tab;
 document.getElementById('tabSummary').style.display=tab==='summary'?'block':'none';
@@ -33,11 +35,11 @@ const viz=vms.map((v,i)=>({i,show:!f||v.name.toLowerCase().includes(f),fav:v.fav
 let hasFavs=false,hasNon=false;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;}
 for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-h+=`<div class="vm-item${sel===x.i?' active':''}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star fav" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}
+h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star fav" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}
 if(hasFavs&&hasNon)h+='<div style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
 if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-h+=`<div class="vm-item${sel===x.i?' active':''}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}}
+h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}}
 e.innerHTML=h||'<div style="color:var(--text-dim);font-size:12px">No VMs</div>';
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+' virtual machine(s)';if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
@@ -45,7 +47,8 @@ if(sel!==null&&sel<vms.length){const v=vms[sel];document.getElementById('statusb
 else document.getElementById('statusbar').textContent=parts;}
 async function toggleFavorite(i){if(i>=vms.length)return;const v=vms[i];const fav=v.favorite==='true'?'0':'1';
 const r=await apiPost('/api/save/'+i,'favorite='+fav);if(r){v.favorite=fav==='1'?'true':'false';renderList();if(sel===i)renderDetails();}}
-function select(i){sel=i;renderList();if(sel!==null){if(activeTab==='summary')renderDetails();else editVm();}else{showEmptyState();}updatePowerBtn();}
+function select(i){sel=i;renderList();closeSidebar();if(sel!==null){if(activeTab==='summary')renderDetails();else editVm();}else{showEmptyState();}updatePowerBtn();}
+function deselectVm(){sel=null;renderList();showEmptyState();updatePowerBtn();}
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
 document.getElementById('vmname').textContent='Select a VM';document.getElementById('tabBar').style.display='none';
 t.innerHTML='<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to view its details, or create a new one.</p></div>';
@@ -60,6 +63,7 @@ h+=`<div class="summary-card"><div class="card-label">Guest OS</div><div class="
 h+=`<div class="summary-card"><div class="card-label">Memory</div><div class="card-value">${v.mem} MB</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">CPU</div><div class="card-value">${v.cpu} cores</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">Hard Disk</div><div class="card-value">${v.disk} GB</div></div>`;
+if(v.iso_path)h+=`<div class="summary-card"><div class="card-label">CD/DVD</div><div class="card-value">${v.iso_path}</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">Network</div><div class="card-value">${v.net}</div></div>`;
 if(v.mac)h+=`<div class="summary-card"><div class="card-label">MAC</div><div class="card-value">${v.mac}</div></div>`;
 if(v.nic2_mode&&v.nic2_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 2</div><div class="card-value">${v.nic2_mode}</div></div>`;
@@ -188,27 +192,59 @@ function vnetDefaults(){const def=[{name:'VMnet0',type:'bridged',subnet:'',mask:
 vnetsData={networks:def};vnetIdx=0;renderVnetList();}
 async function vnetSaveAll(){const r=await apiPost('/api/vnets/save',JSON.stringify(vnetsData));if(r){document.getElementById('vnetdlg').close();setStatus('VNet settings saved.');}}
 // ── Preferences ──
-async function openPrefs(){const r=await fetch('/api/config');const cfg=r.ok?await r.json():{};
+async function openPrefs(){let cfg={};try{const r=await fetch('/api/config');if(r.ok)cfg=await r.json();}catch(e){}
 document.getElementById('p_theme').value=cfg.theme||window.kvmguiTheme||'system';document.getElementById('p_default_memory_mb').value=cfg.default_memory_mb||2048;
 document.getElementById('p_default_cpu_cores').value=cfg.default_cpu_cores||2;document.getElementById('p_autoprotect_enabled').value=cfg.autoprotect_enabled_default?'1':'0';
 document.getElementById('p_autoprotect_interval').value=cfg.autoprotect_interval_min_default||60;document.getElementById('p_autoprotect_max').value=cfg.autoprotect_max_default||10;
 document.getElementById('prefsdlg').showModal();}
+function openAbout(){document.getElementById('aboutdlg').showModal();}
 async function savePrefs(){const body=['theme','default_memory_mb','default_cpu_cores','autoprotect_enabled','autoprotect_interval','autoprotect_max']
 .map(id=>{const el=document.getElementById('p_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
 const r=await apiPost('/api/config',body);if(r){const el=document.getElementById('p_theme');if(el)window.applyTheme(el.value);document.getElementById('prefsdlg').close();setStatus('Preferences saved.');}}
 // ── Dialog Backdrop Click-to-Close ──
-['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg'].forEach(function(id){var dlg=document.getElementById(id);dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});});
+['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg'].forEach(function(id){var dlg=document.getElementById(id);dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});});
 // ── Sidebar Overlay Click-to-Close ──
-document.body.addEventListener('click',function(e){if(document.body.classList.contains('sidebar-overlay')&&!e.target.closest('aside')){document.querySelector('aside').classList.remove('open');document.body.classList.remove('sidebar-overlay');}});
+document.body.addEventListener('click',function(e){if(document.body.classList.contains('sidebar-overlay')&&!e.target.closest('aside')){closeSidebar();}});
+// ── Right-Click Context Menu ──
+let ctxMenu=null,ctxVmIdx=-1;
+function hideCtxMenu(){if(ctxMenu){ctxMenu.remove();ctxMenu=null;ctxVmIdx=-1;}}
+document.addEventListener('click',function(e){if(ctxMenu&&!ctxMenu.contains(e.target))hideCtxMenu();});
+document.getElementById('vmlist').addEventListener('contextmenu',function(e){
+  var item=e.target.closest('.vm-item');if(!item){hideCtxMenu();return;}
+  var idx=parseInt(item.getAttribute('data-vm-index'));if(isNaN(idx)||idx>=vms.length){hideCtxMenu();return;}
+  ctxVmIdx=idx;hideCtxMenu();
+  e.preventDefault();
+  ctxMenu=document.createElement('div');ctxMenu.className='ctx-menu';
+  ctxMenu.style.position='fixed';ctxMenu.style.left=e.clientX+'px';ctxMenu.style.top=e.clientY+'px';
+  ctxMenu.style.background='var(--surface)';ctxMenu.style.border='1px solid var(--border)';ctxMenu.style.borderRadius='var(--radius)';
+  ctxMenu.style.boxShadow='var(--shadow-lg)';ctxMenu.style.padding='4px';ctxMenu.style.zIndex='9999';ctxMenu.style.minWidth='170px';
+  var items=[
+    ['▶ Power On/Off',function(){if(ctxVmIdx>=0){select(ctxVmIdx);powerToggle();}}],
+    ['⚙ Settings',function(){if(ctxVmIdx>=0){select(ctxVmIdx);editVm();}}],
+    ['✎ Rename',function(){if(ctxVmIdx>=0){select(ctxVmIdx);renameGuest();}}],
+    ['⧉ Clone',function(){if(ctxVmIdx>=0){select(ctxVmIdx);cloneGuest();}}],
+    ['✕ Delete',function(){if(ctxVmIdx>=0){select(ctxVmIdx);if(confirm('Delete this VM?'))deleteVm();}}]
+  ];
+  items.forEach(function(pair){var lbl=pair[0],fn=pair[1];var mi=document.createElement('div');mi.className='ctx-item';
+    mi.style.padding='6px 12px';mi.style.borderRadius='4px';mi.style.cursor='pointer';mi.style.fontSize='13px';
+    mi.style.color='var(--text)';mi.textContent=lbl;
+    mi.addEventListener('mouseenter',function(){mi.style.background='var(--accent-subtle)';});
+    mi.addEventListener('mouseleave',function(){mi.style.background='';});
+    mi.addEventListener('click',function(){hideCtxMenu();fn();});
+    ctxMenu.appendChild(mi);});
+  document.body.appendChild(ctxMenu);
+});
 // ── Keyboard Shortcuts ──
 document.addEventListener('keydown',function(e){if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
 if(e.key==='Escape'){
-  var anyOpen=false;['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg'].forEach(function(id){var d=document.getElementById(id);if(d.open){d.close();anyOpen=true;}});
+  var anyOpen=false;['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg'].forEach(function(id){var d=document.getElementById(id);if(d.open){d.close();anyOpen=true;}});
   if(!anyOpen&&sel!==null){sel=null;renderList();showEmptyState();}
   return;
 }
 if(e.ctrlKey&&e.key==='n'){e.preventDefault();newVm();return;}
 if(e.ctrlKey&&e.key==='e'){e.preventDefault();if(sel!==null)editVm();return;}
+if(e.ctrlKey&&e.key==='w'){e.preventDefault();deselectVm();return;}
+if(e.ctrlKey&&e.key==='Enter'){e.preventDefault();if(sel!==null)editVm();return;}
 if(e.key==='Delete'){if(sel!==null)deleteVm();return;}
 if(e.key==='Enter'){if(sel!==null)powerToggle();return;}
 });
@@ -220,9 +256,10 @@ let fbCanvas=document.getElementById('fbcanvas'),fbCtx=fbCanvas.getContext('2d')
 async function startFb(){if(sel===null){document.getElementById('display').style.display='none';if(fbInterval)clearInterval(fbInterval);return;}
 document.getElementById('display').style.display='block';
 if(fbInterval)clearInterval(fbInterval);fbInterval=setInterval(async()=>{if(sel===null||sel>=vms.length)return;const v=vms[sel];if(v.status!=='running')return;
-try{const r=await fetch('/api/fb/'+sel);if(!r.ok)return;const buf=await r.arrayBuffer();const w=640,h=480;const needed=w*h*4;if(buf.byteLength<needed)return;fbCanvas.width=w;fbCanvas.height=h;
-const img=fbCtx.createImageData(w,h);const src=new Uint8Array(buf);const dst=img.data;for(let i=0;i<w*h;i++){const o=i*4;dst[o]=src[o+2];dst[o+1]=src[o+1];dst[o+2]=src[o];dst[o+3]=255;}
-fbCtx.putImageData(img,0,0);}catch(e){}},200)};
+try{const r=await fetch('/api/fb/'+sel);if(!r.ok)return;const buf=await r.arrayBuffer();if(buf.byteLength<54)return;
+const blob=new Blob([buf],{type:'image/bmp'});const url=URL.createObjectURL(blob);
+const img=new Image();img.onload=function(){fbCanvas.width=img.width;fbCanvas.height=img.height;fbCtx.drawImage(img,0,0);URL.revokeObjectURL(url);};
+img.onerror=function(){URL.revokeObjectURL(url);};img.src=url;}catch(e){}},200)};
 setInterval(()=>{if(sel!==null&&sel<vms.length&&vms[sel].status==='running')startFb();},2000);
 // Serial console
 let serialWs=null,serialIdx=null,serialManualOff=false;
@@ -235,7 +272,26 @@ serialWs.onclose=()=>{stopSerial();};
 serialWs.onerror=()=>{stopSerial();};}
 function stopSerial(){if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;const term=document.getElementById('serialterm');if(term)term.value='';document.getElementById('serialpanel').style.display='none';}
 function manualDisconnectSerial(){serialManualOff=true;stopSerial();}
-document.getElementById('serialterm').addEventListener('keydown',e=>{if(!serialWs||serialWs.readyState!==WebSocket.OPEN)return;
-e.preventDefault();let s=e.key;if(e.key==='Enter')s='\r\n';else if(e.key==='Backspace')s='\x08';else if(e.key==='Tab')s='\t';
-if(s.length===1||s==='\r\n'||s==='\x08'||s==='\t')serialWs.send(s);});
+document.getElementById('serialterm').addEventListener('keydown',function(e){if(!serialWs||serialWs.readyState!==WebSocket.OPEN)return;
+e.preventDefault();e.stopPropagation();
+var s=null;
+if(e.ctrlKey&&!e.altKey&&!e.metaKey){
+ if(e.key.length===1){var cc=e.key.charCodeAt(0);if(cc>=64&&cc<=95)s=String.fromCharCode(cc-64);else if(cc>=97&&cc<=122)s=String.fromCharCode(cc-96);}
+ else if(e.key===' '||e.key==='Spacebar')s='\x00';
+}else if(!e.altKey&&!e.metaKey){
+ switch(e.key){
+  case'Enter':s='\r\n';break;case'Backspace':s='\x08';break;case'Tab':s='\t';break;
+  case'Delete':s='\x1b[3~';break;case'Escape':s='\x1b';break;
+  case'ArrowUp':s='\x1b[A';break;case'ArrowDown':s='\x1b[B';break;
+  case'ArrowRight':s='\x1b[C';break;case'ArrowLeft':s='\x1b[D';break;
+  case'Home':s='\x1b[H';break;case'End':s='\x1b[F';break;
+  case'PageUp':s='\x1b[5~';break;case'PageDown':s='\x1b[6~';break;
+  case'Insert':s='\x1b[2~';break;
+  case'F1':s='\x1bOP';break;case'F2':s='\x1bOQ';break;case'F3':s='\x1bOR';break;case'F4':s='\x1bOS';break;
+  case'F5':s='\x1b[15~';break;case'F6':s='\x1b[17~';break;case'F7':s='\x1b[18~';break;case'F8':s='\x1b[19~';break;
+  case'F9':s='\x1b[20~';break;case'F10':s='\x1b[21~';break;case'F11':s='\x1b[23~';break;case'F12':s='\x1b[24~';break;
+  default:if(e.key.length===1)s=e.key;break;
+ }
+}
+if(s)serialWs.send(s);});
 setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&serialIdx!==sel)serialManualOff=false;if(v.status==='running'&&v.hasSerial)startSerial(sel);else stopSerial();}},3000);

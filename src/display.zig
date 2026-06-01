@@ -63,7 +63,9 @@ pub fn renderFramebuffer(
     const src_slice: []const u8 = fb[0 .. @as(usize, @intCast(fh)) * stride];
     fbmath.bgraToRgba(rgba, src_slice, @intCast(fw), @intCast(fh), stride, dst_stride);
 
-    const img = cfltk.Fl_RGB_Image_new(@ptrCast(rgba.ptr), fw, fh, 4, 0);
+    // Copy the pixel data (Ld=1) so FLTK owns its own buffer — avoids
+    // use-after-free when we release `rgba` below.
+    const img = cfltk.Fl_RGB_Image_new(@ptrCast(rgba.ptr), fw, fh, 4, 1);
     if (img == null) return;
 
     if (fw > box_w or fh > box_h) {

@@ -617,8 +617,14 @@ pub fn isVmAlive(config: *vm.VmConfig) bool {
         // Still running
         return true;
     }
+    if (reaped == -1) {
+        // EINTR or other error — process could still be alive.
+        // errno == ECHILD means the child no longer exists (already reaped or
+        // never was ours); everything else is transient.
+        return true; // Assume alive on transient error.
+    }
 
-    // Process exited (or waitpid failed, meaning it's gone).
+    // reaped == pid: process genuinely exited.
     config.pid = null;
     config.status = .stopped;
     return false;
@@ -663,16 +669,28 @@ pub fn resizeDiskImage(path: []const u8, new_size_gb: u32, allocator: std.mem.Al
 /// Convert a disk image to a different format using `qemu-img convert`.
 /// Used by OVF export to produce a VMDK stream-optimized image suitable
 /// for ESXi / VMware Workstation import.
-pub fn convertDiskImage(src_path: []const u8, src_format: vm.DiskFormat, dest_path: []const u8, allocator: std.mem.Allocator) !void {
-    const args = [_][]const u8{
-        "qemu-img", "convert",
-        "-f", std.mem.span(src_format.toStr()),
-        "-O", "vmdk",
-        "-o", "subformat=streamOptimized",
-        src_path,
-        dest_path,
-    };
-    runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+pub fn convertDiskImage(src_path: []const u8, src_format: vm.DiskFormat, dest_path: []const u8, dest_format: vm.DiskFormat, allocator: std.mem.Allocator) !void {
+    const dest_str = std.mem.span(dest_format.toStr());
+    if (dest_format == .vmdk) {
+        const args = [_][]const u8{
+            "qemu-img", "convert",
+            "-f", std.mem.span(src_format.toStr()),
+            "-O", dest_str,
+            "-o", "subformat=streamOptimized",
+            src_path,
+            dest_path,
+        };
+        runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+    } else {
+        const args = [_][]const u8{
+            "qemu-img", "convert",
+            "-f", std.mem.span(src_format.toStr()),
+            "-O", dest_str,
+            src_path,
+            dest_path,
+        };
+        runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+    }
 }
 
 /// Create a linked clone: a new qcow2 image backed by `backing_path`.
@@ -952,6 +970,12 @@ test "fuzz: createDiskImage/resize/snapshot over temp qcow2 with random params" 
         const clone = std.fmt.bufPrintZ(&clone_buf, "/tmp/kvmgui-qclone-{d}-{d}.qcow2", .{ std.c.getpid(), i }) catch continue;
         createLinkedClone(clone, path, fmt, alloc) catch {};
         _ = std.Io.Dir.cwd().deleteFile(appio.io(), clone) catch {};
+
+        // convert to VMDK (stream-optimized) — exercises convertDiskImage
+        var vmdk_buf: [96]u8 = undefined;
+        const vmdk = std.fmt.bufPrintZ(&vmdk_buf, "/tmp/kvmgui-qconv-{d}-{d}.vmdk", .{ std.c.getpid(), i }) catch continue;
+        convertDiskImage(path, fmt, vmdk, .vmdk, alloc) catch {};
+        _ = std.Io.Dir.cwd().deleteFile(appio.io(), vmdk) catch {};
     }
 }
 

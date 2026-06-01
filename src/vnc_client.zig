@@ -201,9 +201,11 @@ pub const VncClient = struct {
                 break;
             }
             if (result > 0) {
-                self.mutex.lock();
+                // Do NOT hold the mutex across HandleRFBServerMessage — its
+                // callbacks (onMallocFb, etc.) acquire it, and SpinMutex is
+                // non-reentrant.  The callbacks lock internally when they touch
+                // the framebuffer / dirty flag.
                 const ok = c.HandleRFBServerMessage(self.rfb);
-                self.mutex.unlock();
                 if (ok == 0) {
                     @atomicStore(bool, &self.connected, false, .seq_cst);
                     break;

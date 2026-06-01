@@ -40,3 +40,51 @@ pub fn remoteRefreshVmList() void {
     var tmp_prefs: vm.Prefs = .{};
     app.vm_count = persist.loadFromSlice(&app.vms, buf[0..n], &tmp_prefs);
 }
+
+// ── tests ──────────────────────────────────────────────────────────
+const testing = std.testing;
+
+test "apiGet: returns 0 when remote_mode is false" {
+    app.remote_mode = false;
+    var buf: [256]u8 = undefined;
+    const n = apiGet("/api/vms", &buf);
+    try testing.expectEqual(@as(usize, 0), n);
+}
+
+test "apiGet: returns 0 when remote_url_len is 0" {
+    app.remote_mode = true;
+    app.remote_url_len = 0;
+    var buf: [256]u8 = undefined;
+    const n = apiGet("/api/vms", &buf);
+    try testing.expectEqual(@as(usize, 0), n);
+}
+
+test "apiPost: returns 0 when remote_mode is false" {
+    app.remote_mode = false;
+    var buf: [256]u8 = undefined;
+    const n = apiPost("/api/power/0", "body", &buf);
+    try testing.expectEqual(@as(usize, 0), n);
+}
+
+test "apiPost: returns 0 when remote_url_len is 0" {
+    app.remote_mode = true;
+    app.remote_url_len = 0;
+    var buf: [256]u8 = undefined;
+    const n = apiPost("/api/power/0", "body", &buf);
+    try testing.expectEqual(@as(usize, 0), n);
+}
+
+test "remoteRefreshVmList: no-op when not in remote mode" {
+    app.remote_mode = false;
+    const before = app.vm_count;
+    remoteRefreshVmList();
+    try testing.expectEqual(before, app.vm_count);
+}
+
+test "remoteRefreshVmList: no-op when remote_url_len is 0" {
+    app.remote_mode = true;
+    app.remote_url_len = 0;
+    const before = app.vm_count;
+    remoteRefreshVmList();
+    try testing.expectEqual(before, app.vm_count);
+}

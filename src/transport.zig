@@ -33,7 +33,24 @@ pub const Url = struct {
             std.mem.copyForwards(u8, &u.path, rest[0..u.path_len]);
             return u;
         }
-        // TCP: parse host:port
+        // TCP: parse host:port.  IPv6 addresses are wrapped in brackets: [::1]:9080.
+        if (rest.len > 0 and rest[0] == '[') {
+            if (std.mem.indexOfScalar(u8, rest, ']')) |rbracket| {
+                const host_slice = rest[1..rbracket];
+                u.host_len = @min(host_slice.len, u.host.len);
+                std.mem.copyForwards(u8, &u.host, host_slice[0..u.host_len]);
+                const after = rest[rbracket + 1 ..];
+                if (after.len > 0 and after[0] == ':') {
+                    const port_str = after[1..];
+                    if (std.mem.indexOfScalar(u8, port_str, '/')) |slash| {
+                        u.port = std.fmt.parseInt(u16, port_str[0..slash], 10) catch 9080;
+                    } else {
+                        u.port = std.fmt.parseInt(u16, port_str, 10) catch 9080;
+                    }
+                }
+                return u;
+            }
+        }
         if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
             u.host_len = @min(colon, u.host.len);
             std.mem.copyForwards(u8, &u.host, rest[0..u.host_len]);
@@ -198,12 +215,22 @@ fn shmRequest(conn: *Connection, method: []const u8, path: []const u8, body: ?[]
     return 0;
 }
 
+/// Write all bytes, looping until complete or error.
+fn writeAll(fd: c.fd_t, data: []const u8) void {
+    var off: usize = 0;
+    while (off < data.len) {
+        const n = c.write(fd, data[off..].ptr, data.len - off);
+        if (n <= 0) return;
+        off += @intCast(n);
+    }
+}
+
 fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u8, body: ?[]const u8, out: []u8) usize {
     var req_buf: [512]u8 = undefined;
     const body_len = if (body) |b| b.len else 0;
     const req = std.fmt.bufPrintZ(&req_buf, "{s} {s} HTTP/1.0\r\nHost: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ method, path, host, body_len }) catch return 0;
-    _ = c.write(fd, req.ptr, req.len);
-    if (body) |b| { _ = c.write(fd, b.ptr, b.len); }
+    writeAll(fd, req.ptr[0..req.len]);
+    if (body) |b| { writeAll(fd, b); }
 
     var total: usize = 0;
     while (total < out.len) {
@@ -225,8 +252,8 @@ fn rawRequest(fd: c.fd_t, method: []const u8, path: []const u8, body: ?[]const u
     // "METHOD /path\r\n" + optional body, then read response
     var req_buf: [512]u8 = undefined;
     const req = std.fmt.bufPrintZ(&req_buf, "{s} /{s}\r\n", .{ method, path }) catch return 0;
-    _ = c.write(fd, req.ptr, req.len);
-    if (body) |b| { _ = c.write(fd, b.ptr, b.len); _ = c.write(fd, "\r\n", 2); }
+    writeAll(fd, req.ptr[0..req.len]);
+    if (body) |b| { writeAll(fd, b); writeAll(fd, "\r\n"); }
 
     var total: usize = 0;
     while (total < out.len) {
@@ -262,6 +289,27 @@ test "Url parse: no scheme defaults to tcp" {
     try std.testing.expectEqual(Proto.tcp, u.proto);
     try std.testing.expectEqualStrings("192.168.1.1", u.host[0..u.host_len]);
     try std.testing.expectEqual(@as(u16, 9080), u.port);
+}
+
+test "Url parse: IPv6 with brackets" {
+    const u = Url.parse("http://[::1]:9080").?;
+    try std.testing.expectEqual(Proto.tcp, u.proto);
+    try std.testing.expectEqualStrings("::1", u.host[0..u.host_len]);
+    try std.testing.expectEqual(@as(u16, 9080), u.port);
+}
+
+test "Url parse: IPv6 with brackets, default port" {
+    const u = Url.parse("http://[fe80::1]").?;
+    try std.testing.expectEqual(Proto.tcp, u.proto);
+    try std.testing.expectEqualStrings("fe80::1", u.host[0..u.host_len]);
+    try std.testing.expectEqual(@as(u16, 9080), u.port);
+}
+
+test "Url parse: IPv6 with brackets, default port, trailing slash" {
+    const u = Url.parse("http://[::1]:8080/api/").?;
+    try std.testing.expectEqual(Proto.tcp, u.proto);
+    try std.testing.expectEqualStrings("::1", u.host[0..u.host_len]);
+    try std.testing.expectEqual(@as(u16, 8080), u.port);
 }
 
 test "fuzz: Url.parse never panics on random inputs" {

@@ -1,5 +1,5 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KVMGUI</title><link rel="icon" href="/favicon.ico" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head><body>
+<title>KVMGUI</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head><body>
 <aside>
 <div class="sidebar-header"><div class="logo">K</div><h2>KVMGUI</h2></div>
 <div class="search-wrap"><input id="search" placeholder="Search VMs..." oninput="filterList()"><button class="clear-btn" id="searchClear" onclick="clearSearch()">✕</button></div>
@@ -11,6 +11,7 @@
 <div id="serialpanel"><textarea id="serialterm" readonly></textarea><div style="display:flex;gap:8px;padding:4px 8px"><button class="btn danger" onclick="manualDisconnectSerial()" style="font-size:11px;padding:2px 8px">Disconnect</button></div></div>
 <div class="toolbar">
 <button class="hamburger" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
+<button class="btn ghost" onclick="deselectVm()" title="Deselect VM (Ctrl+W)">⌂ Home</button>
 <button id="powerbtn" class="btn primary" onclick="powerToggle()" title="Power On/Off selected VM">▶ Power On</button><span class="sep"></span>
 <button class="btn ghost" onclick="pauseGuest()" title="Freeze guest execution">⏸ Pause</button>
 <button class="btn ghost" onclick="resumeGuest()" title="Resume guest execution">▶ Resume</button>
@@ -28,6 +29,7 @@
 <span class="sep"></span>
 <button class="btn ghost" onclick="openVnets()" title="Edit virtual networks">🌐 VNet</button>
 <button class="btn ghost" onclick="openPrefs()" title="Application preferences">⚡ Prefs</button>
+<button class="btn ghost" onclick="openAbout()" title="About KVMGUI">ℹ About</button>
 <span class="sep"></span>
 <button class="btn primary" onclick="batchStart()" title="Start all stopped VMs">▶ Start All</button>
 <button class="btn danger" onclick="batchStop()" title="Stop all running/paused VMs">⏹ Stop All</button>
@@ -92,4 +94,13 @@
 <label for="p_autoprotect_max">AutoProtect Max Snapshots</label><input id="p_autoprotect_max" type="number" value="10">
 </div>
 <div class="btn-row"><button class="btn" onclick="prefsdlg.close()">Cancel</button><button class="btn primary" onclick="savePrefs()">Save</button></div></dialog>
-<script src="/app.js"></script></body></html>
+<script src="/app.js"></script>
+<dialog id="aboutdlg"><h3>About KVMGUI</h3>
+<div class="dialog-body" style="text-align:center">
+<div style="font-size:48px;margin-bottom:12px;width:64px;height:64px;background:var(--gradient);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 4px 16px rgba(59,130,246,0.3)">K</div>
+<p style="font-size:18px;font-weight:600">KVMGUI</p>
+<p style="color:var(--text-muted);font-size:13px">Lightweight QEMU VM Manager</p>
+<p style="color:var(--text-dim);font-size:11px;margin-top:8px">A VMware Workstation-style GUI for QEMU/KVM.<br>Built with Zig, IUP, and vanilla HTML/CSS/JS.</p>
+<p style="color:var(--text-dim);font-size:11px;margin-top:12px">No libvirt dependency — direct QMP control.</p>
+</div>
+<div class="btn-row"><button class="btn" onclick="aboutdlg.close()">Close</button></div></dialog></body></html>

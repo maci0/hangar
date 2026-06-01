@@ -43,6 +43,12 @@ fn prefsCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.pre
 fn vnetCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.vnetDialog(); }
 fn quitCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { shutdown(); }
 fn aboutCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.aboutDialog(); }
+fn fullScreenCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
+    if (app.win_handle) |w| {
+        const cur = cfltk.Fl_Window_fullscreen_active(w);
+        _ = cfltk.Fl_Window_fullscreen(w, if (cur != 0) @as(c_uint, 0) else 1);
+    }
+}
 fn exportOvfCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.exportOvfDialog(); }
 fn homeCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { app.selected_idx = null; app.refreshBrowser(); app.refreshDetails(); }
 fn connectRemoteCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.remoteConnectDialog(); }
@@ -114,17 +120,15 @@ fn webServerThreadMain() void {
     app.web_running = false;
 }
 
-/// Stop the embedded web server (best-effort — thread is detached).
+/// Stop the embedded web server (signals shutdown on the listen socket).
 fn stopWebServer() void {
     if (!app.web_running) {
         app.setStatus("Web server is not running");
         return;
     }
-    // Since the web server thread blocks on accept(), we can't cleanly
-    // interrupt it from another thread. Setting web_running = false and
-    // having the user Ctrl+C the thread is the current workaround.
     app.web_running = false;
-    app.setStatus("Web server stop requested (thread will exit on next connection)");
+    web_server.shutdownSignal();
+    app.setStatus("Web server stopped");
 }
 
 fn cloneVm() void {
@@ -1519,6 +1523,8 @@ fn kbHandler(event: c_int) callconv(.c) c_int {
     if (ctrl and key == 'q') { shutdown(); return 1; }
     if (ctrl and key == 'e') { editVmDialog(); return 1; }
     if (ctrl and key == 'i') { importVm(); return 1; }
+    if (ctrl and key == 's') { suspendVm(); return 1; }
+    if (ctrl and key == 'p') { dialogs.prefsDialog(); return 1; }
     if (key == 0xffbf) { editVmDialog(); return 1; } // F2
     if (key == 0xffff) { deleteCurrentVm(); return 1; } // DEL
     if (key == 0xffc8) { if (app.win_handle) |w| { const cur = cfltk.Fl_Window_fullscreen_active(w); cfltk.Fl_Window_fullscreen(w, if (cur != 0) @as(c_uint, 0) else 1); } return 1; } // F11 toggle
@@ -1686,12 +1692,9 @@ pub fn main() void {
     // Initialize the HV abstraction dispatch table (QEMU backend).
     app.g_vmm = hv_backend.createVmm(.auto);
 
-    // Set a cohesive modern color palette.
-    cfltk.Fl_background(240, 242, 245);
-    cfltk.Fl_background2(255, 255, 255);
-    cfltk.Fl_foreground(40, 40, 45);
-    cfltk.Fl_selection_color(66, 133, 244);
-    cfltk.Fl_inactive_color(160, 160, 170);
+    // Global FLTK color scheme is already set by applyTheme() above.
+    // Do NOT hardcode Fl_background/Fl_foreground etc. here — that would
+    // overwrite the palette chosen by applyTheme() and break dark mode.
 
     const WW: i32 = if (app.prefs.win_w > 0) app.prefs.win_w else 1200;
     const WH: i32 = if (app.prefs.win_h > 0) app.prefs.win_h else 700;
@@ -1700,6 +1703,7 @@ pub fn main() void {
 
     // Menu bar with working submenus
     const menu_bar = cfltk.Fl_Menu_Bar_new(0, 0, WW, 25, "");
+    app.menu_bar = @ptrCast(menu_bar);
 
     // Add menu items: label, shortcut (0=none), callback, userdata(0), flags(0)
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "File/New VM\tCtrl+N", 0, @ptrCast(&newVmCB), null, 0);
@@ -1721,12 +1725,13 @@ pub fn main() void {
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Snapshot Manager...", 0, @ptrCast(&snapshotCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Clone", 0, @ptrCast(&cloneCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Delete VM\tDEL", 0, @ptrCast(&deleteVmCB), null, 0);
-    _ = cfltk.Fl_Menu_Bar_add(menu_bar, "View/Full Screen\tF11", 0, null, null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(menu_bar, "View/Full Screen\tF11", 0, @ptrCast(&fullScreenCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "Help/About KVMGUI", 0, @ptrCast(&aboutCB), null, 0);
 
     // Toolbar with styled background
     const tb_y: i32 = 28;
     const tb = cfltk.Fl_Box_new(0, tb_y, WW, 40, "");
+    app.toolbar_bg = @ptrCast(tb);
     cfltk.Fl_Box_set_box(tb, 4); // FL_THIN_UP_BOX
     cfltk.Fl_Box_set_color(tb, app.pal.border);
     const new_btn = cfltk.Fl_Button_new(5, tb_y + 3, 80, 34, "New VM");
@@ -1804,17 +1809,19 @@ pub fn main() void {
     const import_btn = cfltk.Fl_Button_new(5, utb_y + 3, 70, 34, "Import");
     const rename_btn = cfltk.Fl_Button_new(80, utb_y + 3, 70, 34, "Rename");
     const del_btn = cfltk.Fl_Button_new(155, utb_y + 3, 70, 34, "Delete");
+    const fav_btn = cfltk.Fl_Button_new(230, utb_y + 3, 65, 34, "★ Fav");
 
-    const vnet_btn = cfltk.Fl_Button_new(310, utb_y + 3, 70, 34, "VNet");
-    const pref_btn = cfltk.Fl_Button_new(385, utb_y + 3, 70, 34, "Prefs");
+    const vnet_btn = cfltk.Fl_Button_new(300, utb_y + 3, 70, 34, "VNet");
+    const pref_btn = cfltk.Fl_Button_new(375, utb_y + 3, 70, 34, "Prefs");
 
-    const ws_start_btn = cfltk.Fl_Button_new(510, utb_y + 3, 70, 34, "Web Start");
-    const ws_stop_btn = cfltk.Fl_Button_new(585, utb_y + 3, 70, 34, "Web Stop");
+    const ws_start_btn = cfltk.Fl_Button_new(450, utb_y + 3, 70, 34, "Web Start");
+    const ws_stop_btn = cfltk.Fl_Button_new(525, utb_y + 3, 70, 34, "Web Stop");
 
     // Tooltips
     cfltk.Fl_Button_set_tooltip(import_btn, "Import a VM from a .vmdk or .qcow2 disk image");
     cfltk.Fl_Button_set_tooltip(rename_btn, "Rename the selected virtual machine");
     cfltk.Fl_Button_set_tooltip(del_btn, "Delete the selected virtual machine (DEL key)");
+    cfltk.Fl_Button_set_tooltip(fav_btn, "Toggle favorite (pin to top of VM Library)");
     cfltk.Fl_Button_set_tooltip(vnet_btn, "Virtual Network Editor (manage VMnet switch configurations)");
     cfltk.Fl_Button_set_tooltip(pref_btn, "Preferences (theme, default folder, display, audio)");
     cfltk.Fl_Button_set_tooltip(ws_start_btn, "Start the web UI server on http://localhost:9080");
@@ -1824,6 +1831,7 @@ pub fn main() void {
     cfltk.Fl_Button_set_color(import_btn, app.pal.accent);      cfltk.Fl_Button_set_label_color(import_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(rename_btn, app.pal.accent);      cfltk.Fl_Button_set_label_color(rename_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(del_btn, app.pal.danger);          cfltk.Fl_Button_set_label_color(del_btn, app.pal.accent_text);
+    cfltk.Fl_Button_set_color(fav_btn, app.pal.gray_btn);       cfltk.Fl_Button_set_label_color(fav_btn, app.pal.amber);
     cfltk.Fl_Button_set_color(vnet_btn, app.pal.gray_btn);       cfltk.Fl_Button_set_label_color(vnet_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(pref_btn, app.pal.gray_btn);       cfltk.Fl_Button_set_label_color(pref_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(ws_start_btn, app.pal.success);    cfltk.Fl_Button_set_label_color(ws_start_btn, app.pal.accent_text);
@@ -1833,6 +1841,7 @@ pub fn main() void {
     cfltk.Fl_Button_set_callback(import_btn, importCB, null);
     cfltk.Fl_Button_set_callback(rename_btn, renameCB, null);
     cfltk.Fl_Button_set_callback(del_btn, deleteVmCB, null);
+    cfltk.Fl_Button_set_callback(fav_btn, favCB, null);
     cfltk.Fl_Button_set_callback(vnet_btn, vnetCB, null);
     cfltk.Fl_Button_set_callback(pref_btn, prefsCB, null);
     cfltk.Fl_Button_set_callback(ws_start_btn, webStartCB, null);
@@ -1846,6 +1855,7 @@ pub fn main() void {
 
     // Sidebar header
     const lib_hdr = cfltk.Fl_Box_new(0, body_y, SW, 22, "VM Library");
+    app.lib_hdr = @ptrCast(lib_hdr);
     cfltk.Fl_Box_set_box(lib_hdr, 4); // FL_THIN_UP_BOX
     cfltk.Fl_Box_set_label_font(lib_hdr, 1); // bold
     cfltk.Fl_Box_set_label_color(lib_hdr, app.pal.header);
@@ -1856,6 +1866,7 @@ pub fn main() void {
     const si = cfltk.Fl_Input_new(2, body_y + body_h - 20, SW - 4, 18, "");
     app.search_input = @ptrCast(si);
     cfltk.Fl_Input_set_callback(si, searchCB, null);
+    cfltk.Fl_Input_set_tooltip(si, "Filter VMs by name (Ctrl+F)");
 
     // Context menu (right-click popup on VM app.browser)
     const ctx_menu = cfltk.Fl_Menu_Button_new(0, 0, 0, 0, "");
@@ -1870,6 +1881,7 @@ pub fn main() void {
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Settings...", 0, @ptrCast(&settingsCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Rename...", 0, @ptrCast(&renameCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Snapshot Manager...", 0, @ptrCast(&snapshotCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Export OVF...", 0, @ptrCast(&exportOvfCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Clone", 0, @ptrCast(&cloneCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Toggle Favorite", 0, @ptrCast(&favCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(@ptrCast(ctx_menu), "Delete VM\tDEL", 0, @ptrCast(&deleteVmCB), null, 0);
@@ -1878,6 +1890,7 @@ pub fn main() void {
 
     // Tabs
     const tabs = cfltk.Fl_Tabs_new(CX, body_y, CW, body_h, "");
+    app.tab_bar = @ptrCast(tabs);
 
     // Summary
     const sg = cfltk.Fl_Group_new(CX, body_y + 20, CW, body_h - 20, "Summary");

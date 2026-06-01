@@ -108,29 +108,38 @@ pub fn readFrameHeader(fd: c.fd_t) ?FrameHeader {
 /// Returns the number of bytes actually read (<= payload_len).
 pub fn readFramePayload(fd: c.fd_t, buf: []u8, header: FrameHeader) ?usize {
     const len: usize = @intCast(@min(header.payload_len, buf.len));
+    if (len == 0 and header.mask) {
+        // Mask key is still on the wire even with zero payload — consume it.
+        var mask_key: [4]u8 = undefined;
+        if (c.read(fd, &mask_key, 4) != 4) return null;
+        return 0;
+    }
     if (len == 0) return 0;
 
+    // Read mask key FIRST (RFC 6455 §5.3: masking-key precedes Payload Data).
+    var mask_key: [4]u8 = [_]u8{0} ** 4;
+    if (header.mask) {
+        if (c.read(fd, &mask_key, 4) != 4) return null;
+    }
+
+    // Read and unmask the payload in a single pass.
     var total_read: usize = 0;
     while (total_read < len) {
         const n = c.read(fd, buf.ptr + total_read, len - total_read);
         if (n <= 0) return null;
-        total_read += @intCast(n);
-    }
-
-    // Read and apply mask if present.
-    if (header.mask) {
-        var mask_key: [4]u8 = undefined;
-        if (c.read(fd, &mask_key, 4) != 4) return null;
-        for (0..len) |i| {
-            buf[i] ^= mask_key[i % 4];
+        const chunk_end = total_read + @as(usize, @intCast(n));
+        if (header.mask) {
+            for (total_read..chunk_end) |i| {
+                buf[i] ^= mask_key[i % 4];
+            }
         }
+        total_read = chunk_end;
     }
 
     // Drain any remaining payload beyond our buffer.
     if (header.payload_len > len) {
         var drain: [4096]u8 = undefined;
-        var remaining: u64 = header.payload_len - len + if (header.mask) @as(u64, 4) else 0;
-        // Note: mask bytes are required even if we don't use them for draining
+        var remaining: u64 = header.payload_len - len;
         while (remaining > 0) {
             const to_read: usize = @intCast(@min(remaining, drain.len));
             const n = c.read(fd, &drain, to_read);

@@ -126,7 +126,7 @@ pub const Vmm = struct {
     createLinkedCloneFn: *const fn (ctx: VmmHandle, dest: []const u8, backing: []const u8, backing_fmt: u32, alloc: std.mem.Allocator) VmmError!void,
 
     /// Convert a disk image to a different format (e.g. qcow2 → vmdk).
-    convertDiskFn: *const fn (ctx: VmmHandle, src_path: []const u8, dst_path: []const u8, src_fmt: u32, alloc: std.mem.Allocator) VmmError!void,
+    convertDiskFn: *const fn (ctx: VmmHandle, src_path: []const u8, dst_path: []const u8, src_fmt: u32, dst_fmt: u32, alloc: std.mem.Allocator) VmmError!void,
 
     /// Snapshot operations (offline, via qemu-img or equivalent).
     snapshotCreateFn: *const fn (ctx: VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) VmmError!void,

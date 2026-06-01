@@ -99,9 +99,10 @@ pub fn prefsDialog() void {
     const th = cfltk.Fl_Box_new(10, 195, 130, 20, "Theme:");
     cfltk.Fl_Box_set_label_font(th, 1); cfltk.Fl_Box_set_label_color(th, app.pal.text_dim);
     const theme_choice = cfltk.Fl_Choice_new(140, 192, 270, 24, "");
+    _ = cfltk.Fl_Choice_add_choice(theme_choice, "System");
     _ = cfltk.Fl_Choice_add_choice(theme_choice, "Light");
     _ = cfltk.Fl_Choice_add_choice(theme_choice, "Dark");
-    const tval: i32 = switch (app.current_theme) { .light, .system => 0, .dark => 1 };
+    const tval: i32 = switch (app.current_theme) { .system => 0, .light => 1, .dark => 2 };
     _ = cfltk.Fl_Choice_set_value(theme_choice, tval);
 
     const PData = struct {
@@ -155,7 +156,7 @@ pub fn prefsDialog() void {
             }
             if (pp.theme) |tc| {
                 const v: i32 = cfltk.Fl_Choice_value(tc);
-                const new_theme: vm.Theme = if (v == 1) .dark else .light;
+                const new_theme: vm.Theme = switch (v) { 2 => .dark, 1 => .light, else => .system };
                 app.prefs.theme = new_theme;
                 app.applyTheme(new_theme);
             }
@@ -343,12 +344,12 @@ pub fn exportOvfDialog() void {
         };
         defer std.heap.page_allocator.free(vmdk_full);
         if (app.getVmmHandle(idx)) |h| {
-            app.g_vmm.convertDiskFn(h, disk_path, vmdk_full, @intFromEnum(v.disk_format), std.heap.page_allocator) catch {
+            app.g_vmm.convertDiskFn(h, disk_path, vmdk_full, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
                 app.setStatus("OVF saved, but VMDK conversion failed (qemu-img missing?)");
                 return;
             };
         } else {
-            qemu.convertDiskImage(disk_path, v.disk_format, vmdk_full, std.heap.page_allocator) catch {
+            qemu.convertDiskImage(disk_path, v.disk_format, vmdk_full, .vmdk, std.heap.page_allocator) catch {
                 app.setStatus("OVF saved, but VMDK conversion failed (qemu-img missing?)");
                 return;
             };

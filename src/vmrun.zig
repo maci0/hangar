@@ -232,33 +232,35 @@ fn sendRequest(conn: *transport.Connection, method: []const u8, path: []const u8
     return resp;
 }
 
+/// Pure helper: given VM-list JSON and a VM name, find its "idx" field value.
+/// Scans for `"name":"target"` then looks backwards for the nearest `"idx":N`.
+fn findVmIdxInJson(json: []const u8, target: []const u8) ?usize {
+    var search_buf: [128]u8 = undefined;
+    const pat = std.fmt.bufPrint(&search_buf, "\"name\":\"{s}\"", .{target}) catch return null;
+    const name_pos = std.mem.indexOf(u8, json, pat) orelse return null;
+    const idx_pat = "\"idx\":";
+    const before = json[0..name_pos];
+    var i: usize = before.len;
+    while (i > 0) {
+        i -= 1;
+        if (std.mem.startsWith(u8, before[i..], idx_pat)) {
+            const num_start = i + idx_pat.len;
+            const num_end = std.mem.indexOfScalar(u8, before[num_start..], ',') orelse
+                            std.mem.indexOfScalar(u8, before[num_start..], '}') orelse (before.len - num_start);
+            return std.fmt.parseInt(usize, before[num_start..][0..num_end], 10) catch return null;
+        }
+    }
+    return null;
+}
+
 fn resolveVm(conn: *transport.Connection, target: []const u8) ?usize {
     // Try parsing as numeric index first.
     if (std.fmt.parseInt(usize, target, 10)) |idx| {
         return idx;
     } else |_| {}
 
-    // Search by name in the VM list JSON.
     const json = sendRequest(conn, "GET", "/api/vms", null) catch return null;
-    // Simple scan for "name":"target"
-    var search_buf: [128]u8 = undefined;
-    const pat = std.fmt.bufPrint(&search_buf, "\"name\":\"{s}\"", .{target}) catch return null;
-    if (std.mem.indexOf(u8, json, pat)) |_| {
-        // Find the preceding "idx":N
-        const idx_pat = "\"idx\":";
-        const before = json[0..std.mem.indexOf(u8, json, pat).?];
-        var i: usize = before.len;
-        while (i > 0) {
-            i -= 1;
-            if (std.mem.startsWith(u8, before[i..], idx_pat)) {
-                const num_start = i + idx_pat.len;
-                const num_end = std.mem.indexOfScalar(u8, before[num_start..], ',') orelse
-                                std.mem.indexOfScalar(u8, before[num_start..], '}') orelse before.len;
-                return std.fmt.parseInt(usize, before[num_start..][0..(num_end - num_start)], 10) catch return null;
-            }
-        }
-    }
-    return null;
+    return findVmIdxInJson(json, target);
 }
 
 fn cmdList(conn: *transport.Connection, io: std.Io) !void {
@@ -528,6 +530,80 @@ test "extractJsonInt: handles zero value" {
     try std.testing.expectEqual(@as(usize, 0), port.?);
 }
 
+test "findVmIdxInJson: finds VM by name in single-element array" {
+    const json = "[{\"idx\":0,\"name\":\"myvm\",\"status\":\"running\"}]";
+    const idx = findVmIdxInJson(json, "myvm");
+    try std.testing.expect(idx != null);
+    try std.testing.expectEqual(@as(usize, 0), idx.?);
+}
+
+test "findVmIdxInJson: finds correct VM in multi-element array" {
+    const json = "[{\"idx\":0,\"name\":\"alpha\",\"status\":\"stopped\"},{\"idx\":1,\"name\":\"beta\",\"status\":\"running\"},{\"idx\":2,\"name\":\"gamma\",\"status\":\"suspended\"}]";
+    const idx = findVmIdxInJson(json, "beta");
+    try std.testing.expectEqual(@as(usize, 1), idx.?);
+    const first = findVmIdxInJson(json, "alpha");
+    try std.testing.expectEqual(@as(usize, 0), first.?);
+    const last = findVmIdxInJson(json, "gamma");
+    try std.testing.expectEqual(@as(usize, 2), last.?);
+}
+
+test "findVmIdxInJson: returns null for missing name" {
+    const json = "[{\"idx\":0,\"name\":\"myvm\"}]";
+    const idx = findVmIdxInJson(json, "nonexistent");
+    try std.testing.expect(idx == null);
+}
+
+test "findVmIdxInJson: returns null for empty JSON" {
+    const idx = findVmIdxInJson("[]", "myvm");
+    try std.testing.expect(idx == null);
+}
+
+test "findVmIdxInJson: returns null for empty string" {
+    const idx = findVmIdxInJson("", "myvm");
+    try std.testing.expect(idx == null);
+}
+
+test "findVmIdxInJson: handles idx with trailing comma" {
+    const json = "[{\"idx\":5,\"name\":\"vm5\"},{\"idx\":10,\"name\":\"vm10\"}]";
+    const idx = findVmIdxInJson(json, "vm5");
+    try std.testing.expectEqual(@as(usize, 5), idx.?);
+}
+
+test "findVmIdxInJson: handles multi-digit idx values" {
+    const json = "[{\"idx\":42,\"name\":\"big\"}]";
+    const idx = findVmIdxInJson(json, "big");
+    try std.testing.expectEqual(@as(usize, 42), idx.?);
+}
+
+test "findVmIdxInJson: finds nearest preceding idx (not another object's)" {
+    // The idx for "target" should be 7, not 99 (from the preceding object).
+    const json = "[{\"idx\":99,\"name\":\"other\"},{\"idx\":7,\"name\":\"target\"}]";
+    const idx = findVmIdxInJson(json, "target");
+    try std.testing.expectEqual(@as(usize, 7), idx.?);
+}
+
+test "findVmIdxInJson: handles name containing special JSON characters" {
+    // Names with hyphens, underscores, spaces.
+    const json = "[{\"idx\":1,\"name\":\"Ubuntu-22.04\"},{\"idx\":2,\"name\":\"Win_Server_2022\"}]";
+    const idx1 = findVmIdxInJson(json, "Ubuntu-22.04");
+    try std.testing.expectEqual(@as(usize, 1), idx1.?);
+    const idx2 = findVmIdxInJson(json, "Win_Server_2022");
+    try std.testing.expectEqual(@as(usize, 2), idx2.?);
+}
+
+test "findVmIdxInJson: name that is a substring of another name" {
+    // "vm" should match "vm" exactly, not "vm_special"
+    const json = "[{\"idx\":0,\"name\":\"vm\"},{\"idx\":1,\"name\":\"vm_special\"}]";
+    const idx = findVmIdxInJson(json, "vm");
+    try std.testing.expectEqual(@as(usize, 0), idx.?);
+}
+
+test "findVmIdxInJson: name contains colon or other special chars" {
+    const json = "[{\"idx\":3,\"name\":\"test:vm\"}]";
+    const idx = findVmIdxInJson(json, "test:vm");
+    try std.testing.expectEqual(@as(usize, 3), idx.?);
+}
+
 // ── Fuzz tests ──────────────────────────────────────────────────────
 
 test "fuzz: extractJsonString never panics on random JSON-like input" {
@@ -560,6 +636,25 @@ test "fuzz: extractJsonInt never panics on random JSON-like input" {
         rnd.bytes(buf[0..len]);
         for (keys) |k| {
             _ = extractJsonInt(buf[0..len], k);
+        }
+    }
+}
+
+test "fuzz: findVmIdxInJson never panics on random input" {
+    var prng = std.Random.DefaultPrng.init(0xFEED_F00D);
+    const rnd = prng.random();
+    var buf: [1024]u8 = undefined;
+
+    const names = [_][]const u8{ "myvm", "test", "alpha", "123", "a", "Ubuntu-22.04", "" };
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        for (names) |n| {
+            if (findVmIdxInJson(buf[0..len], n)) |result| {
+                // Name was found — result must be a valid index
+                _ = result;
+            }
         }
     }
 }

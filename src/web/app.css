@@ -7,6 +7,7 @@
   --danger:#e84040; --danger-hover:#f05555; --success:#22c55e;
   --warn:#f59e0b; --pause:#f97316;
   --display-bg:#000000; --serial-bg:#08090d; --serial-fg:#00ff66;
+  --gradient:linear-gradient(135deg,var(--accent),#6366f1);
   --radius:7px; --radius-lg:11px;
   --transition:160ms ease;
   --shadow-sm:0 1px 2px rgba(0,0,0,0.25);
@@ -20,6 +21,7 @@
   --danger:#dc2626; --danger-hover:#b91c1c; --success:#16a34a;
   --warn:#d97706; --pause:#ea580c;
   --display-bg:#000000; --serial-bg:#f0f0f0; --serial-fg:#1a1a2e;
+  --gradient:linear-gradient(135deg,var(--accent),#818cf8);
   --shadow-sm:0 1px 2px rgba(0,0,0,0.06);
   --shadow-lg:0 20px 55px rgba(0,0,0,0.12),0 0 0 1px var(--border);
 }
@@ -27,7 +29,7 @@ body{font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-se
 /* ─── Sidebar ─── */
 aside{width:244px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .sidebar-header{padding:18px 16px 10px;display:flex;align-items:center;gap:10px}
-.sidebar-header .logo{width:24px;height:24px;background:linear-gradient(135deg,var(--accent),#6366f1);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;box-shadow:0 2px 8px rgba(59,130,246,0.25)}
+.sidebar-header .logo{width:24px;height:24px;background:var(--gradient);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;box-shadow:0 2px 8px rgba(59,130,246,0.25)}
 .sidebar-header h2{font-size:16px;font-weight:650;color:var(--text);letter-spacing:-0.4px}
 aside .search-wrap{padding:0 12px;margin-bottom:10px}
 aside input#search{width:100%;padding:8px 10px 8px 32px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);font-size:12.5px;outline:none;transition:all var(--transition)}

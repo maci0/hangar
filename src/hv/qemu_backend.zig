@@ -206,10 +206,11 @@ fn createLinkedClone(ctx: hv.VmmHandle, dest: []const u8, backing: []const u8, b
     qemu.createLinkedClone(dest, backing, backing_fmt, alloc) catch return error.BackendError;
 }
 
-fn convertDisk(ctx: hv.VmmHandle, src_path: []const u8, dst_path: []const u8, src_fmt_u32: u32, alloc: std.mem.Allocator) hv.VmmError!void {
+fn convertDisk(ctx: hv.VmmHandle, src_path: []const u8, dst_path: []const u8, src_fmt_u32: u32, dst_fmt_u32: u32, alloc: std.mem.Allocator) hv.VmmError!void {
     _ = ctx;
     const src_fmt: vm.DiskFormat = @enumFromInt(@as(u8, @intCast(src_fmt_u32)));
-    qemu.convertDiskImage(src_path, src_fmt, dst_path, alloc) catch return error.BackendError;
+    const dst_fmt: vm.DiskFormat = @enumFromInt(@as(u8, @intCast(dst_fmt_u32)));
+    qemu.convertDiskImage(src_path, src_fmt, dst_path, dst_fmt, alloc) catch return error.BackendError;
 }
 
 fn snapshotCreate(ctx: hv.VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) hv.VmmError!void {

@@ -1687,6 +1687,7 @@ test "fuzz: enum fromIndex always yields a valid variant" {
         try std.testing.expect(BootOrder.fromIndex(i).toIndex() < BootOrder.count);
         try std.testing.expect(AudioDevice.fromIndex(i).toIndex() < AudioDevice.count);
         try std.testing.expect(BootFirmware.fromIndex(i).toIndex() < BootFirmware.count);
+        try std.testing.expect(GpuDevice.fromIndex(i).toIndex() < GpuDevice.count);
         try std.testing.expect(Theme.fromIndex(i).toIndex() < Theme.count);
     }
 }

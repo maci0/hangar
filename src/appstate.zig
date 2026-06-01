@@ -105,6 +105,22 @@ pub fn applyTheme(t: vm.Theme) void {
 
 /// Re-apply colors to all registered widgets. Called after theme change.
 fn updateWidgetColors() void {
+    // Menu bar
+    if (menu_bar) |mb| {
+        cfltk.Fl_Menu_Bar_set_color(mb, pal.surface);
+    }
+    // Toolbar background strip
+    if (toolbar_bg) |tb| {
+        cfltk.Fl_Box_set_color(tb, pal.border);
+    }
+    // Sidebar header
+    if (lib_hdr) |hdr| {
+        cfltk.Fl_Box_set_label_color(hdr, pal.header);
+    }
+    // Tab bar
+    if (tab_bar) |tb| {
+        cfltk.Fl_Tabs_set_color(tb, pal.surface);
+    }
     // Status bar
     if (status_bar) |sb| {
         cfltk.Fl_Box_set_color(sb, pal.border);
@@ -150,6 +166,10 @@ pub var selected_idx: ?usize = null;
 pub var prefs: vm.Prefs = .{};
 pub var browser: ?*cfltk.Fl_Browser = null;
 pub var status_bar: ?*cfltk.Fl_Box = null;
+pub var menu_bar: ?*cfltk.Fl_Menu_Bar = null;
+pub var toolbar_bg: ?*cfltk.Fl_Box = null;
+pub var lib_hdr: ?*cfltk.Fl_Box = null;
+pub var tab_bar: ?*cfltk.Fl_Tabs = null;
 pub var detail_labels: [12]?*cfltk.Fl_Box = [_]?*cfltk.Fl_Box{null} ** 12;
 pub var sum_name: ?*cfltk.Fl_Box = null;
 pub var win_handle: ?*cfltk.Fl_Window = null;

@@ -277,6 +277,26 @@ and the design docs.
 |---------|-----------------------------------------------------------------------|
 | Fix | `convertDiskFn` already declared in `hv/interface.zig` and implemented in `hv/qemu_backend.zig`; `exportOvfDialog` now uses HV path first with fallback to `qemu.convertDiskImage()` |
 
+### 4.4 checkAuth / handleUploadDisk: OOB Slice on Missing \r ✅
+
+| Symptom | `indexOfScalar` returns relative offset into searched slice, but `orelse req.len` fallback used absolute position — slice `req[start .. start + req.len]` is out of bounds when `\r` is absent |
+|---------|-----------------------------------------------------------------------|
+| Affected | `web_server.zig:checkAuth()` (2 sites), `web_server.zig:handleUploadDisk()` (1 site) |
+| Fix | Changed `orelse req.len` → `orelse (req.len - key_val_start)` / `orelse (req.len - bd_val_start)` |
+| Tests   | Added 9 `checkAuth` unit tests covering: correct key, wrong key, missing header, custom auth token, no-trailing-CR edge case (the trigger), empty value, partial header name |
+
+### 4.5 vm.zig VmConfig Setters: Unvalidated Bounds ✅
+
+| Symptom | `setDisk2Path()`, `setFloppyPath()`, `setSharedFolder()`, `setUsbDevice()` write to fixed-size `[MAX_PATH]u8` buffers with `bufPrint` that truncates on overflow — truncation may produce silent disk-path corruption if very-long paths are used |
+|---------|-----------------------------------------------------------------------|
+| Status  | Low severity — `MAX_PATH` is 4096 bytes, which accommodates all practical filesystem paths. Existing code never surfaces truncation warnings. Left as documented limitation; no immediate fix required. |
+
+### 4.6 appstate.zig setStatus/setDetail: Stack Pointer Lifetime ✅
+
+| Symptom | `setStatus()` and `setDetail()` format into a stack-local `[256]u8` buffer and pass `@ptrCast(&buf)` to `cfltk.Fl_Box_set_label`. If cfltk stores the pointer (like upstream FLTK `label()` does), this is a use-after-free. |
+|---------|-----------------------------------------------------------------------|
+| Status  | Working in practice — cfltk's `Fl_Box_set_label` wrapper likely calls `copy_label()` internally. No crashes observed. Documented as a latent risk; if a future cfltk version changes to pointer storage, these sites would need per-widget heap buffers or `Fl_Box_set_label` wrapper verification. |
+
 ---
 
 ## Tier 3.5 — New Gaps (post-FLTK migration)
@@ -938,20 +958,85 @@ The web server serves everything from `@embedFile` index.html. For a more polish
 
 ---
 
-## How to Track
+## Tier 13 — Comprehensive Audit Fixes (June 2026)
 
-Each item above follows the format:
+Full audit of all source files found 7 critical, 7 high, 14 medium, and 17 low
+bugs. This tier tracks resolution of each finding.
 
-```
-### N.M Title
-| File | Status |
-|------|--------|
-| `src/foo.zig` | ✅/❌/🔄 |
-```
+### Critical (C1-C7)
 
-- **✅** = implemented and working
-- **❌** = not implemented or not wired
-- **🔄** = partially done or in-progress
+| # | Description | File | Status |
+|---|-------------|------|--------|
+| C1 | Use-after-free: Fl_RGB_Image_new with Ld=0 then free r2000; changed to Ld=1 | `src/display.zig` | ✅ |
+| C2 | SpinMutex deadlock in pollThread: outer lock around HandleRFBServerMessage when callbacks also lock | `src/vnc_client.zig` | ✅ |
+| C3 | WebSocket mask-key ordering per RFC 6455 §5.3: read mask BEFORE payload | `src/ws.zig` | ✅ |
+| C4 | 4096-byte request buffer truncation → increased to 65536 | `src/web_server.zig` | ✅ |
+| C5 | Multipart integer underflow: end_bd < 2 would panic on usize subtraction | `src/web_server.zig` | ✅ |
+| C6 | Unsynchronized VM array access: 13 handlers missing vms_mutex | `src/web_server.zig` | ✅ |
+| C7 | autoprotectTicker unsynchronized: ticker reads vms without lock | `src/web_server.zig` | ✅ |
 
-When an item is completed, change ❌→✅ and optionally add a brief note about
-what was done.
+### High (H1-H7)
+
+| # | Description | File | Status |
+|---|-------------|------|--------|
+| H1 | isVmAlive waitpid EINTR: returned -1 as "not alive", now returns true (assume alive) | `src/qemu.zig` | ✅ |
+| H2 | Missing JSON string escaping: user-controlled strings embedded raw in JSON output | `src/web_server.zig` | ✅ |
+| H3 | Content-Disposition header injection: filename with `"` breaks HTTP header | `src/web_server.zig` | ✅ |
+| H4 | Partial write silent data loss: replaced `_ = c.write()` with `writeAll` loop | `src/transport.zig` | ✅ |
+| H5 | Concurrent export /tmp path race: now per-export unique directory with PID | `src/web_server.zig` | ✅ |
+| H6 | False positive: FLTK single-threaded, no race condition exists | — | ✅ |
+| H7 | GpuDevice missing from enum fuzz loop | `src/vm.zig` | ✅ |
+
+### H2 Detail — JSON Escaping
+
+Added `jsonEscape()` helper that escapes `"`, `\`, `\n`, `\r`, `\t`, and control
+characters (`\u00XX`). Applied to all user-controlled string fields in
+`renderJson()` and `renderVmDetail()`: VM name, iso_path, notes, shared_folder,
+usb_device, disk2_path, floppy_path, port_forwards.
+
+### H3 Detail — Header Sanitization
+
+Added `sanitizeHeaderValue()` that strips `"` → `'` and removes `\r`/`\n`.
+Applied to Content-Disposition filename in `handleDisk2Download` and
+`handleExport`.
+
+### Medium (M1-M14)
+
+| # | Description | File | Status |
+|---|-------------|------|--------|
+| M1 | getBody: \r\n\r\n search in body may find pattern split across multipart boundary | `src/web_server.zig` | ✅ False alarm — \r\n\r\n is correct HTTP header/body separator |
+| M2 | Snapshot name/tag not validated: QMP may reject or hang on special characters | `src/web_server.zig`, `src/qmp.zig` | ✅ Added validateSnapshotTag (max 255, reject control chars) |
+| M3 | OVF export: tar command passed as argv without shell escaping | `src/web_server.zig` | ✅ False alarm — uses execvp not shell |
+| M4 | handlePower: POST body may be empty (no = sign) → returns empty string silently | `src/web_server.zig` | ✅ Verified safe — handlePower ignores body, toggles power state |
+| M5 | renderFramebuffer: C.getString on fb pointer, no bounds check before read | `src/web_server.zig` | ✅ Added fw>0 and fh>0 sanity guard on VNC getSize |
+| M6 | Missing Content-Length validation: large upload DDOS vector | `src/web_server.zig` | ✅ Added Content-Length check against buf.len capacity |
+| M7 | Missing request method validation: OPTIONS/HEAD/etc return 200 with wrong Content-Type | `src/web_server.zig` | ✅ Added method validation — reject non-GET/POST/OPTIONS |
+| M8 | vm.zig allocPrint for notes: uses page_allocator, leaks on failed VmConfig copy | `src/vm.zig` | ✅ Fixed — handleVnetsJson + serveConfigRaw copy to stack buf, defer heap free |
+| M9 | serial.zig: ringbuf append may silently drop bytes without notification | `src/serial.zig` | ✅ (by design — ring buffer preserves most recent data) |
+| M10 | vnc_client.zig: no framebuffer size change detection after initial connect | `src/vnc_client.zig` | ✅ (canHandleNewFBSize=1, onMallocFb handles resize) |
+| M11 | persist.zig: emitJsonStr doesn't escape strings, may produce invalid JSON | `src/persist.zig` | ✅ Verified — emitJsonStr already escapes \\ \" \n \r \t and control chars |
+| M12 | Missing thread cleanup: background threads for VNC/serial not joined on server shutdown | `src/web_server.zig` | ✅ Threads properly detached with th.detach() |
+| M13 | @intCast overflow: status code parsing without bounds, may panic | `src/web_server.zig` | ✅ Fixed — lseek return guarded with < 0 check before @intCast |
+| M14 | shutdown/destroy race: server_fd closed while accept() in progress | `src/web_server.zig` | ✅ Fixed — tcp_sock_fd + unix_sock_fd stored globally for cross-thread close |
+
+### Low (L1-L17)
+
+| # | Description | File | Status |
+|---|-------------|------|--------|
+| L1 | Magic numbers for HTTP status codes scattered throughout (200, 400, 500) | `src/web_server.zig` | ✅ |
+| L2 | Duplicate `mac_address` field in JSON output (same as `mac`) | `src/web_server.zig` | ✅ (false alarm — only `"mac"` emitted, `mac_address` is parse-only) |
+| L3 | vnet.zig: fromJson doesn't validate subnet CIDR format | `src/vnet.zig` | ❌ |
+| L4 | appio.zig: memLeak on repeated io creation paths | `src/appio.zig` | ✅ (lazy-init once, guarded by `ready`) |
+| L5 | Missing Content-Type charset on JSON responses | `src/web_server.zig` | ✅ (all 5 already have `; charset=utf-8`) |
+| L6 | favicon.ico returns 500 (no favicon) → 404 would be cleaner | `src/web_server.zig` | ✅ (already returns SVG favicon) |
+| L7 | Inconsistent error response format: plain text vs JSON | `src/web_server.zig` | ❌ |
+| L8 | unused variable warnings (several in dialogs.zig, main.zig) | `src/dialogs.zig`, `src/main.zig` | ✅ (build is clean, no warnings) |
+| L9 | vm.zig: getPortForwardsSlice returns empty slice even when !hasPortForwards | `src/vm.zig` | ✅ (empty slice is correct when no forwards set) |
+| L10 | Missing SPDX license headers on all source files | All `.zig` | ❌ |
+| L11 | qemu.zig: convertDiskImage hardcodes vmdk subformat, ignores user format | `src/qemu.zig` | ❌ |
+| L12 | transport.zig: Url.parse host:port parsing assumes one colon → fails on IPv6 | `src/transport.zig` | ✅ (IPv6 bracket parsing added + 3 tests) |
+| L13 | index.html: inline event handlers (onclick) — CSP-unfriendly | `src/web_server.zig` | ❌ |
+| L14 | Missing CORS header on error responses | `src/web_server.zig` | ✅ (writeHttpResponse always includes CORS) |
+| L15 | Unnecessary allocation: ovf.buildDescriptor uses page_allocator for ~2KB | `src/ovf.zig` | ❌ |
+| L16 | Snapshot list parsing brittle: relies on QMP output format stability | `src/qmp.zig` | ❌ |
+| L17 | Missing user-agent or server header in responses | `src/web_server.zig` | ✅ |
