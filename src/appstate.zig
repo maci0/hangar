@@ -15,6 +15,7 @@ const hv_iface = @import("hv/interface.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
 const cfltk = @import("cfltk_import.zig").c;
 const filter_ = @import("filter.zig");
+const vmlist = @import("vmlist.zig");
 
 // ── Visual palette ─────────────────────────────────────────────────
 pub const Palette = struct {
@@ -127,7 +128,8 @@ fn updateWidgetColors() void {
         cfltk.Fl_Box_set_color(sb, pal.border);
         cfltk.Fl_Box_set_label_color(sb, pal.text_dim);
     }
-    // Browser (VM list)
+    // Browser (VM list) — also covered by themed_browsers loop,
+    // but kept as direct reference for boot-time before registration expands.
     if (browser) |b| {
         cfltk.Fl_Browser_set_color(b, pal.surface);
         cfltk.Fl_Browser_set_text_size(b, 13);
@@ -157,9 +159,85 @@ fn updateWidgetColors() void {
         cfltk.Fl_Box_set_color(db, pal.surface);
         cfltk.Fl_Box_set_label_color(db, pal.text_dim);
     }
+    // Registered themeable widgets
+    for (themed_inputs[0..themed_inputs_len]) |inp| {
+        cfltk.Fl_Input_set_color(inp, pal.surface);
+        cfltk.Fl_Input_set_text_color(inp, pal.text);
+    }
+    for (themed_choices[0..themed_choices_len]) |ch| {
+        cfltk.Fl_Choice_set_color(ch, pal.surface);
+        cfltk.Fl_Choice_set_text_color(ch, pal.text);
+    }
+    for (themed_browsers[0..themed_browsers_len]) |br| {
+        cfltk.Fl_Browser_set_color(br, pal.surface);
+        cfltk.Fl_Browser_set_text_size(br, 13);
+    }
+    for (themed_checkbuttons[0..themed_checkbuttons_len]) |cb| {
+        cfltk.Fl_Check_Button_set_color(cb, pal.surface);
+        cfltk.Fl_Check_Button_set_label_color(cb, pal.text);
+    }
+    for (themed_scrolls[0..themed_scrolls_len]) |sc| {
+        cfltk.Fl_Scroll_set_color(sc, pal.surface);
+    }
+    if (toolbar_theme_cb) |cb| cb();
 }
 
-pub const MAX_VMS = 64;
+/// Theme a Fl_Input and register it for live theme updates.
+pub fn themeInput(w: ?*cfltk.Fl_Input) void {
+    const inp = w orelse return;
+    cfltk.Fl_Input_set_color(inp, pal.surface);
+    cfltk.Fl_Input_set_text_color(inp, pal.text);
+    if (themed_inputs_len < themed_inputs.len) {
+        themed_inputs[themed_inputs_len] = inp;
+        themed_inputs_len += 1;
+    }
+}
+
+/// Theme a Fl_Choice and register it for live theme updates.
+pub fn themeChoice(w: ?*cfltk.Fl_Choice) void {
+    const ch = w orelse return;
+    cfltk.Fl_Choice_set_color(ch, pal.surface);
+    cfltk.Fl_Choice_set_text_color(ch, pal.text);
+    if (themed_choices_len < themed_choices.len) {
+        themed_choices[themed_choices_len] = ch;
+        themed_choices_len += 1;
+    }
+}
+
+/// Theme a Fl_Browser and register it for live theme updates.
+pub fn themeBrowser(w: ?*cfltk.Fl_Browser) void {
+    const b = w orelse return;
+    cfltk.Fl_Browser_set_color(b, pal.surface);
+    cfltk.Fl_Browser_set_text_size(b, 13);
+    if (themed_browsers_len < themed_browsers.len) {
+        themed_browsers[themed_browsers_len] = b;
+        themed_browsers_len += 1;
+    }
+}
+
+/// Theme a Fl_Check_Button background for the current palette
+/// and register it for live theme updates.
+pub fn themeCheckButton(w: ?*cfltk.Fl_Check_Button) void {
+    const cb = w orelse return;
+    cfltk.Fl_Check_Button_set_color(cb, pal.surface);
+    cfltk.Fl_Check_Button_set_label_color(cb, pal.text);
+    if (themed_checkbuttons_len < themed_checkbuttons.len) {
+        themed_checkbuttons[themed_checkbuttons_len] = cb;
+        themed_checkbuttons_len += 1;
+    }
+}
+
+/// Theme a Fl_Scroll background and register it for live theme updates.
+pub fn themeScroll(w: ?*cfltk.Fl_Scroll) void {
+    const sc = w orelse return;
+    cfltk.Fl_Scroll_set_color(sc, pal.surface);
+    if (themed_scrolls_len < themed_scrolls.len) {
+        themed_scrolls[themed_scrolls_len] = sc;
+        themed_scrolls_len += 1;
+    }
+}
+
+pub const MAX_VMS = vm.MAX_VMS;
 
 pub var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
 pub var vm_count: usize = 0;
@@ -169,6 +247,7 @@ pub var browser: ?*cfltk.Fl_Browser = null;
 pub var status_bar: ?*cfltk.Fl_Box = null;
 pub var menu_bar: ?*cfltk.Fl_Menu_Bar = null;
 pub var toolbar_bg: ?*cfltk.Fl_Box = null;
+pub var toolbar_util_bg: ?*cfltk.Fl_Box = null;
 pub var lib_hdr: ?*cfltk.Fl_Box = null;
 pub var tab_bar: ?*cfltk.Fl_Tabs = null;
 pub var detail_labels: [12]?*cfltk.Fl_Box = [_]?*cfltk.Fl_Box{null} ** 12;
@@ -178,6 +257,7 @@ pub var ctx_menu_handle: ?*cfltk.Fl_Menu_Button = null;
 pub var console_widget: ?*cfltk.Fl_Browser = null;
 pub var display_box: ?*cfltk.Fl_Box = null;
 pub var gl_display: ?*cfltk.Fl_Gl_Window = null;
+pub var display_group: ?*cfltk.Fl_Group = null;
 pub var search_input: ?*cfltk.Fl_Input = null;
 pub var filter_text: [64]u8 = [_]u8{0} ** 64;
 pub var filter_len: usize = 0;
@@ -199,6 +279,23 @@ pub var remote_url_len: usize = 0;
 pub var web_running: bool = false;
 pub var web_thread: ?std.Thread = null;
 pub var modal_active: bool = false;
+
+/// Callback invoked on theme switch to re-color toolbar buttons.
+/// Set by main.zig after toolbar creation.
+pub var toolbar_theme_cb: ?*const fn () void = null;
+
+/// Registered widgets for live theme updates.
+const MAX_THEMED = 128;
+var themed_inputs: [MAX_THEMED]?*cfltk.Fl_Input = [_]?*cfltk.Fl_Input{null} ** MAX_THEMED;
+var themed_inputs_len: usize = 0;
+var themed_choices: [MAX_THEMED]?*cfltk.Fl_Choice = [_]?*cfltk.Fl_Choice{null} ** MAX_THEMED;
+var themed_choices_len: usize = 0;
+var themed_browsers: [MAX_THEMED]?*cfltk.Fl_Browser = [_]?*cfltk.Fl_Browser{null} ** MAX_THEMED;
+var themed_browsers_len: usize = 0;
+var themed_checkbuttons: [MAX_THEMED]?*cfltk.Fl_Check_Button = [_]?*cfltk.Fl_Check_Button{null} ** MAX_THEMED;
+var themed_checkbuttons_len: usize = 0;
+var themed_scrolls: [MAX_THEMED]?*cfltk.Fl_Scroll = [_]?*cfltk.Fl_Scroll{null} ** MAX_THEMED;
+var themed_scrolls_len: usize = 0;
 
 /// Persistent buffers for FLTK labels — FLTK's label() stores pointers
 /// directly, so values must outlive the call site.
@@ -277,39 +374,7 @@ pub fn selectCurrent() void {
     const target: usize = @intCast(line - 1);
 
     const filter: []const u8 = if (filter_len > 0) filter_text[0..filter_len] else "";
-    var cursor: usize = 0;
-    selected_idx = null;
-
-    // Determine if separator is present: at least one fav AND one non-fav visible.
-    var has_favs = false;
-    var has_nonfavs = false;
-    for (0..vm_count) |i| {
-        if (filterMatch(&vms[i], filter)) {
-            if (vms[i].favorite) has_favs = true else has_nonfavs = true;
-        }
-    }
-    const has_sep = has_favs and has_nonfavs;
-
-    // Pass 1: favorites
-    for (0..vm_count) |i| {
-        if (!vms[i].favorite or !filterMatch(&vms[i], filter)) continue;
-        if (cursor == target) { selected_idx = i; return; }
-        cursor += 1;
-    }
-
-    // Separator line
-    if (has_sep) {
-        if (cursor == target) return; // clicked on separator → no selection
-        cursor += 1;
-    }
-
-    // Pass 2: non-favorites (or all if no favs)
-    for (0..vm_count) |i| {
-        const eligible = if (has_sep) !vms[i].favorite else true;
-        if (!eligible or !filterMatch(&vms[i], filter)) continue;
-        if (cursor == target) { selected_idx = i; return; }
-        cursor += 1;
-    }
+    selected_idx = vmlist.lineToVmIndex(target, vms[0..vm_count], filter);
 }
 
 /// Rebuild the VM browser list from vms[] applying the current filter.

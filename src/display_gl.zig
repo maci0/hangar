@@ -26,6 +26,7 @@ extern fn glLinkProgram(program: gl.GLuint) void;
 extern fn glGetProgramiv(program: gl.GLuint, pname: gl.GLenum, params: [*c]gl.GLint) void;
 extern fn glDeleteProgram(program: gl.GLuint) void;
 extern fn glUseProgram(program: gl.GLuint) void;
+extern fn glGetAttribLocation(program: gl.GLuint, name: [*c]const u8) gl.GLint;
 extern fn glGenBuffers(n: gl.GLsizei, buffers: [*c]gl.GLuint) void;
 extern fn glBindBuffer(target: gl.GLenum, buffer: gl.GLuint) void;
 extern fn glBufferData(target: gl.GLenum, size: isize, data: ?*const anyopaque, usage: gl.GLenum) void;
@@ -147,6 +148,7 @@ fn initGL() bool {
 /// Render a BGRA framebuffer to the GL window.
 /// Call only from the Fl_Gl_Window draw callback or when the context is current.
 pub fn renderGL(fb: [*]const u8, fw: c_int, fh: c_int) void {
+    if (app.gl_display == null) return;
     if (!initGL()) return;
     if (fw <= 0 or fh <= 0) return;
 
@@ -171,8 +173,9 @@ pub fn renderGL(fb: [*]const u8, fw: c_int, fh: c_int) void {
     glUseProgram(gl_program);
     glBindBuffer(GL_ARRAY_BUFFER, gl_vbo);
 
-    const pos_loc: gl.GLint = 0;
-    const uv_loc: gl.GLint = 1;
+    const pos_loc = glGetAttribLocation(gl_program, "aPos");
+    const uv_loc = glGetAttribLocation(gl_program, "aUV");
+    if (pos_loc < 0 or uv_loc < 0) return;
     glEnableVertexAttribArray(@intCast(pos_loc));
     glVertexAttribPointer(@intCast(pos_loc), 2, gl.GL_FLOAT, gl.GL_FALSE, 16, @ptrFromInt(0));
     glEnableVertexAttribArray(@intCast(uv_loc));
@@ -184,6 +187,14 @@ pub fn renderGL(fb: [*]const u8, fw: c_int, fh: c_int) void {
     gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
 
     cfltk.Fl_Gl_Window_swap_buffers(app.gl_display);
+}
+
+/// Free GL resources on shutdown.
+pub fn cleanupGL() void {
+    if (gl_program != 0) { glDeleteProgram(gl_program); gl_program = 0; }
+    if (gl_texture != 0) { glDeleteTextures(1, &gl_texture); gl_texture = 0; }
+    if (gl_vbo != 0) { glDeleteBuffers(1, &gl_vbo); gl_vbo = 0; }
+    gl_tex_w = 0; gl_tex_h = 0;
 }
 
 /// Show the GL window and hide the software display box.

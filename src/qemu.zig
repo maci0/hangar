@@ -253,7 +253,10 @@ fn appendExtraNic(
             const nd = std.fmt.bufPrint(dev_buf[64..], "bridge,id={s},br=br0", .{id}) catch "bridge,id=net1,br=br0";
             try args.append(alloc, nd);
         },
-        .none => unreachable,
+        .none => {
+            // caller should filter .none before calling buildNetdev
+            return;
+        },
     }
 }
 
@@ -505,7 +508,12 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     }
 
     if (config.hasSavedState()) {
-        const cmd = try std.fmt.bufPrint(&bufs.incoming_buf, "exec:cat {s}", .{config.getSavedStatePathSlice()});
+        // Validate path: no shell metacharacters.  QEMU's `exec:` protocol
+        // runs its argument via /bin/sh, so we must reject anything that
+        // could break out of the `cat` command.
+        const sp = config.getSavedStatePathSlice();
+        if (!isSafeShellPath(sp)) return error.UnsafeSavedStatePath;
+        const cmd = try std.fmt.bufPrint(&bufs.incoming_buf, "exec:cat {s}", .{sp});
         try args.append(alloc, "-incoming");
         try args.append(alloc, cmd);
     }
@@ -557,7 +565,35 @@ pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
     config.status = .running;
 }
 
-/// Generate QEMU arguments for the given VM configuration and format them as a single string.
+/// Write an argument to the output, shell-quoted if it contains unsafe characters.
+/// Uses single-quote wrapping with internal single-quote escaping ('\'').
+fn appendShellQuoted(arg: []const u8, out: *std.ArrayList(u8), alloc: std.mem.Allocator) !void {
+    // If the arg contains only safe characters, output verbatim.
+    const needs_quote = for (arg) |c| {
+        switch (c) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.', '/', ':', '=', '+', ',' => {},
+            else => break true,
+        }
+    } else false;
+
+    if (!needs_quote) {
+        try out.appendSlice(alloc, arg);
+        return;
+    }
+
+    // Wrap in single quotes, escaping any internal single quotes as '\''.
+    try out.appendSlice(alloc, "'");
+    var start: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, arg, start, '\'')) |pos| {
+        try out.appendSlice(alloc, arg[start..pos]);
+        try out.appendSlice(alloc, "'\\''");
+        start = pos + 1;
+    }
+    try out.appendSlice(alloc, arg[start..]);
+    try out.appendSlice(alloc, "'");
+}
+
+/// Generate a standalone bash launch script for a VM configuration.
 pub fn buildScriptStr(config: *const vm.VmConfig, allocator: std.mem.Allocator) ![]const u8 {
     var args: std.ArrayList([]const u8) = .empty;
     defer args.deinit(allocator);
@@ -574,11 +610,7 @@ pub fn buildScriptStr(config: *const vm.VmConfig, allocator: std.mem.Allocator) 
     }
 
     for (args.items, 0..) |arg, i| {
-        if (std.mem.indexOfScalar(u8, arg, ' ') != null) {
-            try out.print(allocator, "\"{s}\"", .{arg});
-        } else {
-            try out.appendSlice(allocator, arg);
-        }
+        try appendShellQuoted(arg, &out, allocator);
         if (i < args.items.len - 1) {
             try out.appendSlice(allocator, " \\\n    ");
         }
@@ -615,10 +647,15 @@ pub fn isVmAlive(config: *vm.VmConfig) bool {
         return true;
     }
     if (reaped == -1) {
-        // EINTR or other error — process could still be alive.
-        // errno == ECHILD means the child no longer exists (already reaped or
-        // never was ours); everything else is transient.
-        return true; // Assume alive on transient error.
+        // ECHILD: child no longer exists (already reaped or never was ours).
+        const e = std.c._errno().*;
+        if (e == @intFromEnum(std.c.E.CHILD)) {
+            config.pid = null;
+            config.status = .stopped;
+            return false;
+        }
+        // Other errors (EINTR etc.) — assume alive on transient error.
+        return true;
     }
 
     // reaped == pid: process genuinely exited.
@@ -690,6 +727,32 @@ pub fn convertDiskImage(src_path: []const u8, src_format: vm.DiskFormat, dest_pa
     }
 }
 
+/// Start a disk conversion in the background (fork + exec qemu-img convert).
+/// Returns the child PID.  Does NOT wait — the caller must eventually reap
+/// the child via `waitpid`.  This keeps the UI responsive during long
+/// conversions (e.g. OVF export).
+pub fn convertDiskImageNoWait(src_path: []const u8, src_format: vm.DiskFormat, dest_path: []const u8, dest_format: vm.DiskFormat, allocator: std.mem.Allocator) !std.c.pid_t {
+    const src_str = std.mem.span(src_format.toStr());
+    const dest_str = std.mem.span(dest_format.toStr());
+    if (dest_format == .vmdk) {
+        return try forkExec(&.{ "qemu-img", "convert", "-f", src_str, "-O", dest_str, "-o", "subformat=streamOptimized", src_path, dest_path }, allocator);
+    }
+    return try forkExec(&.{ "qemu-img", "convert", "-f", src_str, "-O", dest_str, src_path, dest_path }, allocator);
+}
+
+/// Reap a background process started by convertDiskImageNoWait (or any
+/// child).  Returns `null` if still running, `true` on success (exit 0),
+/// `false` on failure.
+pub fn tryReapChild(pid: std.c.pid_t) ?bool {
+    var status: c_int = 0;
+    const r = std.c.waitpid(pid, &status, W.NOHANG);
+    if (r == 0) return null;                   // still running
+    if (r < 0) return false;                   // error / already reaped
+    const ustatus: u32 = @bitCast(status);
+    if (!W.IFEXITED(ustatus)) return false;
+    return W.EXITSTATUS(ustatus) == 0;
+}
+
 /// Create a linked clone: a new qcow2 image backed by `backing_path`.
 /// The clone shares the backing image's blocks copy-on-write, so it is
 /// created near-instantly and consumes almost no space initially. The
@@ -705,6 +768,131 @@ pub fn createLinkedClone(dest_path: []const u8, backing_path: []const u8, backin
         "qemu-img", "create", "-f", "qcow2", "-o", backing_str, dest_path,
     };
     runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+}
+
+/// Return true if `path` contains no shell metacharacters and is safe
+/// to embed in a single-argument position of `exec:cat {path}`.
+fn isSafeShellPath(path: []const u8) bool {
+    if (path.len == 0) return false;
+    for (path) |c| {
+        switch (c) {
+            ';', '|', '&', '$', '`', '(', ')', '<', '>', '\'', '"', '\\', '\n', '\r', '\t', 0 => return false,
+            else => {},
+        }
+    }
+    return true;
+}
+
+// ── Arg-builder helpers for disk operations ─────────────────────────
+// These return the argv that would be passed to runWait / forkExec, so
+// the arg format can be tested without spawning a child.
+
+/// Returns the argv slice for `qemu-img convert`, with stream-optimized
+/// subformat flag when the destination is VMDK.
+pub fn buildConvertArgs(
+    src_path: []const u8,
+    src_format: vm.DiskFormat,
+    dest_path: []const u8,
+    dest_format: vm.DiskFormat,
+    allocator: std.mem.Allocator,
+) !std.ArrayList([]const u8) {
+    var args: std.ArrayList([]const u8) = .empty;
+    try args.append(allocator, "qemu-img");
+    try args.append(allocator, "convert");
+    try args.append(allocator, "-f");
+    try args.append(allocator, std.mem.span(src_format.toStr()));
+    try args.append(allocator, "-O");
+    try args.append(allocator, std.mem.span(dest_format.toStr()));
+    if (dest_format == .vmdk) {
+        try args.append(allocator, "-o");
+        try args.append(allocator, "subformat=streamOptimized");
+    }
+    try args.append(allocator, src_path);
+    try args.append(allocator, dest_path);
+    return args;
+}
+
+/// Returns the argv slice for `qemu-img create` with backing file options.
+pub fn buildLinkedCloneArgs(
+    dest_path: []const u8,
+    backing_path: []const u8,
+    backing_format: vm.DiskFormat,
+    allocator: std.mem.Allocator,
+) !std.ArrayList([]const u8) {
+    var backing_arg: [vm.MAX_PATH + 64]u8 = undefined;
+    const backing_str = try std.fmt.bufPrint(&backing_arg, "backing_file={s},backing_fmt={s}", .{
+        backing_path,
+        std.mem.span(backing_format.toStr()),
+    });
+
+    var args: std.ArrayList([]const u8) = .empty;
+    try args.append(allocator, "qemu-img");
+    try args.append(allocator, "create");
+    try args.append(allocator, "-f");
+    try args.append(allocator, "qcow2");
+    try args.append(allocator, "-o");
+    try args.append(allocator, try allocator.dupe(u8, backing_str));
+    try args.append(allocator, dest_path);
+    return args;
+}
+
+test "isSafeShellPath: safe and unsafe paths" {
+    try std.testing.expect(isSafeShellPath("/tmp/vm_state.bin"));
+    try std.testing.expect(isSafeShellPath("/home/user/VM Data/state.bin"));
+    try std.testing.expect(!isSafeShellPath("bad; rm -rf /"));
+    try std.testing.expect(!isSafeShellPath("bad$(id)"));
+    try std.testing.expect(!isSafeShellPath("bad`id`"));
+    try std.testing.expect(!isSafeShellPath("bad|cat /etc/passwd"));
+    try std.testing.expect(!isSafeShellPath("bad\"quotes"));
+    try std.testing.expect(!isSafeShellPath(""));
+}
+
+test "convertDiskImage: arg builder includes streamOptimized for VMDK" {
+    const alloc = std.testing.allocator;
+    var args = try buildConvertArgs("/disk.qcow2", .qcow2, "/disk.vmdk", .vmdk, alloc);
+    defer args.deinit(alloc);
+    // Verify the -o subformat=streamOptimized flag appears for VMDK.
+    var found_o = false;
+    var found_sub = false;
+    for (args.items) |a| {
+        if (std.mem.eql(u8, a, "-o")) found_o = true;
+        if (std.mem.eql(u8, a, "subformat=streamOptimized")) found_sub = true;
+    }
+    try std.testing.expect(found_o);
+    try std.testing.expect(found_sub);
+}
+
+test "convertDiskImage: arg builder omits streamOptimized for non-VMDK" {
+    const alloc = std.testing.allocator;
+    var args = try buildConvertArgs("/disk.qcow2", .qcow2, "/disk.raw", .raw, alloc);
+    defer args.deinit(alloc);
+    for (args.items) |a| {
+        try std.testing.expect(!std.mem.eql(u8, a, "-o"));
+        try std.testing.expect(!std.mem.eql(u8, a, "subformat=streamOptimized"));
+    }
+}
+
+test "createLinkedClone: arg builder produces backing_file and backing_fmt" {
+    const alloc = std.testing.allocator;
+    var args = try buildLinkedCloneArgs("/clone.qcow2", "/base.qcow2", .qcow2, alloc);
+    defer {
+        for (args.items) |s| {
+            // The backing_str is the only heap-duped item; the rest are
+            // slices into string literals or caller buffers.
+            if (std.mem.indexOf(u8, s, "backing_file=") != null) alloc.free(s);
+        }
+        args.deinit(alloc);
+    }
+    // The backing option string is one arg: backing_file=/base.qcow2,backing_fmt=qcow2
+    var found_f = false;
+    var found_bb = false;
+    for (args.items) |a| {
+        if (std.mem.eql(u8, a, "-o")) found_f = true;
+        if (std.mem.indexOf(u8, a, "backing_file=") != null and
+            std.mem.indexOf(u8, a, "backing_fmt=qcow2") != null) found_bb = true;
+    }
+    try std.testing.expect(found_f);
+    try std.testing.expect(found_bb);
 }
 
 // ── Fuzz tests ──────────────────────────────────────────────────────

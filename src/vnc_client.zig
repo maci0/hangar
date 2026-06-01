@@ -80,7 +80,12 @@ pub const VncClient = struct {
         cl.*.serverPort = port;
 
         // rfbInitClient frees `cl` on failure — do NOT cleanup after this.
-        if (c.rfbInitClient(cl, null, null) == 0) return false;
+        // It also frees the framebuffer that onMallocFb may have allocated,
+        // so clear our dangling pointer.
+        if (c.rfbInitClient(cl, null, null) == 0) {
+            self.framebuffer = null;
+            return false;
+        }
 
         self.rfb = cl;
         @atomicStore(bool, &self.connected, true, .seq_cst);

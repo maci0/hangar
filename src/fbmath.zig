@@ -64,6 +64,43 @@ test "fbFits: rejects dimensions that exceed the cap" {
     try std.testing.expectEqual(@as(?usize, null), fbFits(3840, 2161, 3840 * 2160 * 4));
 }
 
+test "fbFits: realistic framebuffer sizes" {
+    // Test all common display resolutions with a generous 64MB buffer.
+    const cap: usize = 64 * 1024 * 1024;
+    const cases = [_]struct { w: c_int, h: c_int, expected: usize }{
+        .{ .w = 640,  .h = 480,  .expected = 640 * 480 },
+        .{ .w = 800,  .h = 600,  .expected = 800 * 600 },
+        .{ .w = 1024, .h = 768,  .expected = 1024 * 768 },
+        .{ .w = 1280, .h = 720,  .expected = 1280 * 720 },
+        .{ .w = 1280, .h = 800,  .expected = 1280 * 800 },
+        .{ .w = 1366, .h = 768,  .expected = 1366 * 768 },
+        .{ .w = 1440, .h = 900,  .expected = 1440 * 900 },
+        .{ .w = 1680, .h = 1050, .expected = 1680 * 1050 },
+        .{ .w = 1920, .h = 1080, .expected = 1920 * 1080 },
+        .{ .w = 1920, .h = 1200, .expected = 1920 * 1200 },
+        .{ .w = 2560, .h = 1440, .expected = 2560 * 1440 },
+        .{ .w = 2560, .h = 1600, .expected = 2560 * 1600 },
+        .{ .w = 3440, .h = 1440, .expected = 3440 * 1440 },
+        .{ .w = 3840, .h = 2160, .expected = 3840 * 2160 },
+        .{ .w = 4096, .h = 2160, .expected = 4096 * 2160 },
+        .{ .w = 5120, .h = 2880, .expected = 5120 * 2880 },
+        // 7680×4320 exceeds 64 MB — tested separately in "8K exceeds 64MB cap" below.
+    };
+    for (cases) |c| {
+        const result = fbFits(c.w, c.h, cap);
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(c.expected, result.?);
+        // Verify 4-byte-per-pixel fits.
+        try std.testing.expect(result.? * 4 <= cap);
+    }
+}
+
+test "fbFits: 8K exceeds 64MB cap" {
+    // 7680*4320*4 = 132.7 MB > 64 MB, so it should reject if cap is small.
+    const cap: usize = 64 * 1024 * 1024;
+    try std.testing.expectEqual(@as(?usize, null), fbFits(7680, 4320, cap));
+}
+
 test "fbFits: huge dimensions that overflow i32 do not crash" {
     // 50000*50000 = 2.5e9 > i32 max — the old `fw*fh` (c_int) panicked here.
     try std.testing.expectEqual(@as(?usize, null), fbFits(50000, 50000, 3840 * 2160 * 4));

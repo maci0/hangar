@@ -329,6 +329,7 @@ pub const QmpClient = struct {
 
     /// Create an internal snapshot (VM must have a qcow2 disk).
     pub fn saveSnapshot(self: *QmpClient, name: []const u8) !void {
+        if (!isValidSnapshotTag(name)) return error.InvalidTag;
         var hmp_buf: [300]u8 = undefined;
         const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "savevm {s}", .{name}) catch
             return error.BufferTooSmall;
@@ -344,6 +345,7 @@ pub const QmpClient = struct {
 
     /// Load (restore) an internal snapshot.
     pub fn loadSnapshot(self: *QmpClient, name: []const u8) !void {
+        if (!isValidSnapshotTag(name)) return error.InvalidTag;
         var hmp_buf: [300]u8 = undefined;
         const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "loadvm {s}", .{name}) catch
             return error.BufferTooSmall;
@@ -358,6 +360,7 @@ pub const QmpClient = struct {
 
     /// Delete an internal snapshot.
     pub fn deleteSnapshot(self: *QmpClient, name: []const u8) !void {
+        if (!isValidSnapshotTag(name)) return error.InvalidTag;
         var hmp_buf: [300]u8 = undefined;
         const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "delvm {s}", .{name}) catch
             return error.BufferTooSmall;
@@ -387,11 +390,11 @@ pub const QmpClient = struct {
     /// Uses the stable device id "ide2-cd0" that `qemu.zig` creates with
     /// an explicit `-device ide-cd,drive=cdrom0,id=ide2-cd0` argument.
     pub fn changeCdrom(self: *QmpClient, path: []const u8) !void {
-        var hmp_buf: [vm.MAX_PATH + 64]u8 = undefined;
-        // Escape quotes if path has them (HMP requires strings)
-        // For simplicity, assuming path has no quotes or spaces that break HMP.
-        // Actually HMP `change` takes raw paths if unquoted or quoted strings.
-        const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "change ide2-cd0 \"{s}\"", .{path}) catch
+        var hmp_buf: [vm.MAX_PATH + 128]u8 = undefined;
+        // Escape double-quotes in the path to prevent HMP injection.
+        var esc_buf: [vm.MAX_PATH + 64]u8 = undefined;
+        const escaped = escapeHmpArg(path, &esc_buf);
+        const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "change ide2-cd0 \"{s}\"", .{escaped}) catch
             return error.BufferTooSmall;
 
         var out: [1024]u8 = undefined;
@@ -424,6 +427,79 @@ pub const QmpClient = struct {
 ///
 /// Works for both flat objects (`{"status": "running"}`) and the first
 /// match in nested objects (`{"return": {"status": "paused"}}`).
+/// Decode a single hex digit to its 4-bit value, or null if not hex.
+fn hexDigit(c: u8) ?u4 {
+    return switch (c) {
+        '0'...'9' => @intCast(c - '0'),
+        'a'...'f' => @intCast(c - 'a' + 10),
+        'A'...'F' => @intCast(c - 'A' + 10),
+        else => null,
+    };
+}
+
+/// Encode a Unicode code point as UTF-8 into `out` at position `out_len`.
+/// Returns BufferTooSmall if the output buffer is exhausted.
+fn encodeUtf8(codepoint: u21, out: []u8, out_len: *usize) !void {
+    if (codepoint <= 0x7F) {
+        if (out_len.* >= out.len) return error.BufferTooSmall;
+        out[out_len.*] = @intCast(codepoint);
+        out_len.* += 1;
+    } else if (codepoint <= 0x7FF) {
+        if (out_len.* + 1 >= out.len) return error.BufferTooSmall;
+        out[out_len.*] = @intCast(0xC0 | (codepoint >> 6));
+        out[out_len.* + 1] = @intCast(0x80 | (codepoint & 0x3F));
+        out_len.* += 2;
+    } else if (codepoint <= 0xFFFF) {
+        if (out_len.* + 2 >= out.len) return error.BufferTooSmall;
+        out[out_len.*] = @intCast(0xE0 | (codepoint >> 12));
+        out[out_len.* + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+        out[out_len.* + 2] = @intCast(0x80 | (codepoint & 0x3F));
+        out_len.* += 3;
+    } else {
+        if (out_len.* + 3 >= out.len) return error.BufferTooSmall;
+        out[out_len.*] = @intCast(0xF0 | (codepoint >> 18));
+        out[out_len.* + 1] = @intCast(0x80 | ((codepoint >> 12) & 0x3F));
+        out[out_len.* + 2] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+        out[out_len.* + 3] = @intCast(0x80 | (codepoint & 0x3F));
+        out_len.* += 4;
+    }
+}
+
+/// Parse a `\uXXXX` escape starting at `json[i]` (the backslash).
+/// Returns the decoded code point and advances `i` past the escape.
+/// Returns `error.CommandFailed` on malformed input.
+fn parseUnicodeEscape(json: []const u8, i: *usize) !u21 {
+    // Expect: \ u X X X X  (6 chars)
+    if (i.* + 5 >= json.len) return error.CommandFailed;
+    if (json[i.*] != '\\' or json[i.* + 1] != 'u') return error.CommandFailed;
+
+    var cp: u21 = 0;
+    var d: usize = 0;
+    while (d < 4) : (d += 1) {
+        const h = hexDigit(json[i.* + 2 + d]) orelse return error.CommandFailed;
+        cp = (cp << 4) | @as(u21, h);
+    }
+    i.* += 6; // consumed \uXXXX
+
+    // Handle UTF-16 surrogate pairs: high surrogate followed by \u + low.
+    if (cp >= 0xD800 and cp <= 0xDBFF) {
+        if (i.* + 5 < json.len and json[i.*] == '\\' and json[i.* + 1] == 'u') {
+            var lo: u21 = 0;
+            var d2: usize = 0;
+            while (d2 < 4) : (d2 += 1) {
+                const h2 = hexDigit(json[i.* + 2 + d2]) orelse break;
+                lo = (lo << 4) | @as(u21, h2);
+            }
+            if (lo >= 0xDC00 and lo <= 0xDFFF) {
+                i.* += 6; // consumed the low surrogate
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+            }
+        }
+    }
+
+    return cp;
+}
+
 pub fn extractJsonString(json: []const u8, key: []const u8, out: []u8) ![]const u8 {
     // Build the search needle: "key"
     var needle_buf: [130]u8 = undefined;
@@ -452,6 +528,11 @@ pub fn extractJsonString(json: []const u8, key: []const u8, out: []u8) ![]const 
             return error.BufferTooSmall;
         }
         if (json[i] == '\\' and i + 1 < json.len) {
+            if (json[i + 1] == 'u') {
+                const cp = try parseUnicodeEscape(json, &i);
+                try encodeUtf8(cp, out, &out_len);
+                continue;
+            }
             const esc: u8 = switch (json[i + 1]) {
                 '"' => '"',
                 '\\' => '\\',
@@ -592,6 +673,38 @@ test "extractJsonString: unterminated string returns error" {
         \\{"k": "no end
     , "k", &out);
     try std.testing.expectError(error.CommandFailed, result);
+}
+
+test "extractJsonString: unicode escape basic ascii" {
+    var out: [64]u8 = undefined;
+    const result = try extractJsonString(
+        \\{"msg": "A\u0042C"}
+    , "msg", &out);
+    try std.testing.expectEqualStrings("ABC", result);
+}
+
+test "extractJsonString: unicode escape 2-byte utf8" {
+    var out: [64]u8 = undefined;
+    const result = try extractJsonString(
+        \\{"msg": "caf\u00e9"}
+    , "msg", &out);
+    try std.testing.expectEqualStrings("café", result);
+}
+
+test "extractJsonString: unicode escape 3-byte utf8" {
+    var out: [64]u8 = undefined;
+    const result = try extractJsonString(
+        \\{"msg": "\u4e16\u754c"}
+    , "msg", &out);
+    try std.testing.expectEqualStrings("世界", result);
+}
+
+test "extractJsonString: unicode surrogate pair" {
+    var out: [64]u8 = undefined;
+    const result = try extractJsonString(
+        \\{"msg": "\uD83D\uDE00"}
+    , "msg", &out);
+    try std.testing.expectEqualStrings("😀", result);
 }
 
 test "socketPath: returns null for overly long name" {
@@ -813,4 +926,57 @@ test "extractJsonString: slash escape handled" {
         \\{"msg": "a\/b\/c"}
     , "msg", &out);
     try std.testing.expectEqualStrings("a/b/c", result);
+}
+
+// ── Input validation helpers ────────────────────────────────────
+
+/// Validate a snapshot tag for HMP safety.
+/// Only allows alphanumeric, hyphen, and underscore characters.
+fn isValidSnapshotTag(tag: []const u8) bool {
+    if (tag.len == 0) return false;
+    for (tag) |c| {
+        if (!((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+              (c >= '0' and c <= '9') or c == '-' or c == '_')) return false;
+    }
+    return true;
+}
+
+/// Escape double-quote characters in an HMP argument string.
+/// Returns a slice of `out` guaranteed to contain no unescaped `"`.
+fn escapeHmpArg(arg: []const u8, out: []u8) []const u8 {
+    var pos: usize = 0;
+    for (arg) |c| {
+        if (c == '"') {
+            if (pos + 2 > out.len) break;
+            out[pos] = '\\';
+            out[pos + 1] = '"';
+            pos += 2;
+        } else {
+            if (pos >= out.len) break;
+            out[pos] = c;
+            pos += 1;
+        }
+    }
+    return out[0..pos];
+}
+
+test "isValidSnapshotTag: valid and invalid tags" {
+    try std.testing.expect(isValidSnapshotTag("snap1"));
+    try std.testing.expect(isValidSnapshotTag("my-snapshot_2024"));
+    try std.testing.expect(!isValidSnapshotTag(""));
+    try std.testing.expect(!isValidSnapshotTag("bad tag"));
+    try std.testing.expect(!isValidSnapshotTag("bad\"tag"));
+    try std.testing.expect(!isValidSnapshotTag("bad;tag"));
+}
+
+test "escapeHmpArg: no special chars" {
+    var buf: [128]u8 = undefined;
+    const r = escapeHmpArg("/path/to/iso", &buf);
+    try std.testing.expectEqualStrings("/path/to/iso", r);
+}
+
+test "escapeHmpArg: quote escaping" {
+    var buf: [128]u8 = undefined;
+    const r = escapeHmpArg("path\"with\"quotes", &buf);
+    try std.testing.expectEqualStrings("path\\\"with\\\"quotes", r);
 }

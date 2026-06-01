@@ -11,6 +11,10 @@ const app = @import("appstate.zig");
 const display_gl = @import("display_gl.zig");
 const cfltk = @import("cfltk_import.zig").c;
 
+/// Previous framebuffer image — freed before creating a new one to avoid
+/// the ~500 MB/min leak from unreleased Fl_RGB_Image objects.
+var prev_img: ?*cfltk.Fl_RGB_Image = null;
+
 /// Polling callback (100 ms). Reads the VNC or SPICE framebuffer,
 /// renders it via GPU (OpenGL) if available, falling back to software.
 pub fn displayTimerCB(_: ?*anyopaque) callconv(.c) void {
@@ -30,11 +34,11 @@ pub fn displayTimerCB(_: ?*anyopaque) callconv(.c) void {
             }
         } else if (app.spice_client) |sc| {
             if (sc.checkDirty()) {
-                if (sc.getFb()) |fb| {
+                if (sc.lockFb()) |fb| {
+                    defer sc.unlockFb();
                     var fw: c_int = 0;
                     var fh: c_int = 0;
                     if (sc.getSize(&fw, &fh)) {
-                        // SPICE has stride; GL renderer handles this by reading full fb
                         display_gl.renderGL(fb, fw, fh);
                     }
                 }
@@ -57,7 +61,8 @@ pub fn displayTimerCB(_: ?*anyopaque) callconv(.c) void {
             }
         } else if (app.spice_client) |sc| {
             if (sc.checkDirty()) {
-                if (sc.getFb()) |fb| {
+                if (sc.lockFb()) |fb| {
+                    defer sc.unlockFb();
                     var fw: c_int = 0;
                     var fh: c_int = 0;
                     if (sc.getSize(&fw, &fh)) {
@@ -101,13 +106,25 @@ pub fn renderFramebuffer(
         cfltk.Fl_RGB_Image_scale(img, box_w, box_h, 1, 0);
     }
 
+    // Free the previous image before attaching a new one.
+    if (prev_img) |old| {
+        cfltk.Fl_RGB_Image_delete(old);
+        prev_img = null;
+    }
+
     cfltk.Fl_Box_set_label(db, "");
     cfltk.Fl_Box_set_image(db, @ptrCast(img));
     cfltk.Fl_Box_redraw(db);
+    prev_img = img;
 }
 
 /// Clear the display box — release any image and restore placeholder text.
 pub fn clearDisplay() void {
+    display_gl.hideGL();
+    if (prev_img) |old| {
+        cfltk.Fl_RGB_Image_delete(old);
+        prev_img = null;
+    }
     if (app.display_box) |db| {
         cfltk.Fl_Box_set_image(db, null);
         cfltk.Fl_Box_set_label(db, "▸ Power on a VM to start display\n▸ VNC and SPICE displays appear here");

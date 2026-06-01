@@ -13,6 +13,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Maximum number of VMs that can be managed (single source of truth).
+pub const MAX_VMS: usize = 64;
+
 /// Maximum length of a VM name (bytes, not including sentinel).
 pub const MAX_NAME: usize = 255;
 

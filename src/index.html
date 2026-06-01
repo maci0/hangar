@@ -8,9 +8,9 @@
 </aside>
 <main role="main">
 <div id="display"><canvas id="fbcanvas" width="640" height="480"></canvas></div>
-<div id="serialpanel"><textarea id="serialterm" readonly></textarea><div style="display:flex;gap:8px;padding:4px 8px"><button class="btn danger" data-action="manualDisconnectSerial" style="font-size:11px;padding:2px 8px" title="Disconnect serial console">Disconnect</button></div></div>
+<div id="serialpanel"><textarea id="serialterm" readonly></textarea><div style="display:flex;gap:8px;padding:4px 8px"><button class="btn ghost" data-action="clearSerial" style="font-size:11px;padding:2px 8px" title="Clear serial output">Clear</button><button class="btn ghost" data-action="exportSerial" style="font-size:11px;padding:2px 8px" title="Export serial output to file">Export</button><button class="btn danger" data-action="manualDisconnectSerial" style="font-size:11px;padding:2px 8px" title="Disconnect serial console">Disconnect</button></div></div>
 <div class="toolbar" role="toolbar" aria-label="VM actions">
-<button class="hamburger" data-action="toggleSidebar" title="Toggle sidebar">☰</button>
+<button class="hamburger" data-action="toggleSidebar" title="Toggle sidebar" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar">☰</button>
 <button class="btn ghost" data-action="deselectVm" title="Deselect VM (Ctrl+W)">⌂ Home</button>
 <button id="powerbtn" class="btn primary" data-action="powerToggle" title="Power On/Off selected VM">▶ Power On</button><span class="sep"></span>
 <button class="btn ghost" data-action="pauseGuest" title="Freeze guest execution">⏸ Pause</button>
@@ -26,6 +26,7 @@
 <button class="btn ghost" data-action="importGuest" title="Import a VM from disk image">↓ Import</button>
 <button class="btn ghost" data-action="takeSnapshot" title="Manage snapshots">◎ Snapshot</button>
 <button class="btn ghost" data-action="exportOvf" title="Export VM as OVF/OVA">↑ Export</button>
+<button class="btn ghost" data-action="migrateGuest" title="Live migrate VM to another host">⇄ Migrate</button>
 <span class="sep"></span>
 <button class="btn ghost" data-action="openVnets" title="Edit virtual networks">🌐 VNet</button>
 <button class="btn ghost" data-action="openPrefs" title="Application preferences">⚡ Prefs</button>
@@ -36,29 +37,29 @@
 <button class="btn danger" data-action="deleteVm" title="Delete the selected VM">✕ Delete</button>
 </div>
 <div class="content-area">
-<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-<h1 id="vmname" style="margin-bottom:0">Select a VM</h1>
-<div class="tab-bar" role="tablist" style="margin-bottom:0;border-bottom:none" id="tabBar">
+<div class="vm-header">
+<h1 id="vmname">Select a VM</h1>
+<div class="tab-bar" role="tablist" id="tabBar">
 <button class="tab-btn active" id="tabBtnSummary" role="tab" aria-selected="true" data-action="switchTab" data-tab="summary" title="View VM summary and details">Summary</button>
 <button class="tab-btn" id="tabBtnSettings" role="tab" aria-selected="false" data-action="switchTab" data-tab="settings" title="Edit VM configuration">Settings</button>
 </div>
 </div>
-<div id="tabSummary" role="tabpanel" aria-labelledby="tabBtnSummary"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to view its details, or create a new one.</p></div></div>
-<div id="tabSettings" role="tabpanel" aria-labelledby="tabBtnSettings" style="display:none"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div></div>
+<div id="tabSummary" role="tabpanel" aria-labelledby="tabBtnSummary"><div class="empty-state"><svg class="empty-icon"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to view its details, or create a new one.</p></div></div>
+<div id="tabSettings" role="tabpanel" aria-labelledby="tabBtnSettings" style="display:none"><div class="empty-state"><svg class="empty-icon"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div></div>
 </div></main>
 <div id="statusbar" role="status" aria-live="polite">Ready</div>
 <div id="toast-container" aria-live="polite"></div>
 <dialog id="newdlg" aria-modal="true" aria-labelledby="newdlg-title"><h3 id="newdlg-title">New Virtual Machine</h3>
 <div class="dialog-body">
-<label for="n_name">Name</label><input id="n_name" placeholder="VM Name" value="New VM">
-<label for="n_mem">Memory (MB)</label><input id="n_mem" type="number" value="2048">
-<label for="n_cpu">CPU Cores</label><input id="n_cpu" type="number" value="2">
-<label for="n_disk">Disk Size (GB)</label><input id="n_disk" type="number" value="20">
+<label for="n_name">Name</label><input id="n_name" placeholder="VM Name" value="New VM" required maxlength="128">
+<label for="n_mem">Memory (MB)</label><input id="n_mem" type="number" value="2048" min="128" max="65536" required>
+<label for="n_cpu">CPU Cores</label><input id="n_cpu" type="number" value="2" min="1" max="256" required>
+<label for="n_disk">Disk Size (GB)</label><input id="n_disk" type="number" value="20" min="1" max="65536" required>
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="newdlg" title="Cancel and close">Cancel</button><button class="btn primary" data-action="createVm" title="Create the virtual machine">Create</button></div></dialog>
 <dialog id="snapdlg" aria-modal="true" aria-labelledby="snapdlg-title"><h3 id="snapdlg-title">Snapshots</h3>
 <div class="dialog-body">
-<div style="display:flex;gap:8px;margin-bottom:12px"><input id="s_tag" placeholder="Snapshot tag" style="flex:1"><button class="btn primary" data-action="takeSnapshotFromDlg" title="Create a new snapshot">Take</button></div>
+<div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end"><div style="flex:1"><label for="s_tag" style="display:block;font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:4px">Snapshot tag</label><input id="s_tag" placeholder="e.g. clean-install" style="width:100%"></div><button class="btn primary" data-action="takeSnapshotFromDlg" title="Create a new snapshot">Take</button></div>
 <div id="snaplist" style="max-height:300px;overflow-y:auto;font-size:13px"><div style="color:var(--text-dim)">Loading...</div></div>
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="snapdlg" title="Close">Close</button></div></dialog>
@@ -94,6 +95,14 @@
 <label for="p_autoprotect_max">AutoProtect Max Snapshots</label><input id="p_autoprotect_max" type="number" value="10">
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="prefsdlg" title="Cancel">Cancel</button><button class="btn primary" data-action="savePrefs" title="Save preferences">Save</button></div></dialog>
+<dialog id="migratedlg" aria-modal="true" aria-labelledby="migratedlg-title"><h3 id="migratedlg-title">Live Migrate VM</h3>
+<div class="dialog-body">
+<p style="margin-bottom:12px;color:var(--text-muted)" id="migrate_vmname"></p>
+<label for="mig_host">Target Host</label><input id="mig_host" placeholder="192.168.1.100" required>
+<label for="mig_port">QEMU Migration Port</label><input id="mig_port" type="number" value="4444" min="1" max="65535" required>
+<label for="mig_uri">Migration URI</label><input id="mig_uri" placeholder="tcp:192.168.1.100:4444" readonly style="background:var(--bg);color:var(--text-dim);cursor:not-allowed">
+</div>
+<div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="migratedlg" title="Cancel">Cancel</button><button class="btn primary" data-action="doMigrate" title="Start live migration">Migrate</button></div></dialog>
 <dialog id="aboutdlg" aria-modal="true" aria-labelledby="aboutdlg-title"><h3 id="aboutdlg-title">About KVMGUI</h3>
 <div class="dialog-body" style="text-align:center">
 <div style="font-size:48px;margin-bottom:12px;width:64px;height:64px;background:var(--gradient);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;color:var(--text-on-accent);box-shadow:0 4px 16px var(--accent-glow)">K</div>
@@ -103,8 +112,10 @@
 <p style="color:var(--text-dim);font-size:11px;margin-top:12px">No libvirt dependency — direct QMP control.</p>
 <p style="color:var(--text-muted);font-size:12px;font-weight:600;margin-top:16px">Keyboard Shortcuts</p>
 <p style="color:var(--text-dim);font-size:11px;line-height:1.8">
-Ctrl+N New VM &nbsp;·&nbsp; Ctrl+E Edit Settings &nbsp;·&nbsp; Del Delete VM<br>
-Enter Power Toggle &nbsp;·&nbsp; Ctrl+W Deselect &nbsp;·&nbsp; Escape Close Dialog
+Ctrl+N New VM &nbsp;·&nbsp; Ctrl+E Edit Settings &nbsp;·&nbsp; Ctrl+I Import<br>
+Ctrl+S Suspend &nbsp;·&nbsp; Ctrl+P Preferences &nbsp;·&nbsp; Ctrl+F Search<br>
+Del Delete VM &nbsp;·&nbsp; Enter Power Toggle &nbsp;·&nbsp; Ctrl+W Deselect<br>
+F5 Refresh &nbsp;·&nbsp; F11 Fullscreen &nbsp;·&nbsp; ? Shortcuts &nbsp;·&nbsp; Esc Close
 </p>
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="aboutdlg" title="Close">Close</button></div></dialog>
@@ -112,11 +123,18 @@ Enter Power Toggle &nbsp;·&nbsp; Ctrl+W Deselect &nbsp;·&nbsp; Escape Close Di
 <div class="dialog-body"><table class="shortcuts-table">
 <tr><td><kbd>Ctrl+N</kbd></td><td>New VM</td></tr>
 <tr><td><kbd>Ctrl+E</kbd></td><td>Edit Settings</td></tr>
+<tr><td><kbd>Ctrl+I</kbd></td><td>Import VM</td></tr>
+<tr><td><kbd>Ctrl+S</kbd></td><td>Suspend VM</td></tr>
+<tr><td><kbd>Ctrl+P</kbd></td><td>Preferences</td></tr>
+<tr><td><kbd>Ctrl+F</kbd></td><td>Search VM Library</td></tr>
 <tr><td><kbd>Enter</kbd></td><td>Power On / Off</td></tr>
 <tr><td><kbd>Delete</kbd></td><td>Delete VM</td></tr>
+<tr><td><kbd>F5</kbd></td><td>Refresh VM List</td></tr>
+<tr><td><kbd>F11</kbd></td><td>Toggle Fullscreen</td></tr>
 <tr><td><kbd>Ctrl+W</kbd></td><td>Deselect VM</td></tr>
 <tr><td><kbd>Escape</kbd></td><td>Close Dialog / Deselect</td></tr>
 <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
 </table></div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="shortcutsdlg">Close</button></div></dialog>
-<script src="/app.js"></script></body></html>
+<svg style="display:none" aria-hidden="true"><symbol id="icon-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></symbol><symbol id="icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol></svg>
+<script src="/novnc.js"></script><script src="/app.js"></script></body></html>

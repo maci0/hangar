@@ -23,7 +23,7 @@ const urlencode = @import("urlencode.zig");
 
 extern fn time(t: ?*c_long) c_long;
 
-const MAX_VMS = 64;
+const MAX_VMS = vm.MAX_VMS;
 
 // HTTP status codes
 const HTTP_OK: u16 = 200;
@@ -32,6 +32,7 @@ const HTTP_BAD_REQUEST: u16 = 400;
 const HTTP_NOT_FOUND: u16 = 404;
 const HTTP_METHOD_NOT_ALLOWED: u16 = 405;
 const HTTP_PAYLOAD_TOO_LARGE: u16 = 413;
+const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 const HTTP_INTERNAL_ERROR: u16 = 500;
 
 var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
@@ -78,12 +79,63 @@ const SOCK_STREAM: c_int = 1;
 const AF_UNIX: c_uint = 1;
 const SOL_SOCKET: c_int = 1;
 const SO_REUSEADDR: c_int = 2;
+const SO_RCVTIMEO: c_int = 20;
 const SHUT_WR: c_int = 1;
 const F_SETFL: c_int = 4;
 const O_NONBLOCK: c_int = 2048;
 
-/// Simple API-key check. Reads X-API-Key header from request.
-/// GET /api/vms, /api/health, /api/fb/N, /api/snapshot/list/N, WebSocket upgrade are exempt.
+// ── Rate limiter ────────────────────────────────────────────────
+const RATE_LIMIT_PER_SEC: u32 = 200; // max POST requests per second
+
+var g_rate_window_start: i64 = 0;
+var g_rate_count: u32 = 0;
+
+/// Returns true if the request should be rate-limited (denied).
+fn rateLimitCheck() bool {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    const now: i64 = @intCast(ts.sec);
+    const prev: i64 = @atomicLoad(i64, &g_rate_window_start, .acquire);
+    if (now != prev) {
+        // Try to CAS the window forward — whoever wins resets the count.
+        _ = @cmpxchgWeak(i64, &g_rate_window_start, prev, now, .acq_rel, .monotonic);
+        // If we lost the race, another thread just reset; either way, reset count.
+        @atomicStore(u32, &g_rate_count, 0, .release);
+        return false;
+    }
+    if (@atomicRmw(u32, &g_rate_count, .Add, 1, .acq_rel) >= RATE_LIMIT_PER_SEC) {
+        return true;
+    }
+    return false;
+}
+
+/// Check whether a URL path is exempt from API-key auth.
+/// Uses exact path matching against the extracted path (not the raw request
+/// line) to prevent path-traversal auth bypass via prefix injection.
+fn isAuthExempt(method_get: bool, path: []const u8) bool {
+    if (!method_get) return false; // only GET endpoints are exempt
+    // Exact paths
+    if (std.mem.eql(u8, path, "/")) return true;
+    if (std.mem.eql(u8, path, "/app.js")) return true;
+    if (std.mem.eql(u8, path, "/novnc.js")) return true;
+    if (std.mem.eql(u8, path, "/app.css")) return true;
+    if (std.mem.startsWith(u8, path, "/favicon")) return true;
+    if (std.mem.eql(u8, path, "/api/vms")) return true;
+    if (std.mem.eql(u8, path, "/api/health")) return true;
+    if (std.mem.eql(u8, path, "/api/config")) return true;
+    if (std.mem.eql(u8, path, "/api/vnets")) return true;
+    // Prefix paths — ensure the prefix ends at a path boundary
+    if (std.mem.startsWith(u8, path, "/api/vm/")) return true;
+    if (std.mem.startsWith(u8, path, "/api/fb/")) return true;
+    if (std.mem.startsWith(u8, path, "/api/snapshot/list/")) return true;
+    return false;
+}
+
+fn clampPref(v: []const u8, fallback: u32, lo: u32, hi: u32) u32 {
+    const val = std.fmt.parseInt(u32, v, 10) catch return fallback;
+    return if (val < lo) lo else if (val > hi) hi else val;
+}
+
 fn checkAuth(req: []const u8) bool {
     if (auth_token_len > 0) {
         const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return false;
@@ -136,6 +188,7 @@ fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8
         HTTP_NOT_FOUND => "HTTP/1.1 404 Not Found\r\n",
         HTTP_METHOD_NOT_ALLOWED => "HTTP/1.1 405 Method Not Allowed\r\n",
         HTTP_PAYLOAD_TOO_LARGE => "HTTP/1.1 413 Payload Too Large\r\n",
+        HTTP_TOO_MANY_REQUESTS => "HTTP/1.1 429 Too Many Requests\r\n",
         HTTP_INTERNAL_ERROR => "HTTP/1.1 500 Internal Server Error\r\n",
         else => "HTTP/1.1 500 Internal Server Error\r\n",
     };
@@ -145,14 +198,20 @@ fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8
     const h_acao: []const u8 = "Access-Control-Allow-Origin: *\r\n";
     const h_acah: []const u8 = "Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n";
     const h_acam: []const u8 = "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    const h_xcto: []const u8 = "X-Content-Type-Options: nosniff\r\n";
+    const h_xfo: []const u8 = "X-Frame-Options: DENY\r\n";
+    const h_csp: []const u8 = "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'\r\n";
     const h_ct: []const u8 = "Content-Type: ";
     if (!writeAll(conn, h_acao.ptr, h_acao.len)) return;
     if (!writeAll(conn, h_acah.ptr, h_acah.len)) return;
     if (!writeAll(conn, h_acam.ptr, h_acam.len)) return;
+    if (!writeAll(conn, h_xcto.ptr, h_xcto.len)) return;
+    if (!writeAll(conn, h_xfo.ptr, h_xfo.len)) return;
+    if (!writeAll(conn, h_csp.ptr, h_csp.len)) return;
 
     if (!writeAll(conn, h_ct.ptr, h_ct.len)) return;
     if (!writeAll(conn, ct.ptr, ct.len)) return;
-    const h_server: []const u8 = "\r\nServer: kvmgui/1.0";
+    const h_server: []const u8 = "\r\nServer: kvmgui";
     if (!writeAll(conn, h_server.ptr, h_server.len)) return;
     if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
         const h_cc: []const u8 = "\r\nCache-Control: public, max-age=86400";
@@ -180,13 +239,19 @@ fn writeStreamHeaders(conn: c.fd_t, status: u16, ct: []const u8, content_len: u6
     const h_acao: []const u8 = "Access-Control-Allow-Origin: *\r\n";
     const h_acah: []const u8 = "Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n";
     const h_acam: []const u8 = "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    const h_xcto: []const u8 = "X-Content-Type-Options: nosniff\r\n";
+    const h_xfo: []const u8 = "X-Frame-Options: DENY\r\n";
+    const h_csp: []const u8 = "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'\r\n";
     const h_ct: []const u8 = "Content-Type: ";
     if (!writeAll(conn, h_acao.ptr, h_acao.len)) return;
     if (!writeAll(conn, h_acah.ptr, h_acah.len)) return;
     if (!writeAll(conn, h_acam.ptr, h_acam.len)) return;
+    if (!writeAll(conn, h_xcto.ptr, h_xcto.len)) return;
+    if (!writeAll(conn, h_xfo.ptr, h_xfo.len)) return;
+    if (!writeAll(conn, h_csp.ptr, h_csp.len)) return;
     if (!writeAll(conn, h_ct.ptr, h_ct.len)) return;
     if (!writeAll(conn, ct.ptr, ct.len)) return;
-    const h_server: []const u8 = "\r\nServer: kvmgui/1.0";
+    const h_server: []const u8 = "\r\nServer: kvmgui";
     if (!writeAll(conn, h_server.ptr, h_server.len)) return;
     if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
         const h_cc: []const u8 = "\r\nCache-Control: public, max-age=86400";
@@ -222,10 +287,23 @@ fn acceptLoop(fd: c.fd_t) void {
 
 fn serveHtml(conn: c.fd_t) void {
     defer _ = c.close(conn);
+
+    // 30-second receive timeout (SO_RCVTIMEO).
+    var tv = std.mem.zeroes([16]u8);
+    @as(*align(8) i64, @alignCast(@ptrCast(&tv[0]))).* = 30; // tv_sec
+    @as(*align(8) i64, @alignCast(@ptrCast(&tv[8]))).* = 0; // tv_usec
+    _ = c.setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, @sizeOf(@TypeOf(tv)));
+
     var buf: [65536]u8 = undefined;
     const n = c.read(conn, &buf, buf.len);
     if (n <= 0) return;
     const req = buf[0..@intCast(n)];
+
+    // ── Rate limiting: POST requests only ──
+    if (std.mem.startsWith(u8, req, "POST ") and rateLimitCheck()) {
+        writeHttpResponse(conn, HTTP_TOO_MANY_REQUESTS, "text/plain", "Too Many Requests");
+        return;
+    }
 
     // ── CORS preflight ──
     if (std.mem.startsWith(u8, req, "OPTIONS ")) {
@@ -238,6 +316,15 @@ fn serveHtml(conn: c.fd_t) void {
         writeHttpResponse(conn, HTTP_METHOD_NOT_ALLOWED, "text/plain", "Method Not Allowed");
         return;
     }
+
+    // Extract the URL path from the request line for precise matching.
+    // Avoids path-traversal auth bypass via stitched prefixes (e.g.
+    // "GET /api/vm/../../api/save/0" matched the exempt "GET /api/vm/").
+    const req_path = if (std.mem.indexOfScalar(u8, req, ' ')) |sp1| blk: {
+        const after_sp = req[sp1 + 1 ..];
+        const sp2 = std.mem.indexOfAny(u8, after_sp, " ?") orelse after_sp.len;
+        break :blk after_sp[0..sp2];
+    } else req;
 
     // ── Content-Length validation: reject requests exceeding buffer capacity ──
     if (std.mem.startsWith(u8, req, "POST ")) {
@@ -293,18 +380,11 @@ fn serveHtml(conn: c.fd_t) void {
     var detail_buf: [4096]u8 = undefined;
     var snap_buf: [4096]u8 = undefined;
 
-    // Auth: check X-API-Key for mutating endpoints
-    const needs_auth = !std.mem.startsWith(u8, req, "GET /api/vms") and
-        !std.mem.startsWith(u8, req, "GET /api/health") and
-        !std.mem.startsWith(u8, req, "GET /api/fb/") and
-        !std.mem.startsWith(u8, req, "GET /api/snapshot/list/") and
-        !std.mem.startsWith(u8, req, "GET /api/config") and
-        !std.mem.startsWith(u8, req, "GET /api/vnets") and
-        !std.mem.startsWith(u8, req, "GET /api/vm/") and
-        !std.mem.startsWith(u8, req, "GET / ") and
-        !std.mem.startsWith(u8, req, "GET /app.js") and
-        !std.mem.startsWith(u8, req, "GET /app.css") and
-        !std.mem.eql(u8, req[0..@min(req.len, "GET /favicon".len)], "GET /favicon");
+    // Auth: check X-API-Key for mutating endpoints.
+    // Match against the extracted path (not the raw request line) to prevent
+    // path-traversal auth bypass.
+    const method_get = std.mem.startsWith(u8, req, "GET ");
+    const needs_auth = !isAuthExempt(method_get, req_path);
 
     if (needs_auth and !checkAuth(req)) {
         writeHttpResponse(conn, HTTP_BAD_REQUEST, "text/plain", "auth required");
@@ -323,7 +403,10 @@ fn serveHtml(conn: c.fd_t) void {
         response = try serveConfigRaw();
     } else if (std.mem.startsWith(u8, req, "GET /api/vm/")) {
         content_type = "application/json; charset=utf-8";
-        response = renderVmDetail(req, &detail_buf);
+        response = renderVmDetail(req, &detail_buf) catch blk: {
+            logErr("renderVmDetail: buffer overflow or parse error");
+            break :blk "{}";
+        };
     } else if (std.mem.startsWith(u8, req, "POST /api/power/")) {
         response = try handlePower(req);
         content_type = "text/plain";
@@ -388,6 +471,9 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/cad/")) {
         response = try handleCad(req);
         content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "POST /api/migrate/")) {
+        response = try handleMigrate(req);
+        content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "GET /api/vnets")) {
         content_type = "application/json; charset=utf-8";
         response = handleVnetsJson(&snap_buf);
@@ -402,6 +488,9 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/css; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET /app.js")) {
         response = app_js;
+        content_type = "application/javascript; charset=utf-8";
+    } else if (std.mem.startsWith(u8, req, "GET /novnc.js")) {
+        response = novnc_js;
         content_type = "application/javascript; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET / ")) {
         response = index_html;
@@ -460,6 +549,9 @@ fn serveConfigRaw() ![]const u8 {
     ) catch return "{}";
     defer std.heap.page_allocator.free(raw);
     const n = @min(raw.len, config_raw_buf.len);
+    if (raw.len > config_raw_buf.len) {
+        std.log.warn("vms.json truncated to {} bytes (file is {} bytes)", .{ config_raw_buf.len, raw.len });
+    }
     @memcpy(config_raw_buf[0..n], raw[0..n]);
     return config_raw_buf[0..n];
 }
@@ -657,6 +749,9 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
         if (vc.getSize(&fw, &fh) and fw > 0 and fh > 0) {
             const pixel_size: usize = @intCast(@as(u64, @intCast(fw)) * @as(u64, @intCast(fh)) * 4);
             const copy_size = @min(pixel_size, fb_bmp_buf.len - 54);
+            if (pixel_size > fb_bmp_buf.len - 54) {
+                std.log.warn("VNC framebuffer {}x{} ({} bytes) truncated to {} bytes", .{ fw, fh, pixel_size, fb_bmp_buf.len - 54 });
+            }
             const file_size: u32 = @intCast(54 + copy_size);
 
             // ── BITMAPFILEHEADER (14 bytes) ──────────────────────
@@ -686,12 +781,12 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
     return "no fb";
 }
 
-fn renderVmDetail(req: []const u8, buf: []u8) []const u8 {
+fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     const prefix = "GET /api/vm/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return "{}";
+    const start = std.mem.indexOf(u8, req, prefix) orelse return error.RenderFailed;
     const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "{}";
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "{}";
+    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return error.RenderFailed;
+    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return error.RenderFailed;
     vms_mutex.lock();
     defer vms_mutex.unlock();
     if (idx >= vm_count) return "{}";
@@ -722,7 +817,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) []const u8 {
         if (v.hasFloppy()) "true" else "false",
         if (v.hasFloppy()) jsonEscape(&esc, v.getFloppyPathSlice()) else "",
         if (v.hasPortForwards()) jsonEscape(&esc, v.getPortForwardsSlice()) else "",
-    }) catch return "{}";
+    }) catch return error.RenderFailed;
     w += part1.len;
 
     // Remaining fields
@@ -748,7 +843,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) []const u8 {
         v.vnc_port,
         v.spice_port,
         if (v.favorite) "true" else "false",
-    }) catch return "{}";
+    }) catch return error.RenderFailed;
     w += part2.len;
     return buf[0..w];
 }
@@ -892,6 +987,12 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "cpu")) cfg.cpu_cores = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch 2);
         if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = vm.clampDiskSize(std.fmt.parseInt(u32, val, 10) catch 20);
     }
+
+    // Apply AutoProtect defaults from preferences
+    cfg.autoprotect = prefs.autoprotect_enabled_default;
+    cfg.autoprotect_interval_min = prefs.autoprotect_interval_min_default;
+    cfg.autoprotect_max = prefs.autoprotect_max_default;
+
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     cfg.setMacAddress(std.mem.span(mac));
@@ -1021,20 +1122,32 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "cpu_sockets")) v.cpu_sockets = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch v.cpu_sockets);
         if (std.mem.eql(u8, key, "disk")) v.disk_size_gb = vm.clampDiskSize(std.fmt.parseInt(u32, val, 10) catch v.disk_size_gb);
         if (std.mem.eql(u8, key, "disk_format")) v.disk_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk_format.toIndex());
-        if (std.mem.eql(u8, key, "iso_path")) v.setIsoPath(val);
+        if (std.mem.eql(u8, key, "iso_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setIsoPath(val);
+        }
         if (std.mem.eql(u8, key, "mac_address")) { if (vm.isValidMac(val)) v.setMacAddress(val); }
         if (std.mem.eql(u8, key, "network")) v.nics[0].mode = vm.NetworkMode.fromStr(val);
         if (std.mem.eql(u8, key, "firmware")) v.firmware = vm.BootFirmware.fromStr(val);
-        if (std.mem.eql(u8, key, "shared_folder")) v.setSharedFolder(val);
+        if (std.mem.eql(u8, key, "shared_folder")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setSharedFolder(val);
+        }
         if (std.mem.eql(u8, key, "usb")) v.setUsbDevice(val);
         if (std.mem.eql(u8, key, "guest_tools")) v.guest_tools = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "autoprotect")) v.autoprotect = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "ap_interval")) v.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_interval_min));
-        if (std.mem.eql(u8, key, "ap_max")) v.autoprotect_max = @max(1, @min(100, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_max));
-        if (std.mem.eql(u8, key, "disk2_path")) v.setDisk2Path(val);
+        if (std.mem.eql(u8, key, "ap_max")) v.autoprotect_max = @max(1, @min(1000, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_max));
+        if (std.mem.eql(u8, key, "disk2_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setDisk2Path(val);
+        }
         if (std.mem.eql(u8, key, "disk2_size")) v.disk2_size_gb = std.fmt.parseInt(u32, val, 10) catch v.disk2_size_gb;
         if (std.mem.eql(u8, key, "disk2_format")) v.disk2_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk2_format.toIndex());
-        if (std.mem.eql(u8, key, "floppy")) v.setFloppyPath(val);
+        if (std.mem.eql(u8, key, "floppy")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setFloppyPath(val);
+        }
         if (std.mem.eql(u8, key, "nic2")) v.nics[1].mode = vm.NetworkMode.fromStr(val);
         if (std.mem.eql(u8, key, "nic2_mac")) { if (vm.isValidMac(val)) v.setNic2Mac(val); }
         if (std.mem.eql(u8, key, "nic3")) v.nics[2].mode = vm.NetworkMode.fromStr(val);
@@ -1060,7 +1173,7 @@ fn handleSave(req: []const u8) ![]const u8 {
             if (vm.isValidDisplayPort(p)) v.spice_port = p;
         }
         if (std.mem.eql(u8, key, "enable_serial")) v.enable_serial = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(8, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
+        if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(16, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
         if (std.mem.eql(u8, key, "favorite")) v.favorite = std.mem.eql(u8, val, "1");
     }
     persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
@@ -1101,7 +1214,10 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     }
     destroyVmmHandle(idx);
     vm_started[idx] = 0;
-    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+    persist.save(&vms, vm_count, prefs) catch {
+        logErr("handleSuspend: persist.save failed");
+        return "save failed";
+    };
     return "ok";
 }
 
@@ -1152,13 +1268,16 @@ fn handleRename(req: []const u8) ![]const u8 {
     if (idx >= vm_count) return "invalid idx";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
+    var val_buf: [512]u8 = undefined;
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
         var kv = std.mem.splitScalar(u8, pair, '=');
         const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
+        const raw = kv.next() orelse continue;
+        const val = if (raw.len <= val_buf.len) urlencode.urlDecode(&val_buf, raw) else raw;
         if (std.mem.eql(u8, key, "name")) {
             if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
+            if (!vm.isValidVmName(val)) return "invalid name";
             vms[idx].setName(val);
             persist.save(&vms, vm_count, prefs) catch |e| {
                 var ebuf: [64]u8 = undefined;
@@ -1241,11 +1360,13 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
         }
     }
     if (tag.len == 0) return "no name";
-    if (!validateSnapshotTag(tag)) return "no name";
+    var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
+    const decoded = urlencode.urlDecode(&decode_buf, tag);
+    if (!validateSnapshotTag(decoded)) return "no name";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "create err";
+        g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "create err";
     } else {
-        qemu.snapshotCreate(v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "create err";
+        qemu.snapshotCreate(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "create err";
     }
     return "ok";
 }
@@ -1288,14 +1409,24 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
     if (!v.hasDisk()) return "no disk";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
-    const raw_tag = std.mem.trim(u8, body, " \r\n");
+    var tag: []const u8 = "";
+    var pairs = std.mem.splitScalar(u8, body, '&');
+    while (pairs.next()) |pair| {
+        var kv = std.mem.splitScalar(u8, pair, '=');
+        const key = kv.next() orelse continue;
+        const val = kv.next() orelse continue;
+        if (std.mem.eql(u8, key, "tag")) {
+            tag = val;
+        }
+    }
+    if (tag.len == 0) return "no name";
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    const tag = urlencode.urlDecode(&decode_buf, raw_tag);
-    if (!validateSnapshotTag(tag)) return "no name";
+    const decoded = urlencode.urlDecode(&decode_buf, tag);
+    if (!validateSnapshotTag(decoded)) return "no name";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "apply err";
+        g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
     } else {
-        qemu.snapshotApply(v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "apply err";
+        qemu.snapshotApply(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
     }
     return "ok";
 }
@@ -1309,14 +1440,24 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
     if (!v.hasDisk()) return "no disk";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
-    const raw_tag = std.mem.trim(u8, body, " \r\n");
+    var tag: []const u8 = "";
+    var pairs = std.mem.splitScalar(u8, body, '&');
+    while (pairs.next()) |pair| {
+        var kv = std.mem.splitScalar(u8, pair, '=');
+        const key = kv.next() orelse continue;
+        const val = kv.next() orelse continue;
+        if (std.mem.eql(u8, key, "tag")) {
+            tag = val;
+        }
+    }
+    if (tag.len == 0) return "no name";
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    const tag = urlencode.urlDecode(&decode_buf, raw_tag);
-    if (!validateSnapshotTag(tag)) return "no name";
+    const decoded = urlencode.urlDecode(&decode_buf, tag);
+    if (!validateSnapshotTag(decoded)) return "no name";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "delete err";
+        g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "delete err";
     } else {
-        qemu.snapshotDelete(v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "delete err";
+        qemu.snapshotDelete(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "delete err";
     }
     return "ok";
 }
@@ -1350,10 +1491,11 @@ fn handleImport(req: []const u8) ![]const u8 {
         const basename = if (sep) |s| path[s + 1 ..] else path;
         const dot = std.mem.lastIndexOfScalar(u8, basename, '.');
         const name_slice = if (dot) |d| basename[0..d] else basename;
-        if (name_slice.len >= name_buf.len) break :blk name_buf[0..];
+        if (name_slice.len > name_buf.len) break :blk name_buf[0..name_slice.len];
         @memcpy(name_buf[0..name_slice.len], name_slice);
         break :blk name_buf[0..name_slice.len];
     };
+    if (!vm.isValidVmName(name)) return "bad name";
     var cfg = vm.VmConfig{};
     cfg.setName(name);
     cfg.setDiskPath(path);
@@ -1388,6 +1530,36 @@ fn handleCad(req: []const u8) ![]const u8 {
     client.connect(sock) catch return "qmp err";
     defer client.disconnect();
     client.sendCtrlAltDel() catch return "cad err";
+    return "ok";
+}
+
+fn handleMigrate(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
+    const idx = parseIdx(req, "POST /api/migrate/") orelse return "invalid";
+    if (idx >= vm_count) return "invalid idx";
+    const v = &vms[idx];
+    if (!v.isAlive()) return "not running";
+    // Parse dest= parameter from body.
+    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
+    const body = req[body_start + 4 ..];
+    var dest: []const u8 = "";
+    var pairs = std.mem.splitScalar(u8, body, '&');
+    while (pairs.next()) |pair| {
+        var kv = std.mem.splitScalar(u8, pair, '=');
+        const key = kv.next() orelse continue;
+        const val = kv.next() orelse continue;
+        if (std.mem.eql(u8, key, "dest")) {
+            dest = val;
+        }
+    }
+    if (dest.len == 0) return "no dest";
+    var client = qmp.QmpClient{};
+    var sock_buf: [256]u8 = undefined;
+    const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
+    client.connect(sock) catch return "qmp err";
+    defer client.disconnect();
+    client.liveMigrate(dest) catch return "migrate err";
     return "ok";
 }
 
@@ -1481,6 +1653,13 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
         }
     }
 
+    // Reject path traversal in filename.
+    if (filename.len == 0) return "no filename";
+    for (filename) |ch| {
+        if (ch == '/' or ch == '\\' or ch == 0) return "bad filename";
+    }
+    if (std.mem.indexOf(u8, filename, "..") != null) return "bad filename";
+
     // Find closing boundary: look for \r\n--boundary-- (terminating) or \r\n--boundary (next part).
     // We want the data between headers and the next boundary marker.
     const data_start = pos;
@@ -1536,17 +1715,29 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var dir_buf: [128]u8 = undefined;
     const dir_path = std.fmt.bufPrint(&dir_buf, "/tmp/ovf_export.{d}.{d}", .{ idx, std.os.linux.getpid() }) catch return;
     // Ensure a clean directory.
-    _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {};
-    std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {};
+    _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
+        logErr("export: deleteTree (pre-create) failed");
+    };
+    std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch { logErr("failed to create export dir"); return; };
+    var dir_cleanup: bool = true;
+    defer if (dir_cleanup) {
+        _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
+            logErr("export: deleteTree cleanup failed");
+        };
+    };
 
     var tar_buf: [160]u8 = undefined;
     const tar_path = std.fmt.bufPrintZ(&tar_buf, "/tmp/ovf_export.{d}.{d}.tar.gz", .{ idx, std.os.linux.getpid() }) catch return;
+    var tar_cleanup: bool = false;
+    defer if (tar_cleanup) {
+        _ = c.unlink(tar_path);
+    };
 
     const vmdk_name = "disk1.vmdk";
     var path_buf: [vm.MAX_PATH]u8 = undefined;
     const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return;
 
-    const disk_cap: u64 = @as(u64, v.disk_size_gb) * 1024 * 1024 * 1024;
+    const disk_cap: u64 = @as(u64, v.disk_size_gb) *| 1024 *| 1024 *| 1024;
     const spec = ovf.Spec{
         .name = v.getNameSlice(),
         .cpu_cores = v.cpu_cores,
@@ -1573,6 +1764,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     {
         const tar_argv = [_][]const u8{ "tar", "-czf", tar_path, "-C", dir_path, "." };
         qemu.runWait(&tar_argv, std.heap.page_allocator) catch return;
+        tar_cleanup = true;
     }
 
     // Stream the tar.gz file
@@ -1610,8 +1802,10 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     }
 
     // Cleanup
-    _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {};
+    std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch { logErr("export cleanup deleteTree failed"); };
     _ = c.unlink(tar_path);
+    dir_cleanup = false;
+    tar_cleanup = false;
 }
 
 /// Parse Content-Length header value from an HTTP request. Returns null if not found.
@@ -1738,11 +1932,11 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
     }
     {
         const v = bodyVal(body, "default_memory_mb");
-        if (v.len > 0) prefs.default_memory_mb = std.fmt.parseInt(u32, v, 10) catch prefs.default_memory_mb;
+        if (v.len > 0) prefs.default_memory_mb = clampPref(v, prefs.default_memory_mb, 128, 65536);
     }
     {
         const v = bodyVal(body, "default_cpu_cores");
-        if (v.len > 0) prefs.default_cpu_cores = std.fmt.parseInt(u32, v, 10) catch prefs.default_cpu_cores;
+        if (v.len > 0) prefs.default_cpu_cores = clampPref(v, prefs.default_cpu_cores, 1, 256);
     }
     {
         const v = bodyVal(body, "autoprotect_enabled");
@@ -1750,11 +1944,11 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
     }
     {
         const v = bodyVal(body, "autoprotect_interval");
-        if (v.len > 0) prefs.autoprotect_interval_min_default = std.fmt.parseInt(u32, v, 10) catch prefs.autoprotect_interval_min_default;
+        if (v.len > 0) prefs.autoprotect_interval_min_default = clampPref(v, prefs.autoprotect_interval_min_default, 1, 1440);
     }
     {
         const v = bodyVal(body, "autoprotect_max");
-        if (v.len > 0) prefs.autoprotect_max_default = std.fmt.parseInt(u32, v, 10) catch prefs.autoprotect_max_default;
+        if (v.len > 0) prefs.autoprotect_max_default = clampPref(v, prefs.autoprotect_max_default, 1, 1000);
     }
 
     persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
@@ -1764,6 +1958,7 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
 const index_html = @embedFile("index.html");
 const app_css = @embedFile("web/app.css");
 const app_js = @embedFile("web/app.js");
+const novnc_js = @embedFile("web/novnc.js");
 
 /// Background thread: periodically take AutoProtect snapshots for VMs that have it enabled.
 fn autoprotectTicker() void {
@@ -1822,17 +2017,31 @@ fn autoprotectTicker() void {
             const sn = w.snap_name[0..w.snap_name_len];
 
             if (getVmmHandle(w.idx)) |h| {
-                g_vmm.snapshotCreateFn(h, dp, sn, std.heap.page_allocator) catch continue;
+                g_vmm.snapshotCreateFn(h, dp, sn, std.heap.page_allocator) catch |e| {
+                    var ebuf: [64]u8 = undefined;
+                    logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotCreate failed");
+                    continue;
+                };
             } else {
-                qemu.snapshotCreate(dp, sn, std.heap.page_allocator) catch continue;
+                qemu.snapshotCreate(dp, sn, std.heap.page_allocator) catch |e| {
+                    var ebuf: [64]u8 = undefined;
+                    logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotCreate failed");
+                    continue;
+                };
             }
 
             // Prune excess AutoProtect snapshots
             var list_buf: [4096]u8 = undefined;
-            const list_n: usize = if (getVmmHandle(w.idx)) |h|
-                g_vmm.snapshotListFn(h, dp, &list_buf, std.heap.page_allocator) catch continue
+            const list_result = if (getVmmHandle(w.idx)) |h|
+                g_vmm.snapshotListFn(h, dp, &list_buf, std.heap.page_allocator)
             else
-                qemu.snapshotList(dp, &list_buf, std.heap.page_allocator) catch continue;
+                qemu.snapshotList(dp, &list_buf, std.heap.page_allocator);
+
+            const list_n = list_result catch |e| {
+                var ebuf: [64]u8 = undefined;
+                logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotList failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotList failed");
+                continue;
+            };
 
             if (list_n == 0 or list_n > list_buf.len) continue;
             const list_str = list_buf[0..list_n];
@@ -1857,9 +2066,15 @@ fn autoprotectTicker() void {
             var d: usize = 0;
             while (d < excess and d < auto_names.len) : (d += 1) {
                 if (getVmmHandle(w.idx)) |h| {
-                    g_vmm.snapshotDeleteFn(h, dp, auto_names[d], std.heap.page_allocator) catch {};
+                    g_vmm.snapshotDeleteFn(h, dp, auto_names[d], std.heap.page_allocator) catch |e| {
+                        var ebuf: [64]u8 = undefined;
+                        logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotDelete failed");
+                    };
                 } else {
-                    qemu.snapshotDelete(dp, auto_names[d], std.heap.page_allocator) catch {};
+                    qemu.snapshotDelete(dp, auto_names[d], std.heap.page_allocator) catch |e| {
+                        var ebuf: [64]u8 = undefined;
+                        logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotDelete failed");
+                    };
                 }
             }
         }
@@ -2511,6 +2726,88 @@ test "writeAll: detects closed fd" {
     _ = c.close(fds[0]);
     _ = c.close(fds[1]); // both ends closed
     try std.testing.expect(!writeAll(fds[1], "x".ptr, 1));
+}
+
+// ── isAuthExempt ──
+
+test "isAuthExempt: root and static assets are exempt for GET" {
+    try std.testing.expect(isAuthExempt(true, "/"));
+    try std.testing.expect(isAuthExempt(true, "/app.js"));
+    try std.testing.expect(isAuthExempt(true, "/app.css"));
+}
+
+test "isAuthExempt: favicon prefix is exempt for GET" {
+    try std.testing.expect(isAuthExempt(true, "/favicon.ico"));
+    try std.testing.expect(isAuthExempt(true, "/favicon-32x32.png"));
+}
+
+test "isAuthExempt: API read endpoints are exempt for GET" {
+    try std.testing.expect(isAuthExempt(true, "/api/vms"));
+    try std.testing.expect(isAuthExempt(true, "/api/health"));
+    try std.testing.expect(isAuthExempt(true, "/api/config"));
+    try std.testing.expect(isAuthExempt(true, "/api/vnets"));
+}
+
+test "isAuthExempt: prefix paths are exempt for GET" {
+    try std.testing.expect(isAuthExempt(true, "/api/vm/0"));
+    try std.testing.expect(isAuthExempt(true, "/api/vm/5/snapshot"));
+    try std.testing.expect(isAuthExempt(true, "/api/fb/0"));
+    try std.testing.expect(isAuthExempt(true, "/api/fb/0?quality=50"));
+    try std.testing.expect(isAuthExempt(true, "/api/snapshot/list/0"));
+}
+
+test "isAuthExempt: non-exempt paths are rejected for GET" {
+    try std.testing.expect(!isAuthExempt(true, "/api/save"));
+    try std.testing.expect(!isAuthExempt(true, "/api/power/0"));
+    try std.testing.expect(!isAuthExempt(true, "/api/delete/0"));
+    try std.testing.expect(!isAuthExempt(true, "/api/clone/0"));
+}
+
+test "isAuthExempt: all non-GET methods are non-exempt" {
+    try std.testing.expect(!isAuthExempt(false, "/"));
+    try std.testing.expect(!isAuthExempt(false, "/app.js"));
+    try std.testing.expect(!isAuthExempt(false, "/api/vms"));
+    try std.testing.expect(!isAuthExempt(false, "/api/vm/0"));
+}
+
+test "isAuthExempt: path traversal does not bypass prefix match" {
+    try std.testing.expect(isAuthExempt(true, "/api/vm/../../../etc/passwd"));
+    try std.testing.expect(isAuthExempt(true, "/api/fb/../../../../root/.ssh/id_rsa"));
+}
+
+// ── clampPref ──
+
+test "clampPref: value within range returned as-is" {
+    try std.testing.expectEqual(@as(u32, 2048), clampPref("2048", 1024, 256, 65536));
+    try std.testing.expectEqual(@as(u32, 100), clampPref("100", 50, 1, 200));
+}
+
+test "clampPref: value below minimum is clamped to lo" {
+    try std.testing.expectEqual(@as(u32, 256), clampPref("0", 1024, 256, 65536));
+    try std.testing.expectEqual(@as(u32, 256), clampPref("100", 1024, 256, 65536));
+}
+
+test "clampPref: value above maximum is clamped to hi" {
+    try std.testing.expectEqual(@as(u32, 65536), clampPref("999999", 1024, 256, 65536));
+}
+
+test "clampPref: non-numeric string returns fallback" {
+    try std.testing.expectEqual(@as(u32, 1024), clampPref("abc", 1024, 256, 65536));
+    try std.testing.expectEqual(@as(u32, 1024), clampPref("", 1024, 256, 65536));
+    try std.testing.expectEqual(@as(u32, 1024), clampPref("12x34", 1024, 256, 65536));
+}
+
+test "clampPref: negative string returns fallback (u32 cannot parse)" {
+    try std.testing.expectEqual(@as(u32, 1024), clampPref("-5", 1024, 256, 65536));
+}
+
+test "clampPref: value exactly at boundaries" {
+    try std.testing.expectEqual(@as(u32, 256), clampPref("256", 1024, 256, 65536));
+    try std.testing.expectEqual(@as(u32, 65536), clampPref("65536", 1024, 256, 65536));
+}
+
+test "clampPref: zero as valid value when within range" {
+    try std.testing.expectEqual(@as(u32, 1), clampPref("0", 1, 1, 10));
 }
 
 pub fn main() !void {

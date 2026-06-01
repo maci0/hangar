@@ -4,43 +4,70 @@
 
 | WS17 Feature | KVMGUI Status |
 |-------------|---------------|
-| VM Library sidebar | ✅ Fl_Browser with status icons |
-| Create VM wizard | ✅ Modal dialog (name/mem/cpu/disk) |
-| Edit VM Settings | ✅ 7-field modal (name/mem/cpu/disk/ISO/net/fw/notes) |
-| Power on/off/suspend | ✅ Power On/Off toggle + suspend stub |
-| Shutdown Guest | ✅ QMP graceful shutdown |
-| Snapshot Manager | ✅ Take/List via qemu-img |
-| Clone VM | ✅ Auto-name + unique ports |
-| Delete VM | ✅ Array compaction |
-| Import VM | ✅ Disk image picker |
-| Export OVF | ✅ Dialog (stub) |
-| Virtual Network Editor | ✅ VMnet list display |
-| Preferences | ✅ Default memory/CPU |
-| About dialog | ✅ Version + feature list |
-| VNC/SPICE display | ✅ Auto-connect + polling |
-| Serial console | ✅ Ring buffer + reader thread + Fl_Browser |
-| Keyboard shortcuts | ✅ Ctrl+N/Q/W, F2/F11, DEL |
-| Context menu | ✅ Right-click popup |
-| Shutdown cleanup | ✅ Save + disconnect |
-| Theme support | ✅ gtk+ scheme (system theme) |
-| Multi-display | ❌ Not yet |
-| USB passthrough | ❌ Not yet (qemu.zig has args) |
-| Shared folders | ❌ Not yet (qemu.zig has args) |
-| Guest tools auto-mount | ❌ Not yet (qemu.zig has args) |
-| Linked clones | ❌ Not yet |
-| vmrun CLI | ❌ Not yet |
+| VM Library sidebar | ✅ Fl_Browser + web sidebar with status icons |
+| Create VM wizard | ✅ Modal dialog (name/mem/cpu/disk/ISO/OS) |
+| Edit VM Settings | ✅ Full settings dialog (~40 fields) |
+| Power on/off/suspend | ✅ Power toggle + suspend + pause/resume |
+| Shutdown Guest | ✅ QMP graceful shutdown + reset |
+| Snapshot Manager | ✅ Take/list/revert/delete (FLTK + Web) |
+| Clone VM | ✅ Full + linked clones |
+| Delete VM | ✅ Array compaction + confirmation |
+| Import VM | ✅ Disk image picker + multipart upload (Web) |
+| Export OVF | ✅ OVF XML + VMDK conversion + download |
+| Virtual Network Editor | ✅ VMnet0/1/8 defaults, add/remove |
+| Preferences | ✅ Theme, default mem/CPU, autoprotect defaults |
+| About dialog | ✅ Version + feature list + keyboard shortcuts |
+| VNC/SPICE display | ✅ Auto-connect + FLTK framebuffer + Web VNC WS proxy |
+| Serial console | ✅ Ring buffer + reader thread + Web WebSocket serial |
+| Keyboard shortcuts | ✅ Ctrl+N/Q/W/E, F2/F11, DEL, Ctr+Shift+N, Ctrl+I |
+| Context menu | ✅ Right-click popup with full action set |
+| Autoprotect | ✅ Interval-based auto-snapshots with prune |
+| Theme support | ✅ Light/Dark + system (FLTK + Web) |
+| Multi-display | ✅ VmConfig + QEMU args |
+| USB passthrough | ✅ VmConfig + QEMU args + UI fields |
+| Shared folders | ✅ VmConfig + QEMU args + UI fields |
+| Guest tools auto-mount | ✅ VmConfig + QEMU args + UI fields |
+| Linked clones | ✅ qemu-img backing-file COW |
+| VM rename | ✅ FLTK dialog + Web API |
+| Send Ctrl+Alt+Del | ✅ QMP sendkey + FLTK + Web buttons |
+| Port forwarding | ✅ VmConfig + QEMU hostfwd + UI fields |
+| Second disk + floppy | ✅ VmConfig + QEMU args + UI fields |
+| Extra NICs (2-3) | ✅ VmConfig + QEMU args + UI fields |
+| Auto MAC generation | ✅ Random unicast/local-admin MAC |
+| Remote client/daemon | ✅ transport.zig + HTTP API + vmrun CLI |
+| Batch start/stop all | ✅ FLTK toolbar + Web toolbar buttons |
+| Favorites | ✅ Star toggle + grouped with separator |
+| Window geometry save | ✅ Persisted x/y/w/h |
+| vmrun CLI | ✅ 18 operations (list/start/stop/clone/delete/snapshot/...) |
+| HV abstraction layer | ✅ QEMU backend + dispatch table |
 
 ## Web Frontend Parity
 
 | Feature | Status |
 |---------|--------|
-| VM list | ✅ JSON API + HTML |
-| Create VM | ✅ Form POST |
-| Delete VM | ✅ REST endpoint |
-| Clone VM | ✅ REST endpoint |
+| VM list sidebar | ✅ JSON API + HTML + status dots + favorites |
+| Create VM | ✅ Modal form POST |
+| Edit VM Settings | ✅ Full modal (~40 fields) |
+| Delete VM | ✅ REST endpoint + confirmation |
+| Clone VM | ✅ REST endpoint + linked clone option |
 | Power toggle | ✅ REST endpoint |
-| Framebuffer stream | ✅ Canvas with BGRA→RGBA |
-| Auto-refresh | ✅ 5-second polling |
-| Save config | ✅ REST endpoint |
-| VNC WebSocket | ❌ Future |
-| User auth | ❌ Future |
+| Pause/Resume | ✅ REST endpoints |
+| Shutdown/Reset | ✅ REST endpoints |
+| Suspend | ✅ REST endpoint |
+| Rename | ✅ REST endpoint |
+| Export OVF | ✅ REST endpoint + download |
+| Import VM | ✅ Multipart upload |
+| Snapshot take/list/revert/delete | ✅ REST endpoints + modal UI |
+| Framebuffer display | ✅ Canvas polling + VNC WebSocket proxy |
+| Serial console | ✅ WebSocket serial terminal |
+| Virtual Network Editor | ✅ REST endpoints + modal UI |
+| Preferences editor | ✅ REST endpoint + modal with theme preview |
+| Keyboard shortcuts | ✅ Ctrl+N/E/Del/Esc/Enter/? help modal |
+| Theme support | ✅ Light/Dark/System with CSS variables |
+| Batch start/stop all | ✅ Toolbar buttons |
+| Toast notifications | ✅ Success/error/info with auto-dismiss |
+| API key auth | ✅ X-API-Key header on all writes |
+| Rate limiting | ✅ Atomic 20 req/sec |
+| Security headers | ✅ CSP, X-Content-Type-Options, X-Frame-Options |
+| Favicon | ✅ SVG gradient K logo |
+

@@ -6,6 +6,28 @@
 
 const std = @import("std");
 
+// ── Toolbar: dynamic button sizing ───────────────────────────────────
+
+/// Scale a set of reference button widths for a target window width.
+/// Reference width is 1200; scale is clamped to [0.5, 2.0]; min width is 30.
+pub fn scaleToolbarWidths(comptime N: usize, ref_w: [N]i32, ww: i32) [N]i32 {
+    const REF_WIDTH: i32 = 1200;
+    const scale: f64 = @max(0.5, @min(2.0, @as(f64, @floatFromInt(ww)) / @as(f64, @floatFromInt(REF_WIDTH))));
+    var out: [N]i32 = undefined;
+    for (ref_w, 0..) |bw, i| {
+        out[i] = @max(30, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(bw)) * scale))));
+    }
+    return out;
+}
+
+/// Compute the gap between toolbar buttons for a given window width.
+/// `scaled_w` has the (possibly scaled) button widths; `n_buttons` is the total count.
+pub fn computeToolbarGap(ww: i32, scaled_w: []const i32, n_buttons: usize) i32 {
+    var tw: i32 = 0;
+    for (scaled_w) |w| tw += w;
+    return @max(3, @divTrunc(ww - 10 - tw, @as(i32, @intCast(n_buttons -| 1))));
+}
+
 // ── Display: widget-space → framebuffer-space click mapping ──────────
 
 /// Map a click at widget pixel `(x,y)` (widget size `w`×`h`) to framebuffer
@@ -162,4 +184,73 @@ test "fuzz: serialSocketPath never overflows and round-trips length" {
             try t.expectEqualStrings("/tmp/kvmgui-serial-", buf[0..19]);
         }
     }
+}
+
+// ── Toolbar math tests ───────────────────────────────────────────────
+
+test "scaleToolbarWidths: reference width 1200 produces no scaling" {
+    const ref = [_]i32{ 80, 70, 55 };
+    const got = scaleToolbarWidths(3, ref, 1200);
+    for (ref, 0..) |expected, i| {
+        try t.expectEqual(expected, got[i]);
+    }
+}
+
+test "scaleToolbarWidths: 2400-wide window doubles widths" {
+    const ref = [_]i32{ 80, 70, 55 };
+    const got = scaleToolbarWidths(3, ref, 2400);
+    try t.expectEqual(@as(i32, 160), got[0]);
+    try t.expectEqual(@as(i32, 140), got[1]);
+    try t.expectEqual(@as(i32, 110), got[2]);
+}
+
+test "scaleToolbarWidths: 600-wide window halves widths with floor" {
+    const ref = [_]i32{ 80, 70, 55 };
+    const got = scaleToolbarWidths(3, ref, 600);
+    try t.expectEqual(@as(i32, 40), got[0]);
+    try t.expectEqual(@as(i32, 35), got[1]);
+    try t.expectEqual(@as(i32, 30), got[2]); // 27.5 → max(30, 28) = 30
+}
+
+test "scaleToolbarWidths: min width of 30 is enforced" {
+    const ref = [_]i32{ 30, 20, 10 };
+    const got = scaleToolbarWidths(3, ref, 300);
+    try t.expect(got[0] >= 30);
+    try t.expect(got[1] >= 30);
+    try t.expect(got[2] >= 30);
+}
+
+test "scaleToolbarWidths: scale clamped to 2.0 max" {
+    const ref = [_]i32{ 55 };
+    const got = scaleToolbarWidths(1, ref, 10000);
+    try t.expectEqual(@as(i32, 110), got[0]); // 55 * 2.0 = 110
+}
+
+test "computeToolbarGap: even distribution" {
+    const scaled = [_]i32{80} ** 15;
+    const gap = computeToolbarGap(1200, &scaled, 15);
+    try t.expectEqual(@as(i32, 3), gap);
+}
+
+test "computeToolbarGap: wider window increases gap" {
+    const scaled = [_]i32{80} ** 15;
+    const gap = computeToolbarGap(2400, &scaled, 15);
+    try t.expectEqual(@as(i32, 85), gap);
+}
+
+test "computeToolbarGap: gap at least 3" {
+    const scaled = [_]i32{400} ** 15;
+    const gap = computeToolbarGap(1200, &scaled, 15);
+    try t.expectEqual(@as(i32, 3), gap);
+}
+
+test "scaleToolbarWidths + computeToolbarGap: full layout fits window" {
+    const ref = [_]i32{ 80, 80, 80, 80, 80, 80, 80, 80, 75, 70, 75, 80, 70, 55, 55 };
+    const scaled = scaleToolbarWidths(15, ref, 1200);
+    const gap = computeToolbarGap(1200, &scaled, 15);
+    var total: i32 = 10;
+    for (scaled) |w| total += w;
+    total += gap * @as(i32, @intCast(15 - 1));
+    try t.expect(total <= 1200);
+    try t.expect(total >= 1200 - gap);
 }

@@ -39,13 +39,7 @@ for f in "$SCREENSHOT_DIR"/all_*.png; do
     if [ -f "$f" ]; then
         FOUND=$((FOUND + 1))
         # Check for blank images (mean pixel value near 0 or near 255)
-        MEAN=$(python3 -c "
-from PIL import Image, ImageStat
-img = Image.open('$f').convert('RGB')
-s = ImageStat.Stat(img)
-m = sum(s.mean)/3
-print('{:.1f}'.format(m))
-")
+        MEAN=$(python3 -c "from PIL import Image, ImageStat; img=Image.open('$f').convert('RGB'); s=ImageStat.Stat(img); m=sum(s.mean)/3; print('{:.1f}'.format(m))")
         if (( $(echo "$MEAN < 5 || $MEAN > 250" | bc -l) )); then
             echo "  ⚠ BLANK: $f (mean=$MEAN)"
             BLANK=$((BLANK + 1))

@@ -8,6 +8,7 @@ const std = @import("std");
 const usock = @import("usock.zig");
 const ringbuf = @import("ringbuf.zig");
 const sync = @import("sync.zig");
+const serialpath = @import("serialpath.zig");
 const app = @import("appstate.zig");
 
 fn serialReader() void {
@@ -40,7 +41,7 @@ fn serialReader() void {
 pub fn serialConnect(vm_name: []const u8) void {
     if (app.serial_fd != null) return;
     var path_buf: [320]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "/tmp/kvmgui-serial-{s}.sock", .{vm_name}) catch return;
+    const path = serialpath.serialSocketPath(&path_buf, vm_name) catch return;
     const stream = usock.UnixStream.connect(path) catch return;
     app.serial_fd = stream.fd;
     @atomicStore(bool, &app.serial_running, true, .seq_cst);
@@ -52,8 +53,16 @@ pub fn serialConnect(vm_name: []const u8) void {
 }
 
 /// Stop the serial reader thread and close the socket.
+/// Uses shutdown() to unblock the reader's read() call without closing
+/// the fd prematurely — avoids a double-close race where the OS recycles
+/// the fd number before the thread exits its read() syscall.
 pub fn serialDisconnect() void {
     @atomicStore(bool, &app.serial_running, false, .seq_cst);
-    if (app.serial_fd) |fd| { _ = std.c.close(fd); app.serial_fd = null; }
+    // Shutdown the socket to unblock any in-flight read() in the reader
+    // thread, so the thread can observe running==false and exit.
+    if (app.serial_fd) |fd| _ = std.c.shutdown(fd, std.c.SHUT.RDWR);
     if (app.serial_thread) |t| { t.join(); app.serial_thread = null; }
+    // Now safe to close: the thread is joined and has either already
+    // closed the fd via its cleanup path or skipped it (Rmw returned false).
+    if (app.serial_fd) |fd| { _ = std.c.close(fd); app.serial_fd = null; }
 }

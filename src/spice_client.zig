@@ -10,6 +10,7 @@
 //! `g_signal_connect_data`, and `@ptrCast`.
 
 const std = @import("std");
+const sync = @import("sync.zig");
 
 /// Hand-written bindings for the few spice-client-glib / GLib symbols we use.
 ///
@@ -91,6 +92,7 @@ pub const SpiceClient = struct {
     stride: c_int = 0,
     connected: bool = false,
     dirty: bool = false,
+    mutex: sync.SpinMutex = .{},
     invalidate_cb: ?InvalidateCb = null,
     invalidate_userdata: ?*anyopaque = null,
 
@@ -152,12 +154,15 @@ pub const SpiceClient = struct {
         }
         self.session = null;
         self.inputs = null;
+
+        self.mutex.lock();
         self.fb_data = null;
         self.width = 0;
         self.height = 0;
         self.stride = 0;
         self.connected = false;
-        self.dirty = false;
+        @atomicStore(bool, &self.dirty, false, .seq_cst);
+        self.mutex.unlock();
     }
 
     /// Free all resources.  Disconnects first if still connected.
@@ -181,14 +186,31 @@ pub const SpiceClient = struct {
     }
 
     /// Get a pointer to the display pixel data (32-bit BGRA).
+    /// Prefer `lockFb`/`unlockFb` for thread-safe access.
     pub fn getFb(self: *const SpiceClient) ?[*]const u8 {
         return self.fb_data;
     }
 
+    /// Lock the framebuffer mutex and return a pointer to the pixel data.
+    /// Format: 32-bit BGRA.  Caller MUST call `unlockFb` when done.
+    pub fn lockFb(self: *SpiceClient) ?[*]const u8 {
+        self.mutex.lock();
+        return self.fb_data;
+    }
+
+    /// Unlock the framebuffer mutex.
+    pub fn unlockFb(self: *SpiceClient) void {
+        self.mutex.unlock();
+    }
+
     /// Check and clear the dirty flag.
+    ///
+    /// Uses seq_cst atomics so writes from the GLib callbacks are visible
+    /// to the UI thread without acquiring the framebuffer mutex.  The
+    /// worst case of a lost dirty flag is a single skipped frame.
     pub fn checkDirty(self: *SpiceClient) bool {
-        const was = self.dirty;
-        self.dirty = false;
+        const was = @atomicLoad(bool, &self.dirty, .seq_cst);
+        if (was) @atomicStore(bool, &self.dirty, false, .seq_cst);
         return was;
     }
 
@@ -258,6 +280,9 @@ pub const SpiceClient = struct {
         const self: *SpiceClient = @ptrCast(@alignCast(data orelse return));
         const ch = channel orelse return;
 
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         // Prefer `spice_display_channel_get_primary` because it gives us the
         // actual pixel data pointer.  The signal parameters only carry the
         // dimensions — the fb_data would be null without this call.
@@ -273,7 +298,7 @@ pub const SpiceClient = struct {
             self.height = height;
             self.stride = stride;
         }
-        self.dirty = true;
+        @atomicStore(bool, &self.dirty, true, .seq_cst);
     }
 
     fn onInvalidate(
@@ -285,7 +310,9 @@ pub const SpiceClient = struct {
         data: ?*anyopaque,
     ) callconv(.c) void {
         const self: *SpiceClient = @ptrCast(@alignCast(data orelse return));
-        self.dirty = true;
+        self.mutex.lock();
+        @atomicStore(bool, &self.dirty, true, .seq_cst);
+        self.mutex.unlock();
         if (self.invalidate_cb) |cb| {
             cb(self.invalidate_userdata);
         }
@@ -293,6 +320,8 @@ pub const SpiceClient = struct {
 
     fn onPrimaryDestroy(_: ?*c.SpiceChannel, data: ?*anyopaque) callconv(.c) void {
         const self: *SpiceClient = @ptrCast(@alignCast(data orelse return));
+        self.mutex.lock();
+        defer self.mutex.unlock();
         self.fb_data = null;
         self.width = 0;
         self.height = 0;

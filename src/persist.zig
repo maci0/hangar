@@ -17,8 +17,8 @@ const std = @import("std");
 const appio = @import("appio.zig");
 const vm = @import("vm.zig");
 
-/// Maximum number of VMs (must match main.zig).
-const MAX_VMS = 64;
+/// Maximum number of VMs (single source in vm.zig).
+const MAX_VMS = vm.MAX_VMS;
 
 // ── JSON-friendly intermediate struct ───────────────────────────────
 
@@ -434,7 +434,9 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
     // Ensure config directory exists.
     var dir_buf: [512]u8 = undefined;
     if (getConfigDir(&dir_buf)) |dir_path| {
-        std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {};
+        std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
+            _ = std.c.write(2, "persist: createDirPath failed\n", 29);
+        };
     }
 
     var path_buf: [512]u8 = undefined;
@@ -1198,6 +1200,19 @@ test "parseBootOrder: maps strings to enums" {
     try std.testing.expectEqual(vm.BootOrder.disk_first, parseBootOrder("unknown"));
 }
 
+test "parseAccel: maps strings to enums with safe defaults" {
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("auto"));
+    try std.testing.expectEqual(vm.VmAccel.tcg, parseAccel("tcg"));
+    try std.testing.expectEqual(vm.VmAccel.kvm, parseAccel("kvm"));
+    try std.testing.expectEqual(vm.VmAccel.hvf, parseAccel("hvf"));
+    try std.testing.expectEqual(vm.VmAccel.whpx, parseAccel("whpx"));
+    // Unknown / empty / mixed-case → safe default (auto)
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("unknown"));
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel(""));
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("KVM"));
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("Hvf"));
+}
+
 test "emit→parse JSON text round-trip preserves all fields" {
     const alloc = std.testing.allocator;
 
@@ -1711,4 +1726,101 @@ test "emit→parse: empty config round-trip" {
     try std.testing.expectEqual(vm.DiskFormat.qcow2, restored.disk_format);
     try std.testing.expectEqual(vm.VmAccel.auto, restored.accel);
     try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[0].mode);
+}
+
+test "loadFromSlice: direct" {
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs: vm.Prefs = .{};
+
+    // Empty input → 0 VMs.
+    {
+        const n = loadFromSlice(&vms, "", &prefs);
+        try std.testing.expectEqual(@as(usize, 0), n);
+    }
+
+    // Missing "vms" key → 0 VMs.
+    {
+        const n = loadFromSlice(&vms, "{}", &prefs);
+        try std.testing.expectEqual(@as(usize, 0), n);
+    }
+    {
+        const n = loadFromSlice(&vms, "{\"prefs\":{}}", &prefs);
+        try std.testing.expectEqual(@as(usize, 0), n);
+    }
+
+    // Single VM object.
+    {
+        const json =
+            \\{"vms":[
+            \\  {"name":"test","cpu_cores":4,"memory_mb":8192,"disk_size_gb":100,"disk_format":"qcow2"}
+            \\]}
+        ;
+        const n = loadFromSlice(&vms, json, &prefs);
+        try std.testing.expectEqual(@as(usize, 1), n);
+        try std.testing.expectEqualStrings("test", std.mem.span(vms[0].getName()));
+        try std.testing.expectEqual(@as(u32, 4), vms[0].cpu_cores);
+        try std.testing.expectEqual(@as(u32, 8192), vms[0].memory_mb);
+        try std.testing.expectEqual(@as(u32, 100), vms[0].disk_size_gb);
+    }
+
+    // Multiple VM objects.
+    {
+        const json =
+            \\{"vms":[
+            \\  {"name":"a","cpu_cores":1,"memory_mb":512,"disk_size_gb":10},
+            \\  {},
+            \\  {"name":"c","cpu_cores":8,"memory_mb":4096,"disk_size_gb":200}
+            \\]}
+        ;
+        const n = loadFromSlice(&vms, json, &prefs);
+        try std.testing.expectEqual(@as(usize, 3), n);
+        try std.testing.expectEqualStrings("a", std.mem.span(vms[0].getName()));
+        try std.testing.expectEqual(@as(u32, 1), vms[0].cpu_cores);
+        // Second VM: all defaults (empty object).
+        try std.testing.expectEqualStrings("", std.mem.span(vms[1].getName()));
+        try std.testing.expectEqual(@as(u32, 2), vms[1].cpu_cores);
+        // Third VM.
+        try std.testing.expectEqualStrings("c", std.mem.span(vms[2].getName()));
+        try std.testing.expectEqual(@as(u32, 8), vms[2].cpu_cores);
+    }
+
+    // JSON with theme + prefs but no VMs → 0 VMs, prefs parsed.
+    {
+        const json =
+            \\{"theme":"light","prefs":{"default_memory_mb":1024},
+            \\"vms":[]}
+        ;
+        const n = loadFromSlice(&vms, json, &prefs);
+        try std.testing.expectEqual(@as(usize, 0), n);
+        try std.testing.expectEqual(vm.Theme.light, prefs.theme);
+    }
+
+    // Malformed JSON — no closing bracket.
+    {
+        const json = "{\"vms\":[{\"name\":\"dangling\"}";
+        const n = loadFromSlice(&vms, json, &prefs);
+        // Should parse the one VM and return 1 (not infinite-loop).
+        try std.testing.expectEqual(@as(usize, 1), n);
+    }
+
+    // Interleaved whitespace and commas.
+    {
+        const json =
+            \\ { "vms" : [ { "name" : "spaced" , "cpu_cores" : 3 } , { } ] }
+        ;
+        const n = loadFromSlice(&vms, json, &prefs);
+        try std.testing.expectEqual(@as(usize, 2), n);
+        try std.testing.expectEqualStrings("spaced", std.mem.span(vms[0].getName()));
+        try std.testing.expectEqual(@as(u32, 3), vms[0].cpu_cores);
+    }
+
+    // Theme key alone.
+    {
+        const json =
+            \\{"theme":"light","vms":[]}
+        ;
+        const n = loadFromSlice(&vms, json, &prefs);
+        try std.testing.expectEqual(@as(usize, 0), n);
+        try std.testing.expectEqual(vm.Theme.light, prefs.theme);
+    }
 }

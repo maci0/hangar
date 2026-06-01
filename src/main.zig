@@ -13,9 +13,11 @@ const autoprotect = @import("autoprotect.zig");
 const app = @import("appstate.zig");
 const serial = @import("serial_console.zig");
 const display_mod = @import("display.zig");
+const display_gl = @import("display_gl.zig");
 const remote = @import("remote.zig");
 const dialogs = @import("dialogs.zig");
 const urlencode = @import("urlencode.zig");
+const uimath = @import("uimath.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
 const web_server = @import("web_server.zig");
 const snapparse = @import("snapparse.zig");
@@ -30,6 +32,21 @@ var console_line_buf: [app.SERIAL_BUF_SIZE + 1]u8 = [_]u8{0} ** (app.SERIAL_BUF_
 /// Persistent buffer for snapshot list result — avoids dangling stack
 /// pointers in Fl_Box_set_label callbacks.
 var snap_result_buf: [4096]u8 = [_]u8{0} ** 4096;
+
+/// Toolbar button pointers for live theme updates.
+const MAX_TOOLBAR_BTNS = 32;
+var toolbar_btns: [MAX_TOOLBAR_BTNS]?*cfltk.Fl_Button = [_]?*cfltk.Fl_Button{null} ** MAX_TOOLBAR_BTNS;
+var toolbar_btns_len: usize = 0;
+
+/// Toolbar button widths per row (at reference window width 1200).
+const toolbar_row1_w = [_]i32{ 80, 80, 80, 80, 80, 80, 80, 80, 75, 70, 75, 80, 70, 55, 55 };
+const toolbar_row2_w = [_]i32{ 70, 70, 70, 65, 70, 70, 70, 70, 70 };
+const TOOLBAR_ROW1_Y: i32 = 28;
+const TOOLBAR_ROW2_Y: i32 = 68;
+const TOOLBAR_BTN_H: i32 = 34;
+const TOOLBAR_STRIP_H: i32 = 40;
+const TOOLBAR_ROW1_COUNT = toolbar_row1_w.len;
+const TOOLBAR_ROW2_COUNT = toolbar_row2_w.len;
 
 // ── Callback stubs (delegate to helpers and dialog modules) ──────────
 fn browserCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { app.selectCurrent(); app.refreshDetails(); }
@@ -66,16 +83,45 @@ fn fullScreenCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
 }
 fn exportOvfCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.exportOvfDialog(); }
 fn migrateCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { migrateVm(); }
-fn homeCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { app.selected_idx = null; app.refreshBrowser(); app.refreshDetails(); }
+fn homeCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
+    app.selected_idx = null;
+    display_mod.clearDisplay();
+    serial.serialDisconnect();
+    if (app.console_widget) |cw| {
+        cfltk.Fl_Browser_clear(cw);
+        _ = cfltk.Fl_Browser_add(cw, "Serial console — not connected.");
+    }
+    app.refreshBrowser();
+    app.refreshDetails();
+}
 fn connectRemoteCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.remoteConnectDialog(); }
 fn webStartCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { startWebServer(); }
 fn webStopCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { stopWebServer(); }
 
 fn newVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { newVmDialog(); }
 
+/// Populate a Fl_Choice dropdown with all values of the given enum type.
+fn populateEnum(comptime E: type, ch: anytype, current: E) void {
+    const ptr: *cfltk.Fl_Choice = @ptrCast(ch);
+    cfltk.Fl_Choice_clear(ptr);
+    inline for (0..E.count) |i| {
+        const val = E.fromIndex(i);
+        _ = cfltk.Fl_Choice_add_choice(ptr, val.label());
+    }
+    _ = cfltk.Fl_Choice_set_value(ptr, @intCast(current.toIndex()));
+}
+
+/// Read the selected value from a Fl_Choice dropdown as an enum.
+fn readEnum(comptime E: type, ch: anytype) E {
+    const v = cfltk.Fl_Choice_value(@ptrCast(ch));
+    const idx: usize = if (v < 0) 0 else @intCast(v);
+    return E.fromIndex(idx);
+}
+
 /// Create a bold section heading label.
 fn sectionLabel(text: [*:0]const u8, x: c_int, y: c_int, w: c_int) ?*cfltk.Fl_Box {
     const h = cfltk.Fl_Box_new(x, y, w, 22, text);
+    cfltk.Fl_Box_set_color(h, app.pal.bg);
     cfltk.Fl_Box_set_label_font(h, 1); // FL_HELVETICA_BOLD
     cfltk.Fl_Box_set_label_size(h, 14);
     cfltk.Fl_Box_set_label_color(h, app.pal.header);
@@ -109,6 +155,7 @@ fn shutdown() void {
     if (app.vnc_client) |vc| { vc.disconnect(); vc.free(); app.vnc_client = null; }
     if (app.spice_client) |sc| { sc.disconnect(); sc.free(); app.spice_client = null; }
     display_mod.clearDisplay();
+    display_gl.cleanupGL();
     serial.serialDisconnect();
     if (app.win_handle) |w| cfltk.Fl_Window_hide(w);
 }
@@ -169,10 +216,14 @@ fn cloneVm() void {
     var linked: bool = false;
     {
         const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 320, 2), @divTrunc(cfltk.Fl_h() - 120, 2), 320, 120, "Clone Type");
+        cfltk.Fl_Window_set_color(dlg, app.pal.bg);
         cfltk.Fl_Window_make_modal(dlg, 1);
-        _ = cfltk.Fl_Box_new(10, 10, 300, 20, "Choose clone type:");
+        const ct_label = cfltk.Fl_Box_new(10, 10, 300, 20, "Choose clone type:");
+        cfltk.Fl_Box_set_color(ct_label, app.pal.bg);
+        cfltk.Fl_Box_set_label_color(ct_label, app.pal.text);
 
         const link_check = cfltk.Fl_Check_Button_new(10, 40, 300, 24, "Linked clone (COW, needs source disk)");
+        app.themeCheckButton(@ptrCast(link_check));
         cfltk.Fl_Check_Button_set_label_color(link_check, app.pal.text);
         cfltk.Fl_Check_Button_set_value(link_check, 0);
 
@@ -204,8 +255,10 @@ fn cloneVm() void {
         cfltk.Fl_Button_set_color(linked_btn, app.pal.warn); cfltk.Fl_Button_set_label_color(linked_btn, app.pal.accent_text);
         cfltk.Fl_Button_set_callback(linked_btn, &LinkedCB.go, &cd);
 
+        app.modal_active = true;
         cfltk.Fl_Window_show(dlg);
         while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
+        app.modal_active = false;
         cfltk.Fl_delete_widget(@ptrCast(dlg));
     }
 
@@ -299,7 +352,7 @@ fn importVm() void {
         // Strip extension
         const dot = std.mem.lastIndexOfScalar(u8, basename, '.');
         const name_slice = if (dot) |d| basename[0..d] else basename;
-        if (name_slice.len >= name_buf.len) break :blk name_buf[0..];
+        if (name_slice.len > name_buf.len) break :blk name_buf[0..];
         @memcpy(name_buf[0..name_slice.len], name_slice);
         break :blk name_buf[0..name_slice.len];
     };
@@ -329,15 +382,23 @@ fn importVm() void {
     app.vms[app.vm_count] = cfg;
     app.vm_count += 1;
     app.selected_idx = app.vm_count - 1;
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
     app.refreshBrowser();
     app.refreshDetails();
-    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
-    app.setStatus("VM imported from disk image");
+    // Open settings dialog so the user can review and adjust before confirming.
+    editVmDialogEx(true);
+    app.setStatus("VM imported — review settings and click Save to confirm, or Cancel to discard");
 }
 
 fn deleteCurrentVm() void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
+
+    // Refuse to delete a running VM.
+    if (app.vms[idx].status != .stopped) {
+        app.setStatusErr("Power off the VM before deleting it.");
+        return;
+    }
 
     // Confirmation dialog
     var msg_buf: [128]u8 = undefined;
@@ -361,7 +422,8 @@ fn deleteCurrentVm() void {
     var i = idx;
     while (i + 1 < app.vm_count) : (i += 1) app.vms[i] = app.vms[i + 1];
     // Shift Vmm handles too
-    while (i < app.g_vmm_handles.len - 1) : (i += 1) app.g_vmm_handles[i] = app.g_vmm_handles[i + 1];
+    var j = idx;
+    while (j + 1 < app.vm_count) : (j += 1) app.g_vmm_handles[j] = app.g_vmm_handles[j + 1];
     app.g_vmm_handles[app.vm_count - 1] = null;
     app.vm_count -= 1;
     app.selected_idx = if (app.vm_count > 0) @min(idx, app.vm_count - 1) else null;
@@ -397,12 +459,14 @@ fn buildSaveBody(buf: []u8, dd: *const anyopaque) ![]const u8 {
     };
     const ed: *const Ed = @ptrCast(@alignCast(dd));
     var pos: usize = 0;
+    var idx_buf: [4]u8 = undefined; // for Fl_Choice index → decimal string
     if (ed.na) |n| try urlencode.appendPair(buf, &pos, "name", std.mem.span(cfltk.Fl_Input_value(n)));
     if (ed.me) |m| try urlencode.appendPair(buf, &pos, "mem", std.mem.span(cfltk.Fl_Input_value(m)));
     if (ed.cp) |c| try urlencode.appendPair(buf, &pos, "cpu", std.mem.span(cfltk.Fl_Input_value(c)));
     if (ed.dk) |d2| try urlencode.appendPair(buf, &pos, "disk", std.mem.span(cfltk.Fl_Input_value(d2)));
-    if (ed.nt) |ni| try urlencode.appendPair(buf, &pos, "network", std.mem.span(cfltk.Fl_Input_value(ni)));
-    if (ed.fw) |fi| try urlencode.appendPair(buf, &pos, "firmware", std.mem.span(cfltk.Fl_Input_value(fi)));
+    if (ed.io) |io_val| { const s = std.mem.span(cfltk.Fl_Input_value(io_val)); if (s.len > 0) try urlencode.appendPair(buf, &pos, "iso_path", s); }
+    if (ed.nt) |ni| try urlencode.appendPair(buf, &pos, "network", std.mem.span(cfltk.Fl_Choice_get_choice(@ptrCast(ni))));
+    if (ed.fw) |fi| try urlencode.appendPair(buf, &pos, "firmware", std.mem.span(cfltk.Fl_Choice_get_choice(@ptrCast(fi))));
     if (ed.sh) |si| try urlencode.appendPair(buf, &pos, "shared_folder", std.mem.span(cfltk.Fl_Input_value(si)));
     if (ed.us) |ui| try urlencode.appendPair(buf, &pos, "usb", std.mem.span(cfltk.Fl_Input_value(ui)));
     if (ed.gt) |gti| try urlencode.appendPair(buf, &pos, "guest_tools", if (cfltk.Fl_Check_Button_is_checked(gti) != 0) "1" else "0");
@@ -410,32 +474,61 @@ fn buildSaveBody(buf: []u8, dd: *const anyopaque) ![]const u8 {
     if (ed.ai) |aii| try urlencode.appendPair(buf, &pos, "ap_interval", std.mem.span(cfltk.Fl_Input_value(aii)));
     if (ed.am) |ami| try urlencode.appendPair(buf, &pos, "ap_max", std.mem.span(cfltk.Fl_Input_value(ami)));
     if (ed.no) |notes_val| try urlencode.appendPair(buf, &pos, "notes", std.mem.span(cfltk.Fl_Input_value(notes_val)));
-    if (ed.d2p) |dp| try urlencode.appendPair(buf, &pos, "disk2_path", std.mem.span(cfltk.Fl_Input_value(dp)));
+    if (ed.nd) |ndi| try urlencode.appendPair(buf, &pos, "num_displays", std.mem.span(cfltk.Fl_Input_value(ndi)));
+    if (ed.d2p) |dp| { const s = std.mem.span(cfltk.Fl_Input_value(dp)); if (s.len > 0) try urlencode.appendPair(buf, &pos, "disk2_path", s); }
     if (ed.d2s) |ds| try urlencode.appendPair(buf, &pos, "disk2_size", std.mem.span(cfltk.Fl_Input_value(ds)));
+    if (ed.d2f) |df| {
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(df))});
+        try urlencode.appendPair(buf, &pos, "disk2_format", idx_str);
+    }
     if (ed.flp) |fp| try urlencode.appendPair(buf, &pos, "floppy", std.mem.span(cfltk.Fl_Input_value(fp)));
-    if (ed.n2m) |nm| try urlencode.appendPair(buf, &pos, "nic2", std.mem.span(cfltk.Fl_Input_value(nm)));
-    if (ed.n3m) |nm| try urlencode.appendPair(buf, &pos, "nic3", std.mem.span(cfltk.Fl_Input_value(nm)));
+    if (ed.n2m) |nm| try urlencode.appendPair(buf, &pos, "nic2", std.mem.span(cfltk.Fl_Choice_get_choice(@ptrCast(nm))));
+    if (ed.n2mac) |n2m| { const s = std.mem.span(cfltk.Fl_Input_value(n2m)); if (s.len > 0) try urlencode.appendPair(buf, &pos, "nic2_mac", s); }
+    if (ed.n3m) |nm| try urlencode.appendPair(buf, &pos, "nic3", std.mem.span(cfltk.Fl_Choice_get_choice(@ptrCast(nm))));
+    if (ed.n3mac) |n3m| { const s = std.mem.span(cfltk.Fl_Input_value(n3m)); if (s.len > 0) try urlencode.appendPair(buf, &pos, "nic3_mac", s); }
     if (ed.pf) |pfi| try urlencode.appendPair(buf, &pos, "portfw", std.mem.span(cfltk.Fl_Input_value(pfi)));
     if (ed.cs) |csi| try urlencode.appendPair(buf, &pos, "cpu_sockets", std.mem.span(cfltk.Fl_Input_value(csi)));
     if (ed.kv) |kvi| try urlencode.appendPair(buf, &pos, "accel", if (cfltk.Fl_Check_Button_is_checked(kvi) != 0) "auto" else "tcg");
-    if (ed.os) |osi| try urlencode.appendPair(buf, &pos, "guest_os", std.mem.span(cfltk.Fl_Input_value(osi)));
-    if (ed.bo) |boi| try urlencode.appendPair(buf, &pos, "boot_order", std.mem.span(cfltk.Fl_Input_value(boi)));
-    if (ed.dp) |dpi| try urlencode.appendPair(buf, &pos, "display", std.mem.span(cfltk.Fl_Input_value(dpi)));
-    if (ed.rs) |rsi| try urlencode.appendPair(buf, &pos, "display_resolution", std.mem.span(cfltk.Fl_Input_value(rsi)));
+    if (ed.os) |osi| {
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(osi))});
+        try urlencode.appendPair(buf, &pos, "guest_os", idx_str);
+    }
+    if (ed.bo) |boi| {
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(boi))});
+        try urlencode.appendPair(buf, &pos, "boot_order", idx_str);
+    }
+    if (ed.dp) |dpi| {
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(dpi))});
+        try urlencode.appendPair(buf, &pos, "display", idx_str);
+    }
+    if (ed.rs) |rsi| {
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(rsi))});
+        try urlencode.appendPair(buf, &pos, "display_resolution", idx_str);
+    }
     if (ed.e3) |e3i| try urlencode.appendPair(buf, &pos, "enable_3d", if (cfltk.Fl_Check_Button_is_checked(e3i) != 0) "1" else "0");
-    if (ed.gp) |gpi| try urlencode.appendPair(buf, &pos, "gpu_device", std.mem.span(cfltk.Fl_Input_value(gpi)));
+    if (ed.gp) |gpi| {
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(gpi))});
+        try urlencode.appendPair(buf, &pos, "gpu_device", idx_str);
+    }
     if (ed.em) |emi| try urlencode.appendPair(buf, &pos, "embed_display", if (cfltk.Fl_Check_Button_is_checked(emi) != 0) "1" else "0");
     if (ed.sr) |sri| try urlencode.appendPair(buf, &pos, "enable_serial", if (cfltk.Fl_Check_Button_is_checked(sri) != 0) "1" else "0");
     if (ed.vn) |vni| try urlencode.appendPair(buf, &pos, "vnc_port", std.mem.span(cfltk.Fl_Input_value(vni)));
     if (ed.sp) |spi| try urlencode.appendPair(buf, &pos, "spice_port", std.mem.span(cfltk.Fl_Input_value(spi)));
-    if (ed.df) |dfi| try urlencode.appendPair(buf, &pos, "disk_format", std.mem.span(cfltk.Fl_Input_value(dfi)));
+    if (ed.df) |dfi| {
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(dfi))});
+        try urlencode.appendPair(buf, &pos, "disk_format", idx_str);
+    }
     if (ed.ma) |mai| try urlencode.appendPair(buf, &pos, "mac_address", std.mem.span(cfltk.Fl_Input_value(mai)));
-    if (ed.au) |aui| try urlencode.appendPair(buf, &pos, "audio", std.mem.span(cfltk.Fl_Input_value(aui)));
+    if (ed.au) |aui| {
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(aui))});
+        try urlencode.appendPair(buf, &pos, "audio", idx_str);
+    }
     if (ed.fv) |fvi| try urlencode.appendPair(buf, &pos, "favorite", if (cfltk.Fl_Check_Button_is_checked(fvi) != 0) "1" else "0");
     return buf[0..pos];
 }
 
-fn editVmDialog() void {
+fn editVmDialog() void { editVmDialogEx(false); }
+fn editVmDialogEx(was_imported: bool) void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
     const cfg = &app.vms[idx];
@@ -450,6 +543,7 @@ fn editVmDialog() void {
 
     // Scrollable content area
     const scroll = cfltk.Fl_Scroll_new(0, 0, DIALOG_W, SCROLL_H, "");
+    app.themeScroll(@ptrCast(scroll));
     cfltk.Fl_Scroll_begin(scroll);
 
     // ── Section: Basic ─────────────────────────────────────────────
@@ -459,24 +553,29 @@ fn editVmDialog() void {
     const lb0 = cfltk.Fl_Box_new(10, 44, 120, 20, "VM Name:");
     cfltk.Fl_Box_set_label_font(lb0, 1); cfltk.Fl_Box_set_label_color(lb0, app.pal.text_dim);
     const name_input = cfltk.Fl_Input_new(140, 42, 350, 24, cfg.getName());
+    app.themeInput(@ptrCast(name_input));
     const lb1 = cfltk.Fl_Box_new(10, 74, 120, 20, "Memory (MB):");
     cfltk.Fl_Box_set_label_font(lb1, 1); cfltk.Fl_Box_set_label_color(lb1, app.pal.text_dim);
     var mbuf: [16]u8 = undefined;
     const mstr = std.fmt.bufPrintZ(&mbuf, "{d}", .{cfg.memory_mb}) catch "2048";
     const mem_input = cfltk.Fl_Input_new(140, 72, 350, 24, mstr);
+    app.themeInput(@ptrCast(mem_input));
     const lb2 = cfltk.Fl_Box_new(10, 104, 120, 20, "CPU Cores:");
     cfltk.Fl_Box_set_label_font(lb2, 1); cfltk.Fl_Box_set_label_color(lb2, app.pal.text_dim);
     var cbuf: [16]u8 = undefined;
     const cstr = std.fmt.bufPrintZ(&cbuf, "{d}", .{cfg.cpu_cores}) catch "2";
     const cpu_input = cfltk.Fl_Input_new(140, 102, 350, 24, cstr);
+    app.themeInput(@ptrCast(cpu_input));
     const lb3 = cfltk.Fl_Box_new(10, 134, 120, 20, "Disk Size (GB):");
     cfltk.Fl_Box_set_label_font(lb3, 1); cfltk.Fl_Box_set_label_color(lb3, app.pal.text_dim);
     var dbuf: [16]u8 = undefined;
     const dstr = std.fmt.bufPrintZ(&dbuf, "{d}", .{cfg.disk_size_gb}) catch "20";
     const disk_input = cfltk.Fl_Input_new(140, 132, 350, 24, dstr);
+    app.themeInput(@ptrCast(disk_input));
     const lb4 = cfltk.Fl_Box_new(10, 164, 120, 20, "ISO Path:");
     cfltk.Fl_Box_set_label_font(lb4, 1); cfltk.Fl_Box_set_label_color(lb4, app.pal.text_dim);
     const iso_input = cfltk.Fl_Input_new(140, 162, 350, 24, if (cfg.hasIso()) cfg.getIsoPath() else "");
+    app.themeInput(@ptrCast(iso_input));
     cfltk.Fl_Input_set_text_font(iso_input, 4); // monospace
 
     // ── Section: Network & Boot ────────────────────────────────────
@@ -485,10 +584,14 @@ fn editVmDialog() void {
 
     const lb5 = cfltk.Fl_Box_new(10, 234, 120, 20, "Network:");
     cfltk.Fl_Box_set_label_font(lb5, 1); cfltk.Fl_Box_set_label_color(lb5, app.pal.text_dim);
-    const net_input = cfltk.Fl_Input_new(140, 232, 350, 24, std.mem.span(cfg.nics[0].mode.label()));
+    const net_input = cfltk.Fl_Choice_new(140, 232, 180, 24, "");
+    app.themeChoice(@ptrCast(net_input));
+    populateEnum(vm.NetworkMode, net_input, cfg.nics[0].mode);
     const lb6 = cfltk.Fl_Box_new(10, 264, 120, 20, "Firmware:");
     cfltk.Fl_Box_set_label_font(lb6, 1); cfltk.Fl_Box_set_label_color(lb6, app.pal.text_dim);
-    const fw_input = cfltk.Fl_Input_new(140, 262, 350, 24, std.mem.span(cfg.firmware.label()));
+    const fw_input = cfltk.Fl_Choice_new(140, 262, 180, 24, "");
+    app.themeChoice(@ptrCast(fw_input));
+    populateEnum(vm.BootFirmware, fw_input, cfg.firmware);
 
     // ── Section: Sharing ───────────────────────────────────────────
     _ = sectionLabel("Sharing", 10, 300, 200);
@@ -497,14 +600,17 @@ fn editVmDialog() void {
     const lb7 = cfltk.Fl_Box_new(10, 334, 120, 20, "Shared Folder:");
     cfltk.Fl_Box_set_label_font(lb7, 1); cfltk.Fl_Box_set_label_color(lb7, app.pal.text_dim);
     const shared_input = cfltk.Fl_Input_new(140, 332, 350, 24, if (cfg.hasSharedFolder()) cfg.getSharedFolder() else "");
+    app.themeInput(@ptrCast(shared_input));
     cfltk.Fl_Input_set_text_font(shared_input, 4); // monospace
     const lb8 = cfltk.Fl_Box_new(10, 364, 120, 20, "USB Device:");
     cfltk.Fl_Box_set_label_font(lb8, 1); cfltk.Fl_Box_set_label_color(lb8, app.pal.text_dim);
     const usb_input = cfltk.Fl_Input_new(140, 362, 350, 24, if (cfg.hasUsbDevice()) cfg.getUsbDevice() else "");
+    app.themeInput(@ptrCast(usb_input));
     cfltk.Fl_Input_set_text_font(usb_input, 4); // monospace
     const lb9 = cfltk.Fl_Box_new(10, 394, 120, 20, "Guest Tools ISO:");
     cfltk.Fl_Box_set_label_font(lb9, 1); cfltk.Fl_Box_set_label_color(lb9, app.pal.text_dim);
     const gt_input = cfltk.Fl_Check_Button_new(140, 392, 350, 24, "Auto-mount virtio-win");
+    app.themeCheckButton(@ptrCast(gt_input));
     cfltk.Fl_Check_Button_set_label_color(gt_input, app.pal.text);
     if (cfg.guest_tools) cfltk.Fl_Check_Button_set_checked(gt_input, 1);
 
@@ -515,6 +621,7 @@ fn editVmDialog() void {
     const lb10 = cfltk.Fl_Box_new(10, 464, 120, 20, "AutoProtect:");
     cfltk.Fl_Box_set_label_font(lb10, 1); cfltk.Fl_Box_set_label_color(lb10, app.pal.text_dim);
     const ap_input = cfltk.Fl_Check_Button_new(140, 463, 100, 24, "Enabled");
+    app.themeCheckButton(@ptrCast(ap_input));
     cfltk.Fl_Check_Button_set_label_color(ap_input, app.pal.text);
     if (cfg.autoprotect) cfltk.Fl_Check_Button_set_checked(ap_input, 1);
     const lb11 = cfltk.Fl_Box_new(250, 464, 80, 20, "Interval (min):");
@@ -522,14 +629,17 @@ fn editVmDialog() void {
     var ap_int_buf: [16]u8 = undefined;
     const ap_int_str = std.fmt.bufPrintZ(&ap_int_buf, "{d}", .{cfg.autoprotect_interval_min}) catch "1440";
     const ap_int_input = cfltk.Fl_Input_new(335, 462, 155, 24, ap_int_str);
+    app.themeInput(@ptrCast(ap_int_input));
     const lb12 = cfltk.Fl_Box_new(10, 494, 120, 20, "Max Snapshots:");
     cfltk.Fl_Box_set_label_font(lb12, 1); cfltk.Fl_Box_set_label_color(lb12, app.pal.text_dim);
     var ap_max_buf: [16]u8 = undefined;
     const ap_max_str = std.fmt.bufPrintZ(&ap_max_buf, "{d}", .{cfg.autoprotect_max}) catch "3";
     const ap_max_input = cfltk.Fl_Input_new(140, 492, 150, 24, ap_max_str);
+    app.themeInput(@ptrCast(ap_max_input));
     const lb13 = cfltk.Fl_Box_new(10, 524, 120, 20, "Notes:");
     cfltk.Fl_Box_set_label_font(lb13, 1); cfltk.Fl_Box_set_label_color(lb13, app.pal.text_dim);
     const notes_input = cfltk.Fl_Input_new(140, 522, 350, 80, if (cfg.hasNotes()) cfg.getNotes() else "");
+    app.themeInput(@ptrCast(notes_input));
 
     // ── Section: Display & Video ───────────────────────────────────
     _ = sectionLabel("Display & Video", 10, 614, 200);
@@ -540,25 +650,35 @@ fn editVmDialog() void {
     var nd_buf: [16]u8 = undefined;
     const nd_str = std.fmt.bufPrintZ(&nd_buf, "{d}", .{cfg.num_displays}) catch "1";
     const nd_input = cfltk.Fl_Input_new(140, 646, 150, 24, nd_str);
+    app.themeInput(@ptrCast(nd_input));
 
     const lb15 = cfltk.Fl_Box_new(10, 678, 110, 20, "Display:");
     cfltk.Fl_Box_set_label_font(lb15, 1); cfltk.Fl_Box_set_label_color(lb15, app.pal.text_dim);
-    const disp_input = cfltk.Fl_Input_new(130, 676, 150, 24, std.mem.span(cfg.display.label()));
+    const disp_input = cfltk.Fl_Choice_new(130, 676, 150, 24, "");
+    app.themeChoice(@ptrCast(disp_input));
+    populateEnum(vm.DisplayType, disp_input, cfg.display);
     const lb16 = cfltk.Fl_Box_new(300, 678, 60, 20, "Res:");
     cfltk.Fl_Box_set_label_font(lb16, 1); cfltk.Fl_Box_set_label_color(lb16, app.pal.text_dim);
-    const res_input = cfltk.Fl_Input_new(360, 676, 110, 24, std.mem.span(cfg.display_resolution.label()));
+    const res_input = cfltk.Fl_Choice_new(360, 676, 110, 24, "");
+    app.themeChoice(@ptrCast(res_input));
+    populateEnum(vm.DisplayResolution, res_input, cfg.display_resolution);
 
     const e3d_input = cfltk.Fl_Check_Button_new(130, 707, 160, 24, "3D Acceleration");
+    app.themeCheckButton(@ptrCast(e3d_input));
     cfltk.Fl_Check_Button_set_label_color(e3d_input, app.pal.text);
     if (cfg.enable_3d) cfltk.Fl_Check_Button_set_checked(e3d_input, 1);
     const lb17 = cfltk.Fl_Box_new(300, 709, 60, 20, "GPU:");
     cfltk.Fl_Box_set_label_font(lb17, 1); cfltk.Fl_Box_set_label_color(lb17, app.pal.text_dim);
-    const gpu_input = cfltk.Fl_Input_new(360, 707, 110, 24, std.mem.span(cfg.gpu_device.label()));
+    const gpu_input = cfltk.Fl_Choice_new(360, 707, 130, 24, "");
+    app.themeChoice(@ptrCast(gpu_input));
+    populateEnum(vm.GpuDevice, gpu_input, cfg.gpu_device);
 
     const emb_input = cfltk.Fl_Check_Button_new(130, 737, 160, 24, "Embed Display");
+    app.themeCheckButton(@ptrCast(emb_input));
     cfltk.Fl_Check_Button_set_label_color(emb_input, app.pal.text);
     if (cfg.embed_display) cfltk.Fl_Check_Button_set_checked(emb_input, 1);
     const ser_input = cfltk.Fl_Check_Button_new(300, 737, 170, 24, "Enable Serial");
+    app.themeCheckButton(@ptrCast(ser_input));
     cfltk.Fl_Check_Button_set_label_color(ser_input, app.pal.text);
     if (cfg.enable_serial) cfltk.Fl_Check_Button_set_checked(ser_input, 1);
 
@@ -567,11 +687,13 @@ fn editVmDialog() void {
     var vncbuf: [16]u8 = undefined;
     const vnc_str = std.fmt.bufPrintZ(&vncbuf, "{d}", .{cfg.vnc_port}) catch "5900";
     const vnc_input = cfltk.Fl_Input_new(130, 764, 150, 24, vnc_str);
+    app.themeInput(@ptrCast(vnc_input));
     const lb19 = cfltk.Fl_Box_new(300, 766, 60, 20, "SPICE:");
     cfltk.Fl_Box_set_label_font(lb19, 1); cfltk.Fl_Box_set_label_color(lb19, app.pal.text_dim);
     var spcbuf: [16]u8 = undefined;
     const spc_str = std.fmt.bufPrintZ(&spcbuf, "{d}", .{cfg.spice_port}) catch "5901";
     const spc_input = cfltk.Fl_Input_new(360, 764, 110, 24, spc_str);
+    app.themeInput(@ptrCast(spc_input));
 
     // ── Section: Storage ───────────────────────────────────────────
     _ = sectionLabel("Storage", 10, 806, 200);
@@ -580,19 +702,24 @@ fn editVmDialog() void {
     const lb20 = cfltk.Fl_Box_new(10, 840, 110, 20, "Disk2 Path:");
     cfltk.Fl_Box_set_label_font(lb20, 1); cfltk.Fl_Box_set_label_color(lb20, app.pal.text_dim);
     const d2p_input = cfltk.Fl_Input_new(130, 838, 340, 24, if (cfg.hasDisk2()) cfg.getDisk2Path() else "");
+    app.themeInput(@ptrCast(d2p_input));
     cfltk.Fl_Input_set_text_font(d2p_input, 4); // monospace
     const lb21 = cfltk.Fl_Box_new(10, 870, 110, 20, "Disk2 Size (GB):");
     cfltk.Fl_Box_set_label_font(lb21, 1); cfltk.Fl_Box_set_label_color(lb21, app.pal.text_dim);
     var d2s_buf: [16]u8 = undefined;
     const d2s_str = std.fmt.bufPrintZ(&d2s_buf, "{d}", .{cfg.disk2_size_gb}) catch "0";
     const d2s_input = cfltk.Fl_Input_new(130, 868, 150, 24, d2s_str);
+    app.themeInput(@ptrCast(d2s_input));
     const lb22 = cfltk.Fl_Box_new(300, 870, 60, 20, "Format:");
     cfltk.Fl_Box_set_label_font(lb22, 1); cfltk.Fl_Box_set_label_color(lb22, app.pal.text_dim);
-    const d2f_input = cfltk.Fl_Input_new(360, 868, 110, 24, std.mem.span(cfg.disk2_format.label()));
+    const d2f_input = cfltk.Fl_Choice_new(360, 868, 110, 24, "");
+    app.themeChoice(@ptrCast(d2f_input));
+    populateEnum(vm.DiskFormat, d2f_input, cfg.disk2_format);
 
     const lb23 = cfltk.Fl_Box_new(10, 900, 110, 20, "Floppy Path:");
     cfltk.Fl_Box_set_label_font(lb23, 1); cfltk.Fl_Box_set_label_color(lb23, app.pal.text_dim);
     const flp_input = cfltk.Fl_Input_new(130, 898, 340, 24, if (cfg.hasFloppy()) cfg.getFloppyPath() else "");
+    app.themeInput(@ptrCast(flp_input));
     cfltk.Fl_Input_set_text_font(flp_input, 4); // monospace
 
     // ── Section: NICs & Port Forwards ──────────────────────────────
@@ -601,23 +728,30 @@ fn editVmDialog() void {
 
     const lb24 = cfltk.Fl_Box_new(10, 974, 110, 20, "NIC2 Mode:");
     cfltk.Fl_Box_set_label_font(lb24, 1); cfltk.Fl_Box_set_label_color(lb24, app.pal.text_dim);
-    const n2m_input = cfltk.Fl_Input_new(130, 972, 150, 24, std.mem.span(cfg.nics[1].mode.label()));
+    const n2m_input = cfltk.Fl_Choice_new(130, 972, 150, 24, "");
+    app.themeChoice(@ptrCast(n2m_input));
+    populateEnum(vm.NetworkMode, n2m_input, cfg.nics[1].mode);
     const lb25 = cfltk.Fl_Box_new(300, 974, 60, 20, "MAC:");
     cfltk.Fl_Box_set_label_font(lb25, 1); cfltk.Fl_Box_set_label_color(lb25, app.pal.text_dim);
     const n2mac_input = cfltk.Fl_Input_new(360, 972, 110, 24, if (cfg.nics[1].mac_len > 0) cfg.getNic2Mac() else "");
+    app.themeInput(@ptrCast(n2mac_input));
     cfltk.Fl_Input_set_text_font(n2mac_input, 4); // monospace MAC
 
     const lb26 = cfltk.Fl_Box_new(10, 1004, 110, 20, "NIC3 Mode:");
     cfltk.Fl_Box_set_label_font(lb26, 1); cfltk.Fl_Box_set_label_color(lb26, app.pal.text_dim);
-    const n3m_input = cfltk.Fl_Input_new(130, 1002, 150, 24, std.mem.span(cfg.nics[2].mode.label()));
+    const n3m_input = cfltk.Fl_Choice_new(130, 1002, 150, 24, "");
+    app.themeChoice(@ptrCast(n3m_input));
+    populateEnum(vm.NetworkMode, n3m_input, cfg.nics[2].mode);
     const lb27 = cfltk.Fl_Box_new(300, 1004, 60, 20, "MAC:");
     cfltk.Fl_Box_set_label_font(lb27, 1); cfltk.Fl_Box_set_label_color(lb27, app.pal.text_dim);
     const n3mac_input = cfltk.Fl_Input_new(360, 1002, 110, 24, if (cfg.nics[2].mac_len > 0) cfg.getNic3Mac() else "");
+    app.themeInput(@ptrCast(n3mac_input));
     cfltk.Fl_Input_set_text_font(n3mac_input, 4); // monospace MAC
 
     const lb28 = cfltk.Fl_Box_new(10, 1034, 110, 20, "Port Forwards:");
     cfltk.Fl_Box_set_label_font(lb28, 1); cfltk.Fl_Box_set_label_color(lb28, app.pal.text_dim);
     const pf_input = cfltk.Fl_Input_new(130, 1032, 340, 24, if (cfg.hasPortForwards()) cfg.getPortForwards() else "");
+    app.themeInput(@ptrCast(pf_input));
     cfltk.Fl_Input_set_text_font(pf_input, 4); // monospace port forwards
 
     // ── Section: Advanced ──────────────────────────────────────────
@@ -629,29 +763,41 @@ fn editVmDialog() void {
     var csbuf: [16]u8 = undefined;
     const cs_str = std.fmt.bufPrintZ(&csbuf, "{d}", .{cfg.cpu_sockets}) catch "1";
     const cs_input = cfltk.Fl_Input_new(130, 1106, 150, 24, cs_str);
+    app.themeInput(@ptrCast(cs_input));
     const kvm_input = cfltk.Fl_Check_Button_new(300, 1111, 170, 24, "Enable KVM");
+    app.themeCheckButton(@ptrCast(kvm_input));
     cfltk.Fl_Check_Button_set_label_color(kvm_input, app.pal.text);
     if (cfg.accel != .tcg) cfltk.Fl_Check_Button_set_checked(kvm_input, 1);
 
     const lb30 = cfltk.Fl_Box_new(10, 1138, 110, 20, "Guest OS:");
     cfltk.Fl_Box_set_label_font(lb30, 1); cfltk.Fl_Box_set_label_color(lb30, app.pal.text_dim);
-    const os_input = cfltk.Fl_Input_new(130, 1136, 150, 24, std.mem.span(cfg.guest_os.label()));
+    const os_input = cfltk.Fl_Choice_new(130, 1136, 150, 24, "");
+    app.themeChoice(@ptrCast(os_input));
+    populateEnum(vm.GuestOs, os_input, cfg.guest_os);
     const lb31 = cfltk.Fl_Box_new(300, 1138, 60, 20, "Boot:");
     cfltk.Fl_Box_set_label_font(lb31, 1); cfltk.Fl_Box_set_label_color(lb31, app.pal.text_dim);
-    const boot_input = cfltk.Fl_Input_new(360, 1136, 110, 24, std.mem.span(cfg.boot_order.label()));
+    const boot_input = cfltk.Fl_Choice_new(360, 1136, 110, 24, "");
+    app.themeChoice(@ptrCast(boot_input));
+    populateEnum(vm.BootOrder, boot_input, cfg.boot_order);
 
     const lb32 = cfltk.Fl_Box_new(10, 1168, 110, 20, "Disk Format:");
     cfltk.Fl_Box_set_label_font(lb32, 1); cfltk.Fl_Box_set_label_color(lb32, app.pal.text_dim);
-    const df_input = cfltk.Fl_Input_new(130, 1166, 150, 24, std.mem.span(cfg.disk_format.label()));
+    const df_input = cfltk.Fl_Choice_new(130, 1166, 150, 24, "");
+    app.themeChoice(@ptrCast(df_input));
+    populateEnum(vm.DiskFormat, df_input, cfg.disk_format);
     const lb33 = cfltk.Fl_Box_new(300, 1168, 60, 20, "MAC:");
     cfltk.Fl_Box_set_label_font(lb33, 1); cfltk.Fl_Box_set_label_color(lb33, app.pal.text_dim);
     const mac_input = cfltk.Fl_Input_new(360, 1166, 110, 24, if (cfg.nics[0].mac_len > 0) cfg.getMacAddress() else "");
+    app.themeInput(@ptrCast(mac_input));
     cfltk.Fl_Input_set_text_font(mac_input, 4); // monospace MAC
 
     const lb34 = cfltk.Fl_Box_new(10, 1198, 110, 20, "Audio:");
     cfltk.Fl_Box_set_label_font(lb34, 1); cfltk.Fl_Box_set_label_color(lb34, app.pal.text_dim);
-    const aud_input = cfltk.Fl_Input_new(130, 1196, 150, 24, std.mem.span(cfg.audio.label()));
+    const aud_input = cfltk.Fl_Choice_new(130, 1196, 150, 24, "");
+    app.themeChoice(@ptrCast(aud_input));
+    populateEnum(vm.AudioDevice, aud_input, cfg.audio);
     const fav_input = cfltk.Fl_Check_Button_new(300, 1201, 170, 24, "Favorite");
+    app.themeCheckButton(@ptrCast(fav_input));
     cfltk.Fl_Check_Button_set_label_color(fav_input, app.pal.text);
     if (cfg.favorite) cfltk.Fl_Check_Button_set_checked(fav_input, 1);
 
@@ -661,10 +807,10 @@ fn editVmDialog() void {
     const btn_y = SCROLL_H + 10;
     _ = sectionSep(10, btn_y, DIALOG_W - 20);
 
-    const save_btn = cfltk.Fl_Button_new(DIALOG_W - 200, btn_y + 8, 85, 28, "Save");
+    const save_btn = cfltk.Fl_Button_new(DIALOG_W - 200, btn_y + 8, 85, 30, "Save");
     cfltk.Fl_Button_set_color(save_btn, app.pal.accent);
     cfltk.Fl_Button_set_label_color(save_btn, app.pal.accent_text);
-    const cancel_btn = cfltk.Fl_Button_new(DIALOG_W - 105, btn_y + 8, 85, 28, "Cancel");
+    const cancel_btn = cfltk.Fl_Button_new(DIALOG_W - 105, btn_y + 8, 85, 30, "Cancel");
     cfltk.Fl_Button_set_color(cancel_btn, app.pal.gray_btn);
     cfltk.Fl_Button_set_label_color(cancel_btn, app.pal.accent_text);
 
@@ -690,7 +836,7 @@ fn editVmDialog() void {
         df: ?*cfltk.Fl_Input, ma: ?*cfltk.Fl_Input,
         au: ?*cfltk.Fl_Input, fv: ?*cfltk.Fl_Check_Button,
         v: *vm.VmConfig, dl: ?*cfltk.Fl_Window,
-        idx: usize,
+        idx: usize, wi: bool,
     };
     var ed = Ed{
         .na = @ptrCast(name_input), .me = @ptrCast(mem_input), .cp = @ptrCast(cpu_input),
@@ -713,10 +859,14 @@ fn editVmDialog() void {
         .vn = @ptrCast(vnc_input), .sp = @ptrCast(spc_input),
         .df = @ptrCast(df_input), .ma = @ptrCast(mac_input),
         .au = @ptrCast(aud_input), .fv = @ptrCast(fav_input),
-        .v = cfg, .dl = @ptrCast(dlg), .idx = idx,
+        .v = cfg, .dl = @ptrCast(dlg), .idx = idx, .wi = was_imported,
     };
 
-    const S = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
+    const S = struct {
+        fn clampNum32(v: u32, lo: u32, hi: u32) u32 { return if (v < lo) lo else if (v > hi) hi else v; }
+        fn clampNum16(v: u16, lo: u16, hi: u16) u16 { return if (v < lo) lo else if (v > hi) hi else v; }
+
+        fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
         const dd: *Ed = @ptrCast(@alignCast(d orelse return));
         // Remote mode: POST URL-encoded settings to server.
         if (app.remote_mode) {
@@ -736,114 +886,46 @@ fn editVmDialog() void {
             return;
         }
         if (dd.na) |n| dd.v.setName(std.mem.span(cfltk.Fl_Input_value(n)));
-        if (dd.me) |m| dd.v.memory_mb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(m)), 10) catch dd.v.memory_mb);
-        if (dd.cp) |c| dd.v.cpu_cores = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(c)), 10) catch dd.v.cpu_cores);
-        if (dd.dk) |d2| dd.v.disk_size_gb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(d2)), 10) catch dd.v.disk_size_gb);
+        if (dd.me) |m| dd.v.memory_mb = clampNum32(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(m)), 10) catch 0, 128, 65536);
+        if (dd.cp) |c| dd.v.cpu_cores = clampNum32(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(c)), 10) catch 0, 1, 256);
+        if (dd.dk) |d2| dd.v.disk_size_gb = clampNum32(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(d2)), 10) catch 0, 1, 65536);
         if (dd.io) |i| { const s = std.mem.span(cfltk.Fl_Input_value(i)); if (s.len > 0) dd.v.setIsoPath(s) else dd.v.clearIsoPath(); }
-        if (dd.nt) |ni| {
-            const s = std.mem.span(cfltk.Fl_Input_value(ni));
-            if (std.ascii.eqlIgnoreCase(s, "bridged")) { dd.v.nics[0].mode = .bridge; }
-            else if (std.ascii.eqlIgnoreCase(s, "none")) { dd.v.nics[0].mode = .none; }
-            else { dd.v.nics[0].mode = .user; }
-        }
-        if (dd.fw) |fi| {
-            const s = std.mem.span(cfltk.Fl_Input_value(fi));
-            if (std.ascii.eqlIgnoreCase(s, "uefi")) { dd.v.firmware = .uefi; }
-            else { dd.v.firmware = .bios; }
-        }
+        if (dd.nt) |ni| { dd.v.nics[0].mode = readEnum(vm.NetworkMode, ni); }
+        if (dd.fw) |fi| { dd.v.firmware = readEnum(vm.BootFirmware, fi); }
         if (dd.sh) |si| { const s = std.mem.span(cfltk.Fl_Input_value(si)); if (s.len > 0) dd.v.setSharedFolder(s) else dd.v.clearSharedFolder(); }
         if (dd.us) |ui| { const s = std.mem.span(cfltk.Fl_Input_value(ui)); if (s.len > 0) dd.v.setUsbDevice(s) else dd.v.clearUsbDevice(); }
         if (dd.gt) |gti| { dd.v.guest_tools = cfltk.Fl_Check_Button_is_checked(gti) != 0; }
         if (dd.ap) |api| { dd.v.autoprotect = cfltk.Fl_Check_Button_is_checked(api) != 0; }
-        if (dd.ai) |aii| { dd.v.autoprotect_interval_min = std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(aii)), 10) catch dd.v.autoprotect_interval_min; }
-        if (dd.am) |ami| { dd.v.autoprotect_max = std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(ami)), 10) catch dd.v.autoprotect_max; }
+        if (dd.ai) |aii| { dd.v.autoprotect_interval_min = clampNum32(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(aii)), 10) catch 0, 1, 1440); }
+        if (dd.am) |ami| { dd.v.autoprotect_max = clampNum32(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(ami)), 10) catch 0, 1, 1000); }
         if (dd.no) |notes_val| dd.v.setNotes(std.mem.span(cfltk.Fl_Input_value(notes_val)));
-        if (dd.nd) |ndi| dd.v.num_displays = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(ndi)), 10) catch dd.v.num_displays);
+        if (dd.nd) |ndi| dd.v.num_displays = clampNum32(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(ndi)), 10) catch 0, 1, 16);
         // ── New fields: disk2, floppy, NIC2, NIC3, port forwarding ──
         if (dd.d2p) |dp| { const s = std.mem.span(cfltk.Fl_Input_value(dp)); if (s.len > 0) dd.v.setDisk2Path(s) else dd.v.clearDisk2Path(); }
-        if (dd.d2s) |ds| { dd.v.disk2_size_gb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(ds)), 10) catch dd.v.disk2_size_gb); }
-        if (dd.d2f) |df| {
-            const s = std.mem.span(cfltk.Fl_Input_value(df));
-            if (std.ascii.eqlIgnoreCase(s, "raw")) { dd.v.disk2_format = .raw; }
-            else if (std.ascii.eqlIgnoreCase(s, "vmdk")) { dd.v.disk2_format = .vmdk; }
-            else if (std.ascii.eqlIgnoreCase(s, "vdi")) { dd.v.disk2_format = .vdi; }
-            else { dd.v.disk2_format = .qcow2; }
-        }
+        if (dd.d2s) |ds| { dd.v.disk2_size_gb = clampNum32(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(ds)), 10) catch 0, 0, 65536); }
+        if (dd.d2f) |df| { dd.v.disk2_format = readEnum(vm.DiskFormat, df); }
         if (dd.flp) |fp| { const s = std.mem.span(cfltk.Fl_Input_value(fp)); if (s.len > 0) dd.v.setFloppyPath(s) else dd.v.clearFloppyPath(); }
-        if (dd.n2m) |nm| {
-            const s = std.mem.span(cfltk.Fl_Input_value(nm));
-            if (std.ascii.eqlIgnoreCase(s, "bridged")) { dd.v.nics[1].mode = .bridge; }
-            else if (std.ascii.eqlIgnoreCase(s, "none")) { dd.v.nics[1].mode = .none; }
-            else { dd.v.nics[1].mode = .user; }
-        }
+        if (dd.n2m) |nm| { dd.v.nics[1].mode = readEnum(vm.NetworkMode, nm); }
         if (dd.n2mac) |n2m| { const s = std.mem.span(cfltk.Fl_Input_value(n2m)); dd.v.setNic2Mac(s); }
-        if (dd.n3m) |nm| {
-            const s = std.mem.span(cfltk.Fl_Input_value(nm));
-            if (std.ascii.eqlIgnoreCase(s, "bridged")) { dd.v.nics[2].mode = .bridge; }
-            else if (std.ascii.eqlIgnoreCase(s, "none")) { dd.v.nics[2].mode = .none; }
-            else { dd.v.nics[2].mode = .user; }
-        }
+        if (dd.n3m) |nm| { dd.v.nics[2].mode = readEnum(vm.NetworkMode, nm); }
         if (dd.n3mac) |n3m| { const s = std.mem.span(cfltk.Fl_Input_value(n3m)); dd.v.setNic3Mac(s); }
         if (dd.pf) |pfi| { const s = std.mem.span(cfltk.Fl_Input_value(pfi)); if (s.len > 0) dd.v.setPortForwards(s) else dd.v.clearPortForwards(); }
         // ── New fields: sockets, kvm, os, boot, display, res, 3d, gpu, embed, serial, vnc, spice, diskfmt, mac, audio, fav ──
-        if (dd.cs) |csi| dd.v.cpu_sockets = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(csi)), 10) catch dd.v.cpu_sockets);
+        if (dd.cs) |csi| dd.v.cpu_sockets = clampNum32(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(csi)), 10) catch 0, 1, 8);
         if (dd.kv) |kvi| dd.v.accel = if (cfltk.Fl_Check_Button_is_checked(kvi) != 0) .auto else .tcg;
-        if (dd.os) |osi| {
-            const s = std.mem.span(cfltk.Fl_Input_value(osi));
-            // Match against label() values displayed in the dialog
-            if (std.ascii.indexOfIgnoreCase(s, "linux") != null) { dd.v.guest_os = .linux; }
-            else if (std.ascii.indexOfIgnoreCase(s, "windows") != null) { dd.v.guest_os = .windows; }
-            else if (std.ascii.indexOfIgnoreCase(s, "freebsd") != null) { dd.v.guest_os = .freebsd; }
-            else if (std.ascii.indexOfIgnoreCase(s, "macos") != null) { dd.v.guest_os = .macos; }
-            else { dd.v.guest_os = .other; }
-        }
-        if (dd.bo) |boi| {
-            const s = std.mem.span(cfltk.Fl_Input_value(boi));
-            if (std.ascii.eqlIgnoreCase(s, "cd/dvd")) { dd.v.boot_order = .cdrom_first; }
-            else if (std.ascii.eqlIgnoreCase(s, "network (pxe)")) { dd.v.boot_order = .network_first; }
-            else if (std.ascii.indexOfIgnoreCase(s, "disk") != null) { dd.v.boot_order = .disk_first; }
-            else { dd.v.boot_order = .disk_first; }
-        }
-        if (dd.dp) |dpi| {
-            const s = std.mem.span(cfltk.Fl_Input_value(dpi));
-            if (std.ascii.indexOfIgnoreCase(s, "sdl") != null) { dd.v.display = .sdl; }
-            else if (std.ascii.indexOfIgnoreCase(s, "spice") != null) { dd.v.display = .spice; }
-            else if (std.ascii.indexOfIgnoreCase(s, "vnc") != null) { dd.v.display = .vnc; }
-            else if (std.ascii.indexOfIgnoreCase(s, "none") != null or std.ascii.indexOfIgnoreCase(s, "headless") != null) { dd.v.display = .none; }
-            else { dd.v.display = .gtk; }
-        }
-        if (dd.rs) |rsi| {
-            const s = std.mem.span(cfltk.Fl_Input_value(rsi));
-            if (std.ascii.eqlIgnoreCase(s, "800x600")) { dd.v.display_resolution = .res_800x600; }
-            else if (std.ascii.eqlIgnoreCase(s, "1024x768")) { dd.v.display_resolution = .res_1024x768; }
-            else if (std.ascii.eqlIgnoreCase(s, "1280x800")) { dd.v.display_resolution = .res_1280x800; }
-            else if (std.ascii.eqlIgnoreCase(s, "1920x1080")) { dd.v.display_resolution = .res_1920x1080; }
-            else { dd.v.display_resolution = .auto; }
-        }
+        if (dd.os) |osi| { dd.v.guest_os = readEnum(vm.GuestOs, osi); }
+        if (dd.bo) |boi| { dd.v.boot_order = readEnum(vm.BootOrder, boi); }
+        if (dd.dp) |dpi| { dd.v.display = readEnum(vm.DisplayType, dpi); }
+        if (dd.rs) |rsi| { dd.v.display_resolution = readEnum(vm.DisplayResolution, rsi); }
         if (dd.e3) |e3i| dd.v.enable_3d = cfltk.Fl_Check_Button_is_checked(e3i) != 0;
-        if (dd.gp) |gpi| {
-            const s = std.mem.span(cfltk.Fl_Input_value(gpi));
-            if (std.ascii.indexOfIgnoreCase(s, "vga") != null) { dd.v.gpu_device = .virtio_vga_gl; }
-            else { dd.v.gpu_device = .virtio_gpu_gl; }
-        }
+        if (dd.gp) |gpi| { dd.v.gpu_device = readEnum(vm.GpuDevice, gpi); }
         if (dd.em) |emi| dd.v.embed_display = cfltk.Fl_Check_Button_is_checked(emi) != 0;
         if (dd.sr) |sri| dd.v.enable_serial = cfltk.Fl_Check_Button_is_checked(sri) != 0;
-        if (dd.vn) |vni| dd.v.vnc_port = std.fmt.parseInt(u16, std.mem.span(cfltk.Fl_Input_value(vni)), 10) catch dd.v.vnc_port;
-        if (dd.sp) |spi| dd.v.spice_port = std.fmt.parseInt(u16, std.mem.span(cfltk.Fl_Input_value(spi)), 10) catch dd.v.spice_port;
-        if (dd.df) |dfi| {
-            const s = std.mem.span(cfltk.Fl_Input_value(dfi));
-            if (std.ascii.eqlIgnoreCase(s, "raw")) { dd.v.disk_format = .raw; }
-            else if (std.ascii.eqlIgnoreCase(s, "vmdk")) { dd.v.disk_format = .vmdk; }
-            else if (std.ascii.eqlIgnoreCase(s, "vdi")) { dd.v.disk_format = .vdi; }
-            else { dd.v.disk_format = .qcow2; }
-        }
+        if (dd.vn) |vni| dd.v.vnc_port = clampNum16(std.fmt.parseInt(u16, std.mem.span(cfltk.Fl_Input_value(vni)), 10) catch 0, 5900, 5999);
+        if (dd.sp) |spi| dd.v.spice_port = clampNum16(std.fmt.parseInt(u16, std.mem.span(cfltk.Fl_Input_value(spi)), 10) catch 0, 5900, 5999);
+        if (dd.df) |dfi| { dd.v.disk_format = readEnum(vm.DiskFormat, dfi); }
         if (dd.ma) |mai| { const s = std.mem.span(cfltk.Fl_Input_value(mai)); dd.v.setMacAddress(s); }
-        if (dd.au) |aui| {
-            const s = std.mem.span(cfltk.Fl_Input_value(aui));
-            if (std.ascii.indexOfIgnoreCase(s, "hda") != null) { dd.v.audio = .hda; }
-            else if (std.ascii.indexOfIgnoreCase(s, "ac97") != null) { dd.v.audio = .ac97; }
-            else { dd.v.audio = .none; }
-        }
+        if (dd.au) |aui| { dd.v.audio = readEnum(vm.AudioDevice, aui); }
         if (dd.fv) |fvi| dd.v.favorite = cfltk.Fl_Check_Button_is_checked(fvi) != 0;
         app.refreshBrowser(); app.refreshDetails();
         persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
@@ -851,6 +933,19 @@ fn editVmDialog() void {
     }};
     const C = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
         const dd: *Ed = @ptrCast(@alignCast(d orelse return));
+        // If this was an import preview and the user cancelled, remove the VM.
+        if (dd.wi) {
+            // Shift remaining VMs left to fill the gap.
+            var i: usize = dd.idx;
+            while (i + 1 < app.vm_count) : (i += 1) {
+                app.vms[i] = app.vms[i + 1];
+            }
+            app.vm_count -= 1;
+            app.selected_idx = null;
+            app.refreshBrowser();
+            app.refreshDetails();
+            persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration after delete"); };
+        }
         if (dd.dl) |dl2| cfltk.Fl_Window_hide(dl2);
     }};
     cfltk.Fl_Button_set_callback(save_btn, &S.go, &ed);
@@ -874,6 +969,7 @@ fn snapDialog() void {
     const snl = cfltk.Fl_Box_new(10, 10, 460, 20, "Snapshot name:");
     cfltk.Fl_Box_set_label_font(snl, 1); cfltk.Fl_Box_set_label_color(snl, app.pal.text_dim);
     const ni = cfltk.Fl_Input_new(10, 30, 460, 24, "snapshot1");
+    app.themeInput(@ptrCast(ni));
     const tb = cfltk.Fl_Button_new(10, 70, 80, 30, "Take");
     cfltk.Fl_Button_set_color(tb, app.pal.accent); cfltk.Fl_Button_set_label_color(tb, app.pal.accent_text);
     const lb = cfltk.Fl_Button_new(100, 70, 80, 30, "List");
@@ -1011,10 +1107,6 @@ fn snapDialog() void {
 }
 
 
-/// Get or create the Vmm handle for VM at index idx.
-
-/// Destroy the Vmm handle for VM at index idx.
-
 fn togglePower() void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
@@ -1075,6 +1167,8 @@ fn togglePower() void {
 fn startAllVms() void {
     const saved_idx = app.selected_idx;
     defer { app.selected_idx = saved_idx; }
+    var started: u32 = 0;
+    var failed: u32 = 0;
     for (0..app.vm_count) |i| {
         if (app.vms[i].isAlive()) continue;
         if (app.remote_mode) {
@@ -1084,19 +1178,26 @@ fn startAllVms() void {
             _ = remote.apiPost(path, "", &out_buf);
         } else {
             if (app.getVmmHandle(i)) |h| {
-                app.g_vmm.startFn(h, @ptrCast(&app.vms[i])) catch continue;
+                app.g_vmm.startFn(h, @ptrCast(&app.vms[i])) catch { failed += 1; continue; };
             } else {
-                qemu.startVm(&app.vms[i], std.heap.page_allocator) catch continue;
+                qemu.startVm(&app.vms[i], std.heap.page_allocator) catch { failed += 1; continue; };
             }
             app.vm_started[i] = 1;
             if (app.vms[i].hasSavedState()) app.vms[i].clearSavedStatePath();
         }
+        started += 1;
     }
     if (app.remote_mode) remote.remoteRefreshVmList();
     app.refreshBrowser();
     app.refreshDetails();
     persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
-    app.setStatus("All stopped VMs powered on.");
+    if (failed > 0) {
+        var msg: [64]u8 = undefined;
+        app.setStatusErr(std.fmt.bufPrint(&msg, "Powered on {d} VM(s), {d} failed.", .{ started, failed }) catch return);
+    } else {
+        var msg: [48]u8 = undefined;
+        app.setStatus(std.fmt.bufPrint(&msg, "Powered on {d} VM(s).", .{started}) catch return);
+    }
 }
 
 /// Power off all running VMs.
@@ -1276,13 +1377,14 @@ fn renameVm() void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
 
-    const rw = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 340, 2), @divTrunc(cfltk.Fl_h() - 110, 2), 340, 110, "Rename VM");
-    cfltk.Fl_Window_make_modal(rw, 0);
+    const rw = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 340, 2), @divTrunc(cfltk.Fl_h() - 120, 2), 340, 120, "Rename VM");
+    cfltk.Fl_Window_make_modal(rw, 1);
     cfltk.Fl_Window_set_color(rw, app.pal.bg);
     const rnl = cfltk.Fl_Box_new(10, 10, 320, 20, "Enter new name for the virtual machine:");
     cfltk.Fl_Box_set_label_font(rnl, 1); cfltk.Fl_Box_set_label_color(rnl, app.pal.text_dim);
 
     const ni = cfltk.Fl_Input_new(10, 35, 320, 30, "");
+    app.themeInput(@ptrCast(ni));
     _ = cfltk.Fl_Input_set_value(ni, app.vms[idx].getNameSlice().ptr);
 
     var ok = false;
@@ -1303,11 +1405,11 @@ fn renameVm() void {
     };
     var rd = RDlg{ .dlg = @ptrCast(rw), .input = @ptrCast(ni), .ok = &ok };
 
-    const ok_btn = cfltk.Fl_Button_new(90, 75, 70, 25, "OK");
+    const ok_btn = cfltk.Fl_Button_new(90, 75, 70, 30, "OK");
     cfltk.Fl_Button_set_color(ok_btn, app.pal.accent);
     cfltk.Fl_Button_set_label_color(ok_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_callback(ok_btn, &RDlg.okCB, &rd);
-    const cancel_btn = cfltk.Fl_Button_new(180, 75, 70, 25, "Cancel");
+    const cancel_btn = cfltk.Fl_Button_new(180, 75, 70, 30, "Cancel");
     cfltk.Fl_Button_set_color(cancel_btn, app.pal.gray_btn);
     cfltk.Fl_Button_set_label_color(cancel_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_callback(cancel_btn, &RDlg.cancelCB, &rd);
@@ -1475,18 +1577,24 @@ fn newVmDialog() void {
     const nlb0 = cfltk.Fl_Box_new(10, 40, 100, 20, "VM Name:");
     cfltk.Fl_Box_set_label_font(nlb0, 1); cfltk.Fl_Box_set_label_color(nlb0, app.pal.text_dim);
     const name_input = cfltk.Fl_Input_new(120, 38, 330, 24, "");
+    app.themeInput(@ptrCast(name_input));
     const nlb1 = cfltk.Fl_Box_new(10, 70, 100, 20, "Guest OS:");
     cfltk.Fl_Box_set_label_font(nlb1, 1); cfltk.Fl_Box_set_label_color(nlb1, app.pal.text_dim);
-    const os_input = cfltk.Fl_Input_new(120, 68, 330, 24, "Linux");
+    const os_input = cfltk.Fl_Choice_new(120, 68, 330, 24, "");
+    app.themeChoice(@ptrCast(os_input));
+    populateEnum(vm.GuestOs, os_input, .linux);
     const nlb2 = cfltk.Fl_Box_new(10, 100, 100, 20, "Memory (MB):");
     cfltk.Fl_Box_set_label_font(nlb2, 1); cfltk.Fl_Box_set_label_color(nlb2, app.pal.text_dim);
     const mem_input = cfltk.Fl_Input_new(120, 98, 330, 24, "2048");
+    app.themeInput(@ptrCast(mem_input));
     const nlb3 = cfltk.Fl_Box_new(10, 130, 100, 20, "CPU Cores:");
     cfltk.Fl_Box_set_label_font(nlb3, 1); cfltk.Fl_Box_set_label_color(nlb3, app.pal.text_dim);
     const cpu_input = cfltk.Fl_Input_new(120, 128, 330, 24, "2");
+    app.themeInput(@ptrCast(cpu_input));
     const nlb4 = cfltk.Fl_Box_new(10, 160, 100, 20, "Disk (GB):");
     cfltk.Fl_Box_set_label_font(nlb4, 1); cfltk.Fl_Box_set_label_color(nlb4, app.pal.text_dim);
     const disk_input = cfltk.Fl_Input_new(120, 158, 330, 24, "20");
+    app.themeInput(@ptrCast(disk_input));
 
     _ = sectionSep(10, 195, 440);
 
@@ -1501,7 +1609,7 @@ fn newVmDialog() void {
     // Use a struct to pass data to callbacks
     const DlgData = struct {
         name: ?*cfltk.Fl_Input,
-        os: ?*cfltk.Fl_Input,
+        os: ?*cfltk.Fl_Choice,
         mem: ?*cfltk.Fl_Input,
         cpu: ?*cfltk.Fl_Input,
         disk: ?*cfltk.Fl_Input,
@@ -1516,22 +1624,10 @@ fn newVmDialog() void {
             if (app.remote_mode) {
                 var body: [512]u8 = undefined;
                 var pos: usize = 0;
-                if (dd.name) |n| {
-                    const s = std.fmt.bufPrint(body[pos..], "name={s}&", .{std.mem.span(cfltk.Fl_Input_value(n))}) catch body[pos..];
-                    pos += s.len;
-                }
-                if (dd.mem) |m| {
-                    const s = std.fmt.bufPrint(body[pos..], "mem={s}&", .{std.mem.span(cfltk.Fl_Input_value(m))}) catch body[pos..];
-                    pos += s.len;
-                }
-                if (dd.cpu) |c| {
-                    const s = std.fmt.bufPrint(body[pos..], "cpu={s}&", .{std.mem.span(cfltk.Fl_Input_value(c))}) catch body[pos..];
-                    pos += s.len;
-                }
-                if (dd.disk) |d2| {
-                    const s = std.fmt.bufPrint(body[pos..], "disk={s}", .{std.mem.span(cfltk.Fl_Input_value(d2))}) catch body[pos..];
-                    pos += s.len;
-                }
+                if (dd.name) |n| urlencode.appendPair(&body, &pos, "name", std.mem.span(cfltk.Fl_Input_value(n))) catch return;
+                if (dd.mem) |m| urlencode.appendPair(&body, &pos, "mem", std.mem.span(cfltk.Fl_Input_value(m))) catch return;
+                if (dd.cpu) |c| urlencode.appendPair(&body, &pos, "cpu", std.mem.span(cfltk.Fl_Input_value(c))) catch return;
+                if (dd.disk) |d2| urlencode.appendPair(&body, &pos, "disk", std.mem.span(cfltk.Fl_Input_value(d2))) catch return;
                 var out_buf: [64]u8 = undefined;
                 _ = remote.apiPost("/api/create", body[0..pos], &out_buf);
                 remote.remoteRefreshVmList();
@@ -1548,10 +1644,7 @@ fn newVmDialog() void {
             if (dd.mem) |m| cfg.memory_mb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(m)), 10) catch 2048);
             if (dd.cpu) |c| cfg.cpu_cores = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(c)), 10) catch 2);
             if (dd.disk) |d| cfg.disk_size_gb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(d)), 10) catch 20);
-            if (dd.os) |o| {
-                const os_str = std.mem.span(cfltk.Fl_Input_value(o));
-                cfg.guest_os = vm.GuestOs.fromStr(os_str);
-            }
+            if (dd.os) |o| { cfg.guest_os = readEnum(vm.GuestOs, o); }
 
             // Apply AutoProtect defaults from preferences
             cfg.autoprotect = app.prefs.autoprotect_enabled_default;
@@ -1637,21 +1730,96 @@ fn kbHandler(event: c_int) callconv(.c) c_int {
     return 0;
 }
 
+/// Reposition toolbar backgrounds and buttons for a new window width.
+/// Button widths scale proportionally from a reference width of 1200.
+fn repositionToolbars(ww: i32) void {
+    // Row 1 background
+    if (app.toolbar_bg) |tb| {
+        cfltk.Fl_Box_resize(tb, 0, TOOLBAR_ROW1_Y, ww, TOOLBAR_STRIP_H);
+    }
+    // Row 2 background
+    if (app.toolbar_util_bg) |ub| {
+        cfltk.Fl_Box_resize(ub, 0, TOOLBAR_ROW2_Y, ww, TOOLBAR_STRIP_H);
+    }
+    // Row 1 buttons
+    {
+        const scaled = uimath.scaleToolbarWidths(TOOLBAR_ROW1_COUNT, toolbar_row1_w, ww);
+        const gap: i32 = uimath.computeToolbarGap(ww, &scaled, TOOLBAR_ROW1_COUNT);
+        var x: i32 = 5;
+        for (0..TOOLBAR_ROW1_COUNT) |i| {
+            if (toolbar_btns[i]) |btn| {
+                cfltk.Fl_Button_resize(btn, x, TOOLBAR_ROW1_Y + 3, scaled[i], TOOLBAR_BTN_H);
+            }
+            x += scaled[i] + gap;
+        }
+    }
+    // Row 2 buttons
+    {
+        const scaled = uimath.scaleToolbarWidths(TOOLBAR_ROW2_COUNT, toolbar_row2_w, ww);
+        const gap: i32 = uimath.computeToolbarGap(ww, &scaled, TOOLBAR_ROW2_COUNT);
+        var x: i32 = 5;
+        for (0..TOOLBAR_ROW2_COUNT) |i| {
+            const bi = TOOLBAR_ROW1_COUNT + i;
+            if (toolbar_btns[bi]) |btn| {
+                cfltk.Fl_Button_resize(btn, x, TOOLBAR_ROW2_Y + 3, scaled[i], TOOLBAR_BTN_H);
+            }
+            x += scaled[i] + gap;
+        }
+    }
+}
+
+// Debounce state for window resize — avoids stutter from rapid-fire resize events.
+var last_resize_ns: i64 = 0;
+
+// Window resize callback — keeps Display tab canvas sized to the window.
+fn handleWindowResize(_: ?*cfltk.Fl_Widget, _: c_int, _: c_int, w: c_int, h: c_int, _: ?*anyopaque) callconv(.c) void {
+    if (w <= 0 or h <= 0) return;
+    const WW: i32 = w;
+    const WH: i32 = h;
+
+    // Debounce toolbar repositioning to avoid stutter during rapid resize.
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    const now_ns: i64 = @as(i64, ts.sec) * std.time.ns_per_s + ts.nsec;
+    if (now_ns - last_resize_ns >= 50 * std.time.ns_per_ms) {
+        last_resize_ns = now_ns;
+        repositionToolbars(WW);
+    }
+    const body_y: i32 = 112;
+    const SW: i32 = 200;
+    const CX: i32 = SW;
+    const CW: i32 = WW - SW;
+    const body_h: i32 = WH - body_y - 26;
+    const dg_w: i32 = CW;
+    const dg_h: i32 = body_h - 20;
+    const inner_w: i32 = CW - 10;
+    const inner_h: i32 = body_h - 30;
+    if (app.display_group) |dg| {
+        cfltk.Fl_Group_resize(dg, CX, body_y + 20, dg_w, dg_h);
+    }
+    if (app.display_box) |db| {
+        cfltk.Fl_Box_resize(db, CX + 5, body_y + 25, inner_w, inner_h);
+    }
+    if (app.gl_display) |glw| {
+        cfltk.Fl_Gl_Window_resize(glw, CX + 5, body_y + 25, inner_w, inner_h);
+    }
+}
+
 // Console timer — polls serial ring buffer and updates Fl_Browser widget.
 fn consoleTimerCB(_: ?*anyopaque) callconv(.c) void {
     if (app.modal_active) { _ = cfltk.Fl_repeat_timeout(0.5, consoleTimerCB, null); return; }
     if (app.console_widget) |cw| {
         app.serial_mutex.lock();
         if (app.serial_len > 0) {
-            const n = app.serial_len;
+            const n = @min(app.serial_len, console_line_buf.len);
             @memcpy(console_line_buf[0..n], app.serial_buf[0..n]);
             app.serial_len = 0;
-            app.serial_mutex.unlock();
             const valid_len = termfilter.sanitize(&console_line_buf, n);
             if (valid_len > 0) {
                 console_line_buf[valid_len] = 0;
                 cfltk.Fl_Browser_add(cw, @ptrCast(&console_line_buf));
             }
+            app.serial_mutex.unlock();
         } else {
             app.serial_mutex.unlock();
         }
@@ -1673,9 +1841,6 @@ fn searchCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
 }
 
 
-/// Copy+swap a BGRA framebuffer to RGBA, wrap in an Fl_RGB_Image,
-/// scale to fit the display box, and attach it.
-
 // Timer callback — checks VM liveness, connects display, refreshes UI every 2 seconds.
 // Also runs AutoProtect snapshot scheduling for VMs with autoprotect enabled.
 fn timerCB(_: ?*anyopaque) callconv(.c) void {
@@ -1690,6 +1855,7 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
             if (!alive) {
                 changed = true;
                 app.vm_started[i] = 0;
+                v.status = .stopped;
                 if (app.vnc_client) |vc| { vc.disconnect(); vc.free(); app.vnc_client = null; }
                 if (app.spice_client) |sc| { sc.disconnect(); sc.free(); app.spice_client = null; }
                 display_mod.clearDisplay();
@@ -1762,6 +1928,8 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                         if (app.spice_client) |sc| {
                             if (!sc.connect("127.0.0.1", @intCast(v.spice_port))) {
                                 app.setStatusErr("SPICE connect failed — retrying in 2s");
+                            } else {
+                                display_gl.showGL();
                             }
                         }
                     } else {
@@ -1769,6 +1937,8 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                         if (app.vnc_client) |vc| {
                             if (!vc.connect("127.0.0.1", @intCast(v.vnc_port))) {
                                 app.setStatusErr("VNC connect failed — retrying in 2s");
+                            } else {
+                                display_gl.showGL();
                             }
                         }
                     }
@@ -1783,7 +1953,56 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
     _ = cfltk.Fl_repeat_timeout(2.0, timerCB, null);
 }
 
-
+/// Re-apply palette colors to all toolbar buttons on theme switch.
+fn themeToolbarButtons() void {
+    // Row 1 — action buttons (indices 0..14)
+    const colors1 = [_]struct { bg: u32, fg: u32 }{
+        .{ .bg = app.pal.accent,   .fg = app.pal.accent_text }, // 0: New VM
+        .{ .bg = app.pal.success,  .fg = app.pal.accent_text }, // 1: Power On
+        .{ .bg = app.pal.warn,     .fg = app.pal.accent_text }, // 2: Suspend
+        .{ .bg = app.pal.amber,    .fg = app.pal.dark_text },   // 3: Pause
+        .{ .bg = app.pal.success,  .fg = app.pal.accent_text }, // 4: Resume
+        .{ .bg = app.pal.danger,   .fg = app.pal.accent_text }, // 5: Shut Down
+        .{ .bg = app.pal.danger,   .fg = app.pal.accent_text }, // 6: Reset
+        .{ .bg = app.pal.accent,   .fg = app.pal.accent_text }, // 7: Settings
+        .{ .bg = app.pal.accent,   .fg = app.pal.accent_text }, // 8: Export OVF
+        .{ .bg = app.pal.accent,   .fg = app.pal.accent_text }, // 9: Clone
+        .{ .bg = app.pal.accent,   .fg = app.pal.accent_text }, // 10: Snapshot
+        .{ .bg = app.pal.accent,   .fg = app.pal.accent_text }, // 11: Ctrl+Alt+Del
+        .{ .bg = app.pal.gray_btn, .fg = app.pal.accent_text }, // 12: Home
+        .{ .bg = app.pal.success,  .fg = app.pal.accent_text }, // 13: Start All
+        .{ .bg = app.pal.danger,   .fg = app.pal.accent_text }, // 14: Stop All
+    };
+    // Row 2 — utility buttons (indices 15..23)
+    const colors2 = [_]struct { bg: u32, fg: u32 }{
+        .{ .bg = app.pal.accent,   .fg = app.pal.accent_text }, // 15: Import
+        .{ .bg = app.pal.accent,   .fg = app.pal.accent_text }, // 16: Rename
+        .{ .bg = app.pal.danger,   .fg = app.pal.accent_text }, // 17: Delete
+        .{ .bg = app.pal.gray_btn, .fg = app.pal.amber },       // 18: ★ Fav
+        .{ .bg = app.pal.gray_btn, .fg = app.pal.accent_text }, // 19: VNet
+        .{ .bg = app.pal.gray_btn, .fg = app.pal.accent_text }, // 20: Prefs
+        .{ .bg = app.pal.accent,   .fg = app.pal.accent_text }, // 21: Migrate
+        .{ .bg = app.pal.success,  .fg = app.pal.accent_text }, // 22: Web Start
+        .{ .bg = app.pal.danger,   .fg = app.pal.accent_text }, // 23: Web Stop
+    };
+    var idx: usize = 0;
+    for (colors1) |c| {
+        if (idx >= toolbar_btns_len) return;
+        if (toolbar_btns[idx]) |btn| {
+            cfltk.Fl_Button_set_color(btn, c.bg);
+            cfltk.Fl_Button_set_label_color(btn, c.fg);
+        }
+        idx += 1;
+    }
+    for (colors2) |c| {
+        if (idx >= toolbar_btns_len) return;
+        if (toolbar_btns[idx]) |btn| {
+            cfltk.Fl_Button_set_color(btn, c.bg);
+            cfltk.Fl_Button_set_label_color(btn, c.fg);
+        }
+        idx += 1;
+    }
+}
 
 pub fn main() void {
     app.vm_count = persist.load(&app.vms, std.heap.page_allocator, &app.prefs);
@@ -1835,21 +2054,25 @@ pub fn main() void {
     app.toolbar_bg = @ptrCast(tb);
     cfltk.Fl_Box_set_box(tb, 4); // FL_THIN_UP_BOX
     cfltk.Fl_Box_set_color(tb, app.pal.border);
-    const new_btn = cfltk.Fl_Button_new(5, tb_y + 3, 80, 34, "New VM");
-    const start_btn = cfltk.Fl_Button_new(90, tb_y + 3, 80, 34, "Power On");
-    const susp_btn = cfltk.Fl_Button_new(175, tb_y + 3, 80, 34, "Suspend");
-    const pause_btn = cfltk.Fl_Button_new(260, tb_y + 3, 80, 34, "Pause");
-    const resume_btn = cfltk.Fl_Button_new(345, tb_y + 3, 80, 34, "Resume");
-    const sd_btn = cfltk.Fl_Button_new(430, tb_y + 3, 80, 34, "Shut Down");
-    const rst_btn = cfltk.Fl_Button_new(515, tb_y + 3, 80, 34, "Reset");
-    const set_btn = cfltk.Fl_Button_new(600, tb_y + 3, 80, 34, "Settings");
-    const export_ovf_btn = cfltk.Fl_Button_new(685, tb_y + 3, 75, 34, "Export");
-    const clone_btn = cfltk.Fl_Button_new(765, tb_y + 3, 70, 34, "Clone");
-    const snap_btn = cfltk.Fl_Button_new(840, tb_y + 3, 75, 34, "Snapshot");
-    const cad_btn = cfltk.Fl_Button_new(920, tb_y + 3, 80, 34, "Ctrl+Alt+Del");
-    const home_btn = cfltk.Fl_Button_new(1005, tb_y + 3, 70, 34, "Home");
-    const batch_start_btn = cfltk.Fl_Button_new(1080, tb_y + 3, 55, 34, "Start All");
-    const batch_stop_btn = cfltk.Fl_Button_new(1140, tb_y + 3, 55, 34, "Stop All");
+
+    // ── Toolbar button creation (positions set by repositionToolbars below) ──
+    const placeholder: i32 = 0;
+
+    const new_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "New VM");
+    const start_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Power On");
+    const susp_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Suspend");
+    const pause_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Pause");
+    const resume_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Resume");
+    const sd_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Shut Down");
+    const rst_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Reset");
+    const set_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Settings");
+    const export_ovf_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Export");
+    const clone_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Clone");
+    const snap_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Snapshot");
+    const cad_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Ctrl+Alt+Del");
+    const home_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Home");
+    const batch_start_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Start All");
+    const batch_stop_btn = cfltk.Fl_Button_new(placeholder, tb_y, placeholder, 34, "Stop All");
 
     // Tooltips
     cfltk.Fl_Button_set_tooltip(new_btn, "Create a new virtual machine (Ctrl+N)");
@@ -1903,21 +2126,22 @@ pub fn main() void {
 
     // ── Utility toolbar (row 2) ── Import · Rename · Delete | VNet · Prefs | Web Start · Web Stop
     const utb_y: i32 = 68;
-    const utb = cfltk.Fl_Box_new(0, utb_y, WW, 42, "");
+    const utb = cfltk.Fl_Box_new(0, utb_y, WW, 40, "");
+    app.toolbar_util_bg = @ptrCast(utb);
     cfltk.Fl_Box_set_box(utb, 4);
     cfltk.Fl_Box_set_color(utb, app.pal.border);
 
-    const import_btn = cfltk.Fl_Button_new(5, utb_y + 3, 70, 34, "Import");
-    const rename_btn = cfltk.Fl_Button_new(80, utb_y + 3, 70, 34, "Rename");
-    const del_btn = cfltk.Fl_Button_new(155, utb_y + 3, 70, 34, "Delete");
-    const fav_btn = cfltk.Fl_Button_new(230, utb_y + 3, 65, 34, "★ Fav");
+    const import_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Import");
+    const rename_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Rename");
+    const del_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Delete");
+    const fav_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "★ Fav");
 
-    const vnet_btn = cfltk.Fl_Button_new(300, utb_y + 3, 70, 34, "VNet");
-    const pref_btn = cfltk.Fl_Button_new(375, utb_y + 3, 70, 34, "Prefs");
-    const migrate_btn = cfltk.Fl_Button_new(450, utb_y + 3, 70, 34, "Migrate");
+    const vnet_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "VNet");
+    const pref_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Prefs");
+    const migrate_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Migrate");
 
-    const ws_start_btn = cfltk.Fl_Button_new(525, utb_y + 3, 70, 34, "Web Start");
-    const ws_stop_btn = cfltk.Fl_Button_new(600, utb_y + 3, 70, 34, "Web Stop");
+    const ws_start_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Web Start");
+    const ws_stop_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Web Stop");
 
     // Tooltips
     cfltk.Fl_Button_set_tooltip(import_btn, "Import a VM from a .vmdk or .qcow2 disk image");
@@ -1952,6 +2176,35 @@ pub fn main() void {
     cfltk.Fl_Button_set_callback(ws_start_btn, webStartCB, null);
     cfltk.Fl_Button_set_callback(ws_stop_btn, webStopCB, null);
 
+    // Register toolbar buttons for live theme updates.
+    toolbar_btns[0] = @ptrCast(new_btn);
+    toolbar_btns[1] = @ptrCast(start_btn);
+    toolbar_btns[2] = @ptrCast(susp_btn);
+    toolbar_btns[3] = @ptrCast(pause_btn);
+    toolbar_btns[4] = @ptrCast(resume_btn);
+    toolbar_btns[5] = @ptrCast(sd_btn);
+    toolbar_btns[6] = @ptrCast(rst_btn);
+    toolbar_btns[7] = @ptrCast(set_btn);
+    toolbar_btns[8] = @ptrCast(export_ovf_btn);
+    toolbar_btns[9] = @ptrCast(clone_btn);
+    toolbar_btns[10] = @ptrCast(snap_btn);
+    toolbar_btns[11] = @ptrCast(cad_btn);
+    toolbar_btns[12] = @ptrCast(home_btn);
+    toolbar_btns[13] = @ptrCast(batch_start_btn);
+    toolbar_btns[14] = @ptrCast(batch_stop_btn);
+    toolbar_btns[15] = @ptrCast(import_btn);
+    toolbar_btns[16] = @ptrCast(rename_btn);
+    toolbar_btns[17] = @ptrCast(del_btn);
+    toolbar_btns[18] = @ptrCast(fav_btn);
+    toolbar_btns[19] = @ptrCast(vnet_btn);
+    toolbar_btns[20] = @ptrCast(pref_btn);
+    toolbar_btns[21] = @ptrCast(migrate_btn);
+    toolbar_btns[22] = @ptrCast(ws_start_btn);
+    toolbar_btns[23] = @ptrCast(ws_stop_btn);
+    toolbar_btns_len = 24;
+    repositionToolbars(WW);
+    app.toolbar_theme_cb = &themeToolbarButtons;
+
     const body_y: i32 = 112;
     const body_h: i32 = WH - body_y - 26;
     const SW: i32 = 200;
@@ -1967,8 +2220,10 @@ pub fn main() void {
     cfltk.Fl_Box_set_label_size(lib_hdr, 13);
     const b = cfltk.Fl_Browser_new(2, body_y + 22, SW - 4, body_h - 45, "");
     app.browser = @ptrCast(b);
+    app.themeBrowser(@ptrCast(b));
     cfltk.Fl_Browser_set_callback(b, browserCB, null);
     const si = cfltk.Fl_Input_new(2, body_y + body_h - 20, SW - 4, 18, "");
+    app.themeInput(@ptrCast(si));
     app.search_input = @ptrCast(si);
     cfltk.Fl_Input_set_callback(si, searchCB, null);
     cfltk.Fl_Input_set_tooltip(si, "Filter VMs by name (Ctrl+F)");
@@ -2029,6 +2284,7 @@ pub fn main() void {
 
     // Display tab
     const dg = cfltk.Fl_Group_new(CX, body_y + 20, CW, body_h - 20, "Display");
+    app.display_group = @ptrCast(dg);
     const db = cfltk.Fl_Box_new(CX + 5, body_y + 25, CW - 10, body_h - 30, "▸ Power on a VM to start display\n▸ VNC and SPICE displays appear here");
     cfltk.Fl_Box_set_box(db, 8); // FL_BORDER_BOX
     cfltk.Fl_Box_set_color(db, app.pal.surface);
@@ -2047,6 +2303,7 @@ pub fn main() void {
     const cg = cfltk.Fl_Group_new(CX, body_y + 20, CW, body_h - 20, "Console");
     const cb = cfltk.Fl_Browser_new(CX + 5, body_y + 25, CW - 10, body_h - 30, "");
     app.console_widget = @ptrCast(cb);
+    app.themeBrowser(@ptrCast(cb));
     _ = cfltk.Fl_Browser_add(cb, "Serial console — not connected.");
     cfltk.Fl_Group_end(@ptrCast(cg));
 
@@ -2060,11 +2317,21 @@ pub fn main() void {
     app.status_bar = @ptrCast(sb);
 
     cfltk.Fl_Window_end(win);
+    cfltk.Fl_Window_resize_callback(win, &handleWindowResize, null);
     cfltk.Fl_Window_show(win);
 
-    // Restore saved window position.
+    // Restore saved window geometry, or maximise to fill available screen space on first launch.
     if (app.prefs.win_x >= 0 and app.prefs.win_y >= 0) {
         _ = cfltk.Fl_Window_resize(win, app.prefs.win_x, app.prefs.win_y, WW, WH);
+    } else {
+        // First launch: fill the screen (minus a small margin for panels/taskbars).
+        const screen_w = cfltk.Fl_w();
+        const screen_h = cfltk.Fl_h();
+        const margin_x: i32 = @divTrunc(screen_w, 32); // ~3%
+        const margin_y: i32 = @divTrunc(screen_h, 20); // ~5%
+        const max_w = @max(WW, screen_w - margin_x * 2);
+        const max_h = @max(WH, screen_h - margin_y * 2);
+        _ = cfltk.Fl_Window_resize(win, margin_x, margin_y, max_w, max_h);
     }
 
     app.refreshBrowser();

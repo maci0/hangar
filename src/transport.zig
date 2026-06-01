@@ -105,7 +105,7 @@ pub const Connection = struct {
             conn.fd = switch (url.proto) {
                 .unix => connectUnixFd(url),
                 .tcp => connectTcpFd(url),
-                .shm => unreachable,
+                .shm => -1, // handled above
             };
             if (conn.fd < 0) return null;
         }

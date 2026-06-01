@@ -9,7 +9,10 @@ Zig 0.16.0 + FLTK 1.4 (via cfltk C bindings). No libvirt dependency.
 zig build              # Compile FLTK frontend -> zig-out/bin/kvmgui
 zig build run          # Build + launch the FLTK GUI
 zig build web          # Build + launch web backend (HTTP on :9080)
-zig build test         # Run ALL unit + fuzz tests (17 modules + HV)
+zig build test         # Run ALL unit + fuzz tests (29 modules + HV)
+zig build smoke        # Xvfb GUI smoke test (create + settings + about)
+zig build fuzzgui      # Xvfb random event-storm fuzz
+zig build fuzzmodals   # Xvfb direct-fuzz modal callbacks
 ```
 
 ### Running a single test file
@@ -56,7 +59,7 @@ src/
   termfilter.zig    Terminal output sanitization
   fbmath.zig        Framebuffer geometry math (fbFits)
   uimath.zig        UI math helpers (coordinate mapping, mem-bar, socket paths)
-  snapparse.zig     Snapshot table parser
+  snapparse.zig     Snapshot table parser (QMP + HMP variants)
   ovf.zig           OVF descriptor builder
   autoprotect.zig   AutoProtect snapshot scheduling logic
   transport.zig     Transport abstraction (Unix/TCP/SHM) for client↔daemon

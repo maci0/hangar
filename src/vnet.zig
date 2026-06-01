@@ -315,7 +315,9 @@ pub fn save(set: *const NetworkSet) !void {
 
     var dir_buf: [512]u8 = undefined;
     if (getDir(&dir_buf)) |dir_path| {
-        std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {};
+        std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
+            _ = std.c.write(2, "vnet: createDirPath failed\n", 27);
+        };
     }
 
     var path_buf: [512]u8 = undefined;

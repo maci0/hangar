@@ -4,72 +4,77 @@
 
 ```
 zig build test
-→ All tests pass (1425/1425 across 29 modules)
+→ All tests pass across 31 modules (~1745 tests)
 ```
 
 ## Pure Module Tests
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| `vm.zig` | ~99 | Config model, enums, serialization |
-| `web_server.zig` | ~66 | HTTP API handlers, JSON rendering |
-| `persist.zig` | ~42 | JSON parse/emit, VmJson mapping |
-| `qemu.zig` | ~32 | QEMU arg builder, OVMF detection |
-| `qmp.zig` | ~25 | QMP protocol parser |
-| `vmrun.zig` | ~25 | VM lifecycle runner |
-| `vnet.zig` | ~36 | Virtual network model |
-| `form_parsers.zig` | ~28 | Form data parse/emit |
-| `fbmath.zig` | ~10 | Math utilities |
-| `ringbuf.zig` | ~9 | Ring buffer operations |
-| `uimath.zig` | ~10 | UI positioning math |
-| `snapparse.zig` | ~17 | Snapshot output parser |
-| `termfilter.zig` | ~4 | Terminal escape filter |
-| `ovf.zig` | ~10 | OVF manifest generation |
-| `autoprotect.zig` | ~11 | Auto-snapshot logic |
-| `sync.zig` | ~5 | SpinMutex operations |
-| `usock.zig` | ~3 | Unix socket operations |
-| `appio.zig` | ~3 | I/O + env helpers |
-| `hv/interface.zig` | ~7 | Accelerator detection |
-| `hv/qemu_backend.zig` | ~7 | QEMU backend dispatch |
-| `path_helpers.zig` | ~13 | Path manipulation |
-| `urlencode.zig` | ~9 | URL encoding/decoding |
-| `ws.zig` | ~11 | WebSocket protocol |
-| `transport.zig` | ~8 | HTTP transport |
-| `filter.zig` | ~7 | Request filtering |
-| `remote.zig` | ~6 | Remote config |
-| `vnet_label.zig` | ~6 | Network label helpers |
-| `spice_client.zig` | ~4 | SPICE client wrappers |
-| `vnc_client.zig` | ~4 | VNC client wrappers |
+| `vm.zig` | 114 | Config model, enums, serialization |
+| `web_server.zig` | 83 | HTTP API handlers, JSON rendering, body parsing, auth, validation, isAuthExempt, clampPref |
+| `persist.zig` | 43 | JSON parse/emit, VmJson mapping |
+| `qemu.zig` | 36 | QEMU arg builder, OVMF detection, snapshot funcs |
+| `qmp.zig` | 32 | QMP protocol parser, unicode escapes |
+| `vmrun.zig` | 25 | CLI operations, JSON extraction |
+| `vnet.zig` | 36 | Virtual network model, JSON/validation |
+| `form_parsers.zig` | 28 | Form data parse/emit, enum fromStr |
+| `fbmath.zig` | 10 | Math utilities |
+| `ringbuf.zig` | 9 | Ring buffer operations |
+| `serialpath.zig` | 6 | Serial Unix-socket path builder |
+| `uimath.zig` | 10 | UI positioning math |
+| `snapparse.zig` | 17 | Snapshot output parser (QMP + HMP variants) |
+| `termfilter.zig` | 4 | Terminal escape filter |
+| `ovf.zig` | 10 | OVF manifest generation |
+| `autoprotect.zig` | 11 | Auto-snapshot logic |
+| `sync.zig` | 5 | SpinMutex operations |
+| `usock.zig` | 3 | Unix socket operations |
+| `appio.zig` | 3 | I/O + env helpers |
+| `hv/interface.zig` | 7 | Accelerator detection |
+| `hv/qemu_backend.zig` | 7 | QEMU backend dispatch |
+| `path_helpers.zig` | 13 | Path manipulation |
+| `urlencode.zig` | 20 | URL encoding/decoding |
+| `ws.zig` | 11 | WebSocket protocol (RFC 6455) |
+| `transport.zig` | 8 | HTTP transport, URL parsing, IPv6 |
+| `filter.zig` | 7 | Request filtering |
+| `vmlist.zig` | 8 | VM browser line→index mapping |
+| `remote.zig` | 6 | Remote config |
+| `vnet_label.zig` | 6 | Network label helpers |
+| `spice_client.zig` | 4 | SPICE client wrappers |
+| `vnc_client.zig` | 4 | VNC client wrappers |
 
-## Integration Tests
+## Integration Tests (GUI — FLTK)
 
 ```bash
-zig build itest        # Headless IUP integration (Xvfb)
-zig build cbfuzz       # Headless: direct-fuzz main.zig GUI callbacks
-bash tests/smoke_gui.sh   # Xvfb+XTEST: drives the running app
-bash tests/fuzz_gui.sh    # Xvfb+XTEST: random event-storm fuzz
-bash tests/fuzz_modals.sh # Xvfb: direct-fuzz modal callbacks
+zig build smoke        # Xvfb: launch app, create VM, settings, about
+zig build fuzzgui      # Xvfb: random event-storm fuzz of the full GUI
+zig build fuzzmodals   # Xvfb: direct-fuzz modal callbacks with Escape watchdog
+```
+
+## Web Backend Tests
+
+```bash
+zig build web          # Build + launch web backend (HTTP on :9080)
 bash tests/test_web_api.sh  # Curl-based HTTP API validation
 ```
 
 ## Visual Tests (FLTK)
 
 ```bash
-python3 tests/visual/test_fltk_comprehensive.py
+python3 tests/visual/e2e_fltk_screenshots.sh   # Xvfb screenshots — 22 dialogs
+python3 tests/visual/e2e_web_screenshots.mjs   # Puppeteer screenshots — web UI interaction flow
 ```
-
-Captures screenshots under Xvfb, validates non-blank UI with PIL ImageStat.
-Home page: 1280x800, stddev=99 (visible content confirmed).
 
 ## Running Tests
 
 ```bash
-zig build test                              # All 1425 unit/fuzz tests
-zig build                                   # Build both frontends
-python3 tests/visual/test_fltk.py           # FLTK visual
+zig build test                              # All unit + fuzz tests
+zig build                                   # Build FLTK frontend
+zig build web                               # Build web backend
+python3 tests/visual/test_fltk.py           # FLTK visual (single screenshot)
 ```
 
 ## Known Issues
 
-- No known issues — all 1425 tests pass
+- No known issues — all tests pass
 

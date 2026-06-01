@@ -24,17 +24,17 @@ pub fn aboutDialog() void {
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
     const ah = cfltk.Fl_Box_new(10, 10, 420, 30, "KVMGUI v1.0");
-    cfltk.Fl_Box_set_label_font(ah, 1); cfltk.Fl_Box_set_label_color(ah, app.pal.header);
+    cfltk.Fl_Box_set_color(ah, app.pal.bg); cfltk.Fl_Box_set_label_font(ah, 1); cfltk.Fl_Box_set_label_color(ah, app.pal.header);
     cfltk.Fl_Box_set_label_size(ah, 18);
     const ad1 = cfltk.Fl_Box_new(10, 45, 420, 20, "Lightweight QEMU/KVM Virtual Machine Manager");
-    cfltk.Fl_Box_set_label_color(ad1, app.pal.text_dim);
+    cfltk.Fl_Box_set_color(ad1, app.pal.bg); cfltk.Fl_Box_set_label_color(ad1, app.pal.text_dim);
     const ad2 = cfltk.Fl_Box_new(10, 68, 420, 20, "Built with Zig 0.16 + FLTK 1.4");
-    cfltk.Fl_Box_set_label_color(ad2, app.pal.text_dim);
+    cfltk.Fl_Box_set_color(ad2, app.pal.bg); cfltk.Fl_Box_set_label_color(ad2, app.pal.text_dim);
     const ad3 = cfltk.Fl_Box_new(10, 95, 420, 55, "Features: VM management, VNC/SPICE display, serial console,\nsnapshots, OVF export, AutoProtect, virtual networks");
-    cfltk.Fl_Box_set_label_color(ad3, app.pal.text_dim);
+    cfltk.Fl_Box_set_color(ad3, app.pal.bg); cfltk.Fl_Box_set_label_color(ad3, app.pal.text_dim);
     // Keyboard shortcuts header
     const ksh = cfltk.Fl_Box_new(10, 158, 420, 22, "Keyboard Shortcuts");
-    cfltk.Fl_Box_set_label_font(ksh, 1); cfltk.Fl_Box_set_label_color(ksh, app.pal.header);
+    cfltk.Fl_Box_set_color(ksh, app.pal.bg); cfltk.Fl_Box_set_label_font(ksh, 1); cfltk.Fl_Box_set_label_color(ksh, app.pal.header);
     cfltk.Fl_Box_set_label_size(ksh, 13);
     const ks_sep = cfltk.Fl_Box_new(10, 182, 420, 2, "");
     cfltk.Fl_Box_set_box(ks_sep, 1); cfltk.Fl_Box_set_color(ks_sep, app.pal.border);
@@ -47,13 +47,13 @@ pub fn aboutDialog() void {
         \\Ctrl+F      Search / Filter     F5            Refresh
     ;
     const ks_box = cfltk.Fl_Box_new(10, 190, 420, 100, ks_text);
-    cfltk.Fl_Box_set_label_font(ks_box, 4); // FL_COURIER
+    cfltk.Fl_Box_set_color(ks_box, app.pal.bg); cfltk.Fl_Box_set_label_font(ks_box, 4); // FL_COURIER
     cfltk.Fl_Box_set_label_color(ks_box, app.pal.text_dim);
     cfltk.Fl_Box_set_label_size(ks_box, 12);
     const ad4 = cfltk.Fl_Box_new(10, 300, 420, 20, "Pure modules: 586 tests passing");
-    cfltk.Fl_Box_set_label_color(ad4, app.pal.text_dim);
+    cfltk.Fl_Box_set_color(ad4, app.pal.bg); cfltk.Fl_Box_set_label_color(ad4, app.pal.text_dim);
     const web_hint = cfltk.Fl_Box_new(10, 324, 420, 20, "Web UI: http://localhost:9080  |  docs: docs/README.md");
-    cfltk.Fl_Box_set_label_color(web_hint, app.pal.text_dim);
+    cfltk.Fl_Box_set_color(web_hint, app.pal.bg); cfltk.Fl_Box_set_label_color(web_hint, app.pal.text_dim);
     const cb = cfltk.Fl_Button_new(350, 370, 80, 30, "OK");
     cfltk.Fl_Button_set_color(cb, app.pal.accent); cfltk.Fl_Button_set_label_color(cb, app.pal.accent_text);
     const OK = struct { fn g(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
@@ -74,36 +74,49 @@ pub fn prefsDialog() void {
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
 
     const ph = cfltk.Fl_Box_new(10, 10, 400, 22, "Defaults for new VMs");
+    cfltk.Fl_Box_set_color(ph, app.pal.bg);
     cfltk.Fl_Box_set_label_font(ph, 1); cfltk.Fl_Box_set_label_color(ph, app.pal.header);
     cfltk.Fl_Box_set_label_size(ph, 14);
 
     const pl0 = cfltk.Fl_Box_new(10, 40, 130, 20, "Default Memory (MB):");
+    cfltk.Fl_Box_set_color(pl0, app.pal.bg);
     cfltk.Fl_Box_set_label_font(pl0, 1); cfltk.Fl_Box_set_label_color(pl0, app.pal.text_dim);
     var mb: [16]u8 = undefined;
     const mem_input = cfltk.Fl_Input_new(140, 38, 270, 24, std.fmt.bufPrintZ(&mb, "{d}", .{app.prefs.default_memory_mb}) catch "2048");
+    app.themeInput(@ptrCast(mem_input));
     const pl1 = cfltk.Fl_Box_new(10, 70, 130, 20, "Default CPU Cores:");
+    cfltk.Fl_Box_set_color(pl1, app.pal.bg);
     cfltk.Fl_Box_set_label_font(pl1, 1); cfltk.Fl_Box_set_label_color(pl1, app.pal.text_dim);
     var cb2: [16]u8 = undefined;
     const cpu_input = cfltk.Fl_Input_new(140, 68, 270, 24, std.fmt.bufPrintZ(&cb2, "{d}", .{app.prefs.default_cpu_cores}) catch "2");
+    app.themeInput(@ptrCast(cpu_input));
 
     const pl2 = cfltk.Fl_Box_new(10, 100, 130, 20, "AutoProtect:");
+    cfltk.Fl_Box_set_color(pl2, app.pal.bg);
     cfltk.Fl_Box_set_label_font(pl2, 1); cfltk.Fl_Box_set_label_color(pl2, app.pal.text_dim);
     const ap_check = cfltk.Fl_Check_Button_new(140, 98, 20, 24, "");
+    app.themeCheckButton(@ptrCast(ap_check));
     cfltk.Fl_Check_Button_set_value(ap_check, if (app.prefs.autoprotect_enabled_default) 1 else 0);
 
     const pl3 = cfltk.Fl_Box_new(10, 130, 130, 20, "Snapshot Interval (min):");
+    cfltk.Fl_Box_set_color(pl3, app.pal.bg);
     cfltk.Fl_Box_set_label_font(pl3, 1); cfltk.Fl_Box_set_label_color(pl3, app.pal.text_dim);
     var ab: [16]u8 = undefined;
     const ap_int_input = cfltk.Fl_Input_new(140, 128, 270, 24, std.fmt.bufPrintZ(&ab, "{d}", .{app.prefs.autoprotect_interval_min_default}) catch "60");
+    app.themeInput(@ptrCast(ap_int_input));
 
     const pl4 = cfltk.Fl_Box_new(10, 160, 130, 20, "Max Snapshots:");
+    cfltk.Fl_Box_set_color(pl4, app.pal.bg);
     cfltk.Fl_Box_set_label_font(pl4, 1); cfltk.Fl_Box_set_label_color(pl4, app.pal.text_dim);
     var ac: [16]u8 = undefined;
     const ap_max_input = cfltk.Fl_Input_new(140, 158, 270, 24, std.fmt.bufPrintZ(&ac, "{d}", .{app.prefs.autoprotect_max_default}) catch "10");
+    app.themeInput(@ptrCast(ap_max_input));
 
     const th = cfltk.Fl_Box_new(10, 195, 130, 20, "Theme:");
+    cfltk.Fl_Box_set_color(th, app.pal.bg);
     cfltk.Fl_Box_set_label_font(th, 1); cfltk.Fl_Box_set_label_color(th, app.pal.text_dim);
     const theme_choice = cfltk.Fl_Choice_new(140, 192, 270, 24, "");
+    app.themeChoice(@ptrCast(theme_choice));
     _ = cfltk.Fl_Choice_add_choice(theme_choice, "System");
     _ = cfltk.Fl_Choice_add_choice(theme_choice, "Light");
     _ = cfltk.Fl_Choice_add_choice(theme_choice, "Dark");
@@ -199,8 +212,10 @@ pub fn vnetDialog() void {
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
     const vh = cfltk.Fl_Box_new(10, 10, 560, 20, "Virtual Network switches (VMnet):");
+    cfltk.Fl_Box_set_color(vh, app.pal.bg);
     cfltk.Fl_Box_set_label_font(vh, 1); cfltk.Fl_Box_set_label_color(vh, app.pal.header);
     const net_list = cfltk.Fl_Browser_new(10, 35, 560, 260, "");
+    app.themeBrowser(@ptrCast(net_list));
     for (0..net_set.count) |i| {
         const net = &net_set.nets[i];
         var line: [256]u8 = undefined;
@@ -308,6 +323,7 @@ pub fn vnetDialog() void {
 pub fn exportOvfDialog() void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
+    if (ovf_conv_pid != -1) { app.setStatus("A disk conversion is already in progress — please wait"); return; }
     const v = &app.vms[idx];
     if (!v.hasDisk()) { app.setStatus("VM has no disk — cannot export OVF"); return; }
 
@@ -353,21 +369,59 @@ pub fn exportOvfDialog() void {
             app.setStatus("OVF saved, but VMDK path buffer allocation failed");
             return;
         };
-        defer std.heap.page_allocator.free(vmdk_full);
+        // NOTE: vmdk_full is freed by checkOvfConversion on completion.
+
         if (app.getVmmHandle(idx)) |h| {
             app.g_vmm.convertDiskFn(h, disk_path, vmdk_full, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
+                std.heap.page_allocator.free(vmdk_full);
                 app.setStatus("OVF saved, but VMDK conversion failed (qemu-img missing?)");
                 return;
             };
+            std.heap.page_allocator.free(vmdk_full);
+            app.setStatus("OVF package exported successfully");
         } else {
-            qemu.convertDiskImage(disk_path, v.disk_format, vmdk_full, .vmdk, std.heap.page_allocator) catch {
-                app.setStatus("OVF saved, but VMDK conversion failed (qemu-img missing?)");
+            // Async conversion — returns immediately so UI stays responsive.
+            ovf_conv_pid = qemu.convertDiskImageNoWait(disk_path, v.disk_format, vmdk_full, .vmdk, std.heap.page_allocator) catch {
+                std.heap.page_allocator.free(vmdk_full);
+                app.setStatus("OVF saved, but VMDK conversion failed to start");
                 return;
             };
+            ovf_conv_vmdk = vmdk_full;
+            _ = cfltk.Fl_add_timeout(0.5, checkOvfConversion, null);
+            app.setStatus("Converting disk image for OVF export... will notify when done");
         }
+    } else {
+        app.setStatus("OVF package exported successfully");
+    }
+}
+
+// ── Async OVF conversion state ──────────────────────────────────────
+
+var ovf_conv_pid: std.c.pid_t = -1;
+var ovf_conv_vmdk: ?[*:0]u8 = null;
+
+fn checkOvfConversion(_: ?*anyopaque) callconv(.c) void {
+    if (ovf_conv_pid == -1) return;
+
+    const result = qemu.tryReapChild(ovf_conv_pid);
+    if (result == null) {
+        // Still running — poll again in 0.5 s.
+        _ = cfltk.Fl_repeat_timeout(0.5, checkOvfConversion, null);
+        return;
     }
 
-    app.setStatus("OVF package exported successfully");
+    if (ovf_conv_vmdk) |p| {
+        std.heap.page_allocator.free(std.mem.span(p));
+        ovf_conv_vmdk = null;
+    }
+
+    if (result.? == true) {
+        app.setStatus("OVF package exported successfully");
+    } else {
+        app.setStatus("OVF saved, but VMDK conversion failed");
+    }
+
+    ovf_conv_pid = -1;
 }
 
 pub fn remoteConnectDialog() void {
@@ -375,18 +429,24 @@ pub fn remoteConnectDialog() void {
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
     const rl0 = cfltk.Fl_Box_new(10, 10, 400, 20, "Server URL: unix:///path | http://host:port | shm:///name");
+    cfltk.Fl_Box_set_color(rl0, app.pal.bg);
     cfltk.Fl_Box_set_label_font(rl0, 1); cfltk.Fl_Box_set_label_color(rl0, app.pal.text_dim);
     const url_input = cfltk.Fl_Input_new(10, 35, 400, 24, "");
+    app.themeInput(@ptrCast(url_input));
     cfltk.Fl_Input_set_text_font(url_input, 4); // monospace URL
     const rl1 = cfltk.Fl_Box_new(10, 70, 400, 20, "Auth token (optional):");
+    cfltk.Fl_Box_set_color(rl1, app.pal.bg);
     cfltk.Fl_Box_set_label_font(rl1, 1); cfltk.Fl_Box_set_label_color(rl1, app.pal.text_dim);
     const token_input = cfltk.Fl_Input_new(10, 95, 400, 24, "");
+    app.themeInput(@ptrCast(token_input));
     cfltk.Fl_Input_set_text_font(token_input, 4); // monospace token
     const connect_btn = cfltk.Fl_Button_new(170, 175, 110, 30, "Connect");
     cfltk.Fl_Button_set_color(connect_btn, app.pal.accent); cfltk.Fl_Button_set_label_color(connect_btn, app.pal.accent_text);
     const local_btn = cfltk.Fl_Button_new(290, 175, 110, 30, "Local Mode");
     cfltk.Fl_Button_set_color(local_btn, app.pal.gray_btn); cfltk.Fl_Button_set_label_color(local_btn, app.pal.accent_text);
     const status_label = cfltk.Fl_Box_new(10, 135, 400, 20, "Currently: Local Mode");
+    cfltk.Fl_Box_set_color(status_label, app.pal.bg);
+    cfltk.Fl_Box_set_label_color(status_label, app.pal.text_dim);
 
     const RD = struct { url: ?*cfltk.Fl_Input, token: ?*cfltk.Fl_Input, status: ?*cfltk.Fl_Box, dlg: ?*cfltk.Fl_Window };
     var rd = RD{ .url = @ptrCast(url_input), .token = @ptrCast(token_input), .status = @ptrCast(status_label), .dlg = @ptrCast(dlg) };
@@ -478,6 +538,7 @@ pub fn migrateDialog() void {
     const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 460, 2), @divTrunc(cfltk.Fl_h() - 240, 2), 460, 240, "Live Migrate VM");
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
+    cfltk.Fl_Window_size_range(dlg, 460, 240, 0, 0);
 
     const vm_name = cfltk.Fl_Box_new(10, 10, 440, 20, "");
     {
@@ -485,14 +546,17 @@ pub fn migrateDialog() void {
         const label = std.fmt.bufPrintZ(&buf, "Migrating: {s}", .{v.getNameSlice()}) catch "Migrating VM";
         cfltk.Fl_Box_set_label(vm_name, label.ptr);
     }
+    cfltk.Fl_Box_set_color(vm_name, app.pal.bg);
     cfltk.Fl_Box_set_label_font(vm_name, 1);
     cfltk.Fl_Box_set_label_color(vm_name, app.pal.header);
 
     const uri_label = cfltk.Fl_Box_new(10, 40, 440, 20, "Destination URI (e.g. tcp:host:4444, unix:/path/socket, exec:cmd):");
+    cfltk.Fl_Box_set_color(uri_label, app.pal.bg);
     cfltk.Fl_Box_set_label_font(uri_label, 1);
     cfltk.Fl_Box_set_label_color(uri_label, app.pal.text_dim);
 
     const uri_input = cfltk.Fl_Input_new(10, 65, 440, 24, "");
+    app.themeInput(@ptrCast(uri_input));
     cfltk.Fl_Input_set_text_font(uri_input, 4);
 
     const migrate_btn = cfltk.Fl_Button_new(100, 195, 110, 30, "Migrate");
@@ -504,6 +568,7 @@ pub fn migrateDialog() void {
     cfltk.Fl_Button_set_label_color(cancel_btn, app.pal.accent_text);
 
     const status_label = cfltk.Fl_Box_new(10, 155, 440, 20, "Enter a destination URI and click Migrate.");
+    cfltk.Fl_Box_set_color(status_label, app.pal.bg);
     cfltk.Fl_Box_set_label_color(status_label, app.pal.text_dim);
 
     const MD = struct {
