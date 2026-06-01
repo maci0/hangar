@@ -27,8 +27,8 @@ function clearSearch(){document.getElementById('search').value='';filterList();}
 function switchTab(tab){if(activeTab===tab)return;activeTab=tab;
 document.getElementById('tabSummary').style.display=tab==='summary'?'block':'none';
 document.getElementById('tabSettings').style.display=tab==='settings'?'block':'none';
-const btns=document.querySelectorAll('.tab-btn');btns.forEach(b=>b.classList.remove('active'));
-if(tab==='summary')btns[0].classList.add('active');else btns[1].classList.add('active');
+const btns=document.querySelectorAll('.tab-btn');btns.forEach(b=>{b.classList.remove('active');b.setAttribute('aria-selected','false');});
+if(tab==='summary'){btns[0].classList.add('active');btns[0].setAttribute('aria-selected','true');}else{btns[1].classList.add('active');btns[1].setAttribute('aria-selected','true');}
 if(tab==='settings'&&sel!==null)editVm();}
 async function refresh(){try{var listEl=document.getElementById('vmlist');if(!vms.length){var skHtml='';for(var i=0;i<6;i++){skHtml+='<div class=\"skeleton sk-item\"></div>';}listEl.innerHTML=skHtml;}const r=await fetch('/api/vms');if(!r.ok)return;vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){console.error('refresh failed:',e);}}
 function filterList(){const f=document.getElementById('search').value;const clr=document.getElementById('searchClear');clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
@@ -37,11 +37,11 @@ const viz=vms.map((v,i)=>({i,show:!f||v.name.toLowerCase().includes(f),fav:v.fav
 let hasFavs=false,hasNon=false;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;}
 for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${escHtml(x.v.name)}<span class="star fav" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}
+h+=`<div class="vm-item${sel===x.i?' active':''}" role="option" aria-selected="${sel===x.i?'true':'false'}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${escHtml(x.v.name)}<span class="star fav" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}
 if(hasFavs&&hasNon)h+='<div style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
 if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-h+=`<div class="vm-item${sel===x.i?' active':''}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${escHtml(x.v.name)}<span class="star" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}}
+h+=`<div class="vm-item${sel===x.i?' active':''}" role="option" aria-selected="${sel===x.i?'true':'false'}" data-vm-index="${x.i}" tabindex="0" data-action="select"><span class="dot ${dotCls}"></span> ${escHtml(x.v.name)}<span class="star" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite">★</span></div>`;}}}
 e.innerHTML=h||'<div style="color:var(--text-dim);font-size:12px">No VMs</div>';
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+' virtual machine(s)';if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
@@ -104,7 +104,7 @@ const lines=t.split('\n');let h='';for(const ln of lines){const tag=ln.trim();if
 h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"><span>${escHtml(tag)}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}">Del</button></span></div>`;}
 el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
 async function revertSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Revert to snapshot "'+tag+'"? This will discard current state.'))return;
-const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);snapdlg.close();}}
+const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);document.getElementById('snapdlg').close();}}
 async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Delete snapshot "'+tag+'"?'))return;
 const r=await apiPost('/api/snapshot/delete/'+sel,'tag='+encodeURIComponent(tag));if(r){loadSnapshots();setStatus('Deleted snapshot: '+tag);}}
 async function sendCad(){if(sel===null)return;const r=await apiPost('/api/cad/'+sel);if(r)setStatus('Ctrl+Alt+Del sent to guest.');}
@@ -157,7 +157,7 @@ for(const f of fields){const[lbl,id,type,val]=f;h+='<div class="field-group">';
 h+=`<label>${lbl}</label>`;
 if(type==='select'&&selects[id]){h+=`<select id="${id}">`;
 for(const[ov,ol]of selects[id])h+=`<option value="${ov}"${ov===String(val)?' selected':''}>${ol}</option>`;
-h+='</select>';}else{h+=`<input id="${id}" type="${type}" value="${val}">`;}
+h+='</select>';}else{h+=`<input id="${id}" type="${type}" value="${escHtml(String(val))}">`;}
 h+='</div>';}
 h+='</div><div class="btn-row" style="margin-top:20px"><button class="btn primary" data-action="saveVm">Save Changes</button></div>';
 document.getElementById('tabSettings').innerHTML=h;}
@@ -173,7 +173,7 @@ let vnetsData=[],vnetIdx=-1;
 async function openVnets(){await loadVnets();document.getElementById('vnetdlg').showModal();}
 async function loadVnets(){try{const r=await fetch('/api/vnets');if(r.ok)vnetsData=await r.json();}catch(e){vnetsData={networks:[]};}renderVnetList();}
 function renderVnetList(){const sel=document.getElementById('vnet_sel');let h='';if(!vnetsData.networks)vnetsData={networks:[]};
-for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const line=n.name+' — '+n.type;h+=`<option value="${i}"${i===vnetIdx?' selected':''}>${line}</option>`;}
+for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const line=escHtml(n.name)+' — '+escHtml(n.type);h+=`<option value="${i}"${i===vnetIdx?' selected':''}>${line}</option>`;}
 sel.innerHTML=h;if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length)showVnetFields(vnetIdx);}
 function onVnetSelect(){const s=document.getElementById('vnet_sel');vnetIdx=parseInt(s.value);if(vnetIdx>=0)showVnetFields(vnetIdx);}
 function showVnetFields(i){const n=vnetsData.networks[i];if(!n)return;

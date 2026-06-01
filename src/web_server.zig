@@ -85,17 +85,21 @@ const O_NONBLOCK: c_int = 2048;
 /// GET /api/vms, /api/health, /api/fb/N, /api/snapshot/list/N, WebSocket upgrade are exempt.
 fn checkAuth(req: []const u8) bool {
     if (auth_token_len > 0) {
-        const key_start = std.mem.indexOf(u8, req, "X-API-Key: ") orelse return false;
+        const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return false;
+        const headers = req[0..hdr_end];
+        const key_start = std.mem.indexOf(u8, headers, "X-API-Key: ") orelse return false;
         const key_val_start = key_start + "X-API-Key: ".len;
-        const key_end = std.mem.indexOfScalar(u8, req[key_val_start..], '\r') orelse (req.len - key_val_start);
-        const provided = req[key_val_start .. key_val_start + key_end];
+        const key_end = std.mem.indexOfScalar(u8, headers[key_val_start..], '\r') orelse (headers.len - key_val_start);
+        const provided = headers[key_val_start .. key_val_start + key_end];
         return std.mem.eql(u8, provided, auth_token[0..auth_token_len]);
     }
     // No custom token set — fall back to built-in API_KEY
-    const key_start = std.mem.indexOf(u8, req, "X-API-Key: ") orelse return false;
+    const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return false;
+    const headers = req[0..hdr_end];
+    const key_start = std.mem.indexOf(u8, headers, "X-API-Key: ") orelse return false;
     const key_val_start = key_start + "X-API-Key: ".len;
-    const key_end = std.mem.indexOfScalar(u8, req[key_val_start..], '\r') orelse (req.len - key_val_start);
-    const provided = req[key_val_start .. key_val_start + key_end];
+    const key_end = std.mem.indexOfScalar(u8, headers[key_val_start..], '\r') orelse (headers.len - key_val_start);
+    const provided = headers[key_val_start .. key_val_start + key_end];
     return std.mem.eql(u8, provided, API_KEY);
 }
 
@@ -457,6 +461,8 @@ fn serveConfigRaw() ![]const u8 {
 }
 
 var fb_client: ?*vnc.VncClient = null;
+// Tracks which VM index fb_client is connected to. MAX_VMS = sentinel (none).
+var fb_vm_idx: usize = MAX_VMS;
 var fb_mutex: sync.SpinMutex = .{};
 // BMP output buffer — 54-byte header + up to 2 MB of pixel data
 // 2 MB supports 640×480 at 32 bpp (≈1.23 MB) + margin for larger resolutions
@@ -632,10 +638,14 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
 
     if (fb_client == null) {
         fb_client = vnc.VncClient.new() orelse return "no vnc";
+        fb_vm_idx = MAX_VMS; // not yet connected to any VM
     }
     const vc = fb_client.?;
-    if (!vc.isConnected()) {
+    // Reconnect if the VM changed or the connection dropped.
+    if (fb_vm_idx != idx or !vc.isConnected()) {
+        if (fb_vm_idx != MAX_VMS) vc.disconnect();
         _ = vc.connect("127.0.0.1", @intCast(v.vnc_port));
+        fb_vm_idx = idx;
     }
     if (vc.lockFb()) |pixels| {
         defer vc.unlockFb();
@@ -840,7 +850,10 @@ fn handlePower(req: []const u8) ![]const u8 {
         vm_started[idx] = 0;
     } else {
         if (getVmmHandle(idx)) |h| {
-            g_vmm.startFn(h, @ptrCast(v)) catch return "start err";
+            g_vmm.startFn(h, @ptrCast(v)) catch {
+                destroyVmmHandle(idx);
+                return "start err";
+            };
         } else {
             qemu.startVm(v, std.heap.page_allocator) catch return "start err";
         }
@@ -859,18 +872,21 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     var cfg = vm.VmConfig{};
+    var val_buf: [2048]u8 = undefined;
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
         var kv = std.mem.splitScalar(u8, pair, '=');
         const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
+        const raw = kv.next() orelse continue;
+        const val = if (raw.len <= val_buf.len) urlDecode(&val_buf, raw) else raw;
         if (std.mem.eql(u8, key, "name")) {
             if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
+            if (!vm.isValidVmName(val)) return "invalid name";
             cfg.setName(val);
         }
-        if (std.mem.eql(u8, key, "mem")) cfg.memory_mb = std.fmt.parseInt(u32, val, 10) catch 2048;
-        if (std.mem.eql(u8, key, "cpu")) cfg.cpu_cores = std.fmt.parseInt(u32, val, 10) catch 2;
-        if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = std.fmt.parseInt(u32, val, 10) catch 20;
+        if (std.mem.eql(u8, key, "mem")) cfg.memory_mb = vm.clampMemory(std.fmt.parseInt(u32, val, 10) catch 2048);
+        if (std.mem.eql(u8, key, "cpu")) cfg.cpu_cores = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch 2);
+        if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = vm.clampDiskSize(std.fmt.parseInt(u32, val, 10) catch 20);
     }
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
@@ -943,9 +959,17 @@ fn handleDelete(req: []const u8) ![]const u8 {
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
     if (idx >= vm_count) return "invalid idx";
+    // Destroy the VMM handle for the deleted VM
+    destroyVmmHandle(idx);
     // Shift remaining
     var i = idx;
-    while (i + 1 < vm_count) : (i += 1) vms[i] = vms[i + 1];
+    while (i + 1 < vm_count) : (i += 1) {
+        vms[i] = vms[i + 1];
+        g_vmm_handles[i] = g_vmm_handles[i + 1];
+        vm_started[i] = vm_started[i + 1];
+    }
+    g_vmm_handles[vm_count - 1] = null;
+    vm_started[vm_count - 1] = 0;
     vm_count -= 1;
     persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
@@ -964,38 +988,41 @@ fn handleSave(req: []const u8) ![]const u8 {
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     const v = &vms[idx];
+    var val_buf: [2048]u8 = undefined;
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
         var kv = std.mem.splitScalar(u8, pair, '=');
         const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
+        const raw = kv.next() orelse continue;
+        const val = if (raw.len <= val_buf.len) urlDecode(&val_buf, raw) else raw;
         if (std.mem.eql(u8, key, "name")) {
             if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
+            if (!vm.isValidVmName(val)) return "invalid name";
             v.setName(val);
         }
-        if (std.mem.eql(u8, key, "mem")) v.memory_mb = std.fmt.parseInt(u32, val, 10) catch v.memory_mb;
-        if (std.mem.eql(u8, key, "cpu")) v.cpu_cores = std.fmt.parseInt(u32, val, 10) catch v.cpu_cores;
-        if (std.mem.eql(u8, key, "cpu_sockets")) v.cpu_sockets = std.fmt.parseInt(u32, val, 10) catch v.cpu_sockets;
-        if (std.mem.eql(u8, key, "disk")) v.disk_size_gb = std.fmt.parseInt(u32, val, 10) catch v.disk_size_gb;
+        if (std.mem.eql(u8, key, "mem")) v.memory_mb = vm.clampMemory(std.fmt.parseInt(u32, val, 10) catch v.memory_mb);
+        if (std.mem.eql(u8, key, "cpu")) v.cpu_cores = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch v.cpu_cores);
+        if (std.mem.eql(u8, key, "cpu_sockets")) v.cpu_sockets = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch v.cpu_sockets);
+        if (std.mem.eql(u8, key, "disk")) v.disk_size_gb = vm.clampDiskSize(std.fmt.parseInt(u32, val, 10) catch v.disk_size_gb);
         if (std.mem.eql(u8, key, "disk_format")) v.disk_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk_format.toIndex());
         if (std.mem.eql(u8, key, "iso_path")) v.setIsoPath(val);
-        if (std.mem.eql(u8, key, "mac_address")) v.setMacAddress(val);
+        if (std.mem.eql(u8, key, "mac_address")) { if (vm.isValidMac(val)) v.setMacAddress(val); }
         if (std.mem.eql(u8, key, "network")) v.nics[0].mode = vm.NetworkMode.fromStr(val);
         if (std.mem.eql(u8, key, "firmware")) v.firmware = vm.BootFirmware.fromStr(val);
         if (std.mem.eql(u8, key, "shared_folder")) v.setSharedFolder(val);
         if (std.mem.eql(u8, key, "usb")) v.setUsbDevice(val);
         if (std.mem.eql(u8, key, "guest_tools")) v.guest_tools = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "autoprotect")) v.autoprotect = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "ap_interval")) v.autoprotect_interval_min = std.fmt.parseInt(u32, val, 10) catch v.autoprotect_interval_min;
-        if (std.mem.eql(u8, key, "ap_max")) v.autoprotect_max = std.fmt.parseInt(u32, val, 10) catch v.autoprotect_max;
+        if (std.mem.eql(u8, key, "ap_interval")) v.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_interval_min));
+        if (std.mem.eql(u8, key, "ap_max")) v.autoprotect_max = @max(1, @min(100, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_max));
         if (std.mem.eql(u8, key, "disk2_path")) v.setDisk2Path(val);
         if (std.mem.eql(u8, key, "disk2_size")) v.disk2_size_gb = std.fmt.parseInt(u32, val, 10) catch v.disk2_size_gb;
         if (std.mem.eql(u8, key, "disk2_format")) v.disk2_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk2_format.toIndex());
         if (std.mem.eql(u8, key, "floppy")) v.setFloppyPath(val);
         if (std.mem.eql(u8, key, "nic2")) v.nics[1].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic2_mac")) v.setNic2Mac(val);
+        if (std.mem.eql(u8, key, "nic2_mac")) { if (vm.isValidMac(val)) v.setNic2Mac(val); }
         if (std.mem.eql(u8, key, "nic3")) v.nics[2].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic3_mac")) v.setNic3Mac(val);
+        if (std.mem.eql(u8, key, "nic3_mac")) { if (vm.isValidMac(val)) v.setNic3Mac(val); }
         if (std.mem.eql(u8, key, "portfw")) v.setPortForwards(val);
         if (std.mem.eql(u8, key, "notes")) v.setNotes(val);
         if (std.mem.eql(u8, key, "enable_3d")) v.enable_3d = std.mem.eql(u8, val, "1");
@@ -1008,10 +1035,16 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "accel")) v.accel = persist.parseAccel(val);
         if (std.mem.eql(u8, key, "enable_kvm")) { if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg; }
         if (std.mem.eql(u8, key, "embed_display")) v.embed_display = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "vnc_port")) v.vnc_port = std.fmt.parseInt(u16, val, 10) catch v.vnc_port;
-        if (std.mem.eql(u8, key, "spice_port")) v.spice_port = std.fmt.parseInt(u16, val, 10) catch v.spice_port;
+        if (std.mem.eql(u8, key, "vnc_port")) {
+            const p = std.fmt.parseInt(u16, val, 10) catch v.vnc_port;
+            if (vm.isValidDisplayPort(p)) v.vnc_port = p;
+        }
+        if (std.mem.eql(u8, key, "spice_port")) {
+            const p = std.fmt.parseInt(u16, val, 10) catch v.spice_port;
+            if (vm.isValidDisplayPort(p)) v.spice_port = p;
+        }
         if (std.mem.eql(u8, key, "enable_serial")) v.enable_serial = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "num_displays")) v.num_displays = std.fmt.parseInt(u32, val, 10) catch v.num_displays;
+        if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(8, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
         if (std.mem.eql(u8, key, "favorite")) v.favorite = std.mem.eql(u8, val, "1");
     }
     persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
@@ -1051,6 +1084,7 @@ fn handleSuspend(req: []const u8) ![]const u8 {
         qemu.reapVm(v);
     }
     destroyVmmHandle(idx);
+    vm_started[idx] = 0;
     persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
@@ -1186,9 +1220,7 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
             tag = val;
         }
     }
-    if (tag.len == 0) {
-        tag = std.mem.trim(u8, body, " \r\n");
-    }
+    if (tag.len == 0) return "no name";
     if (!validateSnapshotTag(tag)) return "no name";
     if (getVmmHandle(idx)) |h| {
         g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "create err";
@@ -1236,7 +1268,9 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
     if (!v.hasDisk()) return "no disk";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
-    const tag = std.mem.trim(u8, body, " \r\n");
+    const raw_tag = std.mem.trim(u8, body, " \r\n");
+    var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
+    const tag = urlDecode(&decode_buf, raw_tag);
     if (!validateSnapshotTag(tag)) return "no name";
     if (getVmmHandle(idx)) |h| {
         g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "apply err";
@@ -1255,7 +1289,9 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
     if (!v.hasDisk()) return "no disk";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
-    const tag = std.mem.trim(u8, body, " \r\n");
+    const raw_tag = std.mem.trim(u8, body, " \r\n");
+    var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
+    const tag = urlDecode(&decode_buf, raw_tag);
     if (!validateSnapshotTag(tag)) return "no name";
     if (getVmmHandle(idx)) |h| {
         g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "delete err";
@@ -1282,6 +1318,12 @@ fn handleImport(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "path")) path = val;
     }
     if (path.len == 0) return "no path";
+    // Reject path traversal attempts
+    if (std.mem.indexOf(u8, path, "..") != null) return "bad path";
+    // Reject non-disk extensions
+    if (!(std.mem.endsWith(u8, path, ".vmdk") or std.mem.endsWith(u8, path, ".qcow2") or std.mem.endsWith(u8, path, ".qcow") or std.mem.endsWith(u8, path, ".img") or std.mem.endsWith(u8, path, ".raw"))) return "bad ext";
+    // Verify the file actually exists before creating a VM config for it.
+    std.Io.Dir.cwd().access(appio.io(), path, .{}) catch return "no file";
     var name_buf: [vm.MAX_NAME]u8 = undefined;
     const name = blk: {
         const sep = std.mem.lastIndexOfScalar(u8, path, '/');
@@ -1385,41 +1427,66 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
 
-    // Find first boundary
-    const first_bd = std.mem.indexOf(u8, body, boundary) orelse return "no boundary in body";
-    // Skip boundary line
-    var pos = first_bd + boundary.len;
-    if (pos + 2 <= body.len and body[pos] == '\r' and body[pos + 1] == '\n') pos += 2;
+    // Boundary markers (prefixed with -- per RFC 2046)
+    var bd_buf: [256]u8 = undefined;
+    const full_bd = std.fmt.bufPrint(&bd_buf, "--{s}", .{boundary}) catch return "bd err";
+
+    // Find the opening boundary line.
+    const first_bd = std.mem.indexOf(u8, body, full_bd) orelse return "no boundary in body";
+    var pos = first_bd + full_bd.len;
+    // Skip trailing whitespace after boundary marker.
+    if (pos < body.len and body[pos] == '\r') pos += 1;
     if (pos < body.len and body[pos] == '\n') pos += 1;
 
-    // Skip part headers (Content-Disposition, Content-Type)
-    while (pos + 1 < body.len) {
-        if (body[pos] == '\r' and body[pos + 1] == '\n') {
-            pos += 2;
-            break;
+    // Skip part headers to find the start of file data.
+    // Extract filename from Content-Disposition if present.
+    var filename: []const u8 = "";
+    const headers_end = std.mem.indexOf(u8, body[pos..], "\r\n\r\n") orelse
+        std.mem.indexOf(u8, body[pos..], "\n\n") orelse return "no headers end";
+    const headers = body[pos..][0..headers_end];
+    pos += headers_end;
+    if (pos + 4 <= body.len and std.mem.eql(u8, body[pos..][0..4], "\r\n\r\n")) pos += 4
+    else if (pos + 2 <= body.len and std.mem.eql(u8, body[pos..][0..2], "\n\n")) pos += 2
+    else return "no headers end";
+
+    // Parse filename="..." from Content-Disposition header.
+    if (std.mem.indexOf(u8, headers, "filename=\"")) |fn_start| {
+        const fn_val = headers[fn_start + "filename=\"".len ..];
+        if (std.mem.indexOfScalar(u8, fn_val, '"')) |fn_end| {
+            if (fn_end > 0) filename = fn_val[0..fn_end];
         }
-        if (body[pos] == '\n') {
-            pos += 1;
-            break;
-        }
-        pos += 1;
     }
 
-    // Find closing boundary (--boundary--\r\n)
-    const end_bd = std.mem.indexOf(u8, body[pos..], boundary) orelse return "no end boundary";
-    // Guard against malformed multipart: end_bd<2 means boundary immediately
-    // follows content without \r\n separator — avoid usize underflow.
-    const data_end = if (end_bd >= 2) pos + end_bd - 2 else pos;
-    const file_data = body[pos..data_end];
+    // Find closing boundary: look for \r\n--boundary-- (terminating) or \r\n--boundary (next part).
+    // We want the data between headers and the next boundary marker.
+    const data_start = pos;
+    var data_end: usize = body.len;
+    // Search for the next occurrence of the full boundary after data_start.
+    if (std.mem.indexOf(u8, body[pos..], full_bd)) |next_bd| {
+        // Back up over the \r\n that precedes the boundary.
+        const raw_end = pos + next_bd;
+        data_end = if (raw_end >= 2 and body[raw_end - 2] == '\r' and body[raw_end - 1] == '\n')
+            raw_end - 2
+        else if (raw_end >= 1 and body[raw_end - 1] == '\n')
+            raw_end - 1
+        else
+            raw_end;
+    }
+    const file_data = body[data_start..data_end];
 
-    // Build destination path: same dir as primary disk, with _disk2 suffix + same extension
+    // Build destination path: same dir as primary disk, with _disk2 suffix.
+    // Prefer the uploaded filename; fall back to the primary disk's name + extension.
     const v = &vms[idx];
     const primary = v.getDiskPathSlice();
     const ext = std.fs.path.extension(primary);
     const dir = std.fs.path.dirname(primary) orelse primary;
 
     var dest_buf: [vm.MAX_PATH]u8 = undefined;
-    if (ext.len > 0 and ext.len < 16) {
+    if (filename.len > 0) {
+        const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}", .{ dir, filename }) catch return "path err";
+        std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
+        vms[idx].setDisk2Path(dest);
+    } else if (ext.len > 0 and ext.len < 16) {
         const name_no_ext = primary[dir.len + 1 .. primary.len - ext.len];
         const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2{s}", .{ dir, name_no_ext, ext }) catch return "path err";
         std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
@@ -1443,13 +1510,13 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
 
     // Per-export unique directory to avoid races with concurrent exports.
     var dir_buf: [128]u8 = undefined;
-    const dir_path = std.fmt.bufPrint(&dir_buf, "/tmp/ovf_export.{d}.{d}", .{ idx, c.getpid() }) catch return;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "/tmp/ovf_export.{d}.{d}", .{ idx, std.os.linux.getpid() }) catch return;
     // Ensure a clean directory.
     _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {};
     std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {};
 
     var tar_buf: [160]u8 = undefined;
-    const tar_path = std.fmt.bufPrintZ(&tar_buf, "/tmp/ovf_export.{d}.{d}.tar.gz", .{ idx, c.getpid() }) catch return;
+    const tar_path = std.fmt.bufPrintZ(&tar_buf, "/tmp/ovf_export.{d}.{d}.tar.gz", .{ idx, std.os.linux.getpid() }) catch return;
 
     const vmdk_name = "disk1.vmdk";
     var path_buf: [vm.MAX_PATH]u8 = undefined;
@@ -1543,6 +1610,42 @@ fn handleVnetsJson(buf: []u8) []const u8 {
     const n = @min(json.len, buf.len);
     @memcpy(buf[0..n], json[0..n]);
     return buf[0..n];
+}
+
+/// URL-decode a percent-encoded string in-place. Returns the decoded slice
+/// (always <= src.len). Converts %XX→byte and '+'→' '.
+fn urlDecode(buf: []u8, src: []const u8) []u8 {
+    var wi: usize = 0;
+    var ri: usize = 0;
+    while (ri < src.len) : (ri += 1) {
+        if (src[ri] == '%' and ri + 2 < src.len) {
+            const hi = std.fmt.charToDigit(src[ri + 1], 16) catch {
+                buf[wi] = '%'; wi += 1; continue;
+            };
+            const lo = std.fmt.charToDigit(src[ri + 2], 16) catch {
+                buf[wi] = '%'; wi += 1; continue;
+            };
+            buf[wi] = (hi << 4) | lo;
+            wi += 1;
+            ri += 2;
+        } else if (src[ri] == '+') {
+            buf[wi] = ' ';
+            wi += 1;
+        } else {
+            buf[wi] = src[ri];
+            wi += 1;
+        }
+    }
+    return buf[0..wi];
+}
+
+/// Extract a URL-decoded form value from `key=val&...` body. Returns empty
+/// slice when not found. Result is written into `buf` (must be >= val.len).
+fn formVal(body: []const u8, key: []const u8, buf: []u8) []const u8 {
+    const raw = bodyVal(body, key);
+    if (raw.len == 0) return "";
+    if (raw.len <= buf.len) return urlDecode(buf, raw);
+    return raw; // shouldn't happen; return raw as best-effort
 }
 
 /// Parse key=value body data. Returns empty slice when not found.
@@ -1985,9 +2088,8 @@ test "checkAuth: rejects wrong custom auth token" {
 }
 
 test "checkAuth: key at end with no trailing CR uses rest of request" {
-    // No \r after key — falls back to rest of request length.
-    // Previously this triggered an out-of-bounds slice panic.
-    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: kvmgui";
+    // Key at end of headers (before \r\n\r\n) — still valid.
+    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: kvmgui\r\n\r\n";
     try std.testing.expect(checkAuth(req));
 }
 
@@ -1996,7 +2098,7 @@ test "checkAuth: custom token at end with no trailing CR" {
     @memcpy(auth_token[0..6], "secret");
     defer { auth_token_len = 0; @memset(&auth_token, 0); }
 
-    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: secret";
+    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: secret\r\n\r\n";
     try std.testing.expect(checkAuth(req));
 }
 
@@ -2096,10 +2198,10 @@ test "checkAuth: multiple X-API-Key headers uses first match" {
     try std.testing.expect(!checkAuth(req)); // first match is "wrong"
 }
 
-test "checkAuth: X-API-Key search scans entire buffer including body" {
-    // checkAuth does not stop at \r\n\r\n — it scans the entire buffer.
+test "checkAuth: X-API-Key in body is ignored (only headers searched)" {
+    // checkAuth only searches headers (before \r\n\r\n) — body keys are ignored.
     const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\n\r\nX-API-Key: kvmgui\r\n";
-    try std.testing.expect(checkAuth(req));
+    try std.testing.expect(!checkAuth(req));
 }
 
 test "checkAuth: binary null in key value" {
@@ -2382,8 +2484,14 @@ pub fn main() !void {
     // Bind to 0.0.0.0 — accessible locally and remotely
     const bind_ip: u32 = (@as(u32, BIND_ADDR[0]) << 24) | (@as(u32, BIND_ADDR[1]) << 16) | (@as(u32, BIND_ADDR[2]) << 8) | @as(u32, BIND_ADDR[3]);
     var addr: c.sockaddr.in = .{ .family = AF_INET, .port = std.mem.nativeToBig(u16, port), .addr = std.mem.nativeToBig(u32, bind_ip), .zero = [_]u8{0} ** 8 };
-    if (c.bind(sock, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) != 0) return;
-    if (c.listen(sock, 10) != 0) return;
+    if (c.bind(sock, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) != 0) {
+        logErr("Failed to bind TCP port — already in use");
+        return;
+    }
+    if (c.listen(sock, 10) != 0) {
+        logErr("Failed to listen on TCP port");
+        return;
+    }
 
     // Create Unix socket listener for local clients
     const unix_path = "/tmp/kvmgui-daemon.sock";

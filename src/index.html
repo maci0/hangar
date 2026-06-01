@@ -1,15 +1,15 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>KVMGUI</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head><body>
-<aside>
+<aside aria-label="VM Library">
 <div class="sidebar-header"><div class="logo">K</div><h2>KVMGUI</h2></div>
-<div class="search-wrap"><input id="search" placeholder="Search VMs..." data-action="filterList"><button class="clear-btn" id="searchClear" data-action="clearSearch">✕</button></div>
-<div id="vmlist"></div>
+<div class="search-wrap"><input id="search" placeholder="Search VMs..." data-action="filterList" aria-label="Search VMs"><button class="clear-btn" id="searchClear" data-action="clearSearch">✕</button></div>
+<div id="vmlist" role="listbox" aria-label="VM list"></div>
 <div class="sidebar-footer"><button class="btn primary" style="width:100%" data-action="newVm">+ New VM</button></div>
 </aside>
-<main>
+<main role="main">
 <div id="display"><canvas id="fbcanvas" width="640" height="480"></canvas></div>
 <div id="serialpanel"><textarea id="serialterm" readonly></textarea><div style="display:flex;gap:8px;padding:4px 8px"><button class="btn danger" data-action="manualDisconnectSerial" style="font-size:11px;padding:2px 8px">Disconnect</button></div></div>
-<div class="toolbar">
+<div class="toolbar" role="toolbar" aria-label="VM actions">
 <button class="hamburger" data-action="toggleSidebar" title="Toggle sidebar">☰</button>
 <button class="btn ghost" data-action="deselectVm" title="Deselect VM (Ctrl+W)">⌂ Home</button>
 <button id="powerbtn" class="btn primary" data-action="powerToggle" title="Power On/Off selected VM">▶ Power On</button><span class="sep"></span>
@@ -38,17 +38,17 @@
 <div class="content-area">
 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
 <h1 id="vmname" style="margin-bottom:0">Select a VM</h1>
-<div class="tab-bar" style="margin-bottom:0;border-bottom:none" id="tabBar">
-<button class="tab-btn active" data-action="switchTab" data-tab="summary">Summary</button>
-<button class="tab-btn" data-action="switchTab" data-tab="settings">Settings</button>
+<div class="tab-bar" role="tablist" style="margin-bottom:0;border-bottom:none" id="tabBar">
+<button class="tab-btn active" role="tab" aria-selected="true" data-action="switchTab" data-tab="summary">Summary</button>
+<button class="tab-btn" role="tab" aria-selected="false" data-action="switchTab" data-tab="settings">Settings</button>
 </div>
 </div>
 <div id="tabSummary"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to view its details, or create a new one.</p></div></div>
 <div id="tabSettings" style="display:none"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div></div>
 </div></main>
-<div id="statusbar">Ready</div>
-<div id="toast-container"></div>
-<dialog id="newdlg"><h3>New Virtual Machine</h3>
+<div id="statusbar" role="status" aria-live="polite">Ready</div>
+<div id="toast-container" aria-live="polite"></div>
+<dialog id="newdlg" aria-modal="true" aria-labelledby="newdlg-title"><h3 id="newdlg-title">New Virtual Machine</h3>
 <div class="dialog-body">
 <label for="n_name">Name</label><input id="n_name" placeholder="VM Name" value="New VM">
 <label for="n_mem">Memory (MB)</label><input id="n_mem" type="number" value="2048">
@@ -56,18 +56,18 @@
 <label for="n_disk">Disk Size (GB)</label><input id="n_disk" type="number" value="20">
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="newdlg">Cancel</button><button class="btn primary" data-action="createVm">Create</button></div></dialog>
-<dialog id="snapdlg"><h3>Snapshots</h3>
+<dialog id="snapdlg" aria-modal="true" aria-labelledby="snapdlg-title"><h3 id="snapdlg-title">Snapshots</h3>
 <div class="dialog-body">
 <div style="display:flex;gap:8px;margin-bottom:12px"><input id="s_tag" placeholder="Snapshot tag" style="flex:1"><button class="btn primary" data-action="takeSnapshotFromDlg">Take</button></div>
 <div id="snaplist" style="max-height:300px;overflow-y:auto;font-size:13px"><div style="color:var(--text-dim)">Loading...</div></div>
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="snapdlg">Close</button></div></dialog>
-<dialog id="clonedlg"><h3>Clone VM</h3>
+<dialog id="clonedlg" aria-modal="true" aria-labelledby="clonedlg-title"><h3 id="clonedlg-title">Clone VM</h3>
 <div class="dialog-body">
 <p style="margin-bottom:12px;color:var(--text-muted)">Choose clone type for <strong id="clone_name"></strong></p>
 </div>
 <div class="btn-row"><button class="btn" data-action="doClone" data-clone-linked="0">Full Clone</button><button class="btn primary" data-action="doClone" data-clone-linked="1">Linked Clone</button><button class="btn" data-action="closeDlg" data-dialog="clonedlg">Cancel</button></div></dialog>
-<dialog id="vnetdlg"><h3>Virtual Network Editor</h3>
+<dialog id="vnetdlg" aria-modal="true" aria-labelledby="vnetdlg-title"><h3 id="vnetdlg-title">Virtual Network Editor</h3>
 <div class="dialog-body">
 <div style="display:flex;gap:12px"><div style="width:40%"><select id="vnet_sel" size="8" style="width:100%;height:200px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius)" data-action="onVnetSelect"></select>
 <div class="btn-row" style="border-top:none;margin-top:8px;padding:0"><button class="btn" data-action="vnetAdd">Add</button><button class="btn danger" data-action="vnetRemove">Remove</button><button class="btn" data-action="vnetDefaults">Use Defaults</button></div></div>
@@ -84,7 +84,7 @@
 <div class="btn-row" style="border-top:none;margin-top:8px;padding:0"><button class="btn" data-action="vnetSaveCurrent">Apply Changes</button></div></div></div>
 </div>
 <div class="btn-row"><button class="btn primary" data-action="vnetSaveAll">Save & Close</button><button class="btn" data-action="closeDlg" data-dialog="vnetdlg">Cancel</button></div></dialog>
-<dialog id="prefsdlg"><h3>Preferences</h3>
+<dialog id="prefsdlg" aria-modal="true" aria-labelledby="prefsdlg-title"><h3 id="prefsdlg-title">Preferences</h3>
 <div class="dialog-body">
 <label for="p_theme">Theme</label><select id="p_theme" data-action="applyTheme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
 <label for="p_default_memory_mb">Default Memory (MB)</label><input id="p_default_memory_mb" type="number" value="2048">
@@ -94,7 +94,7 @@
 <label for="p_autoprotect_max">AutoProtect Max Snapshots</label><input id="p_autoprotect_max" type="number" value="10">
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="prefsdlg">Cancel</button><button class="btn primary" data-action="savePrefs">Save</button></div></dialog>
-<dialog id="aboutdlg"><h3>About KVMGUI</h3>
+<dialog id="aboutdlg" aria-modal="true" aria-labelledby="aboutdlg-title"><h3 id="aboutdlg-title">About KVMGUI</h3>
 <div class="dialog-body" style="text-align:center">
 <div style="font-size:48px;margin-bottom:12px;width:64px;height:64px;background:var(--gradient);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 4px 16px rgba(59,130,246,0.3)">K</div>
 <p style="font-size:18px;font-weight:600">KVMGUI</p>
@@ -108,7 +108,7 @@ Enter Power Toggle &nbsp;·&nbsp; Ctrl+W Deselect &nbsp;·&nbsp; Escape Close Di
 </p>
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="aboutdlg">Close</button></div></dialog>
-<dialog id="shortcutsdlg"><h3>Keyboard Shortcuts</h3>
+<dialog id="shortcutsdlg" aria-modal="true" aria-labelledby="shortcutsdlg-title"><h3 id="shortcutsdlg-title">Keyboard Shortcuts</h3>
 <div class="dialog-body"><table class="shortcuts-table">
 <tr><td><kbd>Ctrl+N</kbd></td><td>New VM</td></tr>
 <tr><td><kbd>Ctrl+E</kbd></td><td>Edit Settings</td></tr>

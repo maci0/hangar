@@ -1721,21 +1721,15 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                         app.g_vmm.snapshotListFn(h, v.getDiskPathSlice(), &list_buf, std.heap.page_allocator)
                     else
                         qemu.snapshotList(v.getDiskPathSlice(), &list_buf, std.heap.page_allocator)) |_| {
-                        // Count AutoProtect snapshots and collect the oldest names
+                        const nodes = snapparse.parse(list_buf[0..]);
+                        // Collect AutoProtect snapshot names for potential pruning
                         var auto_names: [16][]const u8 = @splat("");
                         var auto_count: usize = 0;
-                        var lines = std.mem.splitScalar(u8, list_buf[0..], '\n');
-                        while (lines.next()) |line| {
-                            const trimmed = std.mem.trim(u8, line, " \t\r");
-                            // qemu-img snapshot -l output has columns: ID TAG VM SIZE DATE VM CLOCK
-                            // The snapshot name (TAG) is typically the second column
-                            if (std.mem.indexOf(u8, trimmed, autoprotect.PREFIX)) |_| {
-                                // Extract the name portion (between column 1 and 2 boundaries)
-                                var parts = std.mem.splitScalar(u8, trimmed, ' ');
-                                _ = parts.next(); // skip ID (e.g. "1")
-                                const tag = parts.next() orelse continue;
+                        for (0..nodes.count) |j| {
+                            const name = nodes.nameSlice(j);
+                            if (std.mem.indexOf(u8, name, autoprotect.PREFIX)) |_| {
                                 if (auto_count < auto_names.len) {
-                                    auto_names[auto_count] = tag;
+                                    auto_names[auto_count] = name;
                                 }
                                 auto_count += 1;
                             }
@@ -1765,10 +1759,18 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                 if (v.embed_display and app.vnc_client == null and app.spice_client == null) {
                     if (v.display == .spice) {
                         app.spice_client = spice.SpiceClient.new();
-                        if (app.spice_client) |sc| _ = sc.connect("127.0.0.1", @intCast(v.spice_port));
+                        if (app.spice_client) |sc| {
+                            if (!sc.connect("127.0.0.1", @intCast(v.spice_port))) {
+                                app.setStatusErr("SPICE connect failed — retrying in 2s");
+                            }
+                        }
                     } else {
                         app.vnc_client = vnc.VncClient.new();
-                        if (app.vnc_client) |vc| _ = vc.connect("127.0.0.1", @intCast(v.vnc_port));
+                        if (app.vnc_client) |vc| {
+                            if (!vc.connect("127.0.0.1", @intCast(v.vnc_port))) {
+                                app.setStatusErr("VNC connect failed — retrying in 2s");
+                            }
+                        }
                     }
                 }
                 if (v.enable_serial and app.serial_fd == null) {

@@ -15,10 +15,18 @@ fn serialReader() void {
     var buf: [4096]u8 = undefined;
     while (@atomicLoad(bool, &app.serial_running, .seq_cst)) {
         const n = std.c.read(fd, &buf, buf.len);
-        if (n <= 0) break;
-        app.serial_mutex.lock();
-        app.serial_len = ringbuf.append(&app.serial_buf, app.serial_len, buf[0..@intCast(n)]);
-        app.serial_mutex.unlock();
+        if (n > 0) {
+            app.serial_mutex.lock();
+            app.serial_len = ringbuf.append(&app.serial_buf, app.serial_len, buf[0..@intCast(n)]);
+            app.serial_mutex.unlock();
+        } else if (n == 0) {
+            break; // EOF — VM disconnected
+        } else {
+            // n < 0: error — retry on transient, break on permanent
+            const e = std.c._errno().*;
+            if (e == @intFromEnum(std.c.E.INTR) or e == @intFromEnum(std.c.E.AGAIN)) continue;
+            break;
+        }
     }
     // Clean up after unexpected exit (VM died, socket error, etc.).
     // If serialDisconnect already set running=false, skip — it handles cleanup.
@@ -37,6 +45,7 @@ pub fn serialConnect(vm_name: []const u8) void {
     app.serial_fd = stream.fd;
     @atomicStore(bool, &app.serial_running, true, .seq_cst);
     app.serial_thread = std.Thread.spawn(std.Thread.SpawnConfig{}, serialReader, .{}) catch {
+        _ = std.c.close(stream.fd);
         app.serial_fd = null;
         return;
     };
