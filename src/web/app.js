@@ -30,6 +30,13 @@ var sidebarOpen=false;
 function toggleSidebar(){sidebarOpen=!sidebarOpen;const aside=document.querySelector('aside');const btn=document.querySelector('.hamburger');if(aside){if(sidebarOpen){aside.classList.add('open');document.body.classList.add('sidebar-overlay');}else{aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}}
 if(btn)btn.setAttribute('aria-expanded',sidebarOpen?'true':'false');}
 function closeSidebar(){if(!sidebarOpen)return;sidebarOpen=false;const aside=document.querySelector('aside');if(aside){aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}const btn=document.querySelector('.hamburger');if(btn)btn.setAttribute('aria-expanded','false');}
+var toolbarMoreOpen=false;
+function toggleToolbarMore(){toolbarMoreOpen=!toolbarMoreOpen;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');
+if(tb){if(toolbarMoreOpen){tb.classList.add('open-more');}else{tb.classList.remove('open-more');}}
+if(btn)btn.setAttribute('aria-expanded',toolbarMoreOpen?'true':'false');
+if(popover){if(toolbarMoreOpen){popover.classList.add('open');}else{popover.classList.remove('open');}}
+}
+function closeToolbarMore(){if(!toolbarMoreOpen)return;toolbarMoreOpen=false;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');if(tb)tb.classList.remove('open-more');if(btn)btn.setAttribute('aria-expanded','false');if(popover)popover.classList.remove('open');}
 function clearSearch(){var s=document.getElementById('search');if(!s)return;s.value='';filterList();}
 var settingsDirty=false;
 function switchTab(tab){if(activeTab===tab)return;
@@ -67,15 +74,15 @@ if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+' — '+v.status;i
 else{var sb2=document.getElementById('statusbar');if(sb2)sb2.textContent=parts;}}
 async function toggleFavorite(i){if(i>=vms.length)return;const fav=vms[i].favorite==='true'?'0':'1';
 const r=await apiPost('/api/save/'+i,'favorite='+fav);if(r){if(i<vms.length){vms[i].favorite=fav==='1'?'true':'false';}renderList();if(sel===i)renderDetails();}}
-function select(i){stopFb();sel=i;renderList();closeSidebar();if(sel!==null){if(activeTab==='summary')renderDetails();else editVm();if(vms[sel]&&vms[sel].status==='running')startFb();}else{showEmptyState();}updatePowerBtn();}
+function select(i){stopFb();sel=i;renderList();closeSidebar();closeToolbarMore();if(sel!==null){if(activeTab==='summary')renderDetails();else editVm();if(vms[sel]&&vms[sel].status==='running')startFb();}else{showEmptyState();}updatePowerBtn();}
 function deselectVm(){stopFb();sel=null;renderList();showEmptyState();updatePowerBtn();}
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
 const nm=document.getElementById('vmname');const tb=document.getElementById('tabBar');
 if(!t||!s||!nm||!tb)return;
 nm.textContent='Select a VM';tb.style.display='none';
 t.setAttribute('aria-hidden','true');s.setAttribute('aria-hidden','true');
-t.innerHTML='<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to view its details, or create a new one.</p></div>';
-s.innerHTML='<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';}
+t.innerHTML='<div class="empty-state"><svg class="empty-icon"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to view its details, or create a new one.</p></div>';
+s.innerHTML='<div class="empty-state"><svg class="empty-icon"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';}
 function renderDetails(){if(sel===null||sel>=vms.length){showEmptyState();return;}
 const tb=document.getElementById('tabBar');const nm=document.getElementById('vmname');const ts=document.getElementById('tabSummary');
 if(!tb||!nm||!ts)return;
@@ -270,10 +277,16 @@ function openAbout(){var ad=document.getElementById('aboutdlg');if(ad)ad.showMod
 async function savePrefs(){const body=['theme','default_memory_mb','default_cpu_cores','autoprotect_enabled','autoprotect_interval','autoprotect_max']
 .map(id=>{const el=document.getElementById('p_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
 const r=await apiPost('/api/config',body);if(r){if(pendingTheme!==null){window.applyTheme(pendingTheme);pendingTheme=null;}var pd=document.getElementById('prefsdlg');if(pd)pd.close();setStatus('Preferences saved.');}}
-// ── Dialog Backdrop Click-to-Close ──
-['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});});
+// ── Dialog Focus Trap + Backdrop Click-to-Close ──
+var dialogFocusStack=[];
+var FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
+function trapFocus(dlg){var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];dlg.addEventListener('keydown',function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}});first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
+function releaseFocus(dlg){dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
+['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','migratedlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};});
 // ── Sidebar Overlay Click-to-Close ──
 document.body.addEventListener('click',function(e){if(document.body.classList.contains('sidebar-overlay')&&!e.target.closest('aside')){closeSidebar();}});
+// ── Toolbar More Click-Outside ──
+document.body.addEventListener('click',function(e){if(toolbarMoreOpen&&!e.target.closest('.toolbar')){closeToolbarMore();}});
 // ── Right-Click Context Menu ──
 let ctxMenu=null,ctxVmIdx=-1;
 function hideCtxMenu(){if(ctxMenu){ctxMenu.remove();ctxMenu=null;ctxVmIdx=-1;}}
@@ -335,23 +348,52 @@ function showShortcutsModal(){
   var d=document.getElementById('shortcutsdlg');
   if(d)d.showModal();
 }
+// ── Focus Trap for Dialog Modals ──
+function getFocusable(el){
+  return el.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+}
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Tab')return;
+  var openDlg=document.querySelector('dialog[open]');
+  if(!openDlg)return;
+  var focusable=getFocusable(openDlg);
+  if(focusable.length===0)return;
+  var first=focusable[0],last=focusable[focusable.length-1];
+  if(e.shiftKey){
+    if(document.activeElement===first){e.preventDefault();last.focus();}
+  }else{
+    if(document.activeElement===last){e.preventDefault();first.focus();}
+  }
+});
 // ── Periodic Refresh ──
 refresh();
 setInterval(refresh,5000);
-// ── noVNC live viewer ──
+// ── noVNC / SPICE live viewer ──
 var rfb = null; // noVNC RFB client instance
+var spice = null; // SPICE HTML5 client instance
 
 function startFb() {
-  if (rfb) return; // already connected
+  if (rfb || spice) return; // already connected
   const idx = sel;
   if (idx === null || idx >= vms.length) return;
-  if (vms[idx].status !== 'running') return;
+  const v = vms[idx];
+  if (v.status !== 'running') return;
   var displayEl = document.getElementById('display');
   if (!displayEl) return;
   displayEl.style.display = 'block';
   displayEl.classList.add('loading');
 
-  // Remove any previously-created canvas (noVNC appends its own).
+  // Dispatch based on display type: 2 = SPICE, 3 = VNC
+  if (v.display === 2) {
+    startSpice(idx, displayEl, v);
+  } else if (v.display === 3) {
+    startVnc(idx, displayEl);
+  }
+  // Other display types (GTK, SDL, None) have no remote framebuffer; skip.
+}
+
+function startVnc(idx, displayEl) {
+  // Remove any previously-created canvas.
   var oldCanvas = displayEl.querySelector('canvas');
   if (oldCanvas) displayEl.removeChild(oldCanvas);
 
@@ -376,10 +418,40 @@ function startFb() {
   }
 }
 
+function startSpice(idx, displayEl, v) {
+  // Remove any previously-created canvas.
+  var oldCanvas = displayEl.querySelector('canvas');
+  if (oldCanvas) displayEl.removeChild(oldCanvas);
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = proto + '//' + location.host + '/ws/spice/' + idx;
+
+  try {
+    spice = new SpiceHtml5.SpiceMainConn({
+      uri: url,
+      password: '',
+      screen_id: 'display',
+      onerror: function(e) {
+        console.warn('SPICE error:', e);
+        stopFb();
+      },
+      onsuccess: function() {
+        displayEl.classList.remove('loading');
+      }
+    });
+  } catch (e) {
+    stopFb();
+  }
+}
+
 function stopFb() {
   if (rfb) {
     try { rfb.disconnect(); } catch (e) {}
     rfb = null;
+  }
+  if (spice) {
+    try { spice.stop(); } catch (e) {}
+    spice = null;
   }
   var displayEl = document.getElementById('display');
   if (displayEl) {
@@ -431,6 +503,7 @@ serialReconnectTimer=setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms
 // ── Event Delegation (CSP-safe: no inline handlers) ──
 var actionHandlers={
  toggleSidebar:function(){toggleSidebar();},deselectVm:function(){deselectVm();},
+ toggleToolbarMore:function(){toggleToolbarMore();},
  powerToggle:function(){powerToggle();},pauseGuest:function(){pauseGuest();},
  resumeGuest:function(){resumeGuest();},shutdownGuest:function(){shutdownGuest();},
  resetGuest:function(){resetGuest();},suspendGuest:function(){suspendGuest();},

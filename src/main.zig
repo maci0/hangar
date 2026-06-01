@@ -2007,6 +2007,7 @@ fn themeToolbarButtons() void {
 pub fn main() void {
     app.vm_count = persist.load(&app.vms, std.heap.page_allocator, &app.prefs);
     app.applyTheme(app.prefs.theme);
+    cfltk.Fl_init_all();
     _ = cfltk.Fl_set_scheme("gtk+");
 
     // Initialize the HV abstraction dispatch table (QEMU backend).
@@ -2319,6 +2320,7 @@ pub fn main() void {
     cfltk.Fl_Window_end(win);
     cfltk.Fl_Window_resize_callback(win, &handleWindowResize, null);
     cfltk.Fl_Window_show(win);
+    cfltk.Fl_Window_size_range(win, 0, 0, 0, 0);
 
     // Restore saved window geometry, or maximise to fill available screen space on first launch.
     if (app.prefs.win_x >= 0 and app.prefs.win_y >= 0) {

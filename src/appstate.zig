@@ -190,6 +190,8 @@ pub fn themeInput(w: ?*cfltk.Fl_Input) void {
     if (themed_inputs_len < themed_inputs.len) {
         themed_inputs[themed_inputs_len] = inp;
         themed_inputs_len += 1;
+    } else {
+        _ = std.c.write(2, "themeInput: MAX_THEMED exceeded\n", 31);
     }
 }
 
@@ -201,6 +203,8 @@ pub fn themeChoice(w: ?*cfltk.Fl_Choice) void {
     if (themed_choices_len < themed_choices.len) {
         themed_choices[themed_choices_len] = ch;
         themed_choices_len += 1;
+    } else {
+        _ = std.c.write(2, "themeChoice: MAX_THEMED exceeded\n", 32);
     }
 }
 
@@ -212,6 +216,8 @@ pub fn themeBrowser(w: ?*cfltk.Fl_Browser) void {
     if (themed_browsers_len < themed_browsers.len) {
         themed_browsers[themed_browsers_len] = b;
         themed_browsers_len += 1;
+    } else {
+        _ = std.c.write(2, "themeBrowser: MAX_THEMED exceeded\n", 33);
     }
 }
 
@@ -224,6 +230,8 @@ pub fn themeCheckButton(w: ?*cfltk.Fl_Check_Button) void {
     if (themed_checkbuttons_len < themed_checkbuttons.len) {
         themed_checkbuttons[themed_checkbuttons_len] = cb;
         themed_checkbuttons_len += 1;
+    } else {
+        _ = std.c.write(2, "themeCheckButton: MAX_THEMED exceeded\n", 38);
     }
 }
 
@@ -234,6 +242,8 @@ pub fn themeScroll(w: ?*cfltk.Fl_Scroll) void {
     if (themed_scrolls_len < themed_scrolls.len) {
         themed_scrolls[themed_scrolls_len] = sc;
         themed_scrolls_len += 1;
+    } else {
+        _ = std.c.write(2, "themeScroll: MAX_THEMED exceeded\n", 33);
     }
 }
 
@@ -285,7 +295,7 @@ pub var modal_active: bool = false;
 pub var toolbar_theme_cb: ?*const fn () void = null;
 
 /// Registered widgets for live theme updates.
-const MAX_THEMED = 128;
+const MAX_THEMED = 256;
 var themed_inputs: [MAX_THEMED]?*cfltk.Fl_Input = [_]?*cfltk.Fl_Input{null} ** MAX_THEMED;
 var themed_inputs_len: usize = 0;
 var themed_choices: [MAX_THEMED]?*cfltk.Fl_Choice = [_]?*cfltk.Fl_Choice{null} ** MAX_THEMED;
@@ -306,7 +316,8 @@ var status_detail_buf: [200]u8 = [_]u8{0} ** 200;
 /// Set the status bar text.
 pub fn setStatus(msg: []const u8) void {
     if (status_bar) |sb| {
-        const truncated = if (msg.len <= 255) msg else msg[0..255];
+        const max_msg = status_buf.len - 1;
+        const truncated = if (msg.len <= max_msg) msg else msg[0..max_msg];
         @memcpy(status_buf[0..truncated.len], truncated);
         status_buf[truncated.len] = 0;
         cfltk.Fl_Box_set_label(sb, @ptrCast(&status_buf));
@@ -317,7 +328,8 @@ pub fn setStatus(msg: []const u8) void {
 pub fn setStatusIcon(icon: []const u8, msg: []const u8) void {
     if (status_bar) |sb| {
         const icon_len = icon.len;
-        const msg_len = if (msg.len <= 255 - icon_len) msg.len else 255 - icon_len;
+        const max_msg = status_buf.len - 1 - icon_len;
+        const msg_len = if (msg.len <= max_msg) msg.len else max_msg;
         var offset: usize = 0;
         @memcpy(status_buf[0..icon_len], icon);
         offset += icon_len;
@@ -335,7 +347,8 @@ pub fn setStatusOk(msg: []const u8) void { setStatusIcon("✓ ", msg); }
 pub fn setDetail(i: usize, value: []const u8) void {
     if (i < detail_labels.len and i < detail_buf.len) {
         if (detail_labels[i]) |dl| {
-            const truncated = if (value.len <= 255) value else value[0..255];
+            const max_detail = detail_buf[i].len - 1;
+            const truncated = if (value.len <= max_detail) value else value[0..max_detail];
             @memcpy(detail_buf[i][0..truncated.len], truncated);
             detail_buf[i][truncated.len] = 0;
             cfltk.Fl_Box_set_label(dl, @ptrCast(&detail_buf[i]));

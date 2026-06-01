@@ -8,7 +8,6 @@ const persist = @import("persist.zig");
 const qemu = @import("qemu.zig");
 const qmp = @import("qmp.zig");
 const vnc = @import("vnc_client.zig");
-const spice = @import("spice_client.zig");
 const ws = @import("ws.zig");
 const usock = @import("usock.zig");
 const hv_iface = @import("hv/interface.zig");
@@ -118,6 +117,7 @@ fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/")) return true;
     if (std.mem.eql(u8, path, "/app.js")) return true;
     if (std.mem.eql(u8, path, "/novnc.js")) return true;
+    if (std.mem.eql(u8, path, "/spice.js")) return true;
     if (std.mem.eql(u8, path, "/app.css")) return true;
     if (std.mem.startsWith(u8, path, "/favicon")) return true;
     if (std.mem.eql(u8, path, "/api/vms")) return true;
@@ -125,6 +125,9 @@ fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/api/config")) return true;
     if (std.mem.eql(u8, path, "/api/vnets")) return true;
     // Prefix paths — ensure the prefix ends at a path boundary
+    if (std.mem.startsWith(u8, path, "/ws/vnc/")) return true;
+    if (std.mem.startsWith(u8, path, "/ws/spice/")) return true;
+    if (std.mem.startsWith(u8, path, "/ws/serial/")) return true;
     if (std.mem.startsWith(u8, path, "/api/vm/")) return true;
     if (std.mem.startsWith(u8, path, "/api/fb/")) return true;
     if (std.mem.startsWith(u8, path, "/api/snapshot/list/")) return true;
@@ -344,6 +347,14 @@ fn serveHtml(conn: c.fd_t) void {
         return;
     }
 
+    // ── WebSocket SPICE Proxy ──
+    if (std.mem.startsWith(u8, req, "GET /ws/spice/")) {
+        handleWsSpice(conn, req) catch {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "SPICE proxy failed");
+        };
+        return;
+    }
+
     // ── WebSocket Serial Console ──
     if (std.mem.startsWith(u8, req, "GET /ws/serial/")) {
         handleWsSerial(conn, req) catch {
@@ -491,6 +502,9 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "application/javascript; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET /novnc.js")) {
         response = novnc_js;
+        content_type = "application/javascript; charset=utf-8";
+    } else if (std.mem.startsWith(u8, req, "GET /spice.js")) {
+        response = spice_js;
         content_type = "application/javascript; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET / ")) {
         response = index_html;
@@ -641,6 +655,83 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
 
     vnc2ws.join();
     ws2vnc.join();
+}
+
+/// Handle WebSocket SPICE proxy request.
+/// Upgrades the connection to WebSocket, connects to the VM's SPICE port,
+/// and spawns bidirectional relay threads.
+fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
+    // Parse VM index from URL: GET /ws/spice/<idx>
+    const prefix = "GET /ws/spice/";
+    const start = std.mem.indexOf(u8, req, prefix) orelse return;
+    const rest = req[start + prefix.len ..];
+    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
+    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
+    if (idx >= vm_count) return;
+    const v = &vms[idx];
+    if (!v.isAlive()) return;
+
+    // Perform WebSocket upgrade handshake.
+    const accept_key = ws.parseUpgrade(req) orelse return;
+    try ws.writeUpgradeResponse(conn, accept_key);
+
+    // Connect to the VM's SPICE server.
+    const spice_fd = c.socket(AF_INET, SOCK_STREAM, 0);
+    if (spice_fd < 0) return;
+    defer _ = c.close(spice_fd);
+
+    var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
+    addr.family = AF_INET;
+    addr.port = std.mem.nativeToBig(u16, v.spice_port);
+    addr.addr = std.mem.nativeToBig(u32, @bitCast([4]u8{ 127, 0, 0, 1 }));
+
+    if (c.connect(spice_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) < 0) {
+        try ws.writeClose(conn);
+        return;
+    }
+
+    // Spawn threads for bidirectional relay.
+    const RelayCtx = struct {
+        ws_fd: c.fd_t,
+        spice_fd: c.fd_t,
+    };
+    var ctx = RelayCtx{ .ws_fd = conn, .spice_fd = spice_fd };
+
+    // Thread: SPICE → WebSocket
+    const spice2ws = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+        fn run(ctx_ptr: *RelayCtx) void {
+            var buf: [65536]u8 = undefined;
+            while (true) {
+                const n = c.read(ctx_ptr.spice_fd, &buf, buf.len);
+                if (n <= 0) break;
+                ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch break;
+            }
+            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_WR);
+        }
+    }.run, .{&ctx});
+
+    // Thread: WebSocket → SPICE
+    const ws2spice = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+        fn run(ctx_ptr: *RelayCtx) void {
+            var buf: [65536]u8 = undefined;
+            while (true) {
+                const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
+                if (hdr.opcode == .close) break;
+                if (hdr.opcode == .ping) {
+                    ws.writePong(ctx_ptr.ws_fd) catch break;
+                    continue;
+                }
+                if (hdr.opcode == .pong) continue;
+                const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
+                if (rlen == 0) continue;
+                _ = c.write(ctx_ptr.spice_fd, buf[0..rlen].ptr, rlen);
+            }
+            _ = c.shutdown(ctx_ptr.spice_fd, SHUT_WR);
+        }
+    }.run, .{&ctx});
+
+    spice2ws.join();
+    ws2spice.join();
 }
 
 /// Handle WebSocket Serial Console proxy request.
@@ -1959,6 +2050,7 @@ const index_html = @embedFile("index.html");
 const app_css = @embedFile("web/app.css");
 const app_js = @embedFile("web/app.js");
 const novnc_js = @embedFile("web/novnc.js");
+const spice_js = @embedFile("web/spice.js");
 
 /// Background thread: periodically take AutoProtect snapshots for VMs that have it enabled.
 fn autoprotectTicker() void {

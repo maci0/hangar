@@ -148,13 +148,19 @@ pub fn prefsDialog() void {
             if (pp.mem) |mi| {
                 const val = std.mem.span(cfltk.Fl_Input_value(mi));
                 if (val.len > 0) {
-                    app.prefs.default_memory_mb = std.fmt.parseInt(u32, val, 10) catch 2048;
+                    app.prefs.default_memory_mb = std.fmt.parseInt(u32, val, 10) catch {
+                        app.setStatusErr("Invalid value for default memory — must be a number");
+                        return;
+                    };
                 }
             }
             if (pp.cpu) |ci| {
                 const val = std.mem.span(cfltk.Fl_Input_value(ci));
                 if (val.len > 0) {
-                    app.prefs.default_cpu_cores = std.fmt.parseInt(u32, val, 10) catch 2;
+                    app.prefs.default_cpu_cores = std.fmt.parseInt(u32, val, 10) catch {
+                        app.setStatusErr("Invalid value for default CPU cores — must be a number");
+                        return;
+                    };
                 }
             }
             if (pp.ap_check) |apc| {
@@ -163,13 +169,19 @@ pub fn prefsDialog() void {
             if (pp.ap_int) |ai| {
                 const val = std.mem.span(cfltk.Fl_Input_value(ai));
                 if (val.len > 0) {
-                    app.prefs.autoprotect_interval_min_default = std.fmt.parseInt(u32, val, 10) catch 60;
+                    app.prefs.autoprotect_interval_min_default = std.fmt.parseInt(u32, val, 10) catch {
+                        app.setStatusErr("Invalid value for autoprotect interval — must be a number");
+                        return;
+                    };
                 }
             }
             if (pp.ap_max) |am| {
                 const val = std.mem.span(cfltk.Fl_Input_value(am));
                 if (val.len > 0) {
-                    app.prefs.autoprotect_max_default = std.fmt.parseInt(u32, val, 10) catch 10;
+                    app.prefs.autoprotect_max_default = std.fmt.parseInt(u32, val, 10) catch {
+                        app.setStatusErr("Invalid value for autoprotect max — must be a number");
+                        return;
+                    };
                 }
             }
             if (pp.theme) |tc| {
@@ -202,6 +214,32 @@ pub fn prefsDialog() void {
     while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
     app.modal_active = false;
     cfltk.Fl_delete_widget(@ptrCast(dlg));
+}
+
+// Find the first unused third octet in 192.168.{x}.0/24 (x in 100..254)
+// by scanning existing networks' subnet fields. Prevents collisions after
+// deletes/adds. If all 155 slots are taken, falls back to 240.
+fn firstUnusedSubnet(ns: *const vnet.NetworkSet) u8 {
+    var used: [155]bool = [_]bool{false} ** 155;
+    for (ns.nets[0..ns.count]) |*n| {
+        const s = n.getSubnetSlice();
+        // Expect "192.168.N.0" — extract the third octet.
+        if (s.len >= 11 and std.mem.startsWith(u8, s, "192.168.")) {
+            const rest = s[8..];
+            const dot = std.mem.indexOfScalar(u8, rest, '.') orelse continue;
+            const octet_str = rest[0..dot];
+            if (std.fmt.parseInt(u16, octet_str, 10)) |oct| {
+                if (oct >= 100 and oct < 255) {
+                    used[oct - 100] = true;
+                }
+            } else |_| {}
+        }
+    }
+    var oct: u16 = 100;
+    while (oct < 255) : (oct += 1) {
+        if (!used[oct - 100]) return @intCast(oct);
+    }
+    return 240; // all full — fallback
 }
 
 pub fn vnetDialog() void {
@@ -275,13 +313,23 @@ pub fn vnetDialog() void {
             refreshFn(vdp);
         }
     };
+
     const AddCB = struct {
         fn go(_: ?*cfltk.Fl_Widget, data: ?*anyopaque) callconv(.c) void {
             const vdp: *VDlg = @ptrCast(@alignCast(data orelse return));
             if (vdp.ns.count >= vnet.MAX_VNETS) return;
             var name_buf: [16]u8 = undefined;
             const name = std.fmt.bufPrint(&name_buf, "VMnet{d}", .{vdp.ns.count}) catch "VMnetX";
-            _ = vdp.ns.add(name, .host_only, "192.168.100.0", "255.255.255.0", true, "192.168.100.128", "192.168.100.254", "");
+            // Find the first unused 192.168.{x}.0/24 subnet to avoid
+            // collisions when networks are deleted and re-added.
+            const third_octet = firstUnusedSubnet(vdp.ns);
+            var subnet_buf: [16]u8 = undefined;
+            const subnet = std.fmt.bufPrint(&subnet_buf, "192.168.{d}.0", .{third_octet}) catch "192.168.240.0";
+            var dstart_buf: [16]u8 = undefined;
+            const dstart = std.fmt.bufPrint(&dstart_buf, "192.168.{d}.128", .{third_octet}) catch "192.168.240.128";
+            var dend_buf: [16]u8 = undefined;
+            const dend = std.fmt.bufPrint(&dend_buf, "192.168.{d}.254", .{third_octet}) catch "192.168.240.254";
+            _ = vdp.ns.add(name, .host_only, subnet, "255.255.255.0", true, dstart, dend, "");
             refreshFn(vdp);
         }
     };
@@ -593,6 +641,25 @@ pub fn migrateDialog() void {
                 const dest = std.mem.span(cfltk.Fl_Input_value(u));
                 if (dest.len == 0) {
                     if (mdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: enter a destination URI");
+                    return;
+                }
+                // Validate URI: reject empty, exec: (arbitrary command execution), and
+                // require a recognised transport prefix.
+                const valid_prefixes = [_][]const u8{ "tcp:", "unix:", "file:", "fd:" };
+                var prefix_ok = false;
+                for (valid_prefixes) |pfx| {
+                    if (std.mem.startsWith(u8, dest, pfx)) {
+                        prefix_ok = true;
+                        break;
+                    }
+                }
+                if (!prefix_ok) {
+                    if (mdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: invalid URI — must start with tcp:, unix:, file:, or fd:");
+                    return;
+                }
+                // Reject path traversal in file:/unix: paths.
+                if (std.mem.indexOf(u8, dest, "..") != null) {
+                    if (mdp.status) |sl| cfltk.Fl_Box_set_label(sl, "Error: path traversal (..) not allowed in URI");
                     return;
                 }
 

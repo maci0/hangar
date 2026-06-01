@@ -13,7 +13,17 @@ pub const SpinMutex = struct {
     inner: std.atomic.Mutex = .unlocked,
 
     pub fn lock(self: *SpinMutex) void {
-        while (!self.inner.tryLock()) std.atomic.spinLoopHint();
+        var spins: u32 = 0;
+        while (!self.inner.tryLock()) {
+            spins += 1;
+            if (spins & 63 == 0) {
+                // Yield to the OS every 64 spins to avoid 100% CPU
+                // under contention while keeping the fast-path lock-free.
+                std.Thread.yield() catch {};
+            } else {
+                std.atomic.spinLoopHint();
+            }
+        }
     }
 
     pub fn unlock(self: *SpinMutex) void {

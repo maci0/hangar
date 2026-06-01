@@ -13,8 +13,6 @@ pub fn build(b: *std.Build) !void {
     exe_mod.addIncludePath(b.path("deps/cfltk/include"));
     exe_mod.addIncludePath(.{ .cwd_relative = "/usr/include" });
     exe_mod.addObjectFile(.{ .cwd_relative = "deps/cfltk/build_manual/libcfltk.a" });
-    exe_mod.addObjectFile(.{ .cwd_relative = "/usr/lib/libfltk_images.a" });
-    exe_mod.addObjectFile(.{ .cwd_relative = "/usr/lib/libfltk.a" });
     for ([_][]const u8{ "jpeg", "png", "z", "X11", "Xext", "Xinerama", "Xcursor", "Xrender", "Xfixes", "Xft", "fontconfig", "pango-1.0", "pangoxft-1.0", "pangoft2-1.0", "pangocairo-1.0", "cairo", "gobject-2.0", "glib-2.0", "harfbuzz", "freetype", "wayland-client", "wayland-cursor", "xkbcommon", "dbus-1", "decor-0", "dl", "pthread" }) |lib| {
         exe_mod.linkSystemLibrary(lib, .{});
     }
@@ -98,4 +96,16 @@ pub fn build(b: *std.Build) !void {
     fuzzmodals.dependOn(&exe_install.step);
     const fuzzmodals_cmd = b.addSystemCommand(&.{ "bash", "tests/fuzz_modals.sh" });
     fuzzmodals.dependOn(&fuzzmodals_cmd.step);
+
+    // ── FLTK visual screenshot regression (light mode) ──
+    const fltk_ss = b.step("fltk-screenshots", "FLTK visual regression screenshots (light)");
+    fltk_ss.dependOn(&exe_install.step);
+    const fltk_ss_cmd = b.addSystemCommand(&.{ "bash", "tests/visual/e2e_fltk_screenshots.sh" });
+    fltk_ss.dependOn(&fltk_ss_cmd.step);
+
+    // ── FLTK visual screenshot regression (dark mode) ──
+    const fltk_ss_dark = b.step("fltk-screenshots-dark", "FLTK visual regression screenshots (dark)");
+    fltk_ss_dark.dependOn(&exe_install.step);
+    const fltk_ss_dark_cmd = b.addSystemCommand(&.{ "bash", "tests/visual/e2e_fltk_screenshots_dark.sh" });
+    fltk_ss_dark.dependOn(&fltk_ss_dark_cmd.step);
 }

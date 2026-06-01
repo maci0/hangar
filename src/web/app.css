@@ -4,9 +4,10 @@
   color-scheme:dark;
   --bg:#0b0d11; --surface:#14161b; --raised:#1a1d23;
   --border:#252830; --border-focus:#3b82f6;
-  --text:#e4e6eb; --text-muted:#9498a1; --text-dim:#6b6f79;
+  --text:#e4e6eb; --text-muted:#9498a1; --text-dim:#8b8f9a;
   --accent:#3b82f6; --accent-hover:#5091f8; --accent-subtle:rgba(59,130,246,0.10);
-  --danger:#e84040; --danger-hover:#f05555; --success:#22c55e;
+  --danger:#e84040; --danger-hover:#f05555; --danger-subtle:transparent;
+  --success:#22c55e;
   --warn:#f59e0b; --pause:#f97316;
   --display-bg:#000000; --serial-bg:#08090d; --serial-fg:#00ff66;
   --gradient-stop:#6366f1;
@@ -27,9 +28,10 @@
   color-scheme:light;
   --bg:#f5f6f8; --surface:#ffffff; --raised:#eef0f3;
   --border:#d1d5db; --border-focus:#3b82f6;
-  --text:#111317; --text-muted:#4b5563; --text-dim:#6b7280;
+  --text:#111317; --text-muted:#4b5563; --text-dim:#5c6370;
   --accent:#2563eb; --accent-hover:#1d4ed8; --accent-subtle:rgba(37,99,235,0.07);
-  --danger:#dc2626; --danger-hover:#b91c1c; --success:#16a34a;
+  --danger:#dc2626; --danger-hover:#b91c1c; --danger-subtle:rgba(220,38,38,0.06);
+  --success:#16a34a;
   --warn:#d97706; --pause:#ea580c;
   --display-bg:#000000; --serial-bg:#f0f0f0; --serial-fg:#1a1a2e;
   --gradient-stop:#818cf8;
@@ -93,8 +95,7 @@ main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;posit
 .btn:disabled{opacity:0.42;cursor:not-allowed;pointer-events:none}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--text-on-accent);font-weight:600;box-shadow:0 1px 3px var(--accent-glow-subtle)}
 .btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);box-shadow:0 2px 8px var(--accent-glow)}
-.btn.danger{background:transparent;border-color:var(--danger);color:var(--danger)}
-:root.light .btn.danger{background:rgba(220,38,38,0.06)}
+.btn.danger{background:var(--danger-subtle);border-color:var(--danger);color:var(--danger)}
 .btn.danger:hover{background:var(--danger);color:var(--text-on-danger);box-shadow:0 2px 8px var(--danger-glow)}
 .btn.danger:focus-visible{outline:2px solid var(--danger);outline-offset:2px}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--text-muted)}
@@ -103,6 +104,7 @@ main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;posit
 .content-area::-webkit-scrollbar{width:5px}
 .content-area::-webkit-scrollbar-track{background:transparent}
 .content-area::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.content-area::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover)}
 /* ─── Display Canvas ─── */
 #display{background:var(--display-bg);border-radius:var(--radius-lg);margin-bottom:20px;overflow:hidden;display:none;box-shadow:var(--shadow-sm);animation:fade-in 200ms ease;position:relative}
 #display.loading::after{content:'';position:absolute;top:50%;left:50%;width:36px;height:36px;margin:-18px 0 0 -18px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 700ms linear infinite}
@@ -123,6 +125,7 @@ dialog h3{font-size:15px;font-weight:600;padding:18px 22px 14px;border-bottom:1p
 dialog .dialog-body{padding:18px 22px;max-height:62vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 dialog .dialog-body::-webkit-scrollbar{width:4px}
 dialog .dialog-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+dialog .dialog-body::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-hover)}
 dialog label{display:block;font-size:11px;color:var(--text-muted);font-weight:500;margin-top:12px;margin-bottom:4px;letter-spacing:0.1px}
 dialog label:first-child{margin-top:0}
 dialog input,dialog select{width:100%;padding:8px 11px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;outline:none;transition:border-color var(--transition),box-shadow var(--transition)}
@@ -228,6 +231,23 @@ aside .vm-item .star.fav{color:var(--warn)}
   body.sidebar-overlay::after{content:'';position:fixed;inset:0;background:var(--backdrop-overlay);z-index:140}
   aside #vmlist{padding-bottom:28px}
 }
+/* ─── Responsive Toolbar ─── */
+.toolbar-more{display:none}
+@media(max-width:700px){
+  .toolbar .sep{display:none}
+  .toolbar .btn:not(.keep-mobile){display:none}
+  .toolbar .btn.keep-mobile{display:inline-flex}
+  .toolbar-more{display:inline-flex}
+  .toolbar.open-more .btn:not(.keep-mobile){display:inline-flex}
+  .toolbar.open-more .sep{display:block}
+  .toolbar.open-more{flex-wrap:wrap}
+}
+/* ─── Toolbar More Popover ─── */
+.toolbar-more-popover{position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-lg);padding:4px;z-index:200;min-width:180px;display:none;animation:fade-in 100ms ease}
+.toolbar-more-popover.open{display:block}
+.toolbar-more-popover .btn{display:flex;width:100%;justify-content:flex-start;border:none;background:transparent;padding:7px 14px;font-size:13px}
+.toolbar-more-popover .btn:hover{background:var(--accent-subtle);color:var(--text)}
+.toolbar-more-popover .sep{height:1px;background:var(--border);margin:2px 8px}
 /* ─── Empty State SVG Icons ─── */
 .empty-state svg{width:72px;height:72px;margin-bottom:18px;opacity:0.18;color:var(--text-dim)}
 /* ─── focus-visible on selects ─── */
@@ -259,9 +279,10 @@ kbd{background:var(--bg);border:1px solid var(--border);border-radius:3px;paddin
   :root:not(.dark):not(.light){color-scheme:light;
     --bg:#f5f6f8; --surface:#ffffff; --raised:#eef0f3;
     --border:#d1d5db; --border-focus:#3b82f6;
-    --text:#111317; --text-muted:#4b5563; --text-dim:#6b7280;
+    --text:#111317; --text-muted:#4b5563; --text-dim:#5c6370;
     --accent:#2563eb; --accent-hover:#1d4ed8; --accent-subtle:rgba(37,99,235,0.07);
-    --danger:#dc2626; --danger-hover:#b91c1c; --success:#16a34a;
+    --danger:#dc2626; --danger-hover:#b91c1c; --danger-subtle:rgba(220,38,38,0.06);
+    --success:#16a34a;
     --warn:#d97706; --pause:#ea580c;
     --display-bg:#000000; --serial-bg:#f0f0f0; --serial-fg:#1a1a2e;
     --gradient-stop:#818cf8;
@@ -274,4 +295,39 @@ kbd{background:var(--bg);border:1px solid var(--border);border-radius:3px;paddin
     --shadow-sm:0 1px 2px rgba(0,0,0,0.06);
     --shadow-lg:0 20px 55px rgba(0,0,0,0.12),0 0 0 1px var(--border);
   }
+}
+/* ─── Responsive: tablet / narrow desktop (≤1024px) ─── */
+@media(max-width:1024px){
+  aside{width:220px}
+  #vmlist .vm-item{padding:8px 10px}
+  #vmlist .vm-name{font-size:12px}
+  .toolbar{flex-wrap:wrap;gap:4px}
+  .toolbar .btn{padding:5px 10px;font-size:11px}
+  #content{padding:16px}
+}
+/* ─── Responsive: mobile (≤600px) — tighter adjustments beyond the 900px rules ─── */
+@media(max-width:600px){
+  aside{width:100vw}
+  aside.open{width:100vw}
+  #vmlist .vm-item{padding:10px 12px}
+  .toolbar{flex-wrap:wrap;justify-content:flex-start;padding:4px;gap:3px}
+  .toolbar .btn{padding:5px 8px;font-size:10px}
+  .toolbar .btn .btn-icon{font-size:13px}
+  .summary-grid{grid-template-columns:1fr!important}
+  .card-value{font-size:13px}
+  .dialog,.modal{width:calc(100vw - 16px)!important;max-width:100%!important;margin:8px!important;padding:16px!important}
+  .dialog h2,.modal h2{font-size:16px}
+  #content{padding:8px}
+  #statusbar{font-size:11px;padding:4px 8px}
+  .toast{max-width:calc(100vw - 32px);font-size:12px}
+}
+/* ─── Touch-friendly tweaks ─── */
+@media(pointer:coarse){
+  .btn,.vm-item{touch-action:manipulation}
+  #vmlist .vm-item{min-height:44px}
+  .btn{min-height:36px}
+}
+/* ─── Reduced motion ─── */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important}
 }

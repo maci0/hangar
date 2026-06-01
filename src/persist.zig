@@ -521,13 +521,27 @@ fn parseJsonString(s: []const u8, out_buf: []u8) ?struct { value: []const u8, re
         }
         if (s[i] == '\\' and i + 1 < s.len) {
             if (s[i + 1] == 'u' and i + 5 < s.len) {
-                // simple \uXXXX parse (only handles ASCII range properly to avoid full UTF-8 encoding here,
-                // but realistically we only emit \u00XX for control characters).
+                // Decode \uXXXX into a proper UTF-8 sequence.
                 const hex = s[i + 2 .. i + 6];
-                if (std.fmt.parseInt(u8, hex, 16)) |char_val| {
-                    if (out_len < out_buf.len) {
-                        out_buf[out_len] = char_val;
-                        out_len += 1;
+                if (std.fmt.parseInt(u16, hex, 16)) |codepoint| {
+                    if (codepoint < 0x80) {
+                        if (out_len < out_buf.len) {
+                            out_buf[out_len] = @intCast(codepoint);
+                            out_len += 1;
+                        }
+                    } else if (codepoint < 0x800) {
+                        if (out_len + 1 < out_buf.len) {
+                            out_buf[out_len] = @intCast(0xC0 | (codepoint >> 6));
+                            out_buf[out_len + 1] = @intCast(0x80 | (codepoint & 0x3F));
+                            out_len += 2;
+                        }
+                    } else {
+                        if (out_len + 2 < out_buf.len) {
+                            out_buf[out_len] = @intCast(0xE0 | (codepoint >> 12));
+                            out_buf[out_len + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+                            out_buf[out_len + 2] = @intCast(0x80 | (codepoint & 0x3F));
+                            out_len += 3;
+                        }
                     }
                 } else |_| {
                     // Invalid hex, just skip it to avoid crashing
@@ -1021,11 +1035,21 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
     // Find the "vms" array in the top-level object.
     var cur: []const u8 = content;
 
-    // Skip to the "vms" key
+    // Skip to the "vms" key.  Two guards prevent false matches inside string
+    // values: (1) the byte before `"vms"` must be a JSON key-position
+    // character (start-of-input, `{`, `,`, or whitespace), and (2) the
+    // character after the closing quote must be `:`.
     while (cur.len > 0) {
         if (std.mem.indexOf(u8, cur, "\"vms\"")) |idx| {
+            // Guard 1: the byte before the match must be at a key position.
+            const before = if (idx == 0) 0 else cur[idx - 1];
+            if (idx > 0 and before != '{' and before != ',' and before != ' ' and before != '\t' and before != '\n' and before != '\r') {
+                cur = cur[idx + 1 ..]; // skip one byte for forward progress
+                continue;
+            }
             cur = cur[idx + 5 ..]; // skip past "vms"
             cur = skipWs(cur);
+            // Guard 2: the key must be followed by `:`.
             if (cur.len > 0 and cur[0] == ':') {
                 cur = skipWs(cur[1..]);
                 break;
@@ -1366,6 +1390,52 @@ test "parseJsonString: handles \\uXXXX for control chars" {
     const result = parseJsonString("\"hello\\u000aworld\"", &out) orelse unreachable;
     // \u000a = newline
     try std.testing.expectEqualStrings("hello\nworld", result.value);
+}
+
+test "parseJsonString: handles \\uXXXX non-ASCII (UTF-8)" {
+    var out: [64]u8 = undefined;
+    // \u00E9 = é (U+00E9, 2-byte UTF-8: 0xC3 0xA9)
+    const r1 = parseJsonString("\"caf\\u00E9\"", &out) orelse unreachable;
+    try std.testing.expectEqualStrings("café", r1.value);
+    // \u20AC = € (U+20AC, 3-byte UTF-8: 0xE2 0x82 0xAC)
+    const r2 = parseJsonString("\"\\u20AC100\"", &out) orelse unreachable;
+    try std.testing.expectEqualStrings("€100", r2.value);
+    // \u0000 = NUL (still 1 byte)
+    const r3 = parseJsonString("\"a\\u0000b\"", &out) orelse unreachable;
+    try std.testing.expectEqual(@as(usize, 3), r3.value.len);
+    try std.testing.expectEqual(@as(u8, 'a'), r3.value[0]);
+    try std.testing.expectEqual(@as(u8, 0), r3.value[1]);
+    try std.testing.expectEqual(@as(u8, 'b'), r3.value[2]);
+}
+
+test "loadFromSlice: vms key not confused by 'vms' inside string value" {
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs: vm.Prefs = .{};
+    // "vms" appears inside a VM name value — should not confuse the parser.
+    const json =
+        \\{"vms":[
+        \\  {"name":"vms-server","cpu_cores":1,"memory_mb":256,"disk_size_gb":10}
+        \\]}
+    ;
+    const n = loadFromSlice(&vms, json, &prefs);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("vms-server", std.mem.span(vms[0].getName()));
+}
+
+test "loadFromSlice: \"vms\" inside string followed by colon does not match" {
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs: vm.Prefs = .{};
+    // The notes field contains the literal text `"vms" :` which superficially
+    // looks like a key-value pair. The parser must reject it because it's
+    // inside a string value, not at a JSON key position.
+    const json =
+        \\{"vms":[
+        \\  {"name":"test","notes":"look at \\"vms\\" : tricked"}
+        \\]}
+    ;
+    const n = loadFromSlice(&vms, json, &prefs);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("test", std.mem.span(vms[0].getName()));
 }
 
 // ── Fuzz tests ──────────────────────────────────────────────────────
