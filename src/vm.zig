@@ -2171,3 +2171,102 @@ test "BootFirmware: fromStr unknown defaults to bios" {
     try std.testing.expectEqual(BootFirmware.bios, BootFirmware.fromStr(""));
 }
 
+test "GuestOs: fromStr values" {
+    try std.testing.expectEqual(GuestOs.linux, GuestOs.fromStr("linux"));
+    try std.testing.expectEqual(GuestOs.windows, GuestOs.fromStr("windows"));
+    try std.testing.expectEqual(GuestOs.freebsd, GuestOs.fromStr("freebsd"));
+    try std.testing.expectEqual(GuestOs.macos, GuestOs.fromStr("macos"));
+    try std.testing.expectEqual(GuestOs.other, GuestOs.fromStr("other"));
+}
+
+test "GuestOs: fromStr case-insensitive" {
+    try std.testing.expectEqual(GuestOs.linux, GuestOs.fromStr("Linux"));
+    try std.testing.expectEqual(GuestOs.windows, GuestOs.fromStr("WINDOWS"));
+    try std.testing.expectEqual(GuestOs.macos, GuestOs.fromStr("MacOS"));
+}
+
+test "GuestOs: fromStr unknown defaults to linux" {
+    try std.testing.expectEqual(GuestOs.linux, GuestOs.fromStr(""));
+    try std.testing.expectEqual(GuestOs.linux, GuestOs.fromStr("invalid"));
+}
+
+test "VmAccel: fromIndex round-trip" {
+    for (0..VmAccel.count) |i| {
+        const a = VmAccel.fromIndex(i);
+        try std.testing.expectEqual(i, a.toIndex());
+    }
+}
+
+test "VmAccel: toIndex inverts fromIndex" {
+    const variants = [_]VmAccel{ .auto, .tcg, .kvm, .hvf, .whpx };
+    for (variants) |v| {
+        try std.testing.expectEqual(v, VmAccel.fromIndex(v.toIndex()));
+    }
+}
+
+test "VmAccel: toStr values" {
+    try std.testing.expectEqualStrings("auto", std.mem.span(VmAccel.auto.toStr()));
+    try std.testing.expectEqualStrings("tcg", std.mem.span(VmAccel.tcg.toStr()));
+    try std.testing.expectEqualStrings("kvm", std.mem.span(VmAccel.kvm.toStr()));
+    try std.testing.expectEqualStrings("hvf", std.mem.span(VmAccel.hvf.toStr()));
+    try std.testing.expectEqualStrings("whpx", std.mem.span(VmAccel.whpx.toStr()));
+}
+
+test "VmAccel: label values" {
+    try std.testing.expectEqualStrings("Auto (best available)", std.mem.span(VmAccel.auto.label()));
+    try std.testing.expectEqualStrings("TCG (software)", std.mem.span(VmAccel.tcg.label()));
+    try std.testing.expectEqualStrings("KVM (Linux)", std.mem.span(VmAccel.kvm.label()));
+    try std.testing.expectEqualStrings("HVF (macOS)", std.mem.span(VmAccel.hvf.label()));
+    try std.testing.expectEqualStrings("WHPX (Windows)", std.mem.span(VmAccel.whpx.label()));
+}
+
+test "VmAccel: out-of-range fromIndex defaults" {
+    try std.testing.expectEqual(VmAccel.auto, VmAccel.fromIndex(99));
+}
+
+test "VmAccel: platformDefault returns a valid variant" {
+    const pd = VmAccel.platformDefault();
+    _ = pd.toStr(); // must not crash
+    _ = pd.label();
+}
+
+test "VmConfig: findUnusedVncPort returns first gap" {
+    var vms: [4]VmConfig = .{VmConfig{}} ** 4;
+    vms[0].vnc_port = 5900;
+    vms[1].vnc_port = 5901;
+    // 5902 is free
+    vms[2].vnc_port = 5903;
+    vms[3].vnc_port = 5904;
+    try std.testing.expectEqual(@as(u16, 5902), findUnusedVncPort(&vms));
+}
+
+test "VmConfig: findUnusedVncPort empty list returns 5900" {
+    var vms: [0]VmConfig = .{};
+    try std.testing.expectEqual(@as(u16, 5900), findUnusedVncPort(&vms));
+}
+
+test "VmConfig: findUnusedVncPort skips used port" {
+    var vms: [1]VmConfig = .{VmConfig{}} ** 1;
+    vms[0].vnc_port = 5900;
+    try std.testing.expectEqual(@as(u16, 5901), findUnusedVncPort(&vms));
+}
+
+test "VmConfig: findUnusedSpicePort returns first gap" {
+    var vms: [3]VmConfig = .{VmConfig{}} ** 3;
+    vms[0].spice_port = 5930;
+    vms[1].spice_port = 5931;
+    // 5932 is free
+    try std.testing.expectEqual(@as(u16, 5932), findUnusedSpicePort(&vms));
+}
+
+test "VmConfig: findUnusedSpicePort empty list returns 5930" {
+    var vms: [0]VmConfig = .{};
+    try std.testing.expectEqual(@as(u16, 5930), findUnusedSpicePort(&vms));
+}
+
+test "VmConfig: findUnusedSpicePort wraps at 5999" {
+    var vms: [1]VmConfig = .{VmConfig{}} ** 1;
+    vms[0].spice_port = 5999;
+    try std.testing.expectEqual(@as(u16, 5930), findUnusedSpicePort(&vms));
+}
+

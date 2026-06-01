@@ -19,6 +19,7 @@ const appio = @import("appio.zig");
 const autoprotect = @import("autoprotect.zig");
 const snapparse = @import("snapparse.zig");
 const sync = @import("sync.zig");
+const urlencode = @import("urlencode.zig");
 
 extern fn time(t: ?*c_long) c_long;
 
@@ -345,8 +346,11 @@ fn serveHtml(conn: c.fd_t) void {
         response = try handleRename(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/save")) {
-        persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
         response = "saved";
+        persist.save(&vms, vm_count, prefs) catch {
+            logErr("persist.save failed");
+            response = "save failed";
+        };
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/create")) {
         response = try handleNewVm(req);
@@ -878,7 +882,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         var kv = std.mem.splitScalar(u8, pair, '=');
         const key = kv.next() orelse continue;
         const raw = kv.next() orelse continue;
-        const val = if (raw.len <= val_buf.len) urlDecode(&val_buf, raw) else raw;
+        const val = if (raw.len <= val_buf.len) urlencode.urlDecode(&val_buf, raw) else raw;
         if (std.mem.eql(u8, key, "name")) {
             if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
             if (!vm.isValidVmName(val)) return "invalid name";
@@ -895,7 +899,11 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     cfg.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
     vms[vm_count] = cfg;
     vm_count += 1;
-    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+    persist.save(&vms, vm_count, prefs) catch |e| {
+        var ebuf: [64]u8 = undefined;
+        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        return "save failed";
+    };
     return "ok";
 }
 
@@ -945,7 +953,11 @@ fn handleClone(req: []const u8) ![]const u8 {
 
     vms[vm_count] = clone;
     vm_count += 1;
-    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+    persist.save(&vms, vm_count, prefs) catch |e| {
+        var ebuf: [64]u8 = undefined;
+        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        return "save failed";
+    };
     return "ok";
 }
 
@@ -971,7 +983,11 @@ fn handleDelete(req: []const u8) ![]const u8 {
     g_vmm_handles[vm_count - 1] = null;
     vm_started[vm_count - 1] = 0;
     vm_count -= 1;
-    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+    persist.save(&vms, vm_count, prefs) catch |e| {
+        var ebuf: [64]u8 = undefined;
+        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        return "save failed";
+    };
     return "ok";
 }
 
@@ -994,7 +1010,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         var kv = std.mem.splitScalar(u8, pair, '=');
         const key = kv.next() orelse continue;
         const raw = kv.next() orelse continue;
-        const val = if (raw.len <= val_buf.len) urlDecode(&val_buf, raw) else raw;
+        const val = if (raw.len <= val_buf.len) urlencode.urlDecode(&val_buf, raw) else raw;
         if (std.mem.eql(u8, key, "name")) {
             if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
             if (!vm.isValidVmName(val)) return "invalid name";
@@ -1144,7 +1160,11 @@ fn handleRename(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "name")) {
             if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
             vms[idx].setName(val);
-            persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+            persist.save(&vms, vm_count, prefs) catch |e| {
+                var ebuf: [64]u8 = undefined;
+                logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+                return "save failed";
+            };
             return "ok";
         }
     }
@@ -1270,7 +1290,7 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
     const body = req[body_start + 4 ..];
     const raw_tag = std.mem.trim(u8, body, " \r\n");
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    const tag = urlDecode(&decode_buf, raw_tag);
+    const tag = urlencode.urlDecode(&decode_buf, raw_tag);
     if (!validateSnapshotTag(tag)) return "no name";
     if (getVmmHandle(idx)) |h| {
         g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "apply err";
@@ -1291,7 +1311,7 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
     const body = req[body_start + 4 ..];
     const raw_tag = std.mem.trim(u8, body, " \r\n");
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    const tag = urlDecode(&decode_buf, raw_tag);
+    const tag = urlencode.urlDecode(&decode_buf, raw_tag);
     if (!validateSnapshotTag(tag)) return "no name";
     if (getVmmHandle(idx)) |h| {
         g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), tag, std.heap.page_allocator) catch return "delete err";
@@ -1347,7 +1367,11 @@ fn handleImport(req: []const u8) ![]const u8 {
     cfg.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
     vms[vm_count] = cfg;
     vm_count += 1;
-    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+    persist.save(&vms, vm_count, prefs) catch |e| {
+        var ebuf: [64]u8 = undefined;
+        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        return "save failed";
+    };
     return "ok";
 }
 
@@ -1612,42 +1636,6 @@ fn handleVnetsJson(buf: []u8) []const u8 {
     return buf[0..n];
 }
 
-/// URL-decode a percent-encoded string in-place. Returns the decoded slice
-/// (always <= src.len). Converts %XX→byte and '+'→' '.
-fn urlDecode(buf: []u8, src: []const u8) []u8 {
-    var wi: usize = 0;
-    var ri: usize = 0;
-    while (ri < src.len) : (ri += 1) {
-        if (src[ri] == '%' and ri + 2 < src.len) {
-            const hi = std.fmt.charToDigit(src[ri + 1], 16) catch {
-                buf[wi] = '%'; wi += 1; continue;
-            };
-            const lo = std.fmt.charToDigit(src[ri + 2], 16) catch {
-                buf[wi] = '%'; wi += 1; continue;
-            };
-            buf[wi] = (hi << 4) | lo;
-            wi += 1;
-            ri += 2;
-        } else if (src[ri] == '+') {
-            buf[wi] = ' ';
-            wi += 1;
-        } else {
-            buf[wi] = src[ri];
-            wi += 1;
-        }
-    }
-    return buf[0..wi];
-}
-
-/// Extract a URL-decoded form value from `key=val&...` body. Returns empty
-/// slice when not found. Result is written into `buf` (must be >= val.len).
-fn formVal(body: []const u8, key: []const u8, buf: []u8) []const u8 {
-    const raw = bodyVal(body, key);
-    if (raw.len == 0) return "";
-    if (raw.len <= buf.len) return urlDecode(buf, raw);
-    return raw; // shouldn't happen; return raw as best-effort
-}
-
 /// Parse key=value body data. Returns empty slice when not found.
 fn bodyVal(body: []const u8, key: []const u8) []const u8 {
     var pat_buf: [64]u8 = undefined;
@@ -1781,10 +1769,23 @@ const app_js = @embedFile("web/app.js");
 fn autoprotectTicker() void {
     while (true) {
         appio.sleepMs(30_000);
+
+        // Collect work items under the lock, release before I/O
+        const SnapWork = struct {
+            idx: usize,
+            disk_path: [512]u8,
+            disk_path_len: usize,
+            snap_name: [40]u8,
+            snap_name_len: usize,
+            autoprotect_max: u32,
+        };
+        var work_items: [16]SnapWork = undefined;
+        var work_count: usize = 0;
+
         vms_mutex.lock();
         const now = time(null);
         var i: usize = 0;
-        while (i < vm_count) : (i += 1) {
+        while (i < vm_count and work_count < work_items.len) : (i += 1) {
             const v = &vms[i];
             if (!v.autoprotect or v.status != .running or !v.hasDisk()) continue;
             if (!autoprotect.due(true, v.autoprotect_interval_min, v.autoprotect_last_epoch, now)) continue;
@@ -1796,24 +1797,46 @@ fn autoprotectTicker() void {
             var name_buf: [40]u8 = undefined;
             const snap_name = autoprotect.snapName(&name_buf, seq);
 
-            // Take snapshot via HV abstraction, fall back to qemu CLI
-            if (getVmmHandle(i)) |h| {
-                g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch continue;
+            const disk_path = v.getDiskPathSlice();
+            var dp_buf: [512]u8 = undefined;
+            if (disk_path.len > dp_buf.len) continue;
+            @memcpy(dp_buf[0..disk_path.len], disk_path);
+
+            work_items[work_count] = .{
+                .idx = i,
+                .disk_path = dp_buf,
+                .disk_path_len = disk_path.len,
+                .snap_name = name_buf,
+                .snap_name_len = snap_name.len,
+                .autoprotect_max = v.autoprotect_max,
+            };
+            work_count += 1;
+        }
+        vms_mutex.unlock();
+
+        // Perform snapshot I/O outside the lock
+        var wi: usize = 0;
+        while (wi < work_count) : (wi += 1) {
+            const w = &work_items[wi];
+            const dp = w.disk_path[0..w.disk_path_len];
+            const sn = w.snap_name[0..w.snap_name_len];
+
+            if (getVmmHandle(w.idx)) |h| {
+                g_vmm.snapshotCreateFn(h, dp, sn, std.heap.page_allocator) catch continue;
             } else {
-                qemu.snapshotCreate(v.getDiskPathSlice(), snap_name, std.heap.page_allocator) catch continue;
+                qemu.snapshotCreate(dp, sn, std.heap.page_allocator) catch continue;
             }
 
             // Prune excess AutoProtect snapshots
             var list_buf: [4096]u8 = undefined;
-            const list_n: usize = if (getVmmHandle(i)) |h|
-                g_vmm.snapshotListFn(h, v.getDiskPathSlice(), &list_buf, std.heap.page_allocator) catch continue
+            const list_n: usize = if (getVmmHandle(w.idx)) |h|
+                g_vmm.snapshotListFn(h, dp, &list_buf, std.heap.page_allocator) catch continue
             else
-                qemu.snapshotList(v.getDiskPathSlice(), &list_buf, std.heap.page_allocator) catch continue;
+                qemu.snapshotList(dp, &list_buf, std.heap.page_allocator) catch continue;
 
             if (list_n == 0 or list_n > list_buf.len) continue;
             const list_str = list_buf[0..list_n];
 
-            // Count AutoProtect snapshots and collect oldest names
             var auto_names: [32][]const u8 = undefined;
             var auto_count: usize = 0;
             var lines = std.mem.splitSequence(u8, list_str, "\n");
@@ -1830,19 +1853,20 @@ fn autoprotectTicker() void {
                 }
             }
 
-            const excess = autoprotect.pruneExcess(auto_count, v.autoprotect_max);
-            // Delete the oldest AutoProtect snapshots (they come first in the list)
+            const excess = autoprotect.pruneExcess(auto_count, w.autoprotect_max);
             var d: usize = 0;
             while (d < excess and d < auto_names.len) : (d += 1) {
-                if (getVmmHandle(i)) |h| {
-                    g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), auto_names[d], std.heap.page_allocator) catch {};
+                if (getVmmHandle(w.idx)) |h| {
+                    g_vmm.snapshotDeleteFn(h, dp, auto_names[d], std.heap.page_allocator) catch {};
                 } else {
-                    qemu.snapshotDelete(v.getDiskPathSlice(), auto_names[d], std.heap.page_allocator) catch {};
+                    qemu.snapshotDelete(dp, auto_names[d], std.heap.page_allocator) catch {};
                 }
             }
-
-            persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
         }
+
+        // Re-acquire lock only for the save
+        vms_mutex.lock();
+        persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
         vms_mutex.unlock();
     }
 }
@@ -2462,6 +2486,33 @@ test "fuzz: sanitizeHeaderValue never panics on random input" {
     }
 }
 
+test "writeAll: writes exact bytes to fd via pipe" {
+    var fds: [2]c_int = undefined;
+    if (c.pipe(&fds) != 0) return;
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    const msg = "hello from writeAll";
+    try std.testing.expect(writeAll(fds[1], msg.ptr, msg.len));
+    var buf: [64]u8 = undefined;
+    const n = c.read(fds[0], &buf, buf.len);
+    try std.testing.expect(n >= 0);
+    try std.testing.expectEqualStrings(msg, buf[0..@intCast(n)]);
+}
+
+test "writeAll: empty buffer succeeds without write" {
+    var fds: [2]c_int = undefined;
+    if (c.pipe(&fds) != 0) return;
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    try std.testing.expect(writeAll(fds[1], (&[0]u8{}).ptr, 0));
+}
+
+test "writeAll: detects closed fd" {
+    var fds: [2]c_int = undefined;
+    if (c.pipe(&fds) != 0) return;
+    _ = c.close(fds[0]);
+    _ = c.close(fds[1]); // both ends closed
+    try std.testing.expect(!writeAll(fds[1], "x".ptr, 1));
+}
+
 pub fn main() !void {
     vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
     g_vmm = hv_backend.createVmm(.auto);
@@ -2530,7 +2581,10 @@ pub fn main() !void {
     while (true) {
         const conn = c.accept(sock, null, null);
         if (conn < 0) break;
-        const th = std.Thread.spawn(std.Thread.SpawnConfig{}, serveHtml, .{conn}) catch continue;
+        const th = std.Thread.spawn(std.Thread.SpawnConfig{}, serveHtml, .{conn}) catch {
+            _ = c.close(conn);
+            continue;
+        };
         th.detach();
     }
 }
