@@ -879,6 +879,65 @@ The web server serves everything from `@embedFile` index.html. For a more polish
 
 ---
 
+---
+
+## Tier 12 — Final Polish & Recent Fixes
+
+### 12.1 FLTK: Delete VM Confirmation Dialog ✅
+
+| File | Status |
+|------|--------|
+| `src/main.zig:deleteCurrentVm()` | ✅ `Fl_choice2` confirmation dialog with "Cancel" / "Delete" buttons before VM deletion |
+
+### 12.2 FLTK: New VM Dialog — Guest OS Selection ✅
+
+| File | Status |
+|------|--------|
+| `src/main.zig:newVmDialog()` | ✅ Guest OS text input field with label, passed to `VmConfig.guest_os` via `GuestOs.fromStr()` |
+| `src/vm.zig` | ✅ `GuestOs.fromStr()` — case-insensitive prefix match parser (fuzz-tested in form_parsers.zig) |
+
+### 12.3 FLTK: Global FLTK Color Scheme Application ✅
+
+| File | Status |
+|------|--------|
+| `src/appstate.zig:applyTheme()` | ✅ `Fl_background`, `Fl_background2`, `Fl_foreground`, `Fl_selection_color`, `Fl_inactive_color` set from palette on theme change so menus, scrollbars, and FLTK-native chrome match |
+
+### 12.4 FLTK: setStatus/setDetail Null-Termination Fix ✅
+
+| File | Status |
+|------|--------|
+| `src/appstate.zig:setStatus()` | ✅ Always copies to stack buffer + null-terminates before passing to `Fl_Box_set_label` (fixes garbled labels on long strings) |
+| `src/appstate.zig:setDetail()` | ✅ Same fix — stack buffer + null termination |
+
+### 12.5 Web UI: Status Dot Indicators in Sidebar ✅
+
+| File | Status |
+|------|--------|
+| `src/web/app.css` | ✅ `.vm-item .dot` styled with running/paused/suspended color variants + box-shadow glow |
+| `src/web/app.js:renderList()` | ✅ Replaced inline colored text (▶/⏸) with CSS dot indicators `.dot.running`, `.dot.paused`, `.dot.suspended` |
+
+### 12.6 Web UI: Theme-Aware Display/Serial Panel Colors ✅
+
+| File | Status |
+|------|--------|
+| `src/web/app.css` | ✅ `--display-bg`, `--serial-bg`, `--serial-fg` CSS variables with light/dark values; `#display` and `#serialpanel`/`#serialterm` use them instead of hardcoded colors |
+
+### 12.7 FLTK: dialogs.zig persist.save Error Reporting ✅
+
+| File | Status |
+|------|--------|
+| `src/dialogs.zig` prefs dialog Save | ✅ `persist.save(...) catch { app.setStatus("Failed to save VM configuration"); }` |
+| `src/dialogs.zig` VNet dialog Close | ✅ `vnet.save(...) catch { app.setStatus("Failed to save virtual network configuration"); }` |
+| `src/dialogs.zig:toggleFavorite()` | ✅ `persist.save(...) catch { app.setStatus("Failed to save VM configuration"); }` |
+
+### 12.8 Web UI: Prefs Icon Update ✅
+
+| File | Status |
+|------|--------|
+| `src/index.html` toolbar | ✅ Prefs icon changed from ⚙ to ⚡ for visual distinction |
+
+---
+
 ## How to Track
 
 Each item above follows the format:

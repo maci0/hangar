@@ -32,14 +32,12 @@ function renderList(filter){const e=document.getElementById('vmlist');const f=(f
 const viz=vms.map((v,i)=>({i,show:!f||v.name.toLowerCase().includes(f),fav:v.favorite==='true',v}));
 let hasFavs=false,hasNon=false;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;}
 for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
-const color=x.v.status==='running'?'var(--success)':x.v.status==='paused'?'var(--pause)':x.v.status==='suspended'?'var(--warn)':'var(--text-muted)';
-const icon=x.v.status==='running'?'▶':x.v.status==='paused'?'⏸':'  ';
-h+=`<div class="vm-item${sel===x.i?' active':''}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span style="color:${color};font-weight:bold">${icon}</span> ${x.v.name}<span class="star fav" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}
+const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
+h+=`<div class="vm-item${sel===x.i?' active':''}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star fav" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}
 if(hasFavs&&hasNon)h+='<div style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
 if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
-const color=x.v.status==='running'?'var(--success)':x.v.status==='paused'?'var(--pause)':x.v.status==='suspended'?'var(--warn)':'var(--text-muted)';
-const icon=x.v.status==='running'?'▶':x.v.status==='paused'?'⏸':'  ';
-h+=`<div class="vm-item${sel===x.i?' active':''}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span style="color:${color};font-weight:bold">${icon}</span> ${x.v.name}<span class="star" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}}
+const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
+h+=`<div class="vm-item${sel===x.i?' active':''}" tabindex="0" onclick="select(${x.i})" onkeydown="if(event.key==='Enter')select(${x.i})"><span class="dot ${dotCls}"></span> ${x.v.name}<span class="star" style="margin-left:auto;cursor:pointer" onclick="event.stopPropagation();toggleFavorite(${x.i})">★</span></div>`;}}}
 e.innerHTML=h||'<div style="color:var(--text-dim);font-size:12px">No VMs</div>';
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+' virtual machine(s)';if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
@@ -61,7 +59,7 @@ h+=`<div class="summary-card"><div class="card-label">State</div><div class="car
 h+=`<div class="summary-card"><div class="card-label">Guest OS</div><div class="card-value">${v.os}</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">Memory</div><div class="card-value">${v.mem} MB</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">CPU</div><div class="card-value">${v.cpu} cores</div></div>`;
-h+=`<div class="summary-card"><div class="card-label">Hard Disk</div><div class="card-value">${v.disk} GB (${v.fw})</div></div>`;
+h+=`<div class="summary-card"><div class="card-label">Hard Disk</div><div class="card-value">${v.disk} GB</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">Network</div><div class="card-value">${v.net}</div></div>`;
 if(v.mac)h+=`<div class="summary-card"><div class="card-label">MAC</div><div class="card-value">${v.mac}</div></div>`;
 if(v.nic2_mode&&v.nic2_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 2</div><div class="card-value">${v.nic2_mode}</div></div>`;

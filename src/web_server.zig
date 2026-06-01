@@ -377,8 +377,9 @@ fn serveConfigRaw() ![]const u8 {
 
 var fb_client: ?*vnc.VncClient = null;
 var fb_mutex: sync.SpinMutex = .{};
-// BMP output buffer — 54-byte header + up to 1 MB of pixel data
-var fb_bmp_buf: [1024 * 1024 + 54]u8 = undefined;
+// BMP output buffer — 54-byte header + up to 2 MB of pixel data
+// 2 MB supports 640×480 at 32 bpp (≈1.23 MB) + margin for larger resolutions
+var fb_bmp_buf: [2 * 1024 * 1024 + 54]u8 = undefined;
 
 /// Handle WebSocket VNC proxy request.
 /// Upgrades the connection to WebSocket, connects to the VM's VNC port,

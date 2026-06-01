@@ -159,7 +159,7 @@ pub fn prefsDialog() void {
                 app.prefs.theme = new_theme;
                 app.applyTheme(new_theme);
             }
-            persist.save(&app.vms, app.vm_count, app.prefs) catch {};
+            persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
             if (pp.dlg) |d| cfltk.Fl_Window_hide(d);
         }
     };
@@ -240,7 +240,7 @@ pub fn vnetDialog() void {
     const CloseCB = struct {
         fn go(_: ?*cfltk.Fl_Widget, data: ?*anyopaque) callconv(.c) void {
             const vdp: *VDlg = @ptrCast(@alignCast(data orelse return));
-            vnet.save(vdp.ns) catch {};
+            vnet.save(vdp.ns) catch { app.setStatus("Failed to save virtual network configuration"); };
             if (vdp.dlg) |d| cfltk.Fl_Window_hide(d);
         }
     };
@@ -460,5 +460,5 @@ pub fn toggleFavorite() void {
     if (idx >= app.vm_count) return;
     app.vms[idx].favorite = !app.vms[idx].favorite;
     app.refreshBrowser();
-    persist.save(&app.vms, app.vm_count, app.prefs) catch {};
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
 }

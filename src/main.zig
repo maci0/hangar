@@ -319,6 +319,12 @@ fn deleteCurrentVm() void {
     const idx = app.selected_idx orelse return;
     if (idx >= app.vm_count) return;
 
+    // Confirmation dialog
+    var msg_buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(&msg_buf, "Delete VM '{s}'?", .{app.vms[idx].getNameSlice()}) catch "Delete this VM?";
+    const choice = cfltk.Fl_choice2(msg.ptr, "Cancel", "Delete", null);
+    if (choice != 1) return;
+
     // Remote mode: dispatch delete to server, then refresh.
     if (app.remote_mode) {
         var path_buf: [32]u8 = undefined;
@@ -1375,7 +1381,7 @@ fn newVmDialog() void {
     const name_input = cfltk.Fl_Input_new(120, 38, 330, 24, "");
     const nlb1 = cfltk.Fl_Box_new(10, 70, 100, 20, "Guest OS:");
     cfltk.Fl_Box_set_label_font(nlb1, 1); cfltk.Fl_Box_set_label_color(nlb1, app.pal.text_dim);
-    _ = cfltk.Fl_Input_new(120, 68, 330, 24, "Linux");
+    const os_input = cfltk.Fl_Input_new(120, 68, 330, 24, "Linux");
     const nlb2 = cfltk.Fl_Box_new(10, 100, 100, 20, "Memory (MB):");
     cfltk.Fl_Box_set_label_font(nlb2, 1); cfltk.Fl_Box_set_label_color(nlb2, app.pal.text_dim);
     const mem_input = cfltk.Fl_Input_new(120, 98, 330, 24, "2048");
@@ -1399,12 +1405,13 @@ fn newVmDialog() void {
     // Use a struct to pass data to callbacks
     const DlgData = struct {
         name: ?*cfltk.Fl_Input,
+        os: ?*cfltk.Fl_Input,
         mem: ?*cfltk.Fl_Input,
         cpu: ?*cfltk.Fl_Input,
         disk: ?*cfltk.Fl_Input,
         dlg: ?*cfltk.Fl_Window,
     };
-    var ddata = DlgData{ .name = @ptrCast(name_input), .mem = @ptrCast(mem_input), .cpu = @ptrCast(cpu_input), .disk = @ptrCast(disk_input), .dlg = @ptrCast(dlg) };
+    var ddata = DlgData{ .name = @ptrCast(name_input), .os = @ptrCast(os_input), .mem = @ptrCast(mem_input), .cpu = @ptrCast(cpu_input), .disk = @ptrCast(disk_input), .dlg = @ptrCast(dlg) };
 
     const CreateCB = struct {
         fn go(_: ?*cfltk.Fl_Widget, data: ?*anyopaque) callconv(.c) void {
@@ -1445,6 +1452,10 @@ fn newVmDialog() void {
             if (dd.mem) |m| cfg.memory_mb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(m)), 10) catch 2048);
             if (dd.cpu) |c| cfg.cpu_cores = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(c)), 10) catch 2);
             if (dd.disk) |d| cfg.disk_size_gb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(d)), 10) catch 20);
+            if (dd.os) |o| {
+                const os_str = std.mem.span(cfltk.Fl_Input_value(o));
+                cfg.guest_os = vm.GuestOs.fromStr(os_str);
+            }
 
             // Apply AutoProtect defaults from preferences
             cfg.autoprotect = app.prefs.autoprotect_enabled_default;
@@ -1626,7 +1637,7 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                         }
                         const excess = autoprotect.pruneExcess(auto_count, v.autoprotect_max);
                         // Delete the oldest AutoProtect snapshots (they come first in the list)
-                        const to_delete = @min(excess, auto_names.len);
+                        const to_delete = @min(excess, auto_count);
                         const hnd = app.getVmmHandle(i);
                         for (0..to_delete) |j| {
                             if (hnd) |h| {

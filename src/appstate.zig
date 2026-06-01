@@ -76,6 +76,30 @@ pub fn applyTheme(t: vm.Theme) void {
         .light, .system => pal_light,
         .dark => pal_dark,
     };
+
+    // Update global FLTK color scheme so menus, scrollbars, and
+    // FLTK-native chrome match the selected theme.
+    const bg_r: u8 = @truncate((pal.bg >> 24) & 0xff);
+    const bg_g: u8 = @truncate((pal.bg >> 16) & 0xff);
+    const bg_b: u8 = @truncate((pal.bg >> 8) & 0xff);
+    const sfc_r: u8 = @truncate((pal.surface >> 24) & 0xff);
+    const sfc_g: u8 = @truncate((pal.surface >> 16) & 0xff);
+    const sfc_b: u8 = @truncate((pal.surface >> 8) & 0xff);
+    const txt_r: u8 = @truncate((pal.text >> 24) & 0xff);
+    const txt_g: u8 = @truncate((pal.text >> 16) & 0xff);
+    const txt_b: u8 = @truncate((pal.text >> 8) & 0xff);
+    const acc_r: u8 = @truncate((pal.accent >> 24) & 0xff);
+    const acc_g: u8 = @truncate((pal.accent >> 16) & 0xff);
+    const acc_b: u8 = @truncate((pal.accent >> 8) & 0xff);
+    const dim_r: u8 = @truncate((pal.text_dim >> 24) & 0xff);
+    const dim_g: u8 = @truncate((pal.text_dim >> 16) & 0xff);
+    const dim_b: u8 = @truncate((pal.text_dim >> 8) & 0xff);
+    cfltk.Fl_background(bg_r, bg_g, bg_b);
+    cfltk.Fl_background2(sfc_r, sfc_g, sfc_b);
+    cfltk.Fl_foreground(txt_r, txt_g, txt_b);
+    cfltk.Fl_selection_color(acc_r, acc_g, acc_b);
+    cfltk.Fl_inactive_color(dim_r, dim_g, dim_b);
+
     updateWidgetColors();
 }
 
@@ -89,6 +113,7 @@ fn updateWidgetColors() void {
     // Browser (VM list)
     if (browser) |b| {
         cfltk.Fl_Browser_set_color(b, pal.surface);
+        cfltk.Fl_Browser_set_text_size(b, 13);
     }
     // Search input
     if (search_input) |si| {
@@ -156,13 +181,10 @@ pub var web_thread: ?std.Thread = null;
 pub fn setStatus(msg: []const u8) void {
     if (status_bar) |sb| {
         var buf: [256]u8 = undefined;
-        if (msg.len >= buf.len) {
-            cfltk.Fl_Box_set_label(sb, @ptrCast(msg.ptr));
-        } else {
-            @memcpy(buf[0..msg.len], msg);
-            buf[msg.len] = 0;
-            cfltk.Fl_Box_set_label(sb, @ptrCast(&buf));
-        }
+        const truncated = if (msg.len <= 255) msg else msg[0..255];
+        @memcpy(buf[0..truncated.len], truncated);
+        buf[truncated.len] = 0;
+        cfltk.Fl_Box_set_label(sb, @ptrCast(&buf));
     }
 }
 
@@ -170,7 +192,11 @@ pub fn setStatus(msg: []const u8) void {
 pub fn setDetail(i: usize, value: []const u8) void {
     if (i < detail_labels.len) {
         if (detail_labels[i]) |dl| {
-            cfltk.Fl_Box_set_label(dl, @ptrCast(value.ptr));
+            var buf: [256]u8 = undefined;
+            const truncated = if (value.len <= 255) value else value[0..255];
+            @memcpy(buf[0..truncated.len], truncated);
+            buf[truncated.len] = 0;
+            cfltk.Fl_Box_set_label(dl, @ptrCast(&buf));
         }
     }
 }

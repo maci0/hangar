@@ -6,6 +6,7 @@
   --accent:#3b82f6; --accent-hover:#5091f8; --accent-subtle:rgba(59,130,246,0.10);
   --danger:#e84040; --danger-hover:#f05555; --success:#22c55e;
   --warn:#f59e0b; --pause:#f97316;
+  --display-bg:#000000; --serial-bg:#08090d; --serial-fg:#00ff66;
   --radius:7px; --radius-lg:11px;
   --transition:160ms ease;
   --shadow-sm:0 1px 2px rgba(0,0,0,0.25);
@@ -18,6 +19,7 @@
   --accent:#2563eb; --accent-hover:#1d4ed8; --accent-subtle:rgba(37,99,235,0.07);
   --danger:#dc2626; --danger-hover:#b91c1c; --success:#16a34a;
   --warn:#d97706; --pause:#ea580c;
+  --display-bg:#000000; --serial-bg:#f0f0f0; --serial-fg:#1a1a2e;
   --shadow-sm:0 1px 2px rgba(0,0,0,0.06);
   --shadow-lg:0 20px 55px rgba(0,0,0,0.12),0 0 0 1px var(--border);
 }
@@ -43,6 +45,7 @@ aside .vm-item.active::before{content:'';position:absolute;left:0;top:8px;bottom
 aside .vm-item .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--text-dim)}
 aside .vm-item .dot.running{background:var(--success);box-shadow:0 0 6px rgba(34,197,94,0.5)}
 aside .vm-item .dot.paused{background:var(--pause);box-shadow:0 0 6px rgba(249,115,22,0.3)}
+aside .vm-item .dot.suspended{background:var(--warn);box-shadow:0 0 6px rgba(245,158,11,0.3)}
 aside .vm-item .star{font-size:12px;flex-shrink:0;transition:transform 120ms ease}
 aside .vm-item .star:hover{transform:scale(1.2)}
 aside .sidebar-footer{padding:10px 12px;border-top:1px solid var(--border)}
@@ -67,11 +70,11 @@ main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 .content-area::-webkit-scrollbar-track{background:transparent}
 .content-area::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 /* ─── Display Canvas ─── */
-#display{background:#000;border-radius:var(--radius-lg);margin-bottom:20px;overflow:hidden;display:none;box-shadow:var(--shadow-sm)}
+#display{background:var(--display-bg);border-radius:var(--radius-lg);margin-bottom:20px;overflow:hidden;display:none;box-shadow:var(--shadow-sm)}
 #fbcanvas{width:100%;max-height:420px;display:block}
 /* ─── Serial Panel ─── */
-#serialpanel{display:none;background:#08090d;border:1px solid var(--border);border-radius:var(--radius-lg);margin-bottom:20px;overflow:hidden;box-shadow:var(--shadow-sm)}
-#serialterm{width:100%;height:280px;background:#08090d;color:#00ff66;font:13px/1.55 'JetBrains Mono','Cascadia Code','Fira Code','Courier New',monospace;padding:12px 16px;border:none;resize:none;outline:none;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+#serialpanel{display:none;background:var(--serial-bg);border:1px solid var(--border);border-radius:var(--radius-lg);margin-bottom:20px;overflow:hidden;box-shadow:var(--shadow-sm)}
+#serialterm{width:100%;height:280px;background:var(--serial-bg);color:var(--serial-fg);font:13px/1.55 'JetBrains Mono','Cascadia Code','Fira Code','Courier New',monospace;padding:12px 16px;border:none;resize:none;outline:none;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
 /* ─── Dialogs ─── */
 dialog{border:none;border-radius:var(--radius-lg);padding:0;background:var(--surface);color:var(--text);width:460px;max-width:95vw;box-shadow:var(--shadow-lg);animation:dialog-in 150ms ease}
 dialog::backdrop{background:rgba(0,0,0,0.65);backdrop-filter:blur(3px)}

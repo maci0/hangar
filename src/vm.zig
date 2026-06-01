@@ -298,6 +298,16 @@ pub const GuestOs = enum(u8) {
         return @enumFromInt(@as(u8, @intCast(i)));
     }
 
+    /// Parse a GuestOs from its toStr representation (case-insensitive prefix).
+    pub fn fromStr(s: []const u8) GuestOs {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: GuestOs = @enumFromInt(f.value);
+            const str = std.mem.span(variant.toStr());
+            if (std.ascii.eqlIgnoreCase(s, str)) return variant;
+        }
+        return .linux;
+    }
+
     /// Returns a serialisation-friendly string.
     pub fn toStr(self: GuestOs) [*:0]const u8 {
         return switch (self) {
