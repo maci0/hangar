@@ -124,7 +124,7 @@ pub const Connection = struct {
     /// Close the connection.
     pub fn close(self: *Connection) void {
         if (self.shm) |shm| {
-            _ = c.munmap(@ptrCast(@volatileCast(@alignCast(@constCast(shm)))), @sizeOf(ShmChannel));
+            _ = c.munmap(@ptrCast(@alignCast(@volatileCast(shm))), @sizeOf(ShmChannel));
             self.shm = null;
         }
         if (self.fd >= 0) { _ = c.close(self.fd); self.fd = -1; }
@@ -311,6 +311,30 @@ test "Url parse: IPv6 with brackets, default port, trailing slash" {
     try std.testing.expectEqual(Proto.tcp, u.proto);
     try std.testing.expectEqualStrings("::1", u.host[0..u.host_len]);
     try std.testing.expectEqual(@as(u16, 8080), u.port);
+}
+
+test "Connection.close: clears fd and sets to -1" {
+    const sock = c.socket(c.AF.UNIX, c.SOCK.STREAM, 0);
+    try std.testing.expect(sock >= 0);
+
+    var conn = Connection{ .proto = .unix, .fd = sock };
+    try std.testing.expect(conn.fd >= 0);
+
+    conn.close();
+    try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
+}
+
+test "Connection.close: no-op when fd already -1" {
+    var conn = Connection{ .proto = .unix, .fd = -1 };
+    conn.close();
+    try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
+}
+
+test "Connection.close: no-op when shm is null and fd is -1" {
+    var conn = Connection{ .proto = .shm, .fd = -1, .shm = null };
+    conn.close();
+    try std.testing.expect(conn.shm == null);
+    try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
 }
 
 test "fuzz: Url.parse never panics on random inputs" {

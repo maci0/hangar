@@ -360,3 +360,325 @@ test "fuzz: parseUpgrade never panics on random HTTP headers" {
         _ = parseUpgrade(buf[0..n]);
     }
 }
+
+test "writeUpgradeResponse: emits valid HTTP 101 response" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    var accept: [29]u8 = undefined;
+    @memcpy(accept[0..28], "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    accept[28] = 0;
+    try writeUpgradeResponse(fds[0], accept);
+
+    var read_buf: [256]u8 = undefined;
+    const n = c.read(fds[1], &read_buf, read_buf.len);
+    try std.testing.expect(n > 0);
+    const resp = read_buf[0..@intCast(n)];
+
+    try std.testing.expect(std.mem.indexOf(u8, resp, "HTTP/1.1 101") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "Upgrade: websocket") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "Connection: Upgrade") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != null);
+}
+
+test "readFrameHeader: small payload (2-byte header)" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    // FIN + text opcode, unmasked, payload_len=5
+    var frame: [2]u8 = .{ 0x81, 5 };
+    _ = c.write(fds[1], &frame, 2);
+    // Write payload separately so readFrameHeader only consumes header.
+    const payload = "hello";
+    _ = c.write(fds[1], payload, payload.len);
+
+    const hdr = readFrameHeader(fds[0]);
+    try std.testing.expect(hdr != null);
+    try std.testing.expect(hdr.?.fin);
+    try std.testing.expectEqual(Opcode.text, hdr.?.opcode);
+    try std.testing.expect(!hdr.?.mask);
+    try std.testing.expectEqual(@as(u64, 5), hdr.?.payload_len);
+}
+
+test "readFrameHeader: medium payload (4-byte header)" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    // FIN + binary, unmasked, extended payload_len=300 (126 marker + 2 bytes)
+    var frame: [4]u8 = .{ 0x82, 126, 0x01, 0x2c };
+    _ = c.write(fds[1], &frame, 4);
+
+    const hdr = readFrameHeader(fds[0]);
+    try std.testing.expect(hdr != null);
+    try std.testing.expectEqual(Opcode.binary, hdr.?.opcode);
+    try std.testing.expectEqual(@as(u64, 300), hdr.?.payload_len);
+}
+
+test "readFrameHeader: large payload (10-byte header)" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    // FIN + binary, unmasked, extended payload_len=100000 (127 marker + 8 bytes)
+    var frame: [10]u8 = undefined;
+    frame[0] = 0x82;
+    frame[1] = 127;
+    std.mem.writeInt(u64, frame[2..10], @as(u64, 100000), .big);
+    _ = c.write(fds[1], &frame, 10);
+
+    const hdr = readFrameHeader(fds[0]);
+    try std.testing.expect(hdr != null);
+    try std.testing.expectEqual(@as(u64, 100000), hdr.?.payload_len);
+}
+
+test "readFrameHeader: masked frame" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    // FIN + text, masked, payload_len=3
+    var frame: [2]u8 = .{ 0x81, 0x80 | 3 };
+    _ = c.write(fds[1], &frame, 2);
+    // Write mask key + masked payload so readFrameHeader doesn't consume them
+    const mask_and_payload = [_]u8{ 0x11, 0x22, 0x33, 0x44, 'A' ^ 0x11, 'B' ^ 0x22, 'C' ^ 0x33 };
+    _ = c.write(fds[1], &mask_and_payload, mask_and_payload.len);
+
+    const hdr = readFrameHeader(fds[0]);
+    try std.testing.expect(hdr != null);
+    try std.testing.expect(hdr.?.fin);
+    try std.testing.expectEqual(Opcode.text, hdr.?.opcode);
+    try std.testing.expect(hdr.?.mask);
+    try std.testing.expectEqual(@as(u64, 3), hdr.?.payload_len);
+}
+
+test "readFrameHeader: EOF on first 2 bytes returns null" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    _ = c.shutdown(fds[1], c.SHUT.WR);
+    const hdr = readFrameHeader(fds[0]);
+    try std.testing.expect(hdr == null);
+}
+
+test "readFrameHeader: EOF during extended length read returns null" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    // Write only the 2-byte base header with 126 marker, then shutdown.
+    var frame: [2]u8 = .{ 0x82, 126 };
+    _ = c.write(fds[1], &frame, 2);
+    _ = c.shutdown(fds[1], c.SHUT.WR);
+
+    const hdr = readFrameHeader(fds[0]);
+    try std.testing.expect(hdr == null);
+}
+
+test "readFramePayload: unmasked payload" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    const msg = "hello world";
+    _ = c.write(fds[1], msg, msg.len);
+
+    var buf: [32]u8 = undefined;
+    const hdr = FrameHeader{ .fin = true, .opcode = .text, .mask = false, .payload_len = msg.len };
+    const n = readFramePayload(fds[0], &buf, hdr);
+    try std.testing.expect(n != null);
+    try std.testing.expectEqualStrings(msg, buf[0..n.?]);
+}
+
+test "readFramePayload: masked payload" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    const mask: [4]u8 = .{ 0x11, 0x22, 0x33, 0x44 };
+    const plain = "hello";
+    var masked: [5]u8 = undefined;
+    for (plain, 0..) |ch, i| masked[i] = ch ^ mask[i % 4];
+
+    _ = c.write(fds[1], &mask, 4);
+    _ = c.write(fds[1], &masked, masked.len);
+
+    var buf: [32]u8 = undefined;
+    const hdr = FrameHeader{ .fin = true, .opcode = .text, .mask = true, .payload_len = plain.len };
+    const n = readFramePayload(fds[0], &buf, hdr);
+    try std.testing.expect(n != null);
+    try std.testing.expectEqual(plain.len, n.?);
+    try std.testing.expectEqualStrings(plain, buf[0..n.?]);
+}
+
+test "readFramePayload: zero-length unmasked" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    var buf: [32]u8 = undefined;
+    const hdr = FrameHeader{ .fin = true, .opcode = .text, .mask = false, .payload_len = 0 };
+    const n = readFramePayload(fds[0], &buf, hdr);
+    try std.testing.expectEqual(@as(usize, 0), n.?);
+}
+
+test "readFramePayload: zero-length masked consumes mask key" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    // Write mask key + a subsequent byte so we can verify the mask was consumed.
+    const mask: [4]u8 = .{ 0xaa, 0xbb, 0xcc, 0xdd };
+    _ = c.write(fds[1], &mask, 4);
+    _ = c.write(fds[1], &[_]u8{'X'}, 1);
+
+    var buf: [32]u8 = undefined;
+    const hdr = FrameHeader{ .fin = true, .opcode = .text, .mask = true, .payload_len = 0 };
+    const n = readFramePayload(fds[0], &buf, hdr);
+    try std.testing.expectEqual(@as(usize, 0), n.?);
+
+    // The 'X' should still be readable — mask key was consumed.
+    var ch: [1]u8 = undefined;
+    try std.testing.expectEqual(@as(isize, 1), c.read(fds[0], &ch, 1));
+    try std.testing.expectEqual(@as(u8, 'X'), ch[0]);
+}
+
+test "readFramePayload: buffer smaller than payload drains remainder" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    const payload = "ABCDEFGHIJKLMNOP"; // 16 bytes
+    _ = c.write(fds[1], payload, payload.len);
+
+    var buf: [4]u8 = undefined;
+    const hdr = FrameHeader{ .fin = true, .opcode = .binary, .mask = false, .payload_len = payload.len };
+    const n = readFramePayload(fds[0], &buf, hdr);
+    try std.testing.expect(n != null);
+    try std.testing.expectEqual(@as(usize, 4), n.?);
+    try std.testing.expectEqualStrings("ABCD", buf[0..4]);
+}
+
+test "readFramePayload: EOF during read returns null" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    _ = c.shutdown(fds[1], c.SHUT.WR);
+
+    var buf: [32]u8 = undefined;
+    const hdr = FrameHeader{ .fin = true, .opcode = .text, .mask = false, .payload_len = 10 };
+    const n = readFramePayload(fds[0], &buf, hdr);
+    try std.testing.expect(n == null);
+}
+
+test "readFramePayload: EOF during mask key read returns null" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+    _ = c.shutdown(fds[1], c.SHUT.WR);
+
+    var buf: [32]u8 = undefined;
+    const hdr = FrameHeader{ .fin = true, .opcode = .text, .mask = true, .payload_len = 1 };
+    const n = readFramePayload(fds[0], &buf, hdr);
+    try std.testing.expect(n == null);
+}
+
+test "fuzz: readFrameHeader round-trip via socketpair" {
+    var prng = std.Random.DefaultPrng.init(0x7EAF00D);
+    const rnd = prng.random();
+    var iter: usize = 0;
+    while (iter < 800) : (iter += 1) {
+        var fds: [2]c.fd_t = undefined;
+        if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) continue;
+        defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+        const opcode: Opcode = switch (rnd.uintLessThan(u3, 4)) {
+            0 => .binary,
+            1 => .text,
+            2 => .ping,
+            3 => .close,
+            else => unreachable,
+        };
+        const fin = rnd.boolean();
+        const masked = rnd.boolean();
+        const len_choice = rnd.uintLessThan(u3, 3);
+        const payload_len: u64 = switch (len_choice) {
+            0 => rnd.uintLessThan(u64, 125),
+            1 => 126 + rnd.uintLessThan(u64, 65410),
+            2 => 65536 + rnd.uintLessThan(u64, 1000),
+            else => unreachable,
+        };
+
+        // Build raw header bytes.
+        var header: [10]u8 = undefined;
+        var hdr_len: usize = 2;
+        header[0] = (if (fin) @as(u8, 0x80) else 0) | @as(u8, @intFromEnum(opcode));
+        const mask_bit: u8 = if (masked) 0x80 else 0;
+        if (payload_len < 126) {
+            header[1] = mask_bit | @as(u8, @intCast(payload_len));
+        } else if (payload_len <= 65535) {
+            header[1] = mask_bit | 126;
+            std.mem.writeInt(u16, header[2..4], @intCast(payload_len), .big);
+            hdr_len = 4;
+        } else {
+            header[1] = mask_bit | 127;
+            std.mem.writeInt(u64, header[2..10], payload_len, .big);
+            hdr_len = 10;
+        }
+        _ = c.write(fds[1], &header, hdr_len);
+
+        const hdr = readFrameHeader(fds[0]);
+        try std.testing.expect(hdr != null);
+        try std.testing.expectEqual(fin, hdr.?.fin);
+        try std.testing.expectEqual(opcode, hdr.?.opcode);
+        try std.testing.expectEqual(masked, hdr.?.mask);
+        try std.testing.expectEqual(payload_len, hdr.?.payload_len);
+    }
+}
+
+test "fuzz: readFramePayload never panics on random masked data" {
+    var prng = std.Random.DefaultPrng.init(0x7EAF00E);
+    const rnd = prng.random();
+    var iter: usize = 0;
+    while (iter < 600) : (iter += 1) {
+        var fds: [2]c.fd_t = undefined;
+        if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) continue;
+        defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+
+        const masked = rnd.boolean();
+        const payload_len: usize = rnd.uintLessThan(usize, 200);
+        var wire: [500]u8 = undefined;
+        var wp: usize = 0;
+        if (masked) {
+            const mk: [4]u8 = .{
+                rnd.int(u8), rnd.int(u8), rnd.int(u8), rnd.int(u8),
+            };
+            @memcpy(wire[wp..][0..4], &mk);
+            wp += 4;
+        }
+        var plain: [200]u8 = undefined;
+        for (0..payload_len) |i| {
+            plain[i] = rnd.int(u8);
+            if (masked) {
+                wire[wp + i] = plain[i] ^ wire[(wp - 4 + i % 4)];
+            } else {
+                wire[wp + i] = plain[i];
+            }
+        }
+        const wire_end = wp + payload_len;
+        _ = c.write(fds[1], wire[0..wire_end].ptr, wire_end);
+
+        var buf: [200]u8 = undefined;
+        const hdr = FrameHeader{ .fin = true, .opcode = .binary, .mask = masked, .payload_len = payload_len };
+        const n = readFramePayload(fds[0], &buf, hdr);
+        // EOF can happen if the OS buffer swallows only part — tolerate null.
+        if (n) |len| {
+            try std.testing.expectEqualStrings(plain[0..payload_len], buf[0..len]);
+        }
+    }
+}

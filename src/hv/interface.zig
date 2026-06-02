@@ -216,4 +216,37 @@ test "Backend enum has qemu as default" {
     try std.testing.expectEqual(Backend.qemu, @as(Backend, @enumFromInt(0)));
 }
 
+test "hv fuzz: resolveAccel with random VmAccel values never panics" {
+    var prng = std.Random.DefaultPrng.init(0xACCE1101);
+    const rnd = prng.random();
+    var i: usize = 0;
+    while (i < 2000) : (i += 1) {
+        const idx = rnd.uintLessThan(usize, vm.VmAccel.count + 3);
+        const accel: vm.VmAccel = vm.VmAccel.fromIndex(idx);
+        // Random check function: either always pass or always fail.
+        const check: *const fn (Accelerator) bool = if (rnd.boolean()) &alwaysOk_hv else &alwaysNo_hv;
+        const result = resolveAccel(accel, check);
+        // Invariants: result always has non-empty flag and name.
+        try std.testing.expect(std.mem.span(result.flag).len > 0);
+        try std.testing.expect(std.mem.span(result.name).len > 0);
+        // tcg is always software.
+        if (std.mem.eql(u8, std.mem.span(result.flag), "tcg")) {
+            try std.testing.expect(!result.hardware);
+        }
+    }
+}
+
+test "hv fuzz: bestAccelerator and tcgAccelerator consistency" {
+    const best = bestAccelerator();
+    const tcg = tcgAccelerator();
+    // Both must have valid strings.
+    try std.testing.expect(std.mem.span(best.flag).len > 0);
+    try std.testing.expect(std.mem.span(tcg.flag).len > 0);
+    // tcg is never hardware-accelerated.
+    try std.testing.expect(!tcg.hardware);
+    // Self-consistency: resolveAccel(.tcg, alwaysOk) == tcg.
+    const resolved = resolveAccel(.tcg, &alwaysOk_hv);
+    try std.testing.expectEqualStrings(std.mem.span(tcg.flag), std.mem.span(resolved.flag));
+}
+
 

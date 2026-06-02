@@ -1817,6 +1817,11 @@ fn handleImport(req: []const u8) ![]const u8 {
     var cfg = vm.VmConfig{};
     cfg.setName(name);
     cfg.setDiskPath(decoded_path);
+    {
+        const dot = std.mem.lastIndexOfScalar(u8, decoded_path, '.');
+        const ext = if (dot) |d| decoded_path[d + 1 ..] else "";
+        cfg.disk_format = form_parsers.diskFormatFromExtension(ext);
+    }
     cfg.disk_size_gb = 20;
     cfg.memory_mb = appstate.prefs.default_memory_mb;
     cfg.cpu_cores = appstate.prefs.default_cpu_cores;

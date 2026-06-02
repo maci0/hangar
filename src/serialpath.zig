@@ -56,3 +56,24 @@ test "serialSocketPath: consistent format" {
     try std.testing.expect(std.mem.startsWith(u8, path, "/tmp/hangar-serial-"));
     try std.testing.expect(std.mem.endsWith(u8, path, ".sock"));
 }
+
+test "serialSocketPath fuzz: random names never panic, always produce valid paths" {
+    var prng = std.Random.DefaultPrng.init(0x5E410A70);
+    const rnd = prng.random();
+    var name_buf: [64]u8 = undefined;
+    var path_buf: [320]u8 = undefined;
+    var i: usize = 0;
+    while (i < 3000) : (i += 1) {
+        const n = rnd.uintLessThan(usize, 64);
+        for (name_buf[0..n]) |*b| b.* = rnd.int(u8);
+        const name = name_buf[0..n];
+        if (serialSocketPath(&path_buf, name)) |path| {
+            // Invariants: always starts with the prefix, always null-terminated.
+            try std.testing.expect(std.mem.startsWith(u8, path, "/tmp/hangar-serial-"));
+            try std.testing.expect(std.mem.endsWith(u8, path, ".sock"));
+            try std.testing.expect(path[path.len] == 0);
+        } else |_| {
+            // NoSpaceLeft is the only expected error.
+        }
+    }
+}

@@ -293,3 +293,55 @@ fn alwaysNo(_: hv.Accelerator) bool { return false; }
 test "Backend enum has qemu as default" {
     try std.testing.expectEqual(hv.Backend.qemu, @as(hv.Backend, @enumFromInt(0)));
 }
+
+test "qemu_backend fuzz: createVmm with random VmAccel never panics" {
+    var prng = std.Random.DefaultPrng.init(0xBACCA110);
+    const rnd = prng.random();
+    var i: usize = 0;
+    while (i < 2000) : (i += 1) {
+        const idx = rnd.uintLessThan(usize, vm.VmAccel.count + 3);
+        const accel: vm.VmAccel = vm.VmAccel.fromIndex(idx);
+        const vmm = createVmm(accel);
+        // Invariants: Vmm struct is fully populated with non-null function pointers.
+        try std.testing.expect(@intFromPtr(vmm.startFn) != 0);
+        try std.testing.expect(@intFromPtr(vmm.shutdownFn) != 0);
+        try std.testing.expect(@intFromPtr(vmm.deinitFn) != 0);
+        try std.testing.expect(vmm.backend == .qemu);
+    }
+}
+
+test "qemu_backend: createHandle + deinit lifecycle" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("test-vm");
+    const handle = try createHandle(&cfg, .tcg, std.testing.allocator);
+    try std.testing.expect(@intFromPtr(handle) != 0);
+    // deinit via the vmm table from createVmm
+    const vmm = createVmm(.tcg);
+    vmm.deinitFn(handle);
+}
+
+test "qemu_backend: getDisplayPort returns null when embed_display is false" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("test-nodisplay");
+    cfg.embed_display = false;
+    const handle = try createHandle(&cfg, .tcg, std.testing.allocator);
+    defer {
+        const vmm = createVmm(.tcg);
+        vmm.deinitFn(handle);
+    }
+    const port = getDisplayPort(handle);
+    try std.testing.expect(port == null);
+}
+
+test "qemu_backend: getSerialSocket returns null when serial disabled" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("test-noserial");
+    cfg.enable_serial = false;
+    const handle = try createHandle(&cfg, .tcg, std.testing.allocator);
+    defer {
+        const vmm = createVmm(.tcg);
+        vmm.deinitFn(handle);
+    }
+    const sock = getSerialSocket(handle);
+    try std.testing.expect(sock == null);
+}

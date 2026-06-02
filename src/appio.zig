@@ -73,3 +73,26 @@ test "appio: sleepMs waits at least the requested time" {
     const elapsed_ms = (t1.sec - t0.sec) * 1000 + @divTrunc(t1.nsec - t0.nsec, std.time.ns_per_ms);
     try testing.expect(elapsed_ms >= 20); // requested 25, allow scheduler slack
 }
+
+test "appio fuzz: getenv never panics on random names" {
+    var prng = std.Random.DefaultPrng.init(0xA7010A70);
+    const rnd = prng.random();
+    var buf: [128]u8 = undefined;
+    var i: usize = 0;
+    while (i < 2000) : (i += 1) {
+        const n = rnd.uintLessThan(usize, 128);
+        for (buf[0..n]) |*b| b.* = rnd.int(u8);
+        if (n < buf.len) buf[n] = 0;
+        _ = getenv(@ptrCast(&buf));
+    }
+}
+
+test "appio fuzz: sleepMs tolerates random small durations" {
+    var prng = std.Random.DefaultPrng.init(0xA7010A71);
+    const rnd = prng.random();
+    var i: usize = 0;
+    while (i < 100) : (i += 1) {
+        const ms = rnd.uintLessThan(u64, 10);
+        sleepMs(ms);
+    }
+}
