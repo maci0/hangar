@@ -1256,6 +1256,8 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     var original = vm.VmConfig{};
     original.setName("TestVM");
     original.cpu_cores = 4;
+    original.cpu_sockets = 2;
+    original.cpu_model = .Skylake_Server;
     original.memory_mb = 8192;
     original.disk_size_gb = 100;
     original.disk_format = .vmdk;
@@ -1266,6 +1268,25 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.setNotes("These are test notes\nfor the VM.");
     original.setPortForwards("8080:80,2222:22");
     original.setSavedStatePath("/tmp/state.bin");
+    original.setSharedFolder("/srv/share");
+    original.setDisk2Path("/tmp/data.qcow2");
+    original.disk2_size_gb = 50;
+    original.disk2_format = .raw;
+    original.setUsbDevice("046d:c52b");
+    original.nics[1].mode = .none;
+    original.setNic2Mac("02:11:22:33:44:55");
+    original.nics[2].mode = .user;
+    original.setNic3Mac("02:66:77:88:99:AA");
+    original.enable_3d = true;
+    original.gpu_device = .virtio_gpu_gl;
+    original.guest_tools = true;
+    original.favorite = true;
+    original.autoprotect = true;
+    original.autoprotect_interval_min = 60;
+    original.autoprotect_max = 10;
+    original.autoprotect_last_epoch = 1717000000;
+    original.autoprotect_last_seq = 7;
+    original.setFloppyPath("/tmp/boot.img");
     original.display = .vnc;
     original.display_resolution = .res_1920x1080;
     original.nics[0].mode = .bridge;
@@ -1278,11 +1299,25 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.vnc_port = 5901;
     original.spice_port = 5931;
     original.enable_serial = true;
+    original.virtio_rng = true;
+    original.guest_agent = true;
+    original.watchdog = .reset;
+    original.tpm = true;
+    original.secure_boot = true;
+    original.hyperv_enlightenments = true;
+    original.hugepages = true;
+    original.io_threads = 4;
+    original.disk_bps_throttle = 104857600;
+    original.disk_iops_throttle = 1000;
+    original.ballooning = true;
+    original.host_autostart = true;
     original.num_displays = 2;
 
     const json = VmJson{
         .name = original.getNameSlice(),
         .cpu_cores = original.cpu_cores,
+        .cpu_sockets = original.cpu_sockets,
+        .cpu_model = std.mem.span(original.cpu_model.toStr()),
         .memory_mb = original.memory_mb,
         .disk_size_gb = original.disk_size_gb,
         .disk_format = std.mem.span(original.disk_format.toStr()),
@@ -1293,6 +1328,25 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .notes = original.getNotesSlice(),
         .port_forwards = original.getPortForwardsSlice(),
         .saved_state_path = original.getSavedStatePathSlice(),
+        .shared_folder = original.getSharedFolderSlice(),
+        .disk2_path = original.getDisk2PathSlice(),
+        .disk2_size_gb = original.disk2_size_gb,
+        .disk2_format = std.mem.span(original.disk2_format.toStr()),
+        .usb_device = original.getUsbDeviceSlice(),
+        .nic2_mode = std.mem.span(original.nics[1].mode.toStr()),
+        .nic2_mac = original.getNic2MacSlice(),
+        .nic3_mode = std.mem.span(original.nics[2].mode.toStr()),
+        .nic3_mac = original.getNic3MacSlice(),
+        .enable_3d = original.enable_3d,
+        .gpu_device = std.mem.span(original.gpu_device.toStr()),
+        .guest_tools = original.guest_tools,
+        .favorite = original.favorite,
+        .autoprotect = original.autoprotect,
+        .autoprotect_interval_min = original.autoprotect_interval_min,
+        .autoprotect_max = original.autoprotect_max,
+        .autoprotect_last_epoch = original.autoprotect_last_epoch,
+        .autoprotect_last_seq = original.autoprotect_last_seq,
+        .floppy_path = original.getFloppyPathSlice(),
         .display = std.mem.span(original.display.toStr()),
         .display_resolution = @as(u32, @intCast(original.display_resolution.toIndex())),
         .network = std.mem.span(original.nics[0].mode.toStr()),
@@ -1305,6 +1359,18 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .vnc_port = original.vnc_port,
         .spice_port = original.spice_port,
         .enable_serial = original.enable_serial,
+        .virtio_rng = original.virtio_rng,
+        .guest_agent = original.guest_agent,
+        .watchdog = std.mem.span(original.watchdog.toStr()),
+        .tpm = original.tpm,
+        .secure_boot = original.secure_boot,
+        .hyperv_enlightenments = original.hyperv_enlightenments,
+        .hugepages = original.hugepages,
+        .io_threads = original.io_threads,
+        .disk_bps_throttle = original.disk_bps_throttle,
+        .disk_iops_throttle = original.disk_iops_throttle,
+        .ballooning = original.ballooning,
+        .host_autostart = original.host_autostart,
         .num_displays = original.num_displays,
     };
 
@@ -1312,6 +1378,8 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
 
     try std.testing.expectEqualStrings("TestVM", restored.getNameSlice());
     try std.testing.expectEqual(@as(u32, 4), restored.cpu_cores);
+    try std.testing.expectEqual(@as(u32, 2), restored.cpu_sockets);
+    try std.testing.expectEqual(vm.CpuModel.Skylake_Server, restored.cpu_model);
     try std.testing.expectEqual(@as(u32, 8192), restored.memory_mb);
     try std.testing.expectEqual(@as(u32, 100), restored.disk_size_gb);
     try std.testing.expectEqual(vm.DiskFormat.vmdk, restored.disk_format);
@@ -1322,6 +1390,25 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqualStrings("These are test notes\nfor the VM.", restored.getNotesSlice());
     try std.testing.expectEqualStrings("8080:80,2222:22", restored.getPortForwardsSlice());
     try std.testing.expectEqualStrings("/tmp/state.bin", restored.getSavedStatePathSlice());
+    try std.testing.expectEqualStrings("/srv/share", restored.getSharedFolderSlice());
+    try std.testing.expectEqualStrings("/tmp/data.qcow2", restored.getDisk2PathSlice());
+    try std.testing.expectEqual(@as(u32, 50), restored.disk2_size_gb);
+    try std.testing.expectEqual(vm.DiskFormat.raw, restored.disk2_format);
+    try std.testing.expectEqualStrings("046d:c52b", restored.getUsbDeviceSlice());
+    try std.testing.expectEqual(vm.NetworkMode.none, restored.nics[1].mode);
+    try std.testing.expectEqualStrings("02:11:22:33:44:55", restored.getNic2MacSlice());
+    try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[2].mode);
+    try std.testing.expectEqualStrings("02:66:77:88:99:AA", restored.getNic3MacSlice());
+    try std.testing.expect(restored.enable_3d);
+    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, restored.gpu_device);
+    try std.testing.expect(restored.guest_tools);
+    try std.testing.expect(restored.favorite);
+    try std.testing.expect(restored.autoprotect);
+    try std.testing.expectEqual(@as(u32, 60), restored.autoprotect_interval_min);
+    try std.testing.expectEqual(@as(u32, 10), restored.autoprotect_max);
+    try std.testing.expectEqual(@as(i64, 1717000000), restored.autoprotect_last_epoch);
+    try std.testing.expectEqual(@as(u32, 7), restored.autoprotect_last_seq);
+    try std.testing.expectEqualStrings("/tmp/boot.img", restored.getFloppyPathSlice());
     try std.testing.expectEqual(vm.DisplayType.vnc, restored.display);
     try std.testing.expectEqual(vm.DisplayResolution.res_1920x1080, restored.display_resolution);
     try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[0].mode);
@@ -1334,6 +1421,18 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqual(@as(u16, 5901), restored.vnc_port);
     try std.testing.expectEqual(@as(u16, 5931), restored.spice_port);
     try std.testing.expect(restored.enable_serial);
+    try std.testing.expect(restored.virtio_rng);
+    try std.testing.expect(restored.guest_agent);
+    try std.testing.expectEqual(vm.WatchdogAction.reset, restored.watchdog);
+    try std.testing.expect(restored.tpm);
+    try std.testing.expect(restored.secure_boot);
+    try std.testing.expect(restored.hyperv_enlightenments);
+    try std.testing.expect(restored.hugepages);
+    try std.testing.expectEqual(@as(u32, 4), restored.io_threads);
+    try std.testing.expectEqual(@as(u64, 104857600), restored.disk_bps_throttle);
+    try std.testing.expectEqual(@as(u32, 1000), restored.disk_iops_throttle);
+    try std.testing.expect(restored.ballooning);
+    try std.testing.expect(restored.host_autostart);
     try std.testing.expectEqual(@as(u32, 2), restored.num_displays);
 }
 
@@ -1411,6 +1510,24 @@ test "parseGpuDevice: maps strings to enums" {
     try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice(""));
 }
 
+test "parseDiskCache: maps strings to enums" {
+    for (0..vm.DiskCache.count) |i| {
+        const dc = vm.DiskCache.fromIndex(i);
+        try std.testing.expectEqual(dc, parseDiskCache(std.mem.span(dc.toStr())));
+    }
+    try std.testing.expectEqual(vm.DiskCache.writeback, parseDiskCache("unknown"));
+    try std.testing.expectEqual(vm.DiskCache.writeback, parseDiskCache(""));
+}
+
+test "parseWatchdogAction: maps strings to enums" {
+    for (0..vm.WatchdogAction.count) |i| {
+        const wa = vm.WatchdogAction.fromIndex(i);
+        try std.testing.expectEqual(wa, parseWatchdogAction(std.mem.span(wa.toStr())));
+    }
+    try std.testing.expectEqual(vm.WatchdogAction.none, parseWatchdogAction("unknown"));
+    try std.testing.expectEqual(vm.WatchdogAction.none, parseWatchdogAction(""));
+}
+
 test "emit→parse JSON text round-trip preserves all fields" {
     const alloc = std.testing.allocator;
 
@@ -1418,9 +1535,12 @@ test "emit→parse JSON text round-trip preserves all fields" {
     var original = vm.VmConfig{};
     original.setName("RoundTrip");
     original.cpu_cores = 8;
+    original.cpu_sockets = 2;
+    original.cpu_model = .Skylake_Server;
     original.memory_mb = 16384;
     original.disk_size_gb = 200;
     original.disk_format = .vmdk;
+    original.disk_cache = .unsafe;
     original.setDiskPath("/home/user/VMs/rt.vmdk");
     original.setIsoPath("/tmp/debian.iso");
     original.setMacAddress("02:AA:BB:CC:DD:EE");
@@ -1439,24 +1559,38 @@ test "emit→parse JSON text round-trip preserves all fields" {
     original.vnc_port = 5905;
     original.spice_port = 5935;
     original.enable_serial = false;
+    original.virtio_rng = true;
+    original.guest_agent = true;
+    original.watchdog = .poweroff;
+    original.tpm = true;
+    original.secure_boot = true;
+    original.hyperv_enlightenments = true;
+    original.hugepages = true;
+    original.io_threads = 4;
+    original.disk_bps_throttle = 52428800;
+    original.disk_iops_throttle = 500;
+    original.ballooning = true;
+    original.host_autostart = true;
     original.setSharedFolder("/srv/share");
     original.setDisk2Path("/home/user/VMs/rt-data.qcow2");
     original.disk2_size_gb = 50;
     original.disk2_format = .raw;
     original.setUsbDevice("046d:c52b");
-    original.cpu_sockets = 2;
     original.nics[1].mode = .bridge;
     original.setNic2Mac("02:11:22:33:44:55");
     original.nics[2].mode = .user;
     original.setNic3Mac("02:66:77:88:99:AA");
     original.enable_3d = true;
+    original.gpu_device = .virtio_gpu_gl;
     original.guest_tools = true;
+    original.favorite = true;
     original.autoprotect = true;
     original.autoprotect_interval_min = 720;
     original.autoprotect_max = 5;
     original.autoprotect_last_epoch = 1717000000;
     original.autoprotect_last_seq = 42;
     original.setFloppyPath("/tmp/boot.img");
+    original.num_displays = 3;
 
     // Emit to JSON text.
     var list: List = .empty;
@@ -1470,9 +1604,12 @@ test "emit→parse JSON text round-trip preserves all fields" {
     // Verify every field survived the round-trip.
     try std.testing.expectEqualStrings("RoundTrip", restored.getNameSlice());
     try std.testing.expectEqual(@as(u32, 8), restored.cpu_cores);
+    try std.testing.expectEqual(@as(u32, 2), restored.cpu_sockets);
+    try std.testing.expectEqual(vm.CpuModel.Skylake_Server, restored.cpu_model);
     try std.testing.expectEqual(@as(u32, 16384), restored.memory_mb);
     try std.testing.expectEqual(@as(u32, 200), restored.disk_size_gb);
     try std.testing.expectEqual(vm.DiskFormat.vmdk, restored.disk_format);
+    try std.testing.expectEqual(vm.DiskCache.unsafe, restored.disk_cache);
     try std.testing.expectEqualStrings("/home/user/VMs/rt.vmdk", restored.getDiskPathSlice());
     try std.testing.expectEqualStrings("/tmp/debian.iso", restored.getIsoPathSlice());
     try std.testing.expectEqualStrings("02:AA:BB:CC:DD:EE", restored.getMacAddressSlice());
@@ -1491,24 +1628,38 @@ test "emit→parse JSON text round-trip preserves all fields" {
     try std.testing.expectEqual(@as(u16, 5905), restored.vnc_port);
     try std.testing.expectEqual(@as(u16, 5935), restored.spice_port);
     try std.testing.expect(!restored.enable_serial);
+    try std.testing.expect(restored.virtio_rng);
+    try std.testing.expect(restored.guest_agent);
+    try std.testing.expectEqual(vm.WatchdogAction.poweroff, restored.watchdog);
+    try std.testing.expect(restored.tpm);
+    try std.testing.expect(restored.secure_boot);
+    try std.testing.expect(restored.hyperv_enlightenments);
+    try std.testing.expect(restored.hugepages);
+    try std.testing.expectEqual(@as(u32, 4), restored.io_threads);
+    try std.testing.expectEqual(@as(u64, 52428800), restored.disk_bps_throttle);
+    try std.testing.expectEqual(@as(u32, 500), restored.disk_iops_throttle);
+    try std.testing.expect(restored.ballooning);
+    try std.testing.expect(restored.host_autostart);
     try std.testing.expectEqualStrings("/srv/share", restored.getSharedFolderSlice());
     try std.testing.expectEqualStrings("/home/user/VMs/rt-data.qcow2", restored.getDisk2PathSlice());
     try std.testing.expectEqual(@as(u32, 50), restored.disk2_size_gb);
     try std.testing.expectEqual(vm.DiskFormat.raw, restored.disk2_format);
     try std.testing.expectEqualStrings("046d:c52b", restored.getUsbDeviceSlice());
-    try std.testing.expectEqual(@as(u32, 2), restored.cpu_sockets);
     try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[1].mode);
     try std.testing.expectEqualStrings("02:11:22:33:44:55", restored.getNic2MacSlice());
     try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[2].mode);
     try std.testing.expectEqualStrings("02:66:77:88:99:AA", restored.getNic3MacSlice());
     try std.testing.expect(restored.enable_3d);
+    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, restored.gpu_device);
     try std.testing.expect(restored.guest_tools);
+    try std.testing.expect(restored.favorite);
     try std.testing.expect(restored.autoprotect);
     try std.testing.expectEqual(@as(u32, 720), restored.autoprotect_interval_min);
     try std.testing.expectEqual(@as(u32, 5), restored.autoprotect_max);
     try std.testing.expectEqual(@as(i64, 1717000000), restored.autoprotect_last_epoch);
     try std.testing.expectEqual(@as(u32, 42), restored.autoprotect_last_seq);
     try std.testing.expectEqualStrings("/tmp/boot.img", restored.getFloppyPathSlice());
+    try std.testing.expectEqual(@as(u32, 3), restored.num_displays);
 }
 
 test "emit→parse: strings with special characters survive round-trip" {

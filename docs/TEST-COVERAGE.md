@@ -4,16 +4,16 @@
 
 ```
 zig build test
-→ All tests pass across 31 modules (~1745 tests)
+→ All tests pass across 31 modules (~1755 tests)
 ```
 
 ## Pure Module Tests
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
-| `vm.zig` | 114 | Config model, enums, serialization |
+| `vm.zig` | 122 | Config model, enums, serialization |
 | `web_server.zig` | 83 | HTTP API handlers, JSON rendering, body parsing, auth, validation, isAuthExempt, clampPref |
-| `persist.zig` | 43 | JSON parse/emit, VmJson mapping |
+| `persist.zig` | 45 | JSON parse/emit, VmJson mapping |
 | `qemu.zig` | 36 | QEMU arg builder, OVMF detection, snapshot funcs |
 | `qmp.zig` | 32 | QMP protocol parser, unicode escapes |
 | `vmrun.zig` | 25 | CLI operations, JSON extraction |

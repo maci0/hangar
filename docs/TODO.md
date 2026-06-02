@@ -3034,3 +3034,34 @@ in either UI.
 | 29 | Keyboard shortcut reference overlay parity: FLTK shows in About dialog; Web shows dedicated modal on first visit | ✅ — Added Ctrl+Shift+N (Clone), F2 (Edit), updated shortcutsdlg with 18 entries, About dialog inline list updated |
 | 30 | `zig build web-smoke` should run as part of CI-like `zig build test` umbrella (currently separate step) | ✅ — `test_step.dependOn(&web_smoke_cmd.step)` added in build.zig, so `zig build test` now includes web-smoke |
 
+## Tier 41 — Test Coverage Gaps: Enum Tests & Persist Round-Tripping (2026)
+
+### 41.1 — Missing Enum Unit Tests in vm.zig
+
+| # | Enum | Tests Added |
+|---|------|-------------|
+| 1 | `WatchdogAction` | fromIndex, toIndex, toStr, label, fromStr round-trip |
+| 2 | `CpuModel` | toStr values (all 18 variants), fromStr round-trip, `@intFromEnum` alignment |
+
+`WatchdogAction` had no `fromStr` / `toStr` and no tests — the fuzz harness was the
+only coverage. `CpuModel` had all enum methods but only fuzz coverage.
+
+### 41.2 — Persist Round-Trip Tests Now Cover All VmJson Fields
+
+Both the `VmConfig→VmJson fields→VmConfig` test and the
+`emitVmJson→parseVmObject` round-trip test now verify every field in the
+`VmJson` struct, including the previously untested:
+
+- `cpu_model`, `watchdog`, `virtio_rng`, `guest_agent`
+- `tpm`, `secure_boot`, `hyperv_enlightenments`, `hugepages`
+- `io_threads`, `disk_bps_throttle`, `disk_iops_throttle`
+- `ballooning`, `host_autostart`, `gpu_device`, `favorite`
+- `disk_cache`, `num_displays`
+
+### 41.3 — New Parse-Function Unit Tests
+
+| Function | Test |
+|----------|------|
+| `parseWatchdogAction` | All variants round-trip + unknown → none + empty → none |
+| `parseDiskCache` | All variants round-trip + unknown → writeback + empty → writeback |
+

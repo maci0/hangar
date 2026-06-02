@@ -1607,6 +1607,97 @@ test "DiskCache: fromStr round-trip" {
     try std.testing.expectEqual(DiskCache.writeback, DiskCache.fromStr(""));
 }
 
+// -- WatchdogAction --
+
+test "WatchdogAction: fromIndex round-trip" {
+    try std.testing.expectEqual(WatchdogAction.none, WatchdogAction.fromIndex(0));
+    try std.testing.expectEqual(WatchdogAction.reset, WatchdogAction.fromIndex(1));
+    try std.testing.expectEqual(WatchdogAction.poweroff, WatchdogAction.fromIndex(2));
+    try std.testing.expectEqual(WatchdogAction.pause, WatchdogAction.fromIndex(3));
+    try std.testing.expectEqual(WatchdogAction.none, WatchdogAction.fromIndex(99));
+}
+
+test "WatchdogAction: toIndex inverts fromIndex" {
+    for (0..WatchdogAction.count) |i| {
+        try std.testing.expectEqual(i, WatchdogAction.fromIndex(i).toIndex());
+    }
+}
+
+test "WatchdogAction: toStr values" {
+    try std.testing.expectEqualStrings("none", std.mem.span(WatchdogAction.none.toStr()));
+    try std.testing.expectEqualStrings("reset", std.mem.span(WatchdogAction.reset.toStr()));
+    try std.testing.expectEqualStrings("poweroff", std.mem.span(WatchdogAction.poweroff.toStr()));
+    try std.testing.expectEqualStrings("pause", std.mem.span(WatchdogAction.pause.toStr()));
+}
+
+test "WatchdogAction: label values" {
+    try std.testing.expectEqualStrings("None", std.mem.span(WatchdogAction.none.label()));
+    try std.testing.expectEqualStrings("Reset Guest", std.mem.span(WatchdogAction.reset.label()));
+    try std.testing.expectEqualStrings("Power Off Guest", std.mem.span(WatchdogAction.poweroff.label()));
+    try std.testing.expectEqualStrings("Pause Guest", std.mem.span(WatchdogAction.pause.label()));
+}
+
+test "WatchdogAction: fromStr round-trip" {
+    for (0..WatchdogAction.count) |i| {
+        const wa = WatchdogAction.fromIndex(i);
+        try std.testing.expectEqual(wa, WatchdogAction.fromStr(std.mem.span(wa.toStr())));
+    }
+    try std.testing.expectEqual(WatchdogAction.none, WatchdogAction.fromStr("unknown"));
+    try std.testing.expectEqual(WatchdogAction.none, WatchdogAction.fromStr(""));
+}
+
+// -- CpuModel --
+
+test "CpuModel: fromIndex round-trip" {
+    try std.testing.expectEqual(CpuModel.host, CpuModel.fromIndex(0));
+    try std.testing.expectEqual(CpuModel.max, CpuModel.fromIndex(1));
+    try std.testing.expectEqual(CpuModel.qemu64, CpuModel.fromIndex(2));
+    try std.testing.expectEqual(CpuModel.kvm64, CpuModel.fromIndex(3));
+    try std.testing.expectEqual(CpuModel.host, CpuModel.fromIndex(99));
+}
+
+test "CpuModel: toIndex inverts fromIndex" {
+    for (0..CpuModel.count) |i| {
+        try std.testing.expectEqual(i, CpuModel.fromIndex(i).toIndex());
+    }
+}
+
+test "CpuModel: toStr values" {
+    try std.testing.expectEqualStrings("host", std.mem.span(CpuModel.host.toStr()));
+    try std.testing.expectEqualStrings("max", std.mem.span(CpuModel.max.toStr()));
+    try std.testing.expectEqualStrings("qemu64", std.mem.span(CpuModel.qemu64.toStr()));
+    try std.testing.expectEqualStrings("kvm64", std.mem.span(CpuModel.kvm64.toStr()));
+    try std.testing.expectEqualStrings("EPYC", std.mem.span(CpuModel.EPYC.toStr()));
+    try std.testing.expectEqualStrings("EPYC-Rome", std.mem.span(CpuModel.EPYC_Rome.toStr()));
+    try std.testing.expectEqualStrings("EPYC-Milan", std.mem.span(CpuModel.EPYC_Milan.toStr()));
+    try std.testing.expectEqualStrings("Skylake-Server", std.mem.span(CpuModel.Skylake_Server.toStr()));
+    try std.testing.expectEqualStrings("Skylake-Client", std.mem.span(CpuModel.Skylake_Client.toStr()));
+    try std.testing.expectEqualStrings("Icelake-Server", std.mem.span(CpuModel.Icelake_Server.toStr()));
+    try std.testing.expectEqualStrings("Cascadelake-Server", std.mem.span(CpuModel.Cascadelake_Server.toStr()));
+    try std.testing.expectEqualStrings("Nehalem", std.mem.span(CpuModel.Nehalem.toStr()));
+    try std.testing.expectEqualStrings("Westmere", std.mem.span(CpuModel.Westmere.toStr()));
+    try std.testing.expectEqualStrings("SandyBridge", std.mem.span(CpuModel.SandyBridge.toStr()));
+    try std.testing.expectEqualStrings("IvyBridge", std.mem.span(CpuModel.IvyBridge.toStr()));
+    try std.testing.expectEqualStrings("Haswell", std.mem.span(CpuModel.Haswell.toStr()));
+    try std.testing.expectEqualStrings("Broadwell", std.mem.span(CpuModel.Broadwell.toStr()));
+    try std.testing.expectEqualStrings("Opteron_G5", std.mem.span(CpuModel.Opteron_G5.toStr()));
+}
+
+test "CpuModel: label values" {
+    try std.testing.expectEqualStrings("host", std.mem.span(CpuModel.host.label()));
+    try std.testing.expectEqualStrings("max", std.mem.span(CpuModel.max.label()));
+    try std.testing.expectEqualStrings("qemu64", std.mem.span(CpuModel.qemu64.label()));
+}
+
+test "CpuModel: fromStr round-trip" {
+    for (0..CpuModel.count) |i| {
+        const cm = CpuModel.fromIndex(i);
+        try std.testing.expectEqual(cm, CpuModel.fromStr(std.mem.span(cm.toStr())));
+    }
+    try std.testing.expectEqual(CpuModel.host, CpuModel.fromStr("unknown"));
+    try std.testing.expectEqual(CpuModel.host, CpuModel.fromStr(""));
+}
+
 // -- NetworkMode --
 
 test "NetworkMode: fromIndex round-trip" {
