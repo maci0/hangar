@@ -12,6 +12,17 @@ window.applyTheme(saved);
 window.matchMedia('(prefers-color-scheme:light)').addEventListener('change',function(){
  if(window.kvmguiTheme==='system') window.applyTheme('system');
 });
+function cycleTheme(){
+ var themes=['system','light','dark'];
+ var cur=window.kvmguiTheme||'system';
+ var idx=themes.indexOf(cur);
+ var next=themes[(idx+1)%themes.length];
+ window.applyTheme(next);
+ var icons={system:'🌓',light:'☀️',dark:'🌙'};
+ var btn=document.querySelector('.theme-toggle-btn');
+ if(btn)btn.textContent=icons[next]||'🌓';
+ showToast('Theme: '+next.charAt(0).toUpperCase()+next.slice(1),'info',{duration:2000});
+}
 })();
 var vms=[]; var sel=null; var activeTab='summary'; var transitioningIdx=null; var refreshBusy=false;
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
@@ -55,8 +66,9 @@ if(oldEl){oldEl.classList.add('exiting');setTimeout(function(){oldEl.classList.r
 else{newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
 if(tab==='settings'&&sel!==null)editVm();}
 var serverDown=false;
+var saveInFlight=false;
 function setServerDown(s){serverDown=s;var b=document.getElementById('connbanner');if(b)b.style.display=s?'flex':'none';if(s)setStatus('Server unreachable — retrying...');}
-async function refresh(){if(refreshBusy)return;refreshBusy=true;try{var listEl=document.getElementById('vmlist');if(!vms.length&&listEl){var skHtml='';for(var i=0;i<6;i++){skHtml+='<div class="skeleton sk-item" aria-hidden="true"></div>';}listEl.innerHTML=skHtml;listEl.setAttribute('aria-busy','true');}const r=await fetch('/api/vms');if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
+async function refresh(){if(refreshBusy)return;if(transitioningIdx!==null||saveInFlight)return;refreshBusy=true;try{var listEl=document.getElementById('vmlist');if(!vms.length&&listEl){var skHtml='';for(var i=0;i<6;i++){skHtml+='<div class="skeleton sk-item" aria-hidden="true"></div>';}listEl.innerHTML=skHtml;listEl.setAttribute('aria-busy','true');}const r=await fetch('/api/vms');if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
 setServerDown(false);vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){if(!serverDown){setServerDown(true);}}finally{refreshBusy=false;}}
 function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
@@ -119,7 +131,7 @@ updatePowerBtn();}
 async function powerToggle(){const idx=sel;if(idx===null)return;const v=vms[idx];if(v&&(v.status==='running'||v.status==='paused')){if(!confirm('Power off VM "'+v.name+'"?\nUnsaved data may be lost.'))return;}
 var btn=document.getElementById('powerbtn');if(btn){btn.disabled=true;btn.textContent='...';}
 transitioningIdx=idx;renderList();
-try{const r=await apiPost('/api/power/'+idx);transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}else{if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}catch(e){transitioningIdx=null;if(btn){updatePowerBtn();btn.disabled=false;}renderList();setStatus('Power toggle failed: '+e.message);}}
+try{const r=await apiPost('/api/power/'+idx);transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);renderList();}finally{if(btn){updatePowerBtn();btn.disabled=false;}}}else{if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}catch(e){transitioningIdx=null;if(btn){updatePowerBtn();btn.disabled=false;}renderList();setStatus('Power toggle failed: '+e.message);}}
 async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!confirm('Send ACPI shutdown to "'+v.name+'"?'))return;const r=await apiPost('/api/shutdown/'+sel);if(r)setStatus('Shut down guest — ACPI power button sent.');}
 async function resetGuest(){if(sel===null)return;const v=vms[sel];if(!confirm('Reset guest "'+v.name+'"?\nUnsaved data in the guest may be lost.'))return;const r=await apiPost('/api/reset/'+sel);if(r)setStatus('Reset guest — system_reset sent.');}
 async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/pause/'+sel);if(r){await refresh();setStatus('Paused guest — execution frozen.');}}
@@ -129,11 +141,11 @@ async function suspendGuest(){if(sel===null)return;const v=vms[sel];if(!confirm(
 async function cloneGuest(){if(sel===null)return;var cn=document.getElementById('clone_name');var cd=document.getElementById('clonedlg');if(cn)cn.textContent=vms[sel].name;if(cd)cd.showModal();}
 async function doClone(linked){if(sel===null)return;const body=linked?'linked=1':'';const r=await apiPost('/api/clone/'+sel,body);if(r){var cd=document.getElementById('clonedlg');if(cd)cd.close();await refresh();setStatus(linked?'Linked clone created.':'VM cloned.');}}
 async function importGuest(){const p=prompt('Path to VM disk image (.qcow2):');const trimmed=p?p.trim():'';if(!trimmed){showToast('A file path is required','error');return;}if(trimmed.includes('..')){showToast('Invalid path: parent directory traversal not allowed','error');return;}if(!/\.(qcow2|qcow|vmdk|vdi|vhdx|raw|img)$/i.test(trimmed)){showToast('Path should end with a disk image extension (.qcow2, .vmdk, etc.)','warn');}const r=await apiPost('/api/import','path='+encodeURIComponent(trimmed));if(r){await refresh();setStatus('VM imported.');}}
-async function batchStart(){const snap=vms.slice();var started=0,total=0;for(let i=0;i<snap.length;i++){if(snap[i].status==='stopped')total++;}
-for(let i=0;i<snap.length;i++){if(snap[i].status==='stopped'){started++;setStatus('Batch start: VM '+started+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r===null){setStatus('Batch start failed at VM '+started+' of '+total);return;}}}await refresh();setStatus('Batch start complete: '+started+' VM(s) powered on.');}
-async function batchStop(){const snap=vms.slice();var stopped=0,total=0;for(let i=0;i<snap.length;i++){if(snap[i].status==='running'||snap[i].status==='paused')total++;}
+async function batchStart(){const snap=vms.slice();var started=0,failed=0,total=0;for(let i=0;i<snap.length;i++){if(snap[i].status==='stopped')total++;}
+for(let i=0;i<snap.length;i++){if(snap[i].status==='stopped'){setStatus('Batch start: VM '+(started+failed+1)+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r){started++;}else{failed++;setStatus('Batch start: VM '+(started+failed)+' of '+total+' failed, continuing...');}}}await refresh();setStatus('Batch start complete: '+started+' started'+(failed>0?', '+failed+' failed':''));}
+async function batchStop(){const snap=vms.slice();var stopped=0,failed=0,total=0;for(let i=0;i<snap.length;i++){if(snap[i].status==='running'||snap[i].status==='paused')total++;}
 if(!confirm('Power off ALL running VMs?\nUnsaved data may be lost.'))return;
-for(let i=0;i<snap.length;i++){if(snap[i].status==='running'||snap[i].status==='paused'){stopped++;setStatus('Batch stop: VM '+stopped+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r===null){setStatus('Batch stop failed at VM '+stopped+' of '+total);return;}}}await refresh();setStatus('Batch stop complete: '+stopped+' VM(s) powered off.');}
+for(let i=0;i<snap.length;i++){if(snap[i].status==='running'||snap[i].status==='paused'){setStatus('Batch stop: VM '+(stopped+failed+1)+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r){stopped++;}else{failed++;setStatus('Batch stop: VM '+(stopped+failed)+' of '+total+' failed, continuing...');}}}await refresh();setStatus('Batch stop complete: '+stopped+' stopped'+(failed>0?', '+failed+' failed':''));}
 async function takeSnapshot(){if(sel===null)return;openSnapshots();}
 async function takeSnapshotFromDlg(){if(sel===null)return;const st=document.getElementById('s_tag');if(!st)return;const t=st.value;if(!t){alert('Enter a tag name');return;}
 var takeBtn=document.querySelector('[data-action="takeSnapshotFromDlg"]');if(takeBtn){takeBtn.disabled=true;takeBtn.textContent='Taking...';}
@@ -222,6 +234,7 @@ h+='</div>';}
 h+='</div><div class="btn-row" style="margin-top:20px"><button id="savevmbtn" class="btn primary" data-action="saveVm" title="Save VM settings">Save Changes</button></div>';
 var ts=document.getElementById('tabSettings');if(ts)ts.innerHTML=h;settingsDirty=false;}
 async function saveVm(){const idx=sel;if(idx===null)return;const btn=document.getElementById('savevmbtn');if(btn){btn.disabled=true;btn.textContent='Saving...';}
+saveInFlight=true;
 const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
 const body=['name','mem','cpu','cpu_sockets','disk','disk_format','iso_path','mac_address','network','firmware','shared_folder','usb','guest_tools','autoprotect',
 'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','nic2','nic2_mac','nic3','nic3_mac','portfw','notes',
@@ -230,14 +243,16 @@ const body=['name','mem','cpu','cpu_sockets','disk','disk_format','iso_path','ma
 .map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
 try{const r=await apiPost('/api/save/'+idx,body);if(r){settingsDirty=false;await refresh();switchTab('summary');setStatus('Settings saved.');}
 else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}
+saveInFlight=false;
 for(let i=0;i<formEls.length;i++)formEls[i].disabled=false;}}
 // ── VNet Editor ──
 let vnetsData=[],vnetIdx=-1;
 async function openVnets(){await loadVnets();var vd=document.getElementById('vnetdlg');if(vd)vd.showModal();}
-async function loadVnets(){try{const r=await fetch('/api/vnets');if(r.ok)vnetsData=await r.json();}catch(e){vnetsData={networks:[]};}renderVnetList();}
+async function loadVnets(){try{const r=await fetch('/api/vnets');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};console.error('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};console.error('Failed to load VNets:',e);}renderVnetList();}
 function renderVnetList(){const sel=document.getElementById('vnet_sel');if(!sel)return;let h='';if(!vnetsData.networks)vnetsData={networks:[]};
 for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const line=escHtml(n.name)+' — '+escHtml(n.type);h+=`<option value="${i}"${i===vnetIdx?' selected':''}>${line}</option>`;}
-sel.innerHTML=h;if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length)showVnetFields(vnetIdx);}
+sel.innerHTML=h;if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length){showVnetFields(vnetIdx);}else{clearVnetFields();}}
+function clearVnetFields(){['vn_name','vn_type','vn_subnet','vn_mask','vn_dhcp','vn_dstart','vn_dend','vn_iface','vn_gw','vn_pf'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});var vt=document.getElementById('vn_type');if(vt)vt.value='nat';var vd=document.getElementById('vn_dhcp');if(vd)vd.value='0';}
 function onVnetSelect(){const s=document.getElementById('vnet_sel');if(!s)return;vnetIdx=parseInt(s.value);if(vnetIdx>=0)showVnetFields(vnetIdx);}
 function showVnetFields(i){const n=vnetsData.networks[i];if(!n)return;
 var vn=document.getElementById('vn_name');if(!vn)return;vn.value=n.name||'';
@@ -295,7 +310,7 @@ const r=await apiPost('/api/config',body);if(r){if(pendingTheme!==null){window.a
 // ── Dialog Focus Trap + Backdrop Click-to-Close ──
 var dialogFocusStack=[];
 var FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
-function trapFocus(dlg){var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}};dlg._trapFocusHandler=onKey;dlg.addEventListener('keydown',onKey);first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
+function trapFocus(dlg){if(dlg._trapFocusHandler)return;var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}};dlg._trapFocusHandler=onKey;dlg.addEventListener('keydown',onKey);first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
 function releaseFocus(dlg){var handler=dlg._trapFocusHandler;if(handler){dlg.removeEventListener('keydown',handler);delete dlg._trapFocusHandler;}dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
 ['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','migratedlg','shortcutsdlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};var origClose=dlg.close;dlg.close=function(){if(dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
 // ── Sidebar Overlay Click-to-Close ──
@@ -335,7 +350,6 @@ var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventList
     mi.textContent=lbl;
     mi.addEventListener('click',function(){hideCtxMenu();fn();});
     ctxMenu.appendChild(mi);});
-  document.body.appendChild(ctxMenu);
 });
 // ── Keyboard Shortcuts ──
 document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&e.key==='s'&&activeTab==='settings'&&sel!==null){e.preventDefault();saveVm();return;}
@@ -523,7 +537,7 @@ var actionHandlers={
  takeSnapshotFromDlg:function(){takeSnapshotFromDlg();},
  manualDisconnectSerial:function(){manualDisconnectSerial();},
  clearSerial:function(){var t=document.getElementById('serialterm');if(t)t.value='';},
- exportSerial:function(){var t=document.getElementById('serialterm');if(!t||!t.value)return;var blob=new Blob([t.value],{type:'text/plain'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='kvmgui-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();URL.revokeObjectURL(a.href);},
+ exportSerial:function(){var t=document.getElementById('serialterm');if(!t||!t.value)return;var blob=new Blob([t.value],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='kvmgui-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
  savePrefs:function(){savePrefs();},saveVm:function(){saveVm();},
  vnetAdd:function(){vnetAdd();},vnetRemove:function(){vnetRemove();},
  vnetDefaults:function(){vnetDefaults();},vnetSaveCurrent:function(){vnetSaveCurrent();},
@@ -537,6 +551,7 @@ var actionHandlers={
  closeDlg:function(el){var id=el.getAttribute('data-dialog');if(id){var d=document.getElementById(id);if(d)d.close();}},
  dismissBanner:function(){var b=document.getElementById('connbanner');if(b)b.style.display='none';serverDown=false;setStatus('');},
  applyTheme:function(el){pendingTheme=el.value;},
+ toggleTheme:function(){cycleTheme();},
  filterList:function(){filterList();},
  onVnetSelect:function(){onVnetSelect();}
 };
@@ -655,6 +670,14 @@ window.addEventListener('beforeunload',function(){stopFb();stopSerial(true);if(s
     if(touchDrag&&e.pointerId===touchDrag.pointerId){
       if(touchDrag.ghost){document.body.removeChild(touchDrag.ghost);}
       touchDrag.item.classList.remove('dragging');
+      vml.querySelectorAll('.drag-over').forEach(function(el){el.classList.remove('drag-over');});
+      touchDrag=null;
+    }
+  });
+  vml.addEventListener('lostpointercapture',function(e){
+    if(touchDrag&&e.pointerId===touchDrag.pointerId){
+      if(touchDrag.ghost){document.body.removeChild(touchDrag.ghost);touchDrag.ghost=null;}
+      if(touchDrag.item)touchDrag.item.classList.remove('dragging');
       vml.querySelectorAll('.drag-over').forEach(function(el){el.classList.remove('drag-over');});
       touchDrag=null;
     }

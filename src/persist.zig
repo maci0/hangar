@@ -1029,8 +1029,10 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
     if (content.len == 0) return 0;
 
     // Top-level "theme" + "prefs" keys (optional).
-    prefs_out.theme = parseThemeKey(content);
+    // parsePrefs resets prefs_out, so save/restore the theme.
+    const loaded_theme = parseThemeKey(content);
     parsePrefs(content, prefs_out);
+    prefs_out.theme = loaded_theme;
 
     // Find the "vms" array in the top-level object.
     var cur: []const u8 = content;

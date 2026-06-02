@@ -41,7 +41,7 @@ var toolbar_btns_len: usize = 0;
 
 /// Toolbar button widths per row (at reference window width 1200).
 const toolbar_row1_w = [_]i32{ 80, 80, 80, 80, 80, 80, 80, 80, 75, 70, 75, 80, 70, 55, 55 };
-const toolbar_row2_w = [_]i32{ 70, 70, 70, 65, 70, 70, 70, 70, 70 };
+const toolbar_row2_w = [_]i32{ 70, 70, 70, 65, 70, 70, 70, 70, 70, 70 };
 const TOOLBAR_ROW1_Y: i32 = 28;
 const TOOLBAR_ROW2_Y: i32 = 68;
 const TOOLBAR_BTN_H: i32 = 34;
@@ -98,6 +98,7 @@ fn homeCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
 fn connectRemoteCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dialogs.remoteConnectDialog(); }
 fn webStartCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { startWebServer(); }
 fn webStopCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { stopWebServer(); }
+fn themeToggleCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { app.cycleTheme(); }
 
 fn newVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { newVmDialog(); }
 
@@ -1729,8 +1730,8 @@ fn newVmDialog() void {
                 urlencode.appendPair(&body, &pos, "mem", mem_str) catch return;
                 urlencode.appendPair(&body, &pos, "cpu", cpu_str) catch return;
                 urlencode.appendPair(&body, &pos, "disk", disk_str) catch return;
-                if (dd.disk_path) |dp| urlencode.appendPair(&body, &pos, "disk_path", std.mem.span(cfltk.Fl_Input_value(dp))) catch {};
-                if (dd.iso) |iso| urlencode.appendPair(&body, &pos, "iso", std.mem.span(cfltk.Fl_Input_value(iso))) catch {};
+                if (dd.disk_path) |dp| urlencode.appendPair(&body, &pos, "disk_path", std.mem.span(cfltk.Fl_Input_value(dp))) catch { app.setStatusErr("Failed to encode disk path for create request"); };
+                if (dd.iso) |iso| urlencode.appendPair(&body, &pos, "iso", std.mem.span(cfltk.Fl_Input_value(iso))) catch { app.setStatusErr("Failed to encode ISO path for create request"); };
                 var out_buf: [64]u8 = undefined;
                 _ = remote.apiPost("/api/create", body[0..pos], &out_buf);
                 remote.remoteRefreshVmList();
@@ -1793,7 +1794,9 @@ fn newVmDialog() void {
             cfg.spice_port = vm.findUnusedSpicePort(app.vms[0..app.vm_count]);
 
             // Create disk image directory if needed
-            _ = std.Io.Dir.cwd().createDirPath(appio.io(), std.fs.path.dirname(cfg.getDiskPathSlice()) orelse "") catch {};
+            std.Io.Dir.cwd().createDirPath(appio.io(), std.fs.path.dirname(cfg.getDiskPathSlice()) orelse "") catch {
+                app.setStatusErr("Failed to create disk directory — VM may fail to start");
+            };
 
             app.vms[app.vm_count] = cfg;
             app.vm_count += 1;
@@ -2066,7 +2069,10 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                         if (app.spice_client) |sc| {
                             if (!sc.connect("127.0.0.1", @intCast(v.spice_port))) {
                                 app.setStatusErr("SPICE connect failed — retrying in 2s");
+                                sc.free();
+                                app.spice_client = null;
                             } else {
+                                app.setStatusErr("");
                                 display_gl.showGL();
                             }
                         }
@@ -2075,7 +2081,10 @@ fn timerCB(_: ?*anyopaque) callconv(.c) void {
                         if (app.vnc_client) |vc| {
                             if (!vc.connect("127.0.0.1", @intCast(v.vnc_port))) {
                                 app.setStatusErr("VNC connect failed — retrying in 2s");
+                                vc.free();
+                                app.vnc_client = null;
                             } else {
+                                app.setStatusErr("");
                                 display_gl.showGL();
                             }
                         }
@@ -2144,9 +2153,9 @@ fn themeToolbarButtons() void {
 
 pub fn main() void {
     app.vm_count = persist.load(&app.vms, std.heap.page_allocator, &app.prefs);
-    app.applyTheme(app.prefs.theme);
     cfltk.Fl_init_all();
     _ = cfltk.Fl_set_scheme("gtk+");
+    app.applyTheme(app.prefs.theme);
 
     // Initialize the HV abstraction dispatch table (QEMU backend).
     app.g_vmm = hv_backend.createVmm(.auto);
@@ -2281,6 +2290,7 @@ pub fn main() void {
 
     const ws_start_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Web Start");
     const ws_stop_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Web Stop");
+    const theme_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "🌓 Theme");
 
     // Tooltips
     cfltk.Fl_Button_set_tooltip(import_btn, "Import a VM from a .vmdk or .qcow2 disk image");
@@ -2292,6 +2302,7 @@ pub fn main() void {
     cfltk.Fl_Button_set_tooltip(migrate_btn, "Live-migrate the selected running VM to another QEMU instance");
     cfltk.Fl_Button_set_tooltip(ws_start_btn, "Start the web UI server on http://localhost:9080");
     cfltk.Fl_Button_set_tooltip(ws_stop_btn, "Stop the web UI server");
+    cfltk.Fl_Button_set_tooltip(theme_btn, "Toggle theme: System → Light → Dark");
 
     // Button colors
     cfltk.Fl_Button_set_color(import_btn, app.pal.accent);      cfltk.Fl_Button_set_label_color(import_btn, app.pal.accent_text);
@@ -2303,6 +2314,7 @@ pub fn main() void {
     cfltk.Fl_Button_set_color(migrate_btn, app.pal.accent);       cfltk.Fl_Button_set_label_color(migrate_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(ws_start_btn, app.pal.success);    cfltk.Fl_Button_set_label_color(ws_start_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(ws_stop_btn, app.pal.danger);       cfltk.Fl_Button_set_label_color(ws_stop_btn, app.pal.accent_text);
+    cfltk.Fl_Button_set_color(theme_btn, app.pal.gray_btn);       cfltk.Fl_Button_set_label_color(theme_btn, app.pal.amber);
 
     // Callbacks
     cfltk.Fl_Button_set_callback(import_btn, importCB, null);
@@ -2314,6 +2326,7 @@ pub fn main() void {
     cfltk.Fl_Button_set_callback(migrate_btn, migrateCB, null);
     cfltk.Fl_Button_set_callback(ws_start_btn, webStartCB, null);
     cfltk.Fl_Button_set_callback(ws_stop_btn, webStopCB, null);
+    cfltk.Fl_Button_set_callback(theme_btn, themeToggleCB, null);
 
     // Register toolbar buttons for live theme updates.
     toolbar_btns[0] = @ptrCast(new_btn);
@@ -2340,7 +2353,8 @@ pub fn main() void {
     toolbar_btns[21] = @ptrCast(migrate_btn);
     toolbar_btns[22] = @ptrCast(ws_start_btn);
     toolbar_btns[23] = @ptrCast(ws_stop_btn);
-    toolbar_btns_len = 24;
+    toolbar_btns[24] = @ptrCast(theme_btn);
+    toolbar_btns_len = 25;
     repositionToolbars(WW);
     app.toolbar_theme_cb = &themeToolbarButtons;
 

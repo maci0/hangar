@@ -772,3 +772,90 @@ pub fn toggleFavorite() void {
     app.refreshBrowser();
     persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatus("Failed to save VM configuration"); };
 }
+
+// ── Tests for firstUnusedSubnet ──────────────────────────────────────
+
+test "firstUnusedSubnet: empty set returns 100" {
+    const ns = vnet.NetworkSet{};
+    try std.testing.expectEqual(@as(u8, 100), firstUnusedSubnet(&ns));
+}
+
+test "firstUnusedSubnet: single used octet 100 -> 101" {
+    var ns = vnet.NetworkSet{};
+    _ = ns.add("VMnet0", .nat, "192.168.100.0", "255.255.255.0", false, "", "", "");
+    try std.testing.expectEqual(@as(u8, 101), firstUnusedSubnet(&ns));
+}
+
+test "firstUnusedSubnet: contiguous block -> first free after gap" {
+    var ns = vnet.NetworkSet{};
+    for (100..105) |oct| {
+        var subnet: [16]u8 = undefined;
+        const s = std.fmt.bufPrintZ(&subnet, "192.168.{d}.0", .{oct}) catch unreachable;
+        _ = ns.add("VMnet", .nat, s, "255.255.255.0", false, "", "", "");
+    }
+    try std.testing.expectEqual(@as(u8, 105), firstUnusedSubnet(&ns));
+}
+
+test "firstUnusedSubnet: non-192.168 subnets are ignored" {
+    var ns = vnet.NetworkSet{};
+    _ = ns.add("VMnet0", .nat, "192.168.100.0", "255.255.255.0", false, "", "", "");
+    _ = ns.add("VMnet1", .bridged, "10.0.0.0", "255.255.255.0", false, "", "", "");
+    _ = ns.add("VMnet2", .nat, "172.16.0.0", "255.255.0.0", false, "", "", "");
+    // Only 192.168.100.0 counts; 101 should be free
+    try std.testing.expectEqual(@as(u8, 101), firstUnusedSubnet(&ns));
+}
+
+test "firstUnusedSubnet: octet below 100 is ignored" {
+    var ns = vnet.NetworkSet{};
+    _ = ns.add("VMnet0", .nat, "192.168.50.0", "255.255.255.0", false, "", "", "");
+    // 50 is below 100, so it doesn't count; 100 is still first free
+    try std.testing.expectEqual(@as(u8, 100), firstUnusedSubnet(&ns));
+}
+
+test "firstUnusedSubnet: octet boundary (octet >= 255 ignored)" {
+    var ns = vnet.NetworkSet{};
+    _ = ns.add("VMnet0", .nat, "192.168.255.0", "255.255.255.0", false, "", "", "");
+    // 255 is not < 255, so it doesn't count; 100 is first free
+    try std.testing.expectEqual(@as(u8, 100), firstUnusedSubnet(&ns));
+}
+
+test "firstUnusedSubnet: malformed subnet does not block" {
+    var ns = vnet.NetworkSet{};
+    _ = ns.add("VMnet0", .nat, "192.168.a", "255.255.255.0", false, "", "", "");
+    // "a" is not a valid uint, so parse fail -> no block
+    try std.testing.expectEqual(@as(u8, 100), firstUnusedSubnet(&ns));
+}
+
+test "firstUnusedSubnet: short subnet (< 11 chars) is ignored" {
+    var ns = vnet.NetworkSet{};
+    _ = ns.add("VMnet0", .nat, "192.168.1", "255.255.255.0", false, "", "", "");
+    // "192.168.1" has len 9 < 11, so it's skipped
+    try std.testing.expectEqual(@as(u8, 100), firstUnusedSubnet(&ns));
+}
+
+test "firstUnusedSubnet: max networks filled -> returns next unused" {
+    var ns = vnet.NetworkSet{};
+    // Fill all 20 available slots with contiguous 100..119
+    for (100..120) |oct| {
+        var subnet: [16]u8 = undefined;
+        const s = std.fmt.bufPrintZ(&subnet, "192.168.{d}.0", .{oct}) catch unreachable;
+        _ = ns.add("VMnet", .nat, s, "255.255.255.0", false, "", "", "");
+    }
+    try std.testing.expectEqual(@as(u8, 120), firstUnusedSubnet(&ns));
+}
+
+test "firstUnusedSubnet: fallback to 240 is unreachable (kept as safety) — function exists" {
+    // The 240 fallback can't be hit with MAX_VNETS=20, but the code
+    // path is present. Verify the function still compiles and runs.
+    const ns = vnet.NetworkSet{};
+    _ = firstUnusedSubnet(&ns); // just ensure it doesn't crash
+}
+
+test "firstUnusedSubnet: sparse allocation -> first gap found" {
+    var ns = vnet.NetworkSet{};
+    _ = ns.add("VMnet0", .nat, "192.168.100.0", "255.255.255.0", false, "", "", "");
+    _ = ns.add("VMnet1", .nat, "192.168.102.0", "255.255.255.0", false, "", "", "");
+    _ = ns.add("VMnet2", .nat, "192.168.105.0", "255.255.255.0", false, "", "", "");
+    // 100 used, 101 free, 102 used -> first free is 101
+    try std.testing.expectEqual(@as(u8, 101), firstUnusedSubnet(&ns));
+}

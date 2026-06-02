@@ -14,6 +14,7 @@ const spice = @import("spice_client.zig");
 const hv_iface = @import("hv/interface.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
 const cfltk = @import("cfltk_import.zig").c;
+const persist = @import("persist.zig");
 const filter_ = @import("filter.zig");
 const vmlist = @import("vmlist.zig");
 
@@ -36,37 +37,37 @@ pub const Palette = struct {
 };
 
 pub const pal_light: Palette = .{
-    .bg = 0xf5f6f900,
+    .bg = 0xf8f9fc00,
     .surface = 0xffffff00,
-    .text = 0x1e1e2400,
-    .text_dim = 0x6e6e7a00,
-    .accent = 0x1565c000,
+    .text = 0x11131800,
+    .text_dim = 0x88909e00,
+    .accent = 0x3b6eeb00,
     .accent_text = 0xffffff00,
-    .danger = 0xc6282800,
-    .warn = 0xe6510000,
-    .amber = 0xf9a82500,
-    .gray_btn = 0x75757500,
-    .border = 0xe0e0e600,
-    .header = 0x1a1a3a00,
-    .success = 0x2e7d3200,
+    .danger = 0xe02d4200,
+    .warn = 0xffc53d00,
+    .amber = 0xf59e4400,
+    .gray_btn = 0x6b728000,
+    .border = 0xe2e5ec00,
+    .header = 0x11131800,
+    .success = 0x16a34a00,
     .dark_text = 0x00000000,
 };
 
 pub const pal_dark: Palette = .{
-    .bg = 0x1e1e2e00,
-    .surface = 0x31324400,
-    .text = 0xcdd6f400,
-    .text_dim = 0x9399b200,
-    .accent = 0x89b4fa00,
-    .accent_text = 0x1e1e2e00,
-    .danger = 0xf38ba800,
-    .warn = 0xfab38700,
-    .amber = 0xf9e2af00,
-    .gray_btn = 0x585b7000,
-    .border = 0x45475a00,
-    .header = 0xcdd6f400,
-    .success = 0xa6e3a100,
-    .dark_text = 0xcdd6f400,
+    .bg = 0x090b1000,
+    .surface = 0x11131a00,
+    .text = 0xe8eaef00,
+    .text_dim = 0x5e647400,
+    .accent = 0x4f8cff00,
+    .accent_text = 0x090b1000,
+    .danger = 0xf44b5e00,
+    .warn = 0xffc53d00,
+    .amber = 0xf59e4400,
+    .gray_btn = 0x25283300,
+    .border = 0x25283300,
+    .header = 0xe8eaef00,
+    .success = 0x3dd68c00,
+    .dark_text = 0xe8eaef00,
 };
 
 pub var pal: Palette = pal_light;
@@ -103,6 +104,22 @@ pub fn applyTheme(t: vm.Theme) void {
     cfltk.Fl_inactive_color(dim_r, dim_g, dim_b);
 
     updateWidgetColors();
+}
+
+/// Cycle through system → light → dark → system themes.
+pub fn cycleTheme() void {
+    const next: vm.Theme = switch (current_theme) {
+        .system => .light,
+        .light => .dark,
+        .dark => .system,
+    };
+    applyTheme(next);
+    prefs.theme = next;
+    // Persist immediately so the choice survives restart.
+    persist.save(&vms, vm_count, prefs) catch {};
+    var buf: [64]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(&buf, "Theme: {s}", .{next.label()}) catch "Theme changed";
+    setStatus(msg);
 }
 
 /// Re-apply colors to all registered widgets. Called after theme change.

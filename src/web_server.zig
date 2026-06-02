@@ -1841,7 +1841,7 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
     const seek_end = c.lseek(fd, 0, 2); // SEEK_END = 2
     if (seek_end < 0) return;
     const file_size: u64 = @intCast(seek_end);
-    _ = c.lseek(fd, 0, 0); // SEEK_SET = 0
+    if (c.lseek(fd, 0, 0) < 0) return; // SEEK_SET = 0
 
     const basename = std.fs.path.basename(std.mem.span(disk2_path));
     var fname_buf: [256]u8 = undefined;
@@ -1977,8 +1977,10 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     const v = &vms[idx];
 
     // Per-export unique directory to avoid races with concurrent exports.
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     var dir_buf: [128]u8 = undefined;
-    const dir_path = std.fmt.bufPrintZ(&dir_buf, "/tmp/ovf_export.{d}.{d}", .{ idx, std.os.linux.getpid() }) catch return;
+    const dir_path = std.fmt.bufPrintZ(&dir_buf, "/tmp/ovf_export.{d}.{d}.{d}", .{ idx, std.os.linux.getpid(), ts.nsec }) catch return;
     // Ensure a clean directory.
     _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
         logErr("export: deleteTree (pre-create) failed");
@@ -2002,7 +2004,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var path_buf: [vm.MAX_PATH]u8 = undefined;
     const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return;
 
-    const disk_cap: u64 = @as(u64, v.disk_size_gb) *| 1024 *| 1024 *| 1024;
+    const disk_cap = @as(u64, v.disk_size_gb) * 1024 * 1024 * 1024;
     const spec = ovf.Spec{
         .name = v.getNameSlice(),
         .cpu_cores = v.cpu_cores,
@@ -2013,22 +2015,22 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         .has_network = v.nics[0].mode != .none,
     };
     var ovf_buf: [ovf.max_descriptor_len]u8 = undefined;
-    const xml = ovf.buildDescriptor(spec, &ovf_buf) catch return;
+    const xml = ovf.buildDescriptor(spec, &ovf_buf) catch { logErr("export: OVF descriptor build failed"); return; };
 
     const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, v.getNameSlice() });
     defer std.heap.page_allocator.free(ovf_path);
-    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch return;
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch { logErr("export: failed to write OVF file"); return; };
 
     if (getVmmHandle(idx)) |h| {
-        g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch return;
+        g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch { logErr("export: disk conversion (VMM) failed"); return; };
     } else {
-        qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch return;
+        qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch { logErr("export: disk conversion (qemu) failed"); return; };
     }
 
     // Tar+gzip the export directory
     {
         const tar_argv = [_][]const u8{ "tar", "-czf", tar_path, "-C", dir_path, "." };
-        qemu.runWait(&tar_argv, std.heap.page_allocator, null) catch return;
+        qemu.runWait(&tar_argv, std.heap.page_allocator, null) catch { logErr("export: tar+gzip failed"); return; };
         tar_cleanup = true;
     }
 
@@ -2040,7 +2042,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     const seek_end = c.lseek(tar_fd, 0, 2);
     if (seek_end < 0) return;
     const file_size: u64 = @intCast(seek_end);
-    _ = c.lseek(tar_fd, 0, 0);
+    if (c.lseek(tar_fd, 0, 0) < 0) return;
 
     const raw_filename = std.fmt.bufPrint(&path_buf, "{s}.ova", .{v.getNameSlice()}) catch "export.ova";
     var fname_buf2: [256]u8 = undefined;
@@ -2173,11 +2175,13 @@ fn jsonEscape(buf: []u8, s: []const u8) EscapeResult {
 
 /// Wrapper around jsonEscape that logs truncation. Returns only the escaped slice
 /// so call sites remain concise: escapeJson(&esc, s, "field_name")
+/// When truncation occurs, returns "" to avoid embedding broken JSON in the response.
 fn escapeJson(buf: []u8, s: []const u8, field: []const u8) []const u8 {
     const result = jsonEscape(buf, s);
     if (result.truncated) {
         _ = field; // field name is for debugging; log a concise message
         logErr("jsonEscape truncated");
+        return "";
     }
     return result.escaped;
 }
@@ -3055,8 +3059,9 @@ test "isAuthExempt: API read endpoints are exempt for GET" {
 test "isAuthExempt: prefix paths are exempt for GET" {
     try std.testing.expect(isAuthExempt(true, "/api/vm/0"));
     try std.testing.expect(isAuthExempt(true, "/api/vm/5/snapshot"));
-    try std.testing.expect(isAuthExempt(true, "/api/fb/0"));
-    try std.testing.expect(isAuthExempt(true, "/api/fb/0?quality=50"));
+    // /api/fb/ is no longer exempt — framebuffer snapshots require auth
+    try std.testing.expect(!isAuthExempt(true, "/api/fb/0"));
+    try std.testing.expect(!isAuthExempt(true, "/api/fb/0?quality=50"));
     try std.testing.expect(isAuthExempt(true, "/api/snapshot/list/0"));
     try std.testing.expect(isAuthExempt(true, "/api/quickstart/ubuntu2404"));
 }
@@ -3077,7 +3082,8 @@ test "isAuthExempt: all non-GET methods are non-exempt" {
 
 test "isAuthExempt: path traversal does not bypass prefix match" {
     try std.testing.expect(isAuthExempt(true, "/api/vm/../../../etc/passwd"));
-    try std.testing.expect(isAuthExempt(true, "/api/fb/../../../../root/.ssh/id_rsa"));
+    // /api/fb/ is no longer exempt — path traversal on it must also fail
+    try std.testing.expect(!isAuthExempt(true, "/api/fb/../../../../root/.ssh/id_rsa"));
 }
 
 // ── clampPref ──
@@ -3189,15 +3195,21 @@ pub fn main() !void {
     std.debug.print("║  Health: GET /api/health                    ║\n", .{});
     std.debug.print("╚══════════════════════════════════════════════╝\n\n", .{});
 
+    var ebuf: [64]u8 = undefined;
+
     // Spawn thread to accept Unix socket connections
     if (std.Thread.spawn(std.Thread.SpawnConfig{}, acceptLoop, .{ unix_sock })) |th| {
         th.detach();
-    } else |_| {}
+    } else |e| {
+        logErr(std.fmt.bufPrint(&ebuf, "spawn acceptLoop failed: {s}", .{@errorName(e)}) catch "spawn acceptLoop failed");
+    }
 
     // Spawn autoprotect background ticker
     if (std.Thread.spawn(std.Thread.SpawnConfig{}, autoprotectTicker, .{})) |th| {
         th.detach();
-    } else |_| {}
+    } else |e| {
+        logErr(std.fmt.bufPrint(&ebuf, "spawn autoprotectTicker failed: {s}", .{@errorName(e)}) catch "spawn autoprotectTicker failed");
+    }
 
     while (true) {
         const conn = c.accept(sock, null, null);

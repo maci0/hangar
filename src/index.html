@@ -1,5 +1,5 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KVMGUI</title><meta name="theme-color" content="#0b0d11" media="(prefers-color-scheme:dark)"><meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme:light)"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head><body>
+<title>KVMGUI</title><meta name="theme-color" content="#090b10" media="(prefers-color-scheme:dark)"><meta name="theme-color" content="#f8f9fc" media="(prefers-color-scheme:light)"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head><body>
 <div id="connbanner" style="display:none" aria-live="assertive" role="alert"><span>⚠️ Server unreachable — retrying automatically&hellip;</span><button class="btn ghost" data-action="dismissBanner" title="Dismiss" style="padding:0 8px;font-size:12px;line-height:1;color:var(--text)">✕</button></div>
 <aside aria-label="VM Library">
 <div class="sidebar-header"><div class="logo">K</div><h2>KVMGUI</h2></div>
@@ -32,6 +32,7 @@
 <button class="btn ghost" data-action="openVnets" title="Edit virtual networks">🌐 VNet</button>
 <button class="btn ghost" data-action="openPrefs" title="Application preferences">⚡ Prefs</button>
 <button class="btn ghost" data-action="openAbout" title="About KVMGUI">ℹ About</button>
+<button class="btn ghost theme-toggle-btn" data-action="toggleTheme" title="Toggle light/dark/system theme">🌓</button>
 <span class="sep"></span>
 <button class="btn primary" data-action="batchStart" title="Start all stopped VMs">▶ Start All</button>
 <button class="btn danger" data-action="batchStop" title="Stop all running/paused VMs">⏹ Stop All</button>

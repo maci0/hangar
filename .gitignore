@@ -47,5 +47,9 @@ package-lock.json
 __pycache__/
 *.pyc
 
+# Generated visual regression screenshots
+tests/visual/**/*.png
+tests/visual/results.json
+
 # Scratch FLTK binary
 test_fltk
