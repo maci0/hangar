@@ -2744,11 +2744,52 @@ All 15 items resolved. Zero known crash/data-loss bugs remain.
 | # | Description | Priority | Status |
 |---|-------------|----------|--------|
 | 1 | Responsive web breakpoints / hamburger menu | Low | ✅ (3 breakpoints: ≤1024px, ≤900px, ≤600px; hamburger sidebar overlay; touch-friendly tweaks) |
-| 2 | Web favicon | Low | |
+| 2 | Web favicon | Low | ✅ (inline SVG in web_server.zig + web/favicon.svg) |
 | 3 | Serial terminal scrollback export/clear button | Low | ✅ (Clear + Export + Disconnect buttons in serial panel; Tier 30.4 #10) |
-| 4 | Toast notification CSS transition animation | Low | |
-| 5 | `prefers-reduced-motion` media query support | Low | |
-| 6 | Focus trap for web dialog modals | Low | |
-| 7 | VNC canvas loading spinner overlay | Low | |
+| 4 | Toast notification CSS transition animation | Low | ✅ (toast-in/toast-out keyframes + .exit class in JS) |
+| 5 | `prefers-reduced-motion` media query support | Low | ✅ (CSS rule kills all animations/transitions at 0.01ms; JS already checks matchMedia) |
+| 6 | Focus trap for web dialog modals | Low | ✅ (trapFocus/releaseFocus/dialogFocusStack; all dialogs patched) |
+| 7 | VNC canvas loading spinner overlay | Low | ✅ (#display.loading::after with spin animation) |
 | 8 | Test-coverage gaps: ~145 untested lines across persist.zig (emitVmJson w/ snapshot lists, link-clone emit), qmp.zig (response timeout path), dialogs.zig (migrate/vnet save paths) | Low | |
+
+## Tier 34 — Continuous Polish (2025-07-19)
+
+| # | Description | Status |
+|---|-------------|--------|
+| 1 | Button transform transition (scale on active) | ✅ added `transform` to `.btn` transition list |
+| 2 | Tab active glow indicator (`::after` with box-shadow) | ✅ added `::after` pseudo with accent-glow |
+| 3 | Reduced-motion: disable all animations + skeleton shimmer + pulse dot + status pulse | ✅ |
+| 4 | Touch-friendly: 44px min-height list items, 36px min-height buttons, `touch-action:manipulation` | ✅ |
+| 5 | WCAG color contrast audit | ✅ dark border→#606570, light border→#8b9099, accent→#2563eb, danger→#dc2626 |
+| 6 | Dialog exit animation (slide-out instead of instant close) | ✅ |
+| 7 | VM list item drag-to-reorder | ✅ API /api/reorder + frontend DnD with drag/dragover/drop |
+| 8 | Keyboard shortcut overlay shows on first visit | ✅ localStorage flag + 1.5s delay then showShortcutsModal |
+| 9 | Settings form dirty-state detection (warn before losing unsaved edits) | ✅ select/deselectVm/Escape/editVm all guarded |
+| 10 | FLTK: automated screenshot diff test for light/dark theme | ❌ WONTFIX — FLTK replaced by IUP (GTK3), screenshot testing done via Xvfb |
+
+## Tier 35 — Web UI Polish & Gaps (2025-07-19)
+
+| # | Description | Status |
+|---|-------------|--------|
+| 1 | Touch drag-to-reorder for mobile (pointer events as fallback for HTML5 DnD) | ✅ pointer events: pointerdown/move/up, ghost element, threshold, cleanup |
+| 2 | Web UI: end-to-end smoke test (headless browser drives key paths) | ✅ tests/web_smoke.mjs: 30 scenarios via Puppeteer, `zig build web-smoke` |
+| 3 | Web UI: keyboard shortcut to reorder items (Alt+↑/Alt+↓) | ✅ Alt+↑/Alt+↓ in keydown handler + reorderVm helper |
+| 4 | Web UI: `Ctrl+S` save shortcut should work in settings tab even when no input is focused | ✅ added before input-guard in keydown handler |
+| 5 | Web UI: server-connection-lost recovery banner (prominent banner, not just status bar) | ✅ `#connbanner` element with warn styling, `setServerDown()` JS helper, dismiss button |
+| 6 | Web UI: undo toast after drag-to-reorder (5s undo window) | ✅ toastUndo in reorderVm: captures old positions, 5s dismiss, reverse-reorder callback |
+| 7 | Web UI: unused CSS audit and cleanup | ✅ All selectors verified referenced in HTML/JS — no dead code |
+| 8 | Web UI: `prefers-color-scheme` media query auto-detection for theme default | ✅ already implemented — `applyTheme` checks matchMedia, listens for changes |
+
+## Tier 36 — Expanded Test Coverage & CSS Polish (2025-07-20)
+
+| # | Description | Status |
+|---|-------------|--------|
+| 1 | Web smoke test expanded from 14→30 scenarios | ✅ Added: rename, clone, favorite, search, deselect, sendCad, migrate, snapshot UI, serial, batch ops, export OVF function checks |
+| 2 | CSS: hardcoded `color:#000` on `#connbanner` | ✅ Replaced with `var(--text-on-warn)`, added `--text-on-warn` CSS custom property to both `:root` and `:root.light` |
+| 3 | CSS: duplicate `--warn-glow` declaration | ✅ Removed accidental duplicate introduced during variable refactor |
+| 4 | Smoke test: `emptystate` ID → `.empty-state` class fix | ✅ Changed selector from `#emptystate` to `.empty-state` to match actual DOM |
+| 5 | Smoke test: `snap_tag` → `s_tag` input ID fix | ✅ Changed to match actual `#s_tag` input in `index.html` |
+| 6 | Smoke test: `toggleFavorite` call with explicit index | ✅ Changed from `invokeFn` to `page.evaluate(() => window.toggleFavorite(0))` because toggleFavorite requires an index argument |
+| 7 | `migrateGuest` dialog test | ✅ Opens migratedlg modal, handles close gracefully with Escape |
+| 8 | `cloneGuest` dialog test with Full Clone button | ✅ Opens clonedlg, clicks Full Clone button, verifies VM count increases |
 

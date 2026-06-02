@@ -1,5 +1,6 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KVMGUI</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head><body>
+<title>KVMGUI</title><meta name="theme-color" content="#0b0d11" media="(prefers-color-scheme:dark)"><meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme:light)"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head><body>
+<div id="connbanner" style="display:none" aria-live="assertive" role="alert"><span>⚠️ Server unreachable — retrying automatically&hellip;</span><button class="btn ghost" data-action="dismissBanner" title="Dismiss" style="padding:0 8px;font-size:12px;line-height:1;color:var(--text)">✕</button></div>
 <aside aria-label="VM Library">
 <div class="sidebar-header"><div class="logo">K</div><h2>KVMGUI</h2></div>
 <div class="search-wrap"><input id="search" placeholder="Search VMs..." data-action="filterList" aria-label="Search VMs"><button class="clear-btn" id="searchClear" data-action="clearSearch" title="Clear search">✕</button></div>
@@ -125,14 +126,17 @@ F5 Refresh &nbsp;·&nbsp; F11 Fullscreen &nbsp;·&nbsp; ? Shortcuts &nbsp;·&nbs
 <tr><td><kbd>Ctrl+N</kbd></td><td>New VM</td></tr>
 <tr><td><kbd>Ctrl+E</kbd></td><td>Edit Settings</td></tr>
 <tr><td><kbd>Ctrl+I</kbd></td><td>Import VM</td></tr>
-<tr><td><kbd>Ctrl+S</kbd></td><td>Suspend VM</td></tr>
+<tr><td><kbd>Ctrl+S</kbd></td><td>Save Settings / Suspend VM</td></tr>
 <tr><td><kbd>Ctrl+P</kbd></td><td>Preferences</td></tr>
 <tr><td><kbd>Ctrl+F</kbd></td><td>Search VM Library</td></tr>
+<tr><td><kbd>Ctrl+Enter</kbd></td><td>Edit Settings</td></tr>
 <tr><td><kbd>Enter</kbd></td><td>Power On / Off</td></tr>
 <tr><td><kbd>Delete</kbd></td><td>Delete VM</td></tr>
 <tr><td><kbd>F5</kbd></td><td>Refresh VM List</td></tr>
 <tr><td><kbd>F11</kbd></td><td>Toggle Fullscreen</td></tr>
 <tr><td><kbd>Ctrl+W</kbd></td><td>Deselect VM</td></tr>
+<tr><td><kbd>Alt+↑</kbd></td><td>Move VM Up</td></tr>
+<tr><td><kbd>Alt+↓</kbd></td><td>Move VM Down</td></tr>
 <tr><td><kbd>Escape</kbd></td><td>Close Dialog / Deselect</td></tr>
 <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
 </table></div>

@@ -427,6 +427,9 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/delete/")) {
         response = try handleDelete(req);
         content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "POST /api/reorder")) {
+        response = try handleReorder(req);
+        content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "GET /api/fb/")) {
         response = try renderFramebuffer(req);
         content_type = "image/bmp";
@@ -1178,6 +1181,49 @@ fn handleDelete(req: []const u8) ![]const u8 {
     persist.save(&vms, vm_count, prefs) catch |e| {
         var ebuf: [64]u8 = undefined;
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        return "save failed";
+    };
+    return "ok";
+}
+
+fn handleReorder(req: []const u8) ![]const u8 {
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
+
+    const prefix = "POST /api/reorder";
+    _ = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
+    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
+    const body = req[body_start + 4 ..];
+    var val_buf: [16]u8 = undefined;
+    var from: ?usize = null;
+    var to: ?usize = null;
+    var pairs = std.mem.splitScalar(u8, body, '&');
+    while (pairs.next()) |pair| {
+        var kv = std.mem.splitScalar(u8, pair, '=');
+        const key = kv.next() orelse continue;
+        const raw = kv.next() orelse continue;
+        const val = if (raw.len <= val_buf.len) urlencode.urlDecode(&val_buf, raw) else raw;
+        const n = std.fmt.parseInt(usize, val, 10) catch continue;
+        if (std.mem.eql(u8, key, "from")) from = n;
+        if (std.mem.eql(u8, key, "to")) to = n;
+    }
+    if (from == null or to == null) return "missing from/to";
+    const a = from.?;
+    const b = to.?;
+    if (a >= vm_count or b >= vm_count) return "invalid idx";
+    if (a == b) return "ok"; // no-op
+    // Swap VM configs, handles, and started timestamps
+    const tmp_vm = vms[a];
+    vms[a] = vms[b];
+    vms[b] = tmp_vm;
+    const tmp_handle = g_vmm_handles[a];
+    g_vmm_handles[a] = g_vmm_handles[b];
+    g_vmm_handles[b] = tmp_handle;
+    const tmp_started = vm_started[a];
+    vm_started[a] = vm_started[b];
+    vm_started[b] = tmp_started;
+    persist.save(&vms, vm_count, prefs) catch {
+        logErr("persist.save failed");
         return "save failed";
     };
     return "ok";
@@ -2905,6 +2951,14 @@ test "clampPref: zero as valid value when within range" {
 pub fn main() !void {
     vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
     g_vmm = hv_backend.createVmm(.auto);
+
+    // Allow custom API key via environment variable.
+    if (appio.getenv("KV_API_KEY")) |key| {
+        if (key.len > 0 and key.len <= 64) {
+            auth_token_len = key.len;
+            @memcpy(auth_token[0..key.len], key);
+        }
+    }
 
     const port: u16 = if (appio.getenv("KV_PORT")) |env| blk: {
         break :blk std.fmt.parseInt(u16, env, 10) catch 9080;

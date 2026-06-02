@@ -108,4 +108,10 @@ pub fn build(b: *std.Build) !void {
     fltk_ss_dark.dependOn(&exe_install.step);
     const fltk_ss_dark_cmd = b.addSystemCommand(&.{ "bash", "tests/visual/e2e_fltk_screenshots_dark.sh" });
     fltk_ss_dark.dependOn(&fltk_ss_dark_cmd.step);
+
+    // ── Web UI E2E smoke test (Xvfb + Node/Puppeteer) ──
+    const web_smoke = b.step("web-smoke", "Web UI end-to-end smoke test");
+    web_smoke.dependOn(&web_exe.step);
+    const web_smoke_cmd = b.addSystemCommand(&.{ "node", "tests/web_smoke.mjs" });
+    web_smoke.dependOn(&web_smoke_cmd.step);
 }
