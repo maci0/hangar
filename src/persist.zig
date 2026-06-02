@@ -1237,6 +1237,13 @@ test "parseAccel: maps strings to enums with safe defaults" {
     try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("Hvf"));
 }
 
+test "parseGpuDevice: maps strings to enums" {
+    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, parseGpuDevice("virtio_gpu_gl"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice("virtio_vga_gl"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice("unknown"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice(""));
+}
+
 test "emit→parse JSON text round-trip preserves all fields" {
     const alloc = std.testing.allocator;
 

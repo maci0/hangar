@@ -23,6 +23,7 @@ pub fn aboutDialog() void {
     const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 440, 2), @divTrunc(cfltk.Fl_h() - 420, 2), 440, 420, "About KVMGUI");
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
+    cfltk.Fl_Window_size_range(dlg, 440, 420, 0, 0);
     const ah = cfltk.Fl_Box_new(10, 10, 420, 30, "KVMGUI v1.0");
     cfltk.Fl_Box_set_color(ah, app.pal.bg); cfltk.Fl_Box_set_label_font(ah, 1); cfltk.Fl_Box_set_label_color(ah, app.pal.header);
     cfltk.Fl_Box_set_label_size(ah, 18);
@@ -72,6 +73,7 @@ pub fn prefsDialog() void {
     const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 420, 2), @divTrunc(cfltk.Fl_h() - 320, 2), 420, 320, "Preferences");
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
+    cfltk.Fl_Window_size_range(dlg, 420, 320, 0, 0);
 
     const ph = cfltk.Fl_Box_new(10, 10, 400, 22, "Defaults for new VMs");
     cfltk.Fl_Box_set_color(ph, app.pal.bg);
@@ -249,6 +251,7 @@ pub fn vnetDialog() void {
     const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 580, 2), @divTrunc(cfltk.Fl_h() - 420, 2), 580, 420, "Virtual Network Editor");
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
+    cfltk.Fl_Window_size_range(dlg, 580, 420, 0, 0);
     const vh = cfltk.Fl_Box_new(10, 10, 560, 20, "Virtual Network switches (VMnet):");
     cfltk.Fl_Box_set_color(vh, app.pal.bg);
     cfltk.Fl_Box_set_label_font(vh, 1); cfltk.Fl_Box_set_label_color(vh, app.pal.header);
@@ -476,6 +479,7 @@ pub fn remoteConnectDialog() void {
     const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 420, 2), @divTrunc(cfltk.Fl_h() - 220, 2), 420, 220, "Connect to Remote Server");
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
+    cfltk.Fl_Window_size_range(dlg, 420, 220, 0, 0);
     const rl0 = cfltk.Fl_Box_new(10, 10, 400, 20, "Server URL: unix:///path | http://host:port | shm:///name");
     cfltk.Fl_Box_set_color(rl0, app.pal.bg);
     cfltk.Fl_Box_set_label_font(rl0, 1); cfltk.Fl_Box_set_label_color(rl0, app.pal.text_dim);

@@ -19,8 +19,10 @@ const autoprotect = @import("autoprotect.zig");
 const snapparse = @import("snapparse.zig");
 const sync = @import("sync.zig");
 const urlencode = @import("urlencode.zig");
+const form_parsers = @import("form_parsers.zig");
 
 extern fn time(t: ?*c_long) c_long;
+extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
 
 const MAX_VMS = vm.MAX_VMS;
 
@@ -131,6 +133,8 @@ fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.startsWith(u8, path, "/api/vm/")) return true;
     if (std.mem.startsWith(u8, path, "/api/fb/")) return true;
     if (std.mem.startsWith(u8, path, "/api/snapshot/list/")) return true;
+    if (std.mem.eql(u8, path, "/api/catalog")) return true;
+    if (std.mem.startsWith(u8, path, "/api/quickstart/")) return true;
     return false;
 }
 
@@ -1077,9 +1081,9 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             if (!vm.isValidVmName(val)) return "invalid name";
             cfg.setName(val);
         }
-        if (std.mem.eql(u8, key, "mem")) cfg.memory_mb = vm.clampMemory(std.fmt.parseInt(u32, val, 10) catch 2048);
-        if (std.mem.eql(u8, key, "cpu")) cfg.cpu_cores = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch 2);
-        if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = vm.clampDiskSize(std.fmt.parseInt(u32, val, 10) catch 20);
+        if (std.mem.eql(u8, key, "mem")) cfg.memory_mb = vm.clampMemory(form_parsers.parseU32OrDefault(val, 2048));
+        if (std.mem.eql(u8, key, "cpu")) cfg.cpu_cores = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, 2));
+        if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = vm.clampDiskSize(form_parsers.parseU32OrDefault(val, 20));
     }
 
     // Apply AutoProtect defaults from preferences
@@ -1298,7 +1302,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "guest_os")) v.guest_os = vm.GuestOs.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.guest_os.toIndex());
         if (std.mem.eql(u8, key, "audio")) v.audio = vm.AudioDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.audio.toIndex());
         if (std.mem.eql(u8, key, "boot_order")) v.boot_order = vm.BootOrder.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.boot_order.toIndex());
-        if (std.mem.eql(u8, key, "accel")) v.accel = persist.parseAccel(val);
+        if (std.mem.eql(u8, key, "accel")) v.accel = form_parsers.parseAccel(val);
         if (std.mem.eql(u8, key, "enable_kvm")) { if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg; }
         if (std.mem.eql(u8, key, "embed_display")) v.embed_display = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "vnc_port")) {
@@ -2884,6 +2888,7 @@ test "isAuthExempt: API read endpoints are exempt for GET" {
     try std.testing.expect(isAuthExempt(true, "/api/health"));
     try std.testing.expect(isAuthExempt(true, "/api/config"));
     try std.testing.expect(isAuthExempt(true, "/api/vnets"));
+    try std.testing.expect(isAuthExempt(true, "/api/catalog"));
 }
 
 test "isAuthExempt: prefix paths are exempt for GET" {
@@ -2892,6 +2897,7 @@ test "isAuthExempt: prefix paths are exempt for GET" {
     try std.testing.expect(isAuthExempt(true, "/api/fb/0"));
     try std.testing.expect(isAuthExempt(true, "/api/fb/0?quality=50"));
     try std.testing.expect(isAuthExempt(true, "/api/snapshot/list/0"));
+    try std.testing.expect(isAuthExempt(true, "/api/quickstart/ubuntu2404"));
 }
 
 test "isAuthExempt: non-exempt paths are rejected for GET" {
@@ -2947,7 +2953,6 @@ test "clampPref: value exactly at boundaries" {
 test "clampPref: zero as valid value when within range" {
     try std.testing.expectEqual(@as(u32, 1), clampPref("0", 1, 1, 10));
 }
-
 pub fn main() !void {
     vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
     g_vmm = hv_backend.createVmm(.auto);

@@ -16,6 +16,7 @@ const display_mod = @import("display.zig");
 const display_gl = @import("display_gl.zig");
 const remote = @import("remote.zig");
 const dialogs = @import("dialogs.zig");
+const appio = @import("appio.zig");
 const urlencode = @import("urlencode.zig");
 const uimath = @import("uimath.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
@@ -963,9 +964,10 @@ fn snapDialog() void {
     if (idx >= app.vm_count) return;
     const vc = &app.vms[idx];
     if (!vc.hasDisk()) return;
-    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 480, 2), @divTrunc(cfltk.Fl_h() - 200, 2), 480, 200, "Snapshot Manager");
+    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 480, 2), @divTrunc(cfltk.Fl_h() - 420, 2), 480, 420, "Snapshot Manager");
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
+    cfltk.Fl_Window_size_range(dlg, 480, 420, 0, 0);
     const snl = cfltk.Fl_Box_new(10, 10, 460, 20, "Snapshot name:");
     cfltk.Fl_Box_set_label_font(snl, 1); cfltk.Fl_Box_set_label_color(snl, app.pal.text_dim);
     const ni = cfltk.Fl_Input_new(10, 30, 460, 24, "snapshot1");
@@ -978,11 +980,23 @@ fn snapDialog() void {
     cfltk.Fl_Button_set_color(rb, app.pal.warn); cfltk.Fl_Button_set_label_color(rb, app.pal.accent_text);
     const db = cfltk.Fl_Button_new(280, 70, 80, 30, "Delete");
     cfltk.Fl_Button_set_color(db, app.pal.danger); cfltk.Fl_Button_set_label_color(db, app.pal.accent_text);
-    const cb = cfltk.Fl_Button_new(10, 160, 80, 30, "Close");
+    const cb = cfltk.Fl_Button_new(10, 380, 80, 30, "Close");
     cfltk.Fl_Button_set_color(cb, app.pal.gray_btn); cfltk.Fl_Button_set_label_color(cb, app.pal.accent_text);
-    const rl = cfltk.Fl_Box_new(10, 110, 460, 40, "");
-    const SD = struct { n: ?*cfltk.Fl_Input, r: ?*cfltk.Fl_Box, v: *vm.VmConfig, d: ?*cfltk.Fl_Window, idx: usize, remote: bool };
-    var sd = SD{ .n = @ptrCast(ni), .r = @ptrCast(rl), .v = vc, .d = @ptrCast(dlg), .idx = idx, .remote = app.remote_mode };
+    const snap_browser = cfltk.Fl_Browser_new(10, 115, 460, 250, "");
+    app.themeBrowser(@ptrCast(snap_browser));
+    const SD = struct { n: ?*cfltk.Fl_Input, r: ?*cfltk.Fl_Browser, v: *vm.VmConfig, d: ?*cfltk.Fl_Window, idx: usize, remote: bool };
+    var sd = SD{ .n = @ptrCast(ni), .r = @ptrCast(snap_browser), .v = vc, .d = @ptrCast(dlg), .idx = idx, .remote = app.remote_mode };
+    // When the user clicks a snapshot in the list, populate the name input.
+    const SelCB = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
+        const s: *SD = @ptrCast(@alignCast(d orelse return));
+        if (s.r == null or s.n == null) return;
+        const sel = cfltk.Fl_Browser_value(s.r);
+        if (sel > 0) {
+            const txt = cfltk.Fl_Browser_text(s.r, sel);
+            if (txt != null) _ = cfltk.Fl_Input_set_value(s.n, txt);
+        }
+    }};
+    cfltk.Fl_Browser_set_callback(snap_browser, &SelCB.go, &sd);
     const TK = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
         const s: *SD = @ptrCast(@alignCast(d orelse return));
         if (s.n) |nn| {
@@ -991,28 +1005,37 @@ fn snapDialog() void {
                 const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/take/{d}", .{s.idx}) catch return;
                 var out_buf: [64]u8 = undefined;
                 _ = remote.apiPost(path, std.mem.span(cfltk.Fl_Input_value(nn)), &out_buf);
-                if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Created (remote).");
+                if (s.r) |rr| cfltk.Fl_Browser_add(rr, "Created (remote).");
             } else if (app.getVmmHandle(s.idx)) |h| {
                 app.g_vmm.snapshotCreateFn(h, s.v.getDiskPathSlice(), std.mem.span(cfltk.Fl_Input_value(nn)), std.heap.page_allocator) catch { app.setStatusErr("Snapshot create failed"); };
-                if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Created.");
+                if (s.r) |rr| { cfltk.Fl_Browser_clear(rr); _ = cfltk.Fl_Browser_add(rr, "Created."); }
             } else {
                 qemu.snapshotCreate(s.v.getDiskPathSlice(), std.mem.span(cfltk.Fl_Input_value(nn)), std.heap.page_allocator) catch { app.setStatusErr("Snapshot create failed"); };
-                if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Created.");
+                if (s.r) |rr| { cfltk.Fl_Browser_clear(rr); _ = cfltk.Fl_Browser_add(rr, "Created."); }
             }
         }
     }};
     const LK = struct { fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
         const s: *SD = @ptrCast(@alignCast(d orelse return));
+        const rr = s.r orelse return;
+        cfltk.Fl_Browser_clear(rr);
         if (s.remote) {
             var path_buf: [48]u8 = undefined;
             const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/list/{d}", .{s.idx}) catch return;
             const n = remote.apiGet(path, &snap_result_buf);
-            if (s.r) |rr| {
-                if (n > 0 and n <= snap_result_buf.len) {
-                    snap_result_buf[n] = 0;
-                    cfltk.Fl_Box_set_label(rr, @ptrCast(&snap_result_buf));
-                } else {
-                    cfltk.Fl_Box_set_label(rr, "(none)");
+            if (n > 0 and n <= snap_result_buf.len) {
+                snap_result_buf[n] = 0;
+                // Remote list is newline-separated; add each line.
+                var rem: []u8 = snap_result_buf[0..n];
+                while (rem.len > 0) {
+                    const nl = std.mem.indexOfScalar(u8, rem, '\n') orelse rem.len;
+                    if (nl > 0) {
+                        rem[nl] = 0;
+                        _ = cfltk.Fl_Browser_add(rr, @ptrCast(rem.ptr));
+                        rem = rem[(nl + 1)..];
+                    } else {
+                        rem = rem[1..];
+                    }
                 }
             }
         } else {
@@ -1020,23 +1043,11 @@ fn snapDialog() void {
                 app.g_vmm.snapshotListFn(h, s.v.getDiskPathSlice(), &snap_result_buf, std.heap.page_allocator) catch 0
             else
                 qemu.snapshotList(s.v.getDiskPathSlice(), &snap_result_buf, std.heap.page_allocator) catch 0;
-            if (s.r) |rr| {
-                if (n > 0) {
-                    const nodes = snapparse.parse(snap_result_buf[0..n]);
-                    if (nodes.count > 0) {
-                        var w: usize = 0;
-                        for (0..nodes.count) |i| {
-                            const name = nodes.nameSlice(i);
-                            const line = std.fmt.bufPrint(snap_result_buf[w..], "{s}\n", .{name}) catch break;
-                            w += line.len;
-                        }
-                        snap_result_buf[w] = 0;
-                        cfltk.Fl_Box_set_label(rr, @ptrCast(&snap_result_buf));
-                    } else {
-                        cfltk.Fl_Box_set_label(rr, "(none)");
-                    }
-                } else {
-                    cfltk.Fl_Box_set_label(rr, "(none)");
+            if (n > 0) {
+                const nodes = snapparse.parse(snap_result_buf[0..n]);
+                for (0..nodes.count) |i| {
+                    const name = nodes.nameSlice(i);
+                    _ = cfltk.Fl_Browser_add(rr, @ptrCast(name.ptr));
                 }
             }
         }
@@ -1055,13 +1066,13 @@ fn snapDialog() void {
                 const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/revert/{d}", .{s.idx}) catch return;
                 var out_buf: [64]u8 = undefined;
                 _ = remote.apiPost(path, tag, &out_buf);
-                if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Reverted (remote).");
+                if (s.r) |rr| cfltk.Fl_Browser_add(rr, "Reverted (remote).");
             } else if (app.getVmmHandle(s.idx)) |h| {
                 app.g_vmm.snapshotApplyFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatusErr("Snapshot revert failed"); };
-                if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Reverted.");
+                if (s.r) |rr| cfltk.Fl_Browser_add(rr, "Reverted.");
             } else {
                 qemu.snapshotApply(s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatusErr("Snapshot revert failed"); };
-                if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Reverted.");
+                if (s.r) |rr| cfltk.Fl_Browser_add(rr, "Reverted.");
             }
         }
     }};
@@ -1079,13 +1090,13 @@ fn snapDialog() void {
                 const path = std.fmt.bufPrintZ(&path_buf, "/api/snapshot/delete/{d}", .{s.idx}) catch return;
                 var out_buf: [64]u8 = undefined;
                 _ = remote.apiPost(path, tag, &out_buf);
-                if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Deleted (remote).");
+                if (s.r) |rr| cfltk.Fl_Browser_add(rr, "Deleted (remote).");
             } else if (app.getVmmHandle(s.idx)) |h| {
                 app.g_vmm.snapshotDeleteFn(h, s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatusErr("Snapshot delete failed"); };
-                if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Deleted.");
+                if (s.r) |rr| cfltk.Fl_Browser_add(rr, "Deleted.");
             } else {
                 qemu.snapshotDelete(s.v.getDiskPathSlice(), tag, std.heap.page_allocator) catch { app.setStatusErr("Snapshot delete failed"); };
-                if (s.r) |rr| cfltk.Fl_Box_set_label(rr, "Deleted.");
+                if (s.r) |rr| cfltk.Fl_Browser_add(rr, "Deleted.");
             }
         }
     }};
@@ -1380,6 +1391,7 @@ fn renameVm() void {
     const rw = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 340, 2), @divTrunc(cfltk.Fl_h() - 120, 2), 340, 120, "Rename VM");
     cfltk.Fl_Window_make_modal(rw, 1);
     cfltk.Fl_Window_set_color(rw, app.pal.bg);
+    cfltk.Fl_Window_size_range(rw, 340, 120, 0, 0);
     const rnl = cfltk.Fl_Box_new(10, 10, 320, 20, "Enter new name for the virtual machine:");
     cfltk.Fl_Box_set_label_font(rnl, 1); cfltk.Fl_Box_set_label_color(rnl, app.pal.text_dim);
 
@@ -1568,9 +1580,12 @@ fn migrateVm() void {
 }
 
 fn newVmDialog() void {
-    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 460, 2), @divTrunc(cfltk.Fl_h() - 260, 2), 460, 260, "New Virtual Machine");
+    const DLG_W = 460;
+    const DLG_H = 430;
+    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - DLG_W, 2), @divTrunc(cfltk.Fl_h() - DLG_H, 2), DLG_W, DLG_H, "New Virtual Machine");
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
+    cfltk.Fl_Window_size_range(dlg, DLG_W, DLG_H, 0, 0);
 
     _ = sectionLabel("Basic", 10, 10, 440);
 
@@ -1578,56 +1593,144 @@ fn newVmDialog() void {
     cfltk.Fl_Box_set_label_font(nlb0, 1); cfltk.Fl_Box_set_label_color(nlb0, app.pal.text_dim);
     const name_input = cfltk.Fl_Input_new(120, 38, 330, 24, "");
     app.themeInput(@ptrCast(name_input));
+    cfltk.Fl_Input_set_text_font(name_input, 1); // bold for emphasis
+
     const nlb1 = cfltk.Fl_Box_new(10, 70, 100, 20, "Guest OS:");
     cfltk.Fl_Box_set_label_font(nlb1, 1); cfltk.Fl_Box_set_label_color(nlb1, app.pal.text_dim);
     const os_input = cfltk.Fl_Choice_new(120, 68, 330, 24, "");
     app.themeChoice(@ptrCast(os_input));
     populateEnum(vm.GuestOs, os_input, .linux);
+
     const nlb2 = cfltk.Fl_Box_new(10, 100, 100, 20, "Memory (MB):");
     cfltk.Fl_Box_set_label_font(nlb2, 1); cfltk.Fl_Box_set_label_color(nlb2, app.pal.text_dim);
     const mem_input = cfltk.Fl_Input_new(120, 98, 330, 24, "2048");
     app.themeInput(@ptrCast(mem_input));
+
     const nlb3 = cfltk.Fl_Box_new(10, 130, 100, 20, "CPU Cores:");
     cfltk.Fl_Box_set_label_font(nlb3, 1); cfltk.Fl_Box_set_label_color(nlb3, app.pal.text_dim);
     const cpu_input = cfltk.Fl_Input_new(120, 128, 330, 24, "2");
     app.themeInput(@ptrCast(cpu_input));
-    const nlb4 = cfltk.Fl_Box_new(10, 160, 100, 20, "Disk (GB):");
+
+    const nlb4 = cfltk.Fl_Box_new(10, 160, 100, 20, "Disk Size (GB):");
     cfltk.Fl_Box_set_label_font(nlb4, 1); cfltk.Fl_Box_set_label_color(nlb4, app.pal.text_dim);
     const disk_input = cfltk.Fl_Input_new(120, 158, 330, 24, "20");
     app.themeInput(@ptrCast(disk_input));
 
-    _ = sectionSep(10, 195, 440);
+    // Auto-generate default disk path: ~/kvmgui-vms/<name>.qcow2
+    var default_disk_buf: [512]u8 = undefined;
+    const default_disk: [*:0]const u8 = blk: {
+        const home = appio.getenv("HOME") orelse break :blk "";
+        const path = std.fmt.bufPrintZ(&default_disk_buf, "{s}/kvmgui-vms", .{home}) catch break :blk "";
+        break :blk @ptrCast(path);
+    };
+    const nlb5 = cfltk.Fl_Box_new(10, 190, 100, 20, "Disk Path:");
+    cfltk.Fl_Box_set_label_font(nlb5, 1); cfltk.Fl_Box_set_label_color(nlb5, app.pal.text_dim);
+    const disk_path_input = cfltk.Fl_Input_new(120, 188, 330, 24, default_disk);
+    app.themeInput(@ptrCast(disk_path_input));
+    cfltk.Fl_Input_set_text_font(disk_path_input, 4); // monospace
 
-    const create_btn = cfltk.Fl_Button_new(280, 215, 80, 30, "Create");
+    const nlb6 = cfltk.Fl_Box_new(10, 220, 100, 20, "Disk Format:");
+    cfltk.Fl_Box_set_label_font(nlb6, 1); cfltk.Fl_Box_set_label_color(nlb6, app.pal.text_dim);
+    const df_input = cfltk.Fl_Choice_new(120, 218, 330, 24, "");
+    app.themeChoice(@ptrCast(df_input));
+    populateEnum(vm.DiskFormat, df_input, .qcow2);
+
+    const nlb7 = cfltk.Fl_Box_new(10, 250, 100, 20, "ISO (optional):");
+    cfltk.Fl_Box_set_label_font(nlb7, 1); cfltk.Fl_Box_set_label_color(nlb7, app.pal.text_dim);
+    const iso_input = cfltk.Fl_Input_new(120, 248, 330, 24, "");
+    app.themeInput(@ptrCast(iso_input));
+    cfltk.Fl_Input_set_text_font(iso_input, 4); // monospace
+
+    // ── Section: Network & Boot ──────────────────────────────────
+    _ = sectionLabel("Network & Boot", 10, 285, 200);
+    _ = sectionSep(10, 309, 440);
+
+    const nlb8 = cfltk.Fl_Box_new(10, 319, 100, 20, "Network:");
+    cfltk.Fl_Box_set_label_font(nlb8, 1); cfltk.Fl_Box_set_label_color(nlb8, app.pal.text_dim);
+    const net_input = cfltk.Fl_Choice_new(120, 317, 200, 24, "");
+    app.themeChoice(@ptrCast(net_input));
+    populateEnum(vm.NetworkMode, net_input, .user);
+
+    const nlb9 = cfltk.Fl_Box_new(10, 349, 100, 20, "Firmware:");
+    cfltk.Fl_Box_set_label_font(nlb9, 1); cfltk.Fl_Box_set_label_color(nlb9, app.pal.text_dim);
+    const fw_input = cfltk.Fl_Choice_new(120, 347, 200, 24, "");
+    app.themeChoice(@ptrCast(fw_input));
+    populateEnum(vm.BootFirmware, fw_input, .bios);
+
+    // ── Buttons ──────────────────────────────────────────────────
+    _ = sectionSep(10, 384, 440);
+
+    const create_btn = cfltk.Fl_Button_new(280, 394, 80, 30, "Create");
     cfltk.Fl_Button_set_color(create_btn, app.pal.accent);
     cfltk.Fl_Button_set_label_color(create_btn, app.pal.accent_text);
-    const cancel_btn = cfltk.Fl_Button_new(370, 215, 80, 30, "Cancel");
+    const cancel_btn = cfltk.Fl_Button_new(370, 394, 80, 30, "Cancel");
     cfltk.Fl_Button_set_color(cancel_btn, app.pal.gray_btn);
     cfltk.Fl_Button_set_label_color(cancel_btn, app.pal.accent_text);
 
-    // Store pointers for the callback to use
-    // Use a struct to pass data to callbacks
+    // Error label for inline validation feedback
+    const err_label = cfltk.Fl_Box_new(10, 394, 260, 30, "");
+    cfltk.Fl_Box_set_label_color(err_label, app.pal.danger);
+
     const DlgData = struct {
         name: ?*cfltk.Fl_Input,
         os: ?*cfltk.Fl_Choice,
         mem: ?*cfltk.Fl_Input,
         cpu: ?*cfltk.Fl_Input,
         disk: ?*cfltk.Fl_Input,
+        disk_path: ?*cfltk.Fl_Input,
+        df: ?*cfltk.Fl_Choice,
+        iso: ?*cfltk.Fl_Input,
+        net: ?*cfltk.Fl_Choice,
+        fw: ?*cfltk.Fl_Choice,
         dlg: ?*cfltk.Fl_Window,
+        err: ?*cfltk.Fl_Box,
     };
-    var ddata = DlgData{ .name = @ptrCast(name_input), .os = @ptrCast(os_input), .mem = @ptrCast(mem_input), .cpu = @ptrCast(cpu_input), .disk = @ptrCast(disk_input), .dlg = @ptrCast(dlg) };
+    var ddata = DlgData{
+        .name = @ptrCast(name_input), .os = @ptrCast(os_input),
+        .mem = @ptrCast(mem_input), .cpu = @ptrCast(cpu_input),
+        .disk = @ptrCast(disk_input), .disk_path = @ptrCast(disk_path_input),
+        .df = @ptrCast(df_input), .iso = @ptrCast(iso_input),
+        .net = @ptrCast(net_input), .fw = @ptrCast(fw_input),
+        .dlg = @ptrCast(dlg), .err = @ptrCast(err_label),
+    };
 
     const CreateCB = struct {
         fn go(_: ?*cfltk.Fl_Widget, data: ?*anyopaque) callconv(.c) void {
             const dd: *DlgData = @ptrCast(@alignCast(data orelse return));
+            // Validate name
+            const name = if (dd.name) |n| std.mem.span(cfltk.Fl_Input_value(n)) else "";
+            if (name.len == 0) {
+                if (dd.err) |e| cfltk.Fl_Box_set_label(e, "VM Name is required.");
+                return;
+            }
+            // Validate numeric fields
+            const mem_str = if (dd.mem) |m| std.mem.span(cfltk.Fl_Input_value(m)) else "";
+            const mem_val = std.fmt.parseInt(u32, mem_str, 10) catch {
+                if (dd.err) |e| cfltk.Fl_Box_set_label(e, "Invalid memory value.");
+                return;
+            };
+            const cpu_str = if (dd.cpu) |c| std.mem.span(cfltk.Fl_Input_value(c)) else "";
+            const cpu_val = std.fmt.parseInt(u32, cpu_str, 10) catch {
+                if (dd.err) |e| cfltk.Fl_Box_set_label(e, "Invalid CPU cores value.");
+                return;
+            };
+            const disk_str = if (dd.disk) |d2| std.mem.span(cfltk.Fl_Input_value(d2)) else "";
+            const disk_val = std.fmt.parseInt(u32, disk_str, 10) catch {
+                if (dd.err) |e| cfltk.Fl_Box_set_label(e, "Invalid disk size.");
+                return;
+            };
+            if (dd.err) |e| cfltk.Fl_Box_set_label(e, "");
+
             // Remote mode: POST to /api/create, then refresh from server.
             if (app.remote_mode) {
-                var body: [512]u8 = undefined;
+                var body: [1024]u8 = undefined;
                 var pos: usize = 0;
-                if (dd.name) |n| urlencode.appendPair(&body, &pos, "name", std.mem.span(cfltk.Fl_Input_value(n))) catch return;
-                if (dd.mem) |m| urlencode.appendPair(&body, &pos, "mem", std.mem.span(cfltk.Fl_Input_value(m))) catch return;
-                if (dd.cpu) |c| urlencode.appendPair(&body, &pos, "cpu", std.mem.span(cfltk.Fl_Input_value(c))) catch return;
-                if (dd.disk) |d2| urlencode.appendPair(&body, &pos, "disk", std.mem.span(cfltk.Fl_Input_value(d2))) catch return;
+                urlencode.appendPair(&body, &pos, "name", name) catch return;
+                urlencode.appendPair(&body, &pos, "mem", mem_str) catch return;
+                urlencode.appendPair(&body, &pos, "cpu", cpu_str) catch return;
+                urlencode.appendPair(&body, &pos, "disk", disk_str) catch return;
+                if (dd.disk_path) |dp| urlencode.appendPair(&body, &pos, "disk_path", std.mem.span(cfltk.Fl_Input_value(dp))) catch {};
+                if (dd.iso) |iso| urlencode.appendPair(&body, &pos, "iso", std.mem.span(cfltk.Fl_Input_value(iso))) catch {};
                 var out_buf: [64]u8 = undefined;
                 _ = remote.apiPost("/api/create", body[0..pos], &out_buf);
                 remote.remoteRefreshVmList();
@@ -1640,11 +1743,42 @@ fn newVmDialog() void {
             if (app.vm_count >= app.MAX_VMS) return;
 
             var cfg = vm.VmConfig{};
-            if (dd.name) |n| cfg.setName(std.mem.span(cfltk.Fl_Input_value(n)));
-            if (dd.mem) |m| cfg.memory_mb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(m)), 10) catch 2048);
-            if (dd.cpu) |c| cfg.cpu_cores = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(c)), 10) catch 2);
-            if (dd.disk) |d| cfg.disk_size_gb = @intCast(std.fmt.parseInt(u32, std.mem.span(cfltk.Fl_Input_value(d)), 10) catch 20);
+            cfg.setName(name);
+            cfg.memory_mb = mem_val;
+            cfg.cpu_cores = cpu_val;
+            cfg.disk_size_gb = disk_val;
             if (dd.os) |o| { cfg.guest_os = readEnum(vm.GuestOs, o); }
+            if (dd.df) |df| { cfg.disk_format = readEnum(vm.DiskFormat, df); }
+            if (dd.net) |net| { cfg.nics[0].mode = readEnum(vm.NetworkMode, net); }
+            if (dd.fw) |fw| { cfg.firmware = readEnum(vm.BootFirmware, fw); }
+
+            // Disk path: use user-provided or auto-generate from name
+            if (dd.disk_path) |dp| {
+                const dp_slice = std.mem.span(cfltk.Fl_Input_value(dp));
+                if (dp_slice.len > 0 and dp_slice.len <= vm.MAX_PATH) {
+                    // Ensure the path ends with .qcow2 if no extension
+                    if (std.mem.lastIndexOfScalar(u8, dp_slice, '.') == null) {
+                        var ext_buf: [vm.MAX_PATH + 7]u8 = undefined;
+                        const with_ext = std.fmt.bufPrint(&ext_buf, "{s}.qcow2", .{dp_slice}) catch dp_slice;
+                        cfg.setDiskPath(with_ext);
+                    } else {
+                        cfg.setDiskPath(dp_slice);
+                    }
+                }
+            }
+            // If no disk path set, auto-generate: ~/kvmgui-vms/<name>.qcow2
+            if (cfg.getDiskPathSlice().len == 0) {
+                if (appio.getenv("HOME")) |home| {
+                    var auto_buf: [vm.MAX_PATH + 1]u8 = undefined;
+                    const auto_path = std.fmt.bufPrint(&auto_buf, "{s}/kvmgui-vms/{s}.qcow2", .{ home, name }) catch "";
+                    if (auto_path.len > 0) cfg.setDiskPath(auto_path);
+                }
+            }
+
+            if (dd.iso) |iso| {
+                const iso_slice = std.mem.span(cfltk.Fl_Input_value(iso));
+                if (iso_slice.len > 0) cfg.setIsoPath(iso_slice);
+            }
 
             // Apply AutoProtect defaults from preferences
             cfg.autoprotect = app.prefs.autoprotect_enabled_default;
@@ -1657,6 +1791,9 @@ fn newVmDialog() void {
 
             cfg.vnc_port = vm.findUnusedVncPort(app.vms[0..app.vm_count]);
             cfg.spice_port = vm.findUnusedSpicePort(app.vms[0..app.vm_count]);
+
+            // Create disk image directory if needed
+            _ = std.Io.Dir.cwd().createDirPath(appio.io(), std.fs.path.dirname(cfg.getDiskPathSlice()) orelse "") catch {};
 
             app.vms[app.vm_count] = cfg;
             app.vm_count += 1;
@@ -2227,6 +2364,7 @@ pub fn main() void {
     app.themeInput(@ptrCast(si));
     app.search_input = @ptrCast(si);
     cfltk.Fl_Input_set_callback(si, searchCB, null);
+    cfltk.Fl_Input_set_when(si, 1); // FL_WHEN_CHANGED — filter as you type
     cfltk.Fl_Input_set_tooltip(si, "Filter VMs by name (Ctrl+F)");
 
     // Context menu (right-click popup on VM app.browser)

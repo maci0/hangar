@@ -312,9 +312,11 @@ var themed_scrolls_len: usize = 0;
 var status_buf: [256]u8 = [_]u8{0} ** 256;
 var detail_buf: [12][256]u8 = [_][256]u8{[_]u8{0} ** 256} ** 12;
 var status_detail_buf: [200]u8 = [_]u8{0} ** 200;
+var status_err: bool = false;
 
-/// Set the status bar text.
+/// Set the status bar text. Clears any error flag.
 pub fn setStatus(msg: []const u8) void {
+    status_err = false;
     if (status_bar) |sb| {
         const max_msg = status_buf.len - 1;
         const truncated = if (msg.len <= max_msg) msg else msg[0..max_msg];
@@ -340,8 +342,14 @@ pub fn setStatusIcon(icon: []const u8, msg: []const u8) void {
     }
 }
 
-pub fn setStatusErr(msg: []const u8) void { setStatusIcon("✗ ", msg); }
-pub fn setStatusOk(msg: []const u8) void { setStatusIcon("✓ ", msg); }
+pub fn setStatusErr(msg: []const u8) void {
+    status_err = true;
+    setStatusIcon("✗ ", msg);
+}
+pub fn setStatusOk(msg: []const u8) void {
+    status_err = false;
+    setStatusIcon("✓ ", msg);
+}
 
 /// Set a detail label value by index (used by refreshDetails).
 pub fn setDetail(i: usize, value: []const u8) void {
@@ -477,17 +485,19 @@ pub fn refreshDetails() void {
                 } else {
                     setDetail(11, "Disabled");
                 }
-                if (status_bar) |s| {
-                    if (v.isAlive() and vm_started[idx] > 0) {
-                        const elapsed: u64 = @intCast(vm_started[idx]);
-                        const hrs = elapsed / 3600;
-                        const mins = (elapsed % 3600) / 60;
-                        const secs = elapsed % 60;
-                        _ = std.fmt.bufPrintZ(&status_detail_buf, "{s} — {s} | Uptime: {d}:{d:0>2}:{d:0>2} | {d} VM(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), hrs, mins, secs, vm_count }) catch {};
-                        cfltk.Fl_Box_set_label(s, @ptrCast(&status_detail_buf));
-                    } else {
-                        _ = std.fmt.bufPrintZ(&status_detail_buf, "{s} — {s}    |    {d} virtual machine(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), vm_count }) catch {};
-                        cfltk.Fl_Box_set_label(s, @ptrCast(&status_detail_buf));
+                if (!status_err) {
+                    if (status_bar) |s| {
+                        if (v.isAlive() and vm_started[idx] > 0) {
+                            const elapsed: u64 = @intCast(vm_started[idx]);
+                            const hrs = elapsed / 3600;
+                            const mins = (elapsed % 3600) / 60;
+                            const secs = elapsed % 60;
+                            _ = std.fmt.bufPrintZ(&status_detail_buf, "{s} — {s} | Uptime: {d}:{d:0>2}:{d:0>2} | {d} VM(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), hrs, mins, secs, vm_count }) catch {};
+                            cfltk.Fl_Box_set_label(s, @ptrCast(&status_detail_buf));
+                        } else {
+                            _ = std.fmt.bufPrintZ(&status_detail_buf, "{s} — {s}    |    {d} virtual machine(s)", .{ v.getNameSlice(), std.mem.span(v.status.label()), vm_count }) catch {};
+                            cfltk.Fl_Box_set_label(s, @ptrCast(&status_detail_buf));
+                        }
                     }
                 }
                 return;
@@ -495,9 +505,11 @@ pub fn refreshDetails() void {
         }
         cfltk.Fl_Box_set_label(l, "No virtual machine selected.");
         for (&detail_labels) |*dl| { if (dl.*) |d| cfltk.Fl_Box_set_label(d, ""); }
-        if (status_bar) |s| {
-            _ = std.fmt.bufPrintZ(&status_detail_buf, "{d} virtual machine(s)", .{vm_count}) catch {};
-            cfltk.Fl_Box_set_label(s, @ptrCast(&status_detail_buf));
+        if (!status_err) {
+            if (status_bar) |s| {
+                _ = std.fmt.bufPrintZ(&status_detail_buf, "{d} virtual machine(s)", .{vm_count}) catch {};
+                cfltk.Fl_Box_set_label(s, @ptrCast(&status_detail_buf));
+            }
         }
     }
 }

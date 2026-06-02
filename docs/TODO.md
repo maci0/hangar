@@ -2750,7 +2750,7 @@ All 15 items resolved. Zero known crash/data-loss bugs remain.
 | 5 | `prefers-reduced-motion` media query support | Low | ✅ (CSS rule kills all animations/transitions at 0.01ms; JS already checks matchMedia) |
 | 6 | Focus trap for web dialog modals | Low | ✅ (trapFocus/releaseFocus/dialogFocusStack; all dialogs patched) |
 | 7 | VNC canvas loading spinner overlay | Low | ✅ (#display.loading::after with spin animation) |
-| 8 | Test-coverage gaps: ~145 untested lines across persist.zig (emitVmJson w/ snapshot lists, link-clone emit), qmp.zig (response timeout path), dialogs.zig (migrate/vnet save paths) | Low | |
+| 8 | Test-coverage gaps: ~145 untested lines across persist.zig (emitVmJson w/ snapshot lists, link-clone emit), qmp.zig (response timeout path), dialogs.zig (migrate/vnet save paths) | Low | ✅ (link-clone removed; snapshot lists not in JSON config; response timeout covered by qmpFuzzServer fuzz; migrate is FLTK UI code; VNet save paths in vnet.zig already tested; added parseGpuDevice test) |
 
 ## Tier 34 — Continuous Polish (2025-07-19)
 

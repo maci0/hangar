@@ -103,6 +103,17 @@ pub fn parseU32OrDefault(input: []const u8, default: u32) u32 {
     return std.fmt.parseInt(u32, input, 10) catch default;
 }
 
+/// Parse a QEMU acceleration string ("auto", "tcg", "kvm", "hvf", "whpx") into a VmAccel enum.
+/// Defaults to .auto for unrecognized values.
+pub fn parseAccel(s: []const u8) vm.VmAccel {
+    if (std.ascii.eqlIgnoreCase(s, "auto")) return .auto;
+    if (std.ascii.eqlIgnoreCase(s, "tcg")) return .tcg;
+    if (std.ascii.eqlIgnoreCase(s, "kvm")) return .kvm;
+    if (std.ascii.eqlIgnoreCase(s, "hvf")) return .hvf;
+    if (std.ascii.eqlIgnoreCase(s, "whpx")) return .whpx;
+    return .auto;
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 test "parseDiskFormat: known formats" {
@@ -230,6 +241,26 @@ test "themeFromIndex: 0→light, 1→dark" {
     try std.testing.expectEqual(vm.Theme.dark, themeFromIndex(1));
 }
 
+test "parseAccel: known accelerators" {
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("auto"));
+    try std.testing.expectEqual(vm.VmAccel.tcg, parseAccel("tcg"));
+    try std.testing.expectEqual(vm.VmAccel.kvm, parseAccel("kvm"));
+    try std.testing.expectEqual(vm.VmAccel.hvf, parseAccel("hvf"));
+    try std.testing.expectEqual(vm.VmAccel.whpx, parseAccel("whpx"));
+}
+
+test "parseAccel: case insensitive" {
+    try std.testing.expectEqual(vm.VmAccel.kvm, parseAccel("KVM"));
+    try std.testing.expectEqual(vm.VmAccel.hvf, parseAccel("Hvf"));
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("AUTO"));
+}
+
+test "parseAccel: unknown defaults to auto" {
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel(""));
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("unknown"));
+    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("xen"));
+}
+
 test "parseU32OrDefault: valid numbers" {
     try std.testing.expectEqual(@as(u32, 2048), parseU32OrDefault("2048", 1024));
     try std.testing.expectEqual(@as(u32, 0), parseU32OrDefault("0", 1024));
@@ -315,6 +346,7 @@ test "fuzz: all parsers consistency — never panic, return valid enum indices" 
         _ = @intFromEnum(parseFirmware(s));
         _ = @intFromEnum(parseGpuDevice(s));
         _ = @intFromEnum(parseAudio(s));
+        _ = @intFromEnum(parseAccel(s));
         _ = @intFromEnum(themeFromIndex(@intCast(rnd.uintLessThan(u8, 4))));
         _ = parseU32OrDefault(s, rnd.int(u32));
     }
