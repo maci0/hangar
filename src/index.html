@@ -51,6 +51,9 @@
 <div id="tabSettings" role="tabpanel" aria-labelledby="tabBtnSettings" style="display:none"><div class="empty-state"><svg class="empty-icon"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div></div>
 </div></main>
 <div id="statusbar" role="status" aria-live="polite">Ready</div>
+<div id="mig_bar_container" style="display:none;height:4px;background:var(--border);margin:0;padding:0"><div id="mig_progress" style="height:100%;width:0;background:var(--accent);transition:width 0.3s"></div></div>
+<span id="mig_pct" style="display:none;font-size:11px;color:var(--text-dim);padding:2px 8px"></span>
+<button id="mig_cancel" style="display:none;font-size:11px;padding:1px 8px;margin-left:8px;cursor:pointer;background:var(--danger);color:var(--text-on-accent);border:none;border-radius:3px" onclick="cancelMigrate()">Cancel</button>
 <div id="toast-container" aria-live="polite"></div>
 <dialog id="newdlg" aria-modal="true" aria-labelledby="newdlg-title"><h3 id="newdlg-title">New Virtual Machine</h3>
 <div class="dialog-body">

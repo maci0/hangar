@@ -66,6 +66,59 @@ pub const DiskFormat = enum(u8) {
     }
 };
 
+// ── Disk Cache Mode ──────────────────────────────────────────────────
+
+/// QEMU cache mode for virtual disk drives (-drive cache=...).
+pub const DiskCache = enum(u8) {
+    writeback = 0,
+    writethrough = 1,
+    none = 2,
+    directsync = 3,
+    unsafe = 4,
+
+    pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
+
+    pub fn toIndex(self: DiskCache) usize {
+        return @intFromEnum(self);
+    }
+
+    pub fn fromIndex(i: usize) DiskCache {
+        if (i >= count) return .writeback;
+        return @enumFromInt(@as(u8, @intCast(i)));
+    }
+
+    /// Returns the QEMU `-drive cache=` value.
+    pub fn toStr(self: DiskCache) [*:0]const u8 {
+        return switch (self) {
+            .writeback => "writeback",
+            .writethrough => "writethrough",
+            .none => "none",
+            .directsync => "directsync",
+            .unsafe => "unsafe",
+        };
+    }
+
+    /// Human-readable label for the UI.
+    pub fn label(self: DiskCache) [*:0]const u8 {
+        return switch (self) {
+            .writeback => "Writeback",
+            .writethrough => "Writethrough",
+            .none => "None",
+            .directsync => "Direct Sync",
+            .unsafe => "Unsafe",
+        };
+    }
+
+    /// Parse a QEMU cache string (e.g. from JSON).
+    pub fn fromStr(s: []const u8) DiskCache {
+        if (std.mem.eql(u8, s, "writethrough")) return .writethrough;
+        if (std.mem.eql(u8, s, "none")) return .none;
+        if (std.mem.eql(u8, s, "directsync")) return .directsync;
+        if (std.mem.eql(u8, s, "unsafe")) return .unsafe;
+        return .writeback;
+    }
+};
+
 // ── Network Mode ─────────────────────────────────────────────────────
 
 /// Network backend modes supported by the QEMU command builder.
@@ -374,6 +427,78 @@ pub const BootOrder = enum(u8) {
     }
 };
 
+// ── CPU Model ────────────────────────────────────────────────────────
+
+/// CPU model exposed to the guest. "host" passes through the host CPU
+/// (best for KVM); "max" enables all features QEMU knows about (best for TCG).
+pub const CpuModel = enum(u8) {
+    host = 0,
+    max = 1,
+    qemu64 = 2,
+    kvm64 = 3,
+    EPYC = 4,
+    EPYC_Rome = 5,
+    EPYC_Milan = 6,
+    Skylake_Server = 7,
+    Skylake_Client = 8,
+    Icelake_Server = 9,
+    Cascadelake_Server = 10,
+    Nehalem = 11,
+    Westmere = 12,
+    SandyBridge = 13,
+    IvyBridge = 14,
+    Haswell = 15,
+    Broadwell = 16,
+    Opteron_G5 = 17,
+
+    pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
+
+    pub fn toIndex(self: CpuModel) usize {
+        return @intFromEnum(self);
+    }
+
+    pub fn fromIndex(i: usize) CpuModel {
+        if (i >= count) return .host;
+        return @enumFromInt(@as(u8, @intCast(i)));
+    }
+
+    pub fn toStr(self: CpuModel) [*:0]const u8 {
+        return switch (self) {
+            .host => "host",
+            .max => "max",
+            .qemu64 => "qemu64",
+            .kvm64 => "kvm64",
+            .EPYC => "EPYC",
+            .EPYC_Rome => "EPYC-Rome",
+            .EPYC_Milan => "EPYC-Milan",
+            .Skylake_Server => "Skylake-Server",
+            .Skylake_Client => "Skylake-Client",
+            .Icelake_Server => "Icelake-Server",
+            .Cascadelake_Server => "Cascadelake-Server",
+            .Nehalem => "Nehalem",
+            .Westmere => "Westmere",
+            .SandyBridge => "SandyBridge",
+            .IvyBridge => "IvyBridge",
+            .Haswell => "Haswell",
+            .Broadwell => "Broadwell",
+            .Opteron_G5 => "Opteron_G5",
+        };
+    }
+
+    pub fn label(self: CpuModel) [*:0]const u8 {
+        return self.toStr();
+    }
+
+    /// Parse a QEMU CPU model string (from JSON or CLI).
+    pub fn fromStr(s: []const u8) CpuModel {
+        inline for (0..count) |i| {
+            const m = fromIndex(i);
+            if (std.mem.eql(u8, s, std.mem.span(m.toStr()))) return m;
+        }
+        return .host;
+    }
+};
+
 // ── Audio Device ─────────────────────────────────────────────────────
 
 /// Audio device emulation for the guest VM.
@@ -626,9 +751,11 @@ pub const VmConfig = struct {
     // ── Hardware settings ────────────────────────────────────────
     cpu_cores: u32 = 2,
     cpu_sockets: u32 = 1,
+    cpu_model: CpuModel = .host,
     memory_mb: u32 = 2048,
     disk_size_gb: u32 = 20,
     disk_format: DiskFormat = .qcow2,
+    disk_cache: DiskCache = .writeback,
     display: DisplayType = .gtk,
     display_resolution: DisplayResolution = .auto,
     /// Number of virtual displays (1-4).  QEMU adds a virtio-gpu device for each.
@@ -651,6 +778,8 @@ pub const VmConfig = struct {
     spice_port: u16 = 5930,
     /// Enable serial console via Unix socket.
     enable_serial: bool = true,
+    /// Enable virtio-rng entropy device for the guest.
+    virtio_rng: bool = false,
 
     // ── Runtime state (not persisted) ────────────────────────────
     status: VmStatus = .stopped,
@@ -1368,6 +1497,48 @@ test "DiskFormat: label values" {
     try std.testing.expectEqualStrings("VDI", std.mem.span(DiskFormat.vdi.label()));
 }
 
+// -- DiskCache --
+
+test "DiskCache: fromIndex round-trip" {
+    try std.testing.expectEqual(DiskCache.writeback, DiskCache.fromIndex(0));
+    try std.testing.expectEqual(DiskCache.writethrough, DiskCache.fromIndex(1));
+    try std.testing.expectEqual(DiskCache.none, DiskCache.fromIndex(2));
+    try std.testing.expectEqual(DiskCache.directsync, DiskCache.fromIndex(3));
+    try std.testing.expectEqual(DiskCache.unsafe, DiskCache.fromIndex(4));
+    try std.testing.expectEqual(DiskCache.writeback, DiskCache.fromIndex(99));
+}
+
+test "DiskCache: toIndex inverts fromIndex" {
+    for (0..DiskCache.count) |i| {
+        try std.testing.expectEqual(i, DiskCache.fromIndex(i).toIndex());
+    }
+}
+
+test "DiskCache: toStr values" {
+    try std.testing.expectEqualStrings("writeback", std.mem.span(DiskCache.writeback.toStr()));
+    try std.testing.expectEqualStrings("writethrough", std.mem.span(DiskCache.writethrough.toStr()));
+    try std.testing.expectEqualStrings("none", std.mem.span(DiskCache.none.toStr()));
+    try std.testing.expectEqualStrings("directsync", std.mem.span(DiskCache.directsync.toStr()));
+    try std.testing.expectEqualStrings("unsafe", std.mem.span(DiskCache.unsafe.toStr()));
+}
+
+test "DiskCache: label values" {
+    try std.testing.expectEqualStrings("Writeback", std.mem.span(DiskCache.writeback.label()));
+    try std.testing.expectEqualStrings("Writethrough", std.mem.span(DiskCache.writethrough.label()));
+    try std.testing.expectEqualStrings("None", std.mem.span(DiskCache.none.label()));
+    try std.testing.expectEqualStrings("Direct Sync", std.mem.span(DiskCache.directsync.label()));
+    try std.testing.expectEqualStrings("Unsafe", std.mem.span(DiskCache.unsafe.label()));
+}
+
+test "DiskCache: fromStr round-trip" {
+    for (0..DiskCache.count) |i| {
+        const dc = DiskCache.fromIndex(i);
+        try std.testing.expectEqual(dc, DiskCache.fromStr(std.mem.span(dc.toStr())));
+    }
+    try std.testing.expectEqual(DiskCache.writeback, DiskCache.fromStr("unknown"));
+    try std.testing.expectEqual(DiskCache.writeback, DiskCache.fromStr(""));
+}
+
 // -- NetworkMode --
 
 test "NetworkMode: fromIndex round-trip" {
@@ -1765,6 +1936,8 @@ test "fuzz: enum fromIndex always yields a valid variant" {
         try std.testing.expect(BootFirmware.fromIndex(i).toIndex() < BootFirmware.count);
         try std.testing.expect(GpuDevice.fromIndex(i).toIndex() < GpuDevice.count);
         try std.testing.expect(Theme.fromIndex(i).toIndex() < Theme.count);
+        try std.testing.expect(DiskCache.fromIndex(i).toIndex() < DiskCache.count);
+        try std.testing.expect(VmAccel.fromIndex(i).toIndex() < VmAccel.count);
     }
 }
 
@@ -2026,6 +2199,7 @@ test "fuzz: VmConfig defaults survive random partial mutation" {
         cfg.disk_size_gb = rnd.int(u32);
         cfg.accel = VmAccel.fromIndex(rnd.int(usize));
         cfg.enable_serial = rnd.boolean();
+        cfg.virtio_rng = rnd.boolean();
         cfg.embed_display = rnd.boolean();
         cfg.enable_3d = rnd.boolean();
         cfg.guest_tools = rnd.boolean();

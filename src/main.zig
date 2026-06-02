@@ -41,7 +41,7 @@ var toolbar_btns_len: usize = 0;
 
 /// Toolbar button widths per row (at reference window width 1200).
 const toolbar_row1_w = [_]i32{ 80, 80, 80, 80, 80, 80, 80, 80, 75, 70, 75, 80, 70, 55, 55 };
-const toolbar_row2_w = [_]i32{ 70, 70, 70, 65, 70, 70, 70, 70, 70, 70 };
+const toolbar_row2_w = [_]i32{ 70, 70, 70, 65, 70, 70, 70, 70, 70, 70, 55, 55 };
 const TOOLBAR_ROW1_Y: i32 = 28;
 const TOOLBAR_ROW2_Y: i32 = 68;
 const TOOLBAR_BTN_H: i32 = 34;
@@ -99,6 +99,8 @@ fn connectRemoteCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { dia
 fn webStartCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { startWebServer(); }
 fn webStopCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { stopWebServer(); }
 fn themeToggleCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { app.cycleTheme(); }
+fn upVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { moveVmUp(); }
+fn downVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { moveVmDown(); }
 
 fn newVmCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void { newVmDialog(); }
 
@@ -420,6 +422,11 @@ fn deleteCurrentVm() void {
         return;
     }
 
+    // Save undo state before deleting.
+    app.undo_vm = app.vms[idx];
+    app.undo_idx = idx;
+    app.undo_available = true;
+
     app.destroyVmmHandle(idx);
     var i = idx;
     while (i + 1 < app.vm_count) : (i += 1) app.vms[i] = app.vms[i + 1];
@@ -429,6 +436,65 @@ fn deleteCurrentVm() void {
     app.g_vmm_handles[app.vm_count - 1] = null;
     app.vm_count -= 1;
     app.selected_idx = if (app.vm_count > 0) @min(idx, app.vm_count - 1) else null;
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
+    app.showToastFmt("Deleted VM '{s}' -- Undo Ctrl+Z", .{app.undo_vm.getNameSlice()}, .warn);
+}
+
+/// Restore the last deleted VM at its original index.
+fn undoDeleteVm() void {
+    if (!app.undo_available) return;
+    if (app.vm_count >= vm.MAX_VMS) {
+        app.showToast("Cannot undo: VM library is full.", .warn);
+        app.undo_available = false;
+        return;
+    }
+    // Shift VMs down from undo_idx to make room.
+    var i: usize = app.vm_count;
+    while (i > app.undo_idx) {
+        app.vms[i] = app.vms[i - 1];
+        app.g_vmm_handles[i] = app.g_vmm_handles[i - 1];
+        i -= 1;
+    }
+    app.vms[app.undo_idx] = app.undo_vm;
+    app.g_vmm_handles[app.undo_idx] = null;
+    app.vm_count += 1;
+    app.selected_idx = app.undo_idx;
+    app.undo_available = false;
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
+    app.showToastFmt("Restored VM '{s}'.", .{app.undo_vm.getNameSlice()}, .success);
+}
+
+/// Move the selected VM up one position in the list.
+fn moveVmUp() void {
+    const idx = app.selected_idx orelse return;
+    if (idx == 0 or idx >= app.vm_count) return;
+    const tmp = app.vms[idx - 1];
+    app.vms[idx - 1] = app.vms[idx];
+    app.vms[idx] = tmp;
+    const th = app.g_vmm_handles[idx - 1];
+    app.g_vmm_handles[idx - 1] = app.g_vmm_handles[idx];
+    app.g_vmm_handles[idx] = th;
+    app.selected_idx = idx - 1;
+    app.refreshBrowser();
+    app.refreshDetails();
+    persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
+}
+
+/// Move the selected VM down one position in the list.
+fn moveVmDown() void {
+    const idx = app.selected_idx orelse return;
+    if (idx + 1 >= app.vm_count) return;
+    const tmp = app.vms[idx + 1];
+    app.vms[idx + 1] = app.vms[idx];
+    app.vms[idx] = tmp;
+    const th = app.g_vmm_handles[idx + 1];
+    app.g_vmm_handles[idx + 1] = app.g_vmm_handles[idx];
+    app.g_vmm_handles[idx] = th;
+    app.selected_idx = idx + 1;
     app.refreshBrowser();
     app.refreshDetails();
     persist.save(&app.vms, app.vm_count, app.prefs) catch { app.setStatusErr("Failed to save VM configuration"); };
@@ -454,8 +520,9 @@ fn buildSaveBody(buf: []u8, dd: *const anyopaque) ![]const u8 {
         dp: ?*cfltk.Fl_Input, rs: ?*cfltk.Fl_Input,
         e3: ?*cfltk.Fl_Check_Button, gp: ?*cfltk.Fl_Input,
         em: ?*cfltk.Fl_Check_Button, sr: ?*cfltk.Fl_Check_Button,
+        rr: ?*cfltk.Fl_Check_Button,
         vn: ?*cfltk.Fl_Input, sp: ?*cfltk.Fl_Input,
-        df: ?*cfltk.Fl_Input, ma: ?*cfltk.Fl_Input,
+        df: ?*cfltk.Fl_Input, dc: ?*cfltk.Fl_Input, ma: ?*cfltk.Fl_Input,
         au: ?*cfltk.Fl_Input, fv: ?*cfltk.Fl_Check_Button,
         v: *vm.VmConfig, dl: ?*cfltk.Fl_Window,
     };
@@ -514,11 +581,16 @@ fn buildSaveBody(buf: []u8, dd: *const anyopaque) ![]const u8 {
     }
     if (ed.em) |emi| try urlencode.appendPair(buf, &pos, "embed_display", if (cfltk.Fl_Check_Button_is_checked(emi) != 0) "1" else "0");
     if (ed.sr) |sri| try urlencode.appendPair(buf, &pos, "enable_serial", if (cfltk.Fl_Check_Button_is_checked(sri) != 0) "1" else "0");
+    if (ed.rr) |rri| try urlencode.appendPair(buf, &pos, "virtio_rng", if (cfltk.Fl_Check_Button_is_checked(rri) != 0) "1" else "0");
     if (ed.vn) |vni| try urlencode.appendPair(buf, &pos, "vnc_port", std.mem.span(cfltk.Fl_Input_value(vni)));
     if (ed.sp) |spi| try urlencode.appendPair(buf, &pos, "spice_port", std.mem.span(cfltk.Fl_Input_value(spi)));
     if (ed.df) |dfi| {
         const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(dfi))});
         try urlencode.appendPair(buf, &pos, "disk_format", idx_str);
+    }
+    if (ed.dc) |dci| {
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{}", .{cfltk.Fl_Choice_value(@ptrCast(dci))});
+        try urlencode.appendPair(buf, &pos, "disk_cache", idx_str);
     }
     if (ed.ma) |mai| try urlencode.appendPair(buf, &pos, "mac_address", std.mem.span(cfltk.Fl_Input_value(mai)));
     if (ed.au) |aui| {
@@ -683,6 +755,10 @@ fn editVmDialogEx(was_imported: bool) void {
     app.themeCheckButton(@ptrCast(ser_input));
     cfltk.Fl_Check_Button_set_label_color(ser_input, app.pal.text);
     if (cfg.enable_serial) cfltk.Fl_Check_Button_set_checked(ser_input, 1);
+    const rng_input = cfltk.Fl_Check_Button_new(300, 712, 170, 24, "virtio-rng Entropy");
+    app.themeCheckButton(@ptrCast(rng_input));
+    cfltk.Fl_Check_Button_set_label_color(rng_input, app.pal.text);
+    if (cfg.virtio_rng) cfltk.Fl_Check_Button_set_checked(rng_input, 1);
 
     const lb18 = cfltk.Fl_Box_new(10, 766, 110, 20, "VNC Port:");
     cfltk.Fl_Box_set_label_font(lb18, 1); cfltk.Fl_Box_set_label_color(lb18, app.pal.text_dim);
@@ -803,6 +879,12 @@ fn editVmDialogEx(was_imported: bool) void {
     cfltk.Fl_Check_Button_set_label_color(fav_input, app.pal.text);
     if (cfg.favorite) cfltk.Fl_Check_Button_set_checked(fav_input, 1);
 
+    const lb35 = cfltk.Fl_Box_new(10, 1228, 110, 20, "Disk Cache:");
+    cfltk.Fl_Box_set_label_font(lb35, 1); cfltk.Fl_Box_set_label_color(lb35, app.pal.text_dim);
+    const dc_input = cfltk.Fl_Choice_new(130, 1226, 150, 24, "");
+    app.themeChoice(@ptrCast(dc_input));
+    populateEnum(vm.DiskCache, dc_input, cfg.disk_cache);
+
     cfltk.Fl_Scroll_end(scroll);
 
     // Fixed button bar below the scroll area
@@ -834,8 +916,9 @@ fn editVmDialogEx(was_imported: bool) void {
         dp: ?*cfltk.Fl_Input, rs: ?*cfltk.Fl_Input,
         e3: ?*cfltk.Fl_Check_Button, gp: ?*cfltk.Fl_Input,
         em: ?*cfltk.Fl_Check_Button, sr: ?*cfltk.Fl_Check_Button,
+        rr: ?*cfltk.Fl_Check_Button,
         vn: ?*cfltk.Fl_Input, sp: ?*cfltk.Fl_Input,
-        df: ?*cfltk.Fl_Input, ma: ?*cfltk.Fl_Input,
+        df: ?*cfltk.Fl_Input, dc: ?*cfltk.Fl_Input, ma: ?*cfltk.Fl_Input,
         au: ?*cfltk.Fl_Input, fv: ?*cfltk.Fl_Check_Button,
         v: *vm.VmConfig, dl: ?*cfltk.Fl_Window,
         idx: usize, wi: bool,
@@ -858,8 +941,9 @@ fn editVmDialogEx(was_imported: bool) void {
         .dp = @ptrCast(disp_input), .rs = @ptrCast(res_input),
         .e3 = @ptrCast(e3d_input), .gp = @ptrCast(gpu_input),
         .em = @ptrCast(emb_input), .sr = @ptrCast(ser_input),
+        .rr = @ptrCast(rng_input),
         .vn = @ptrCast(vnc_input), .sp = @ptrCast(spc_input),
-        .df = @ptrCast(df_input), .ma = @ptrCast(mac_input),
+        .df = @ptrCast(df_input), .dc = @ptrCast(dc_input), .ma = @ptrCast(mac_input),
         .au = @ptrCast(aud_input), .fv = @ptrCast(fav_input),
         .v = cfg, .dl = @ptrCast(dlg), .idx = idx, .wi = was_imported,
     };
@@ -923,6 +1007,7 @@ fn editVmDialogEx(was_imported: bool) void {
         if (dd.gp) |gpi| { dd.v.gpu_device = readEnum(vm.GpuDevice, gpi); }
         if (dd.em) |emi| dd.v.embed_display = cfltk.Fl_Check_Button_is_checked(emi) != 0;
         if (dd.sr) |sri| dd.v.enable_serial = cfltk.Fl_Check_Button_is_checked(sri) != 0;
+        if (dd.rr) |rri| dd.v.virtio_rng = cfltk.Fl_Check_Button_is_checked(rri) != 0;
         if (dd.vn) |vni| dd.v.vnc_port = clampNum16(std.fmt.parseInt(u16, std.mem.span(cfltk.Fl_Input_value(vni)), 10) catch 0, 5900, 5999);
         if (dd.sp) |spi| dd.v.spice_port = clampNum16(std.fmt.parseInt(u16, std.mem.span(cfltk.Fl_Input_value(spi)), 10) catch 0, 5900, 5999);
         if (dd.df) |dfi| { dd.v.disk_format = readEnum(vm.DiskFormat, dfi); }
@@ -1862,6 +1947,9 @@ fn kbHandler(event: c_int) callconv(.c) c_int {
     if (key == 0xffc8) { if (app.win_handle) |w| { const cur = cfltk.Fl_Window_fullscreen_active(w); const next = if (cur != 0) @as(c_uint, 0) else @as(c_uint, 1); _ = cfltk.Fl_Window_fullscreen(w, next); if (next != 0) { app.setStatus("Full Screen — Press F11 to exit"); } else { app.setStatus("Exited full screen"); } } return 1; } // F11 toggle
     if (ctrl and key == 'w') { app.selected_idx = null; app.refreshBrowser(); app.refreshDetails(); return 1; }
     if (ctrl and key == 'f') { if (app.search_input) |si| _ = cfltk.Fl_Input_take_focus(si); return 1; }
+    if (ctrl and key == 'z') { undoDeleteVm(); return 1; }
+    if (key == 0xff52 and cfltk.Fl_event_alt() != 0) { moveVmUp(); return 1; } // Alt+Up
+    if (key == 0xff54 and cfltk.Fl_event_alt() != 0) { moveVmDown(); return 1; } // Alt+Down
     if (key == 0xff0d) { togglePower(); return 1; } // Enter → Power On/Off
     if (key == 0xff1b) { // Escape
         if (cfltk.Fl_modal() != null) return 0; // let modal dialog handle Escape
@@ -1944,6 +2032,10 @@ fn handleWindowResize(_: ?*cfltk.Fl_Widget, _: c_int, _: c_int, w: c_int, h: c_i
     if (app.gl_display) |glw| {
         cfltk.Fl_Gl_Window_resize(glw, CX + 5, body_y + 25, inner_w, inner_h);
     }
+    // Reposition toast overlay to bottom-right.
+    if (app.toast_box) |tw| {
+        cfltk.Fl_Box_resize(tw, WW - 320, WH - 56, 300, 28);
+    }
 }
 
 // Console timer — polls serial ring buffer and updates Fl_Browser widget.
@@ -1966,6 +2058,66 @@ fn consoleTimerCB(_: ?*anyopaque) callconv(.c) void {
         }
     }
     _ = cfltk.Fl_repeat_timeout(0.5, consoleTimerCB, null);
+}
+
+/// Callback for the serial input field — sends typed text to the VM serial port.
+fn serialInputCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
+    if (app.serial_input_widget) |si| {
+        const val = cfltk.Fl_Input_value(si);
+        const sv = std.mem.span(val);
+        if (sv.len > 0 and app.serial_fd != null) {
+            // Write to the serial socket fd
+            _ = std.c.write(app.serial_fd.?, sv.ptr, sv.len);
+            _ = std.c.write(app.serial_fd.?, "\r\n", 2);
+            // Echo to browser with prompt
+            var echo_buf: [512]u8 = undefined;
+            const echo = std.fmt.bufPrintZ(&echo_buf, "> {s}", .{sv}) catch "> (input)";
+            if (app.console_widget) |cw| {
+                cfltk.Fl_Browser_add(cw, @ptrCast(echo));
+            }
+        }
+        _ = cfltk.Fl_Input_set_value(si, "");
+    }
+}
+
+/// Export serial console contents to a file via native file chooser.
+fn serialExportCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
+    const fc = cfltk.Fl_Native_File_Chooser_new(2); // BROWSE_SAVE_FILE
+    defer cfltk.Fl_Native_File_Chooser_delete(fc);
+    cfltk.Fl_Native_File_Chooser_set_title(fc, "Export Serial Console");
+    cfltk.Fl_Native_File_Chooser_set_filter(fc, "*.txt");
+    if (cfltk.Fl_Native_File_Chooser_show(fc) != 0) return;
+
+    const out_path = cfltk.Fl_Native_File_Chooser_filename(fc);
+    const out_slice = std.mem.span(out_path);
+    // Use libc open/write/close for simplicity
+    const out_z = out_slice.ptr; // already null-terminated from C string
+    const fd = std.c.open(out_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
+    if (fd < 0) {
+        app.setStatusErr("Failed to create export file");
+        return;
+    }
+    defer _ = std.c.close(fd);
+
+    if (app.console_widget) |cw| {
+        const line_count = cfltk.Fl_Browser_size(cw);
+        var i: c_int = 1;
+        while (i <= line_count) : (i += 1) {
+            const line = cfltk.Fl_Browser_text(cw, i);
+            const line_slice = std.mem.span(line);
+            _ = std.c.write(fd, line_slice.ptr, line_slice.len);
+            _ = std.c.write(fd, "\n", 1);
+        }
+    }
+    app.setStatusOk("Serial console exported");
+}
+
+/// Clear the serial console browser widget.
+fn serialClearCB(_: ?*cfltk.Fl_Widget, _: ?*anyopaque) callconv(.c) void {
+    if (app.console_widget) |cw| {
+        cfltk.Fl_Browser_clear(cw);
+        _ = cfltk.Fl_Browser_add(cw, "Serial console — cleared.");
+    }
 }
 
 // Display timer — polls VNC framebuffer and updates display tab (100ms).
@@ -2291,6 +2443,8 @@ pub fn main() void {
     const ws_start_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Web Start");
     const ws_stop_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "Web Stop");
     const theme_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, "🌓 Theme");
+    const up_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, " ▲ Up");
+    const dn_btn = cfltk.Fl_Button_new(placeholder, utb_y, placeholder, 34, " ▼ Dn");
 
     // Tooltips
     cfltk.Fl_Button_set_tooltip(import_btn, "Import a VM from a .vmdk or .qcow2 disk image");
@@ -2303,6 +2457,8 @@ pub fn main() void {
     cfltk.Fl_Button_set_tooltip(ws_start_btn, "Start the web UI server on http://localhost:9080");
     cfltk.Fl_Button_set_tooltip(ws_stop_btn, "Stop the web UI server");
     cfltk.Fl_Button_set_tooltip(theme_btn, "Toggle theme: System → Light → Dark");
+    cfltk.Fl_Button_set_tooltip(up_btn, "Move selected VM up in the list");
+    cfltk.Fl_Button_set_tooltip(dn_btn, "Move selected VM down in the list");
 
     // Button colors
     cfltk.Fl_Button_set_color(import_btn, app.pal.accent);      cfltk.Fl_Button_set_label_color(import_btn, app.pal.accent_text);
@@ -2315,6 +2471,8 @@ pub fn main() void {
     cfltk.Fl_Button_set_color(ws_start_btn, app.pal.success);    cfltk.Fl_Button_set_label_color(ws_start_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(ws_stop_btn, app.pal.danger);       cfltk.Fl_Button_set_label_color(ws_stop_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_color(theme_btn, app.pal.gray_btn);       cfltk.Fl_Button_set_label_color(theme_btn, app.pal.amber);
+    cfltk.Fl_Button_set_color(up_btn, app.pal.gray_btn);          cfltk.Fl_Button_set_label_color(up_btn, app.pal.accent_text);
+    cfltk.Fl_Button_set_color(dn_btn, app.pal.gray_btn);          cfltk.Fl_Button_set_label_color(dn_btn, app.pal.accent_text);
 
     // Callbacks
     cfltk.Fl_Button_set_callback(import_btn, importCB, null);
@@ -2327,6 +2485,8 @@ pub fn main() void {
     cfltk.Fl_Button_set_callback(ws_start_btn, webStartCB, null);
     cfltk.Fl_Button_set_callback(ws_stop_btn, webStopCB, null);
     cfltk.Fl_Button_set_callback(theme_btn, themeToggleCB, null);
+    cfltk.Fl_Button_set_callback(up_btn, upVmCB, null);
+    cfltk.Fl_Button_set_callback(dn_btn, downVmCB, null);
 
     // Register toolbar buttons for live theme updates.
     toolbar_btns[0] = @ptrCast(new_btn);
@@ -2354,7 +2514,9 @@ pub fn main() void {
     toolbar_btns[22] = @ptrCast(ws_start_btn);
     toolbar_btns[23] = @ptrCast(ws_stop_btn);
     toolbar_btns[24] = @ptrCast(theme_btn);
-    toolbar_btns_len = 25;
+    toolbar_btns[25] = @ptrCast(up_btn);
+    toolbar_btns[26] = @ptrCast(dn_btn);
+    toolbar_btns_len = 27;
     repositionToolbars(WW);
     app.toolbar_theme_cb = &themeToolbarButtons;
 
@@ -2455,10 +2617,33 @@ pub fn main() void {
 
     // Console tab
     const cg = cfltk.Fl_Group_new(CX, body_y + 20, CW, body_h - 20, "Console");
-    const cb = cfltk.Fl_Browser_new(CX + 5, body_y + 25, CW - 10, body_h - 30, "");
+    const console_input_h: i32 = 38;
+    const browser_h: i32 = body_h - 30 - console_input_h;
+    const cb = cfltk.Fl_Browser_new(CX + 5, body_y + 25, CW - 10, browser_h, "");
     app.console_widget = @ptrCast(cb);
     app.themeBrowser(@ptrCast(cb));
     _ = cfltk.Fl_Browser_add(cb, "Serial console — not connected.");
+
+    // Serial input row: input field + export + clear buttons
+    const input_y: i32 = body_y + 25 + browser_h + 4;
+    const ser_in = cfltk.Fl_Input_new(CX + 5, input_y, CW - 130, 28, "");
+    cfltk.Fl_Input_set_when(ser_in, 8); // FL_WHEN_ENTER_KEY
+    cfltk.Fl_Input_set_callback(ser_in, &serialInputCB, null);
+    cfltk.Fl_Input_set_color(ser_in, app.pal.surface);
+    cfltk.Fl_Input_set_text_color(ser_in, app.pal.text);
+    app.serial_input_widget = @ptrCast(ser_in);
+    app.themeInput(@ptrCast(ser_in));
+
+    const export_btn = cfltk.Fl_Button_new(CX + CW - 120, input_y, 55, 28, "Export");
+    cfltk.Fl_Button_set_color(export_btn, app.pal.gray_btn);
+    cfltk.Fl_Button_set_label_color(export_btn, app.pal.accent_text);
+    cfltk.Fl_Button_set_callback(export_btn, &serialExportCB, null);
+
+    const clear_btn = cfltk.Fl_Button_new(CX + CW - 60, input_y, 55, 28, "Clear");
+    cfltk.Fl_Button_set_color(clear_btn, app.pal.gray_btn);
+    cfltk.Fl_Button_set_label_color(clear_btn, app.pal.accent_text);
+    cfltk.Fl_Button_set_callback(clear_btn, &serialClearCB, null);
+
     cfltk.Fl_Group_end(@ptrCast(cg));
 
     cfltk.Fl_Group_end(@ptrCast(tabs));
@@ -2469,6 +2654,13 @@ pub fn main() void {
     cfltk.Fl_Box_set_color(sb, app.pal.border);
     cfltk.Fl_Box_set_label_color(sb, app.pal.text_dim);
     app.status_bar = @ptrCast(sb);
+
+    // Toast notification overlay — initially invisible, above status bar.
+    const toast_w = cfltk.Fl_Box_new(WW - 320, WH - 56, 300, 28, "");
+    cfltk.Fl_Box_set_box(toast_w, 0); // FL_NO_BOX when hidden
+    cfltk.Fl_Box_set_color(toast_w, app.pal.accent);
+    cfltk.Fl_Box_set_label_color(toast_w, app.pal.accent_text);
+    app.toast_box = @ptrCast(toast_w);
 
     cfltk.Fl_Window_end(win);
     cfltk.Fl_Window_resize_callback(win, &handleWindowResize, null);

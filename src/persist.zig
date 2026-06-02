@@ -28,9 +28,11 @@ const VmJson = struct {
     name: []const u8 = "",
     cpu_cores: u32 = 2,
     cpu_sockets: u32 = 1,
+    cpu_model: []const u8 = "host",
     memory_mb: u32 = 2048,
     disk_size_gb: u32 = 20,
     disk_format: []const u8 = "qcow2",
+    disk_cache: []const u8 = "writeback",
     disk_path: []const u8 = "",
     iso_path: []const u8 = "",
     mac_address: []const u8 = "",
@@ -68,6 +70,7 @@ const VmJson = struct {
     vnc_port: u16 = 5900,
     spice_port: u16 = 5930,
     enable_serial: bool = true,
+    virtio_rng: bool = false,
     num_displays: u32 = 1,
 };
 
@@ -90,6 +93,10 @@ fn parseDiskFormat(s: []const u8) vm.DiskFormat {
     if (std.mem.eql(u8, s, "vmdk")) return .vmdk;
     if (std.mem.eql(u8, s, "vdi")) return .vdi;
     return .qcow2;
+}
+
+fn parseDiskCache(s: []const u8) vm.DiskCache {
+    return vm.DiskCache.fromStr(s);
 }
 
 fn parseDisplayType(s: []const u8) vm.DisplayType {
@@ -153,9 +160,11 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.setName(j.name);
     cfg.cpu_cores = j.cpu_cores;
     cfg.cpu_sockets = j.cpu_sockets;
+    cfg.cpu_model = vm.CpuModel.fromStr(j.cpu_model);
     cfg.memory_mb = j.memory_mb;
     cfg.disk_size_gb = j.disk_size_gb;
     cfg.disk_format = parseDiskFormat(j.disk_format);
+    cfg.disk_cache = parseDiskCache(j.disk_cache);
     cfg.setDiskPath(j.disk_path);
     cfg.setIsoPath(j.iso_path);
     cfg.setMacAddress(j.mac_address);
@@ -193,6 +202,7 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.vnc_port = j.vnc_port;
     cfg.spice_port = j.spice_port;
     cfg.enable_serial = j.enable_serial;
+    cfg.virtio_rng = j.virtio_rng;
     cfg.num_displays = j.num_displays;
     return cfg;
 }
@@ -263,6 +273,10 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emitInt(list, alloc, cfg.cpu_sockets);
     try emit(list, alloc, ",\n");
 
+    try emit(list, alloc, "      \"cpu_model\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.cpu_model.toStr()));
+    try emit(list, alloc, ",\n");
+
     try emit(list, alloc, "      \"memory_mb\": ");
     try emitInt(list, alloc, cfg.memory_mb);
     try emit(list, alloc, ",\n");
@@ -273,6 +287,10 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"disk_format\": ");
     try emitJsonStr(list, alloc, std.mem.span(cfg.disk_format.toStr()));
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"disk_cache\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.disk_cache.toStr()));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"disk_path\": ");
@@ -415,6 +433,10 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"enable_serial\": ");
     try emitBool(list, alloc, cfg.enable_serial);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"virtio_rng\": ");
+    try emitBool(list, alloc, cfg.virtio_rng);
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"num_displays\": ");
@@ -827,6 +849,11 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cfg.disk_format = parseDiskFormat(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "disk_cache")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.disk_cache = parseDiskCache(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "display")) {
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.display = parseDisplayType(r.value);
@@ -865,6 +892,11 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
         } else if (std.mem.eql(u8, key, "cpu_sockets")) {
             if (parseJsonInt(cur)) |r| {
                 cfg.cpu_sockets = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "cpu_model")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.cpu_model = vm.CpuModel.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "cpu_cores")) {
@@ -912,6 +944,11 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
         } else if (std.mem.eql(u8, key, "enable_serial")) {
             if (parseJsonBool(cur)) |r| {
                 cfg.enable_serial = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "virtio_rng")) {
+            if (parseJsonBool(cur)) |r| {
+                cfg.virtio_rng = r.value;
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "num_displays")) {
@@ -1097,6 +1134,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.memory_mb = 8192;
     original.disk_size_gb = 100;
     original.disk_format = .vmdk;
+    original.disk_cache = .unsafe;
     original.setDiskPath("/home/user/VMs/test.vmdk");
     original.setIsoPath("/tmp/ubuntu-22.04.iso");
     original.setMacAddress("02:00:11:22:33:44");
@@ -1123,6 +1161,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .memory_mb = original.memory_mb,
         .disk_size_gb = original.disk_size_gb,
         .disk_format = std.mem.span(original.disk_format.toStr()),
+        .disk_cache = std.mem.span(original.disk_cache.toStr()),
         .disk_path = original.getDiskPathSlice(),
         .iso_path = original.getIsoPathSlice(),
         .mac_address = original.getMacAddressSlice(),
@@ -1151,6 +1190,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqual(@as(u32, 8192), restored.memory_mb);
     try std.testing.expectEqual(@as(u32, 100), restored.disk_size_gb);
     try std.testing.expectEqual(vm.DiskFormat.vmdk, restored.disk_format);
+    try std.testing.expectEqual(vm.DiskCache.unsafe, restored.disk_cache);
     try std.testing.expectEqualStrings("/home/user/VMs/test.vmdk", restored.getDiskPathSlice());
     try std.testing.expectEqualStrings("/tmp/ubuntu-22.04.iso", restored.getIsoPathSlice());
     try std.testing.expectEqualStrings("02:00:11:22:33:44", restored.getMacAddressSlice());
@@ -1558,6 +1598,7 @@ fn fuzzConfig(rnd: std.Random, sbuf: []u8) vm.VmConfig {
     c.spice_port = rnd.int(u16);
     c.disk_format = vm.DiskFormat.fromIndex(rnd.int(usize));
     c.disk2_format = vm.DiskFormat.fromIndex(rnd.int(usize));
+    c.disk_cache = vm.DiskCache.fromIndex(rnd.int(usize));
     c.display = vm.DisplayType.fromIndex(rnd.int(usize));
     c.display_resolution = vm.DisplayResolution.fromIndex(rnd.int(usize));
     c.nics[0].mode = vm.NetworkMode.fromIndex(rnd.int(usize));
@@ -1570,6 +1611,7 @@ fn fuzzConfig(rnd: std.Random, sbuf: []u8) vm.VmConfig {
     c.accel = vm.VmAccel.fromIndex(rnd.int(usize));
     c.embed_display = rnd.boolean();
     c.enable_serial = rnd.boolean();
+    c.virtio_rng = rnd.boolean();
     c.enable_3d = rnd.boolean();
     const rstr = struct {
         fn get(r: std.Random, b: []u8) []const u8 {

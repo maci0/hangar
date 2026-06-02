@@ -2988,21 +2988,21 @@ in either UI.
 
 | # | Description | Status |
 |---|-------------|--------|
-| 1 | Interactive serial terminal input: FLTK serial is read-only `Fl_Browser`; Web serial is fully interactive (sends escape sequences, arrow keys, Ctrl+letter) | ⬜ |
-| 2 | Toast notification system: Web has success/error/info/warn toasts with auto-dismiss; FLTK has only status bar text | ⬜ |
-| 3 | Undo delete: Web shows undo toast on VM delete with full config restore; FLTK has no undo mechanism | ⬜ |
+| 1 | Interactive serial terminal input: FLTK serial is read-only `Fl_Browser`; Web serial is fully interactive (sends escape sequences, arrow keys, Ctrl+letter) | ✅ — `serial_input_widget` added to FLTK, sends typed input through serial socket |
+| 2 | Toast notification system: Web has success/error/info/warn toasts with auto-dismiss; FLTK has only status bar text | ✅ — `showToast()` added to `appstate.zig` with auto-dismiss timer, icon + colored background per type |
+| 3 | Undo delete: Web shows undo toast on VM delete with full config restore; FLTK has no undo mechanism | ✅ — `undo_vm`/`undo_idx`/`undo_available` in `appstate`, Ctrl+Z restores deleted VM with preserved index |
 | 4 | Drag-to-reorder VM list: Web has HTML5 DnD + touch pointer-event reorder; FLTK `Fl_Browser` does not support DnD — consider click-button reorder (Move Up/Move Down) | ⬜ |
 | 5 | Skeleton loading states: Web shows shimmer placeholders during initial VM list load; FLTK directly populates | ⬜ |
-| 6 | Serial terminal export/clear: Web has Export .txt + Clear buttons; FLTK serial has neither | ⬜ |
+| 6 | Serial terminal export/clear: Web has Export .txt + Clear buttons; FLTK serial has neither | ✅ — Export and Clear buttons wired in FLTK Console tab with native file chooser + full browser dump |
 
 ### 39.2 — FLTK features missing from Web
 
 | # | Description | Status |
 |---|-------------|--------|
-| 7 | Migration with progress/polling/cancel: FLTK migration does QMP polling with progress bar and cancel; Web is fire-and-forget | ⬜ |
+| 7 | Migration with progress/polling/cancel: FLTK migration does QMP polling with progress bar and cancel; Web is fire-and-forget | ✅ — Web now polls `GET /api/migrate/status/N` every 500ms, shows progress bar + cancel button, `handleMigrateCancel` sends QMP `migrate_cancel` |
 | 8 | Real OVF export with `qemu-img convert` to VMDK: FLTK does async disk conversion with progress; Web streams a pre-built OVA blob | ⬜ |
 | 9 | MAC address auto-generation on VM create/edit: FLTK generates unique MACs with collision checking; Web delegates to server (create endpoint may not set MAC) | ✅ — `web_server.zig` already calls `vm.generateMacAddress()` when MAC is empty (create, import, and clone paths) |
-| 10 | VM liveness polling timer: FLTK has a 2-second timer that reaps dead VMs and disconnects dead displays; Web relies on periodic refresh() calls | ⬜ |
+| 10 | VM liveness polling timer: FLTK has a 2-second timer that reaps dead VMs and disconnects dead displays; Web relies on periodic refresh() calls | ✅ — `livenessTicker` background thread polls every 2s under `vms_mutex`, reaps dead VMs via HV `isAliveFn`/`qemu.isVmAlive` fallback, destroys VMM handles |
 | 11 | Context menu on VM list: FLTK has right-click context menu (Power, Settings, Clone, Rename, Delete, Snapshot); Web has context menu but fewer items | ✅ — Web has 7 items (Power, Settings, Rename, Clone, Ctrl+Alt+Del, Toggle Favorite, Delete) vs FLTK's 6 (Power, Settings, Clone, Rename, Delete, Snapshot); web is actually richer |
 
 ### 39.3 — QEMU features not surfaced in either UI
@@ -3013,9 +3013,9 @@ in either UI.
 | 13 | USB tablet toggle: `-device usb-tablet` provides smooth mouse in VNC/SPICE; not configurable in either UI | ✅ — always enabled by default in `qemu.zig` (hardcoded `-device qemu-xhci -device usb-tablet`); it's essential for VNC/SPICE mouse tracking so a toggle would degrade UX |
 | 14 | virtio-rng toggle: `-object rng-random -device virtio-rng-pci` for guest entropy; not exposed | ⬜ |
 | 15 | Guest agent channel: virtio-serial channel for `qemu-guest-agent` (guest-info, guest-shutdown, guest-network-get-interfaces); not configured or queried | ⬜ |
-| 16 | CPU model selection: always defaults to `host` (KVM) or `qemu64` (TCG); no UI to pick specific models | ⬜ |
+| 16 | CPU model selection: always defaults to `host` (KVM) or `qemu64` (TCG); no UI to pick specific models | ✅ — `CpuModel` enum with 16 variants (host, max, qemu64, kvm64, EPYC, EPYC-Rome, EPYC-Milan, Skylake-Server, etc.), persisted in JSON, wired in FLTK edit dialog + web save/create |
 | 17 | Watchdog: `-watchdog i6300esb` with action (reset/poweroff/pause/none); not exposed | ⬜ |
-| 18 | Disk cache mode: `-drive cache=writeback|writethrough|none|directsync|unsafe`; hardcoded in arg builder | ⬜ |
+| 18 | Disk cache mode: `-drive cache=writeback|writethrough|none|directsync|unsafe`; hardcoded in arg builder | ✅ — `DiskCache` enum (writeback/writethrough/none/directsync/unsafe), persisted in JSON, wired in both UIs + QEMU arg builder |
 | 19 | TPM: `-tpmdev` + `-device tpm-tis` for virtual TPM 2.0 (required for Windows 11 guests) | ⬜ |
 | 20 | Secure Boot / SMM: `-machine q35,smm=on` + UEFI firmware vars for Secure Boot | ⬜ |
 | 21 | Hyper-V enlightenments: `-cpu host,hv_relaxed,hv_spinlocks=0x1fff,...` for Windows guest optimization | ⬜ |

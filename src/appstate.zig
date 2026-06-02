@@ -349,6 +349,11 @@ pub var selected_idx: ?usize = null;
 pub var prefs: vm.Prefs = .{};
 pub var browser: ?*cfltk.Fl_Browser = null;
 pub var status_bar: ?*cfltk.Fl_Box = null;
+pub var toast_box: ?*cfltk.Fl_Box = null;
+pub var toast_timer_active: bool = false;
+pub var undo_vm: vm.VmConfig = .{};
+pub var undo_idx: usize = 0;
+pub var undo_available: bool = false;
 pub var menu_bar: ?*cfltk.Fl_Menu_Bar = null;
 pub var toolbar_bg: ?*cfltk.Fl_Box = null;
 pub var toolbar_util_bg: ?*cfltk.Fl_Box = null;
@@ -359,6 +364,7 @@ pub var sum_name: ?*cfltk.Fl_Box = null;
 pub var win_handle: ?*cfltk.Fl_Window = null;
 pub var ctx_menu_handle: ?*cfltk.Fl_Menu_Button = null;
 pub var console_widget: ?*cfltk.Fl_Browser = null;
+pub var serial_input_widget: ?*cfltk.Fl_Input = null;
 pub var display_box: ?*cfltk.Fl_Box = null;
 pub var gl_display: ?*cfltk.Fl_Gl_Window = null;
 pub var display_group: ?*cfltk.Fl_Group = null;
@@ -454,6 +460,94 @@ pub fn setDetail(i: usize, value: []const u8) void {
             @memcpy(detail_buf[i][0..truncated.len], truncated);
             detail_buf[i][truncated.len] = 0;
             cfltk.Fl_Box_set_label(dl, @ptrCast(&detail_buf[i]));
+        }
+    }
+}
+
+/// Toast type determines background color and icon prefix.
+pub const ToastType = enum(u8) { info, success, err, warn };
+
+/// Persistent buffer for toast label — FLTK stores the pointer directly.
+var toast_buf: [256]u8 = [_]u8{0} ** 256;
+
+/// Show a toast notification that auto-dismisses after ~3.5 seconds.
+/// The toast appears as a floating box above the status bar.
+pub fn showToast(msg: []const u8, ttype: ToastType) void {
+    if (toast_box == null) {
+        // Fall back to status bar if toast box not created yet.
+        switch (ttype) {
+            .err => setStatusErr(msg),
+            .success => setStatusOk(msg),
+            .warn => setStatusIcon("⚠ ", msg),
+            .info => setStatus(msg),
+        }
+        return;
+    }
+    const tb = toast_box.?;
+
+    // Cancel any pending dismiss timer.
+    if (toast_timer_active) {
+        _ = cfltk.Fl_remove_timeout(&dismissToastCB, null);
+        toast_timer_active = false;
+    }
+
+    // Build the label: icon + message.
+    const icon: []const u8 = switch (ttype) {
+        .info => "ℹ ",
+        .success => "✓ ",
+        .err => "✗ ",
+        .warn => "⚠ ",
+    };
+    const icon_len = icon.len;
+    const max_msg = toast_buf.len - 1 - icon_len;
+    const msg_len = if (msg.len <= max_msg) msg.len else max_msg;
+    @memcpy(toast_buf[0..icon_len], icon);
+    @memcpy(toast_buf[icon_len .. icon_len + msg_len], msg[0..msg_len]);
+    toast_buf[icon_len + msg_len] = 0;
+
+    // Color the box based on type.
+    const bg: c_uint = switch (ttype) {
+        .info => pal.accent,
+        .success => pal.success,
+        .err => pal.danger,
+        .warn => pal.amber,
+    };
+    _ = cfltk.Fl_Box_set_color(tb, bg);
+    _ = cfltk.Fl_Box_set_label_color(tb, pal.accent_text);
+    _ = cfltk.Fl_Box_set_box(tb, 20); // FL_UP_BOX — gives it a visible border
+    _ = cfltk.Fl_Box_set_label(tb, @ptrCast(&toast_buf));
+
+    // Auto-dismiss after 3.5 seconds.
+    _ = cfltk.Fl_add_timeout(3.5, &dismissToastCB, null);
+    toast_timer_active = true;
+
+    // Redraw to show the toast immediately.
+    if (win_handle) |w| {
+        _ = cfltk.Fl_Window_redraw(w);
+    }
+}
+
+/// Show a toast notification with formatted message.
+pub fn showToastFmt(comptime fmt: []const u8, args: anytype, ttype: ToastType) void {
+    const msg = std.fmt.bufPrintZ(&toast_buf, fmt, args) catch {
+        showToast("(message truncated)", ttype);
+        return;
+    };
+    showToast(msg, ttype);
+}
+
+/// Dismiss the toast notification (called by timer or explicitly).
+fn dismissToastCB(_: ?*anyopaque) callconv(.c) void {
+    dismissToast();
+}
+
+pub fn dismissToast() void {
+    toast_timer_active = false;
+    if (toast_box) |tb| {
+        _ = cfltk.Fl_Box_set_label(tb, "");
+        _ = cfltk.Fl_Box_set_box(tb, 0); // FL_NO_BOX — invisible
+        if (win_handle) |w| {
+            _ = cfltk.Fl_Window_redraw(w);
         }
     }
 }

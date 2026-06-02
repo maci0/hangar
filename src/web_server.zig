@@ -499,9 +499,15 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/cad/")) {
         response = try handleCad(req);
         content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "GET /api/migrate/status/")) {
+        response = handleMigrateStatus(req, &snap_buf);
+        content_type = "application/json; charset=utf-8";
+    } else if (std.mem.startsWith(u8, req, "POST /api/migrate/cancel/")) {
+        response = try handleMigrateCancel(req);
+        content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/migrate/")) {
         response = try handleMigrate(req);
-        content_type = "text/plain";
+        content_type = "application/json; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET /api/vnets")) {
         content_type = "application/json; charset=utf-8";
         response = handleVnetsJson(&snap_buf);
@@ -912,10 +918,10 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 
     // First 32 fields
     const part1 = std.fmt.bufPrint(buf[w..],
-        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
+        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
     , .{
         idx, escapeJson(&esc, v.getNameSlice(), "name"), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
-        v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(),
+        v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(), v.disk_cache.toIndex(),
         std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
         if (v.hasIso()) "true" else "false", if (v.hasDisk()) "true" else "false",
         if (v.hasIso()) escapeJson(&esc, v.getIsoPathSlice(), "iso_path") else "",
@@ -936,7 +942,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 
     // Remaining fields
     const part2 = std.fmt.bufPrint(buf[w..],
-        \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+        \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
     , .{
         if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
         std.mem.span(v.nics[1].mode.toStr()),
@@ -945,6 +951,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         if (v.nics[2].mac_len > 0) v.getNic3MacSlice() else "",
         v.num_displays,
         if (v.enable_serial) "true" else "false",
+        if (v.virtio_rng) "true" else "false",
         if (v.enable_3d) "true" else "false",
         v.gpu_device.toIndex(),
         v.display.toIndex(),
@@ -984,10 +991,10 @@ fn renderJson(buf: []u8) usize {
 
         // First block: up through port_forwards
         const part1 = std.fmt.bufPrint(buf[w..],
-            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
+            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
         , .{
             i, escapeJson(&esc, v.getNameSlice(), "name"), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
-            v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(),
+            v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(), v.disk_cache.toIndex(),
             std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
             if (v.hasIso()) "true" else "false", if (v.hasDisk()) "true" else "false",
             if (v.hasIso()) escapeJson(&esc, v.getIsoPathSlice(), "iso_path") else "",
@@ -1008,7 +1015,7 @@ fn renderJson(buf: []u8) usize {
 
         // Remaining fields
         const part2 = std.fmt.bufPrint(buf[w..],
-            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}}}
+            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}}}
         , .{
             if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
             std.mem.span(v.nics[1].mode.toStr()),
@@ -1017,6 +1024,7 @@ fn renderJson(buf: []u8) usize {
             if (v.nics[2].mac_len > 0) v.getNic3MacSlice() else "",
             v.num_displays,
             if (v.enable_serial) "true" else "false",
+            if (v.virtio_rng) "true" else "false",
             if (v.enable_3d) "true" else "false",
             v.gpu_device.toIndex(),
             v.display.toIndex(),
@@ -1132,6 +1140,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "cpu_sockets")) cfg.cpu_sockets = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, 1));
         if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = vm.clampDiskSize(form_parsers.parseU32OrDefault(val, 20));
         if (std.mem.eql(u8, key, "disk_format")) cfg.disk_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk_format.toIndex());
+        if (std.mem.eql(u8, key, "disk_cache")) cfg.disk_cache = vm.DiskCache.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk_cache.toIndex());
         if (std.mem.eql(u8, key, "iso_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setIsoPath(val);
@@ -1182,6 +1191,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             if (vm.isValidDisplayPort(p)) { cfg.spice_port = p; has_spice_port = true; }
         }
         if (std.mem.eql(u8, key, "enable_serial")) cfg.enable_serial = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "virtio_rng")) cfg.virtio_rng = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "num_displays")) cfg.num_displays = @max(1, @min(16, std.fmt.parseInt(u32, val, 10) catch cfg.num_displays));
         if (std.mem.eql(u8, key, "favorite")) cfg.favorite = std.mem.eql(u8, val, "1");
     }
@@ -1366,6 +1376,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "cpu_sockets")) v.cpu_sockets = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch v.cpu_sockets);
         if (std.mem.eql(u8, key, "disk")) v.disk_size_gb = vm.clampDiskSize(std.fmt.parseInt(u32, val, 10) catch v.disk_size_gb);
         if (std.mem.eql(u8, key, "disk_format")) v.disk_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk_format.toIndex());
+        if (std.mem.eql(u8, key, "disk_cache")) v.disk_cache = vm.DiskCache.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk_cache.toIndex());
         if (std.mem.eql(u8, key, "iso_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setIsoPath(val);
@@ -1417,6 +1428,7 @@ fn handleSave(req: []const u8) ![]const u8 {
             if (vm.isValidDisplayPort(p)) v.spice_port = p;
         }
         if (std.mem.eql(u8, key, "enable_serial")) v.enable_serial = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "virtio_rng")) v.virtio_rng = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(16, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
         if (std.mem.eql(u8, key, "favorite")) v.favorite = std.mem.eql(u8, val, "1");
     }
@@ -1810,6 +1822,45 @@ fn handleMigrate(req: []const u8) ![]const u8 {
     client.connect(sock) catch return "qmp err";
     defer client.disconnect();
     client.liveMigrate(dest) catch return "migrate err";
+    return "{\"status\":\"started\"}";
+}
+
+/// Query current migration status for a VM.
+fn handleMigrateStatus(req: []const u8, buf: []u8) []const u8 {
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    const idx = parseIdx(req, "GET /api/migrate/status/") orelse return "{\"status\":\"error\",\"error\":\"invalid idx\"}";
+    if (idx >= appstate.vm_count) return "{\"status\":\"error\",\"error\":\"bad idx\"}";
+    const v = &appstate.vms[idx];
+    if (!v.isAlive()) return "{\"status\":\"error\",\"error\":\"not running\"}";
+
+    var client = qmp.QmpClient{};
+    var sock_buf: [256]u8 = undefined;
+    const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "{\"status\":\"error\",\"error\":\"no socket\"}";
+    client.connect(sock) catch return "{\"status\":\"error\",\"error\":\"qmp connect\"}";
+    defer client.disconnect();
+
+    var status_buf: [128]u8 = undefined;
+    const status = client.queryMigrateStatus(&status_buf) catch return "{\"status\":\"error\",\"error\":\"qmp query\"}";
+    const resp = std.fmt.bufPrint(buf, "{{\"status\":\"{s}\"}}", .{status}) catch return "{\"status\":\"error\"}";
+    return buf[0..resp.len];
+}
+
+/// Cancel an active migration.
+fn handleMigrateCancel(req: []const u8) ![]const u8 {
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    const idx = parseIdx(req, "POST /api/migrate/cancel/") orelse return "invalid";
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
+    if (!v.isAlive()) return "not running";
+
+    var client = qmp.QmpClient{};
+    var sock_buf: [256]u8 = undefined;
+    const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
+    client.connect(sock) catch return "qmp err";
+    defer client.disconnect();
+    client.cancelMigrate() catch return "cancel err";
     return "ok";
 }
 
@@ -2241,6 +2292,35 @@ const app_css = @embedFile("web/app.css");
 const app_js = @embedFile("web/app.js");
 const novnc_js = @embedFile("web/novnc.js");
 const spice_js = @embedFile("web/spice.js");
+
+/// Background thread: periodically check liveness of running VMs and reap dead ones.
+fn livenessTicker() void {
+    while (true) {
+        appio.sleepMs(2000);
+
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+
+        var changed = false;
+        for (0..appstate.vm_count) |i| {
+            const v = &appstate.vms[i];
+            if (v.status == .running or v.status == .paused) {
+                const alive: bool = if (getVmmHandle(i)) |h|
+                    appstate.g_vmm.isAliveFn(h)
+                else
+                    qemu.isVmAlive(v);
+                if (!alive) {
+                    v.status = .stopped;
+                    destroyVmmHandle(i);
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {};
+        }
+    }
+}
 
 /// Background thread: periodically take AutoProtect snapshots for VMs that have it enabled.
 fn autoprotectTicker() void {
@@ -3191,6 +3271,13 @@ pub fn main() !void {
         th.detach();
     } else |e| {
         logErr(std.fmt.bufPrint(&ebuf, "spawn acceptLoop failed: {s}", .{@errorName(e)}) catch "spawn acceptLoop failed");
+    }
+
+    // Spawn VM liveness polling ticker
+    if (std.Thread.spawn(std.Thread.SpawnConfig{}, livenessTicker, .{})) |th| {
+        th.detach();
+    } else |e| {
+        logErr(std.fmt.bufPrint(&ebuf, "spawn livenessTicker failed: {s}", .{@errorName(e)}) catch "spawn livenessTicker failed");
     }
 
     // Spawn autoprotect background ticker

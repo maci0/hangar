@@ -276,14 +276,13 @@ fn appendExtraNic(
 fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc: std.mem.Allocator, bufs: *ArgBuffers) !void {
     try args.append(alloc, "qemu-system-x86_64");
 
-    // Resolve accelerator: TCG → software, all others → hardware with host CPU.
-    const is_tcg = config.accel == .tcg;
     const accel_flag = config.accel.toStr();
     try args.append(alloc, "-machine");
     const mach_str = try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,accel={s}", .{std.mem.span(accel_flag)});
     try args.append(alloc, mach_str);
     try args.append(alloc, "-cpu");
-    try args.append(alloc, if (is_tcg) "qemu64" else "host");
+    const cpu_str = config.cpu_model.toStr();
+    try args.append(alloc, std.mem.span(cpu_str));
 
     // QEMU rejects -smp 0 and -m 0; clamp to a sane range. The upper bound also
     // prevents `sockets * cores` from overflowing u32 when the UI passes huge
@@ -302,9 +301,10 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     try args.append(alloc, mem_str);
 
     if (config.hasDisk()) {
-        const disk_str = try std.fmt.bufPrint(&bufs.disk_buf, "file={s},format={s},if=virtio", .{
+        const disk_str = try std.fmt.bufPrint(&bufs.disk_buf, "file={s},format={s},if=virtio,cache={s}", .{
             config.getDiskPathSlice(),
             std.mem.span(config.disk_format.toStr()),
+            std.mem.span(config.disk_cache.toStr()),
         });
         try args.append(alloc, "-drive");
         try args.append(alloc, disk_str);
@@ -312,9 +312,10 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 
     // Optional second (data) disk, attached as another virtio drive.
     if (config.hasDisk2()) {
-        const disk2_str = try std.fmt.bufPrint(&bufs.disk2_buf, "file={s},format={s},if=virtio", .{
+        const disk2_str = try std.fmt.bufPrint(&bufs.disk2_buf, "file={s},format={s},if=virtio,cache={s}", .{
             config.getDisk2PathSlice(),
             std.mem.span(config.disk2_format.toStr()),
+            std.mem.span(config.disk_cache.toStr()),
         });
         try args.append(alloc, "-drive");
         try args.append(alloc, disk2_str);
@@ -429,6 +430,13 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         const serial_str = try std.fmt.bufPrint(&bufs.serial_buf, "unix:/tmp/kvmgui-serial-{s}.sock,server=on,wait=off", .{config.getNameSlice()});
         try args.append(alloc, "-serial");
         try args.append(alloc, serial_str);
+    }
+
+    if (config.virtio_rng) {
+        try args.append(alloc, "-object");
+        try args.append(alloc, "rng-random,filename=/dev/urandom,id=rng0");
+        try args.append(alloc, "-device");
+        try args.append(alloc, "virtio-rng-pci,rng=rng0");
     }
 
     if (config.hasName()) {
@@ -938,6 +946,7 @@ test "fuzz: buildScriptStr never crashes on random configs" {
         c.spice_port = rnd.int(u16);
         c.disk_format = vm.DiskFormat.fromIndex(rnd.int(usize));
         c.disk2_format = vm.DiskFormat.fromIndex(rnd.int(usize));
+        c.disk_cache = vm.DiskCache.fromIndex(rnd.int(usize));
         c.display = vm.DisplayType.fromIndex(rnd.int(usize));
         c.display_resolution = vm.DisplayResolution.fromIndex(rnd.int(usize));
         c.nics[0].mode = vm.NetworkMode.fromIndex(rnd.int(usize));
@@ -952,6 +961,7 @@ test "fuzz: buildScriptStr never crashes on random configs" {
         c.accel = vm.VmAccel.fromIndex(rnd.int(usize));
         c.embed_display = rnd.boolean();
         c.enable_serial = rnd.boolean();
+        c.virtio_rng = rnd.boolean();
         c.enable_3d = rnd.boolean();
 
         const rstr = struct {

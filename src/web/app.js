@@ -166,7 +166,24 @@ async function sendCad(){if(sel===null)return;const r=await apiPost('/api/cad/'+
 async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/export/'+sel,{method:'POST',headers:{'X-API-Key':'kvmgui'}});if(!r.ok){setStatus('Export failed: '+r.status);return;}const blob=await r.blob();const a=document.createElement('a');const url=URL.createObjectURL(blob);a.href=url;a.download=vms[sel].name+'.ova';a.click();setTimeout(function(){URL.revokeObjectURL(url);},60000);setStatus('Export downloaded.');}catch(e){setStatus('Export error: '+e);}}
 async function migrateGuest(){if(sel===null)return;var vm=vms[sel];var mv=document.getElementById('migrate_vmname');if(mv)mv.textContent='Migrating: '+vm.name;var md=document.getElementById('migratedlg');if(md){updateMigUri();md.showModal();}}
 function updateMigUri(){var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');var uri=document.getElementById('mig_uri');if(host&&port&&uri){uri.value='tcp:'+host.value+':'+port.value;}}
-async function doMigrate(){if(sel===null)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;var r=await apiPost('/api/migrate/'+sel,'dest='+encodeURIComponent(dest));if(r){var md=document.getElementById('migratedlg');if(md)md.close();setStatus('Live migration to '+dest+' started.');}}
+async function doMigrate(){if(sel===null)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;var r=await apiPost('/api/migrate/'+sel,'dest='+encodeURIComponent(dest));if(!r)return;try{var j=JSON.parse(r);if(j.status!=='started'){showToast('Migration failed to start','error');return;}}catch(e){}var md=document.getElementById('migratedlg');if(md)md.close();showMigProgress();pollMigStatus();}
+var migPollTimer=null;
+function showMigProgress(){var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar&&info){bar.style.display='block';info.style.display='inline';info.textContent='Migration in progress...';}if(cancel)cancel.style.display='inline';}
+function hideMigProgress(){if(migPollTimer){clearTimeout(migPollTimer);migPollTimer=null;}var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar)bar.style.display='none';if(info)info.style.display='none';if(cancel)cancel.style.display='none';}
+async function pollMigStatus(){if(sel===null){hideMigProgress();return;}
+var t='';try{var resp=await fetch('/api/migrate/status/'+sel);t=await resp.text();}catch(e){}
+var info=document.getElementById('mig_pct');var bar=document.getElementById('mig_progress');
+if(!info||!bar)return;
+if(!t){info.textContent='Migration failed — connection lost';hideMigProgress();setStatus('Migration failed');return;}
+try{
+var s=JSON.parse(t);
+if(s.status==='completed'){info.textContent='Migration completed.';bar.style.width='100%';bar.style.background='var(--success)';setStatus('Migration completed');setTimeout(hideMigProgress,3000);return;}
+if(s.status==='failed'||s.status==='error'){info.textContent='Migration failed.';bar.style.background='var(--danger)';setStatus('Migration failed');setTimeout(hideMigProgress,3000);return;}
+if(s.status==='cancelled'){info.textContent='Migration cancelled.';bar.style.background='var(--amber)';setStatus('Migration cancelled');setTimeout(hideMigProgress,3000);return;}
+info.textContent='Migration '+s.status+'...';
+}catch(e){info.textContent='Migration polling error';}
+migPollTimer=setTimeout(pollMigStatus,500);}
+async function cancelMigrate(){var r=await apiPost('/api/migrate/cancel/'+sel,'');if(r){var info=document.getElementById('mig_pct');if(info)info.textContent='Cancelling...';setStatus('Migration cancel requested');}}
 function updatePowerBtn(){const b=document.getElementById('powerbtn');if(!b)return;if(sel===null||sel>=vms.length){b.textContent='▶ Power On';b.className='btn primary';return;}
 const v=vms[sel];if(v.status==='running'||v.status==='paused'){b.textContent='⏹ Power Off';b.className='btn danger';}else{b.textContent='▶ Power On';b.className='btn primary';}}
 function newVm(){var d=document.getElementById('newdlg');if(d)d.showModal();}
