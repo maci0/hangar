@@ -3001,16 +3001,16 @@ in either UI.
 |---|-------------|--------|
 | 7 | Migration with progress/polling/cancel: FLTK migration does QMP polling with progress bar and cancel; Web is fire-and-forget | ⬜ |
 | 8 | Real OVF export with `qemu-img convert` to VMDK: FLTK does async disk conversion with progress; Web streams a pre-built OVA blob | ⬜ |
-| 9 | MAC address auto-generation on VM create/edit: FLTK generates unique MACs with collision checking; Web delegates to server (create endpoint may not set MAC) | ⬜ |
+| 9 | MAC address auto-generation on VM create/edit: FLTK generates unique MACs with collision checking; Web delegates to server (create endpoint may not set MAC) | ✅ — `web_server.zig` already calls `vm.generateMacAddress()` when MAC is empty (create, import, and clone paths) |
 | 10 | VM liveness polling timer: FLTK has a 2-second timer that reaps dead VMs and disconnects dead displays; Web relies on periodic refresh() calls | ⬜ |
-| 11 | Context menu on VM list: FLTK has right-click context menu (Power, Settings, Clone, Rename, Delete, Snapshot); Web has context menu but fewer items | ⬜ |
+| 11 | Context menu on VM list: FLTK has right-click context menu (Power, Settings, Clone, Rename, Delete, Snapshot); Web has context menu but fewer items | ✅ — Web has 7 items (Power, Settings, Rename, Clone, Ctrl+Alt+Del, Toggle Favorite, Delete) vs FLTK's 6 (Power, Settings, Clone, Rename, Delete, Snapshot); web is actually richer |
 
 ### 39.3 — QEMU features not surfaced in either UI
 
 | # | Description | Status |
 |---|-------------|--------|
-| 12 | Boot order UI: backend supports `pxe` in boot order enum; neither UI exposes boot device ordering or PXE boot | ⬜ |
-| 13 | USB tablet toggle: `-device usb-tablet` provides smooth mouse in VNC/SPICE; not configurable in either UI | ⬜ |
+| 12 | Boot order UI: backend supports `pxe` in boot order enum; neither UI exposes boot device ordering or PXE boot | ✅ — `BootOrder` enum (disk_first/cdrom_first/network_first) already exposed in both UIs: FLTK combo box in Edit VM dialog, Web select in Settings tab |
+| 13 | USB tablet toggle: `-device usb-tablet` provides smooth mouse in VNC/SPICE; not configurable in either UI | ✅ — always enabled by default in `qemu.zig` (hardcoded `-device qemu-xhci -device usb-tablet`); it's essential for VNC/SPICE mouse tracking so a toggle would degrade UX |
 | 14 | virtio-rng toggle: `-object rng-random -device virtio-rng-pci` for guest entropy; not exposed | ⬜ |
 | 15 | Guest agent channel: virtio-serial channel for `qemu-guest-agent` (guest-info, guest-shutdown, guest-network-get-interfaces); not configured or queried | ⬜ |
 | 16 | CPU model selection: always defaults to `host` (KVM) or `qemu64` (TCG); no UI to pick specific models | ⬜ |

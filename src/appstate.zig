@@ -344,6 +344,7 @@ pub const MAX_VMS = vm.MAX_VMS;
 
 pub var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
 pub var vm_count: usize = 0;
+pub var vms_mutex: sync.SpinMutex = .{};
 pub var selected_idx: ?usize = null;
 pub var prefs: vm.Prefs = .{};
 pub var browser: ?*cfltk.Fl_Browser = null;

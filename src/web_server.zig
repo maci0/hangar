@@ -4,6 +4,7 @@
 //! Open http://localhost:9080 in any browser.
 const std = @import("std");
 const vm = @import("vm.zig");
+const appstate = @import("appstate.zig");
 const persist = @import("persist.zig");
 const qemu = @import("qemu.zig");
 const qmp = @import("qmp.zig");
@@ -24,8 +25,6 @@ const form_parsers = @import("form_parsers.zig");
 extern fn time(t: ?*c_long) c_long;
 extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
 
-const MAX_VMS = vm.MAX_VMS;
-
 // HTTP status codes
 const HTTP_OK: u16 = 200;
 const HTTP_CREATED: u16 = 201;
@@ -36,39 +35,29 @@ const HTTP_PAYLOAD_TOO_LARGE: u16 = 413;
 const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 const HTTP_INTERNAL_ERROR: u16 = 500;
 
-var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
-var vm_count: usize = 0;
-var vm_started: [MAX_VMS]i64 = [_]i64{0} ** MAX_VMS;
-var vms_mutex: sync.SpinMutex = .{};
-var prefs: vm.Prefs = .{};
-
-// Server socket fds for shutdown signaling.
-var tcp_sock_fd: c.fd_t = -1;
-var unix_sock_fd: c.fd_t = -1;
-
 const BIND_ADDR: [4]u8 = .{ 0, 0, 0, 0 }; // 0.0.0.0 — accessible remotely
 const API_KEY: []const u8 = "kvmgui"; // default API key for X-API-Key auth
 var auth_token: [64]u8 = [_]u8{0} ** 64;
 var auth_token_len: usize = 0;
 
-// HV abstraction — QEMU backend dispatch table
-var g_vmm: hv_iface.Vmm = undefined;
-var g_vmm_handles: [MAX_VMS]?hv_iface.VmmHandle = [_]?hv_iface.VmmHandle{null} ** MAX_VMS;
+// Server socket fds for shutdown signaling.
+var tcp_sock_fd: c.fd_t = -1;
+var unix_sock_fd: c.fd_t = -1;
 
 /// Get or create the Vmm handle for VM at index idx.
 fn getVmmHandle(idx: usize) ?hv_iface.VmmHandle {
-    if (idx >= vm_count) return null;
-    if (g_vmm_handles[idx] == null) {
-        g_vmm_handles[idx] = hv_backend.createHandle(&vms[idx], vms[idx].accel, std.heap.page_allocator) catch return null;
+    if (idx >= appstate.vm_count) return null;
+    if (appstate.g_vmm_handles[idx] == null) {
+        appstate.g_vmm_handles[idx] = hv_backend.createHandle(&appstate.vms[idx], appstate.vms[idx].accel, std.heap.page_allocator) catch return null;
     }
-    return g_vmm_handles[idx];
+    return appstate.g_vmm_handles[idx];
 }
 
 /// Destroy the Vmm handle for VM at index idx.
 fn destroyVmmHandle(idx: usize) void {
-    if (g_vmm_handles[idx]) |h| {
-        g_vmm.deinitFn(h);
-        g_vmm_handles[idx] = null;
+    if (appstate.g_vmm_handles[idx]) |h| {
+        appstate.g_vmm.deinitFn(h);
+        appstate.g_vmm_handles[idx] = null;
     }
 }
 
@@ -469,7 +458,7 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/save")) {
         response = "saved";
-        persist.save(&vms, vm_count, prefs) catch {
+        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
             logErr("persist.save failed");
             response = "save failed";
         };
@@ -599,8 +588,8 @@ fn serveConfigRaw() ![]const u8 {
 }
 
 var fb_client: ?*vnc.VncClient = null;
-// Tracks which VM index fb_client is connected to. MAX_VMS = sentinel (none).
-var fb_vm_idx: usize = MAX_VMS;
+// Tracks which VM index fb_client is connected to. appstate.MAX_VMS = sentinel (none).
+var fb_vm_idx: usize = appstate.MAX_VMS;
 var fb_mutex: sync.SpinMutex = .{};
 // BMP output buffer — 54-byte header + up to 2 MB of pixel data
 // 2 MB supports 640×480 at 32 bpp (≈1.23 MB) + margin for larger resolutions
@@ -617,10 +606,10 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
-    if (idx >= vm_count) return;
-    const v = &vms[idx];
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx >= appstate.vm_count) return;
+    const v = &appstate.vms[idx];
     if (!v.isAlive()) return;
 
     // Perform WebSocket upgrade handshake.
@@ -697,10 +686,10 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
-    if (idx >= vm_count) return;
-    const v = &vms[idx];
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx >= appstate.vm_count) return;
+    const v = &appstate.vms[idx];
     if (!v.isAlive()) return;
 
     // Perform WebSocket upgrade handshake.
@@ -776,10 +765,10 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
-    if (idx >= vm_count) return;
-    const v = &vms[idx];
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx >= appstate.vm_count) return;
+    const v = &appstate.vms[idx];
     if (!v.isAlive() or !v.enable_serial or !v.hasName()) return;
 
     // Perform WebSocket upgrade handshake.
@@ -848,10 +837,10 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid idx";
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
-    if (idx >= vm_count) return "no vm";
-    const v = &vms[idx];
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx >= appstate.vm_count) return "no vm";
+    const v = &appstate.vms[idx];
     if (!v.isAlive()) return "off";
 
     fb_mutex.lock();
@@ -859,12 +848,12 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
 
     if (fb_client == null) {
         fb_client = vnc.VncClient.new() orelse return "no vnc";
-        fb_vm_idx = MAX_VMS; // not yet connected to any VM
+        fb_vm_idx = appstate.MAX_VMS; // not yet connected to any VM
     }
     const vc = fb_client.?;
     // Reconnect if the VM changed or the connection dropped.
     if (fb_vm_idx != idx or !vc.isConnected()) {
-        if (fb_vm_idx != MAX_VMS) vc.disconnect();
+        if (fb_vm_idx != appstate.MAX_VMS) vc.disconnect();
         _ = vc.connect("127.0.0.1", @intCast(v.vnc_port));
         fb_vm_idx = idx;
     }
@@ -912,10 +901,10 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return error.RenderFailed;
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return error.RenderFailed;
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
-    if (idx >= vm_count) return "{}";
-    const v = &vms[idx];
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx >= appstate.vm_count) return "{}";
+    const v = &appstate.vms[idx];
     var w: usize = 0;
 
     // Reusable escape buffer for user-controlled strings in JSON output.
@@ -976,8 +965,8 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 /// Render JSON into caller-provided buffer. Returns bytes written, or 0 on overflow.
 fn renderJson(buf: []u8) usize {
     if (buf.len == 0) return 0;
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     var w: usize = 0;
     buf[w] = '[';
     w += 1;
@@ -985,13 +974,13 @@ fn renderJson(buf: []u8) usize {
     // Reusable escape buffer for user-controlled strings in JSON output.
     var esc: [vm.MAX_PATH]u8 = undefined;
 
-    for (0..vm_count) |i| {
+    for (0..appstate.vm_count) |i| {
         if (i > 0) {
             if (w >= buf.len) return 0;
             buf[w] = ',';
             w += 1;
         }
-        const v = &vms[i];
+        const v = &appstate.vms[i];
 
         // First block: up through port_forwards
         const part1 = std.fmt.bufPrint(buf[w..],
@@ -1040,7 +1029,7 @@ fn renderJson(buf: []u8) usize {
             v.vnc_port,
             v.spice_port,
             if (v.favorite) "true" else "false",
-            vm_started[i],
+            appstate.vm_started[i],
         }) catch break;
         w += part2.len;
     }
@@ -1051,8 +1040,8 @@ fn renderJson(buf: []u8) usize {
 }
 
 fn handlePower(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
 
     // Extract idx from /api/power/N
     const prefix = "POST /api/power/";
@@ -1060,21 +1049,21 @@ fn handlePower(req: []const u8) ![]const u8 {
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (v.isAlive()) {
         if (getVmmHandle(idx)) |h| {
-            g_vmm.forceStopFn(h);
-            g_vmm.reapFn(h);
+            appstate.g_vmm.forceStopFn(h);
+            appstate.g_vmm.reapFn(h);
         } else {
             qemu.forceStopVm(v);
             qemu.reapVm(v);
         }
         destroyVmmHandle(idx);
-        vm_started[idx] = 0;
+        appstate.vm_started[idx] = 0;
     } else {
         if (getVmmHandle(idx)) |h| {
-            g_vmm.startFn(h, @ptrCast(v)) catch {
+            appstate.g_vmm.startFn(h, @ptrCast(v)) catch {
                 destroyVmmHandle(idx);
                 return "start err";
             };
@@ -1090,9 +1079,9 @@ fn handlePower(req: []const u8) ![]const u8 {
                 return "start err";
             };
         }
-        vm_started[idx] = time(null);
+        appstate.vm_started[idx] = time(null);
     }
-    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -1114,10 +1103,10 @@ fn readStartupLog(path: [*:0]const u8) []const u8 {
 }
 
 fn handleNewVm(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
 
-    if (vm_count >= MAX_VMS) return "full";
+    if (appstate.vm_count >= appstate.MAX_VMS) return "full";
     // Parse body: name=...&mem=...&cpu=...&disk=... plus all advanced fields (for undo restore)
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
@@ -1199,20 +1188,20 @@ fn handleNewVm(req: []const u8) ![]const u8 {
 
     // Apply defaults for fields not explicitly provided
     if (!has_autoprotect) {
-        cfg.autoprotect = prefs.autoprotect_enabled_default;
-        cfg.autoprotect_interval_min = prefs.autoprotect_interval_min_default;
-        cfg.autoprotect_max = prefs.autoprotect_max_default;
+        cfg.autoprotect = appstate.prefs.autoprotect_enabled_default;
+        cfg.autoprotect_interval_min = appstate.prefs.autoprotect_interval_min_default;
+        cfg.autoprotect_max = appstate.prefs.autoprotect_max_default;
     }
     if (!has_mac) {
         var mac_buf: [18]u8 = undefined;
         const mac = vm.generateMacAddress(&mac_buf);
         cfg.setMacAddress(std.mem.span(mac));
     }
-    if (!has_vnc_port) cfg.vnc_port = vm.findUnusedVncPort(vms[0..vm_count]);
-    if (!has_spice_port) cfg.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
-    vms[vm_count] = cfg;
-    vm_count += 1;
-    persist.save(&vms, vm_count, prefs) catch |e| {
+    if (!has_vnc_port) cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
+    if (!has_spice_port) cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+    appstate.vms[appstate.vm_count] = cfg;
+    appstate.vm_count += 1;
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
         var ebuf: [64]u8 = undefined;
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
         return "save failed";
@@ -1221,24 +1210,24 @@ fn handleNewVm(req: []const u8) ![]const u8 {
 }
 
 fn handleClone(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
 
     const prefix = "POST /api/clone/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
-    if (idx >= vm_count or vm_count >= MAX_VMS) return "full";
-    var clone = vms[idx];
-    const src = &vms[idx];
+    if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
+    var clone = appstate.vms[idx];
+    const src = &appstate.vms[idx];
     var name_buf: [256]u8 = undefined;
     const cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{clone.getNameSlice()}) catch return "nameerr";
     clone.setName(cn);
     clone.status = .stopped;
     clone.pid = null;
-    clone.vnc_port = vm.findUnusedVncPort(vms[0..vm_count]);
-    clone.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
+    clone.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
+    clone.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     clone.setMacAddress(std.mem.span(mac));
@@ -1256,7 +1245,7 @@ fn handleClone(req: []const u8) ![]const u8 {
         var disk_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
         const disk_path = std.fmt.bufPrintZ(&disk_path_buf, "{s}/VMs/{s}.qcow2", .{ home, clone.getNameSlice() }) catch return "nameerr";
         if (getVmmHandle(idx)) |h| {
-            g_vmm.createLinkedCloneFn(h, disk_path, src.getDiskPathSlice(), @intFromEnum(src.disk_format), std.heap.page_allocator) catch return "linkerr";
+            appstate.g_vmm.createLinkedCloneFn(h, disk_path, src.getDiskPathSlice(), @intFromEnum(src.disk_format), std.heap.page_allocator) catch return "linkerr";
         } else {
             qemu.createLinkedClone(disk_path, src.getDiskPathSlice(), src.disk_format, std.heap.page_allocator) catch return "linkerr";
         }
@@ -1264,9 +1253,9 @@ fn handleClone(req: []const u8) ![]const u8 {
         clone.disk_format = .qcow2;
     }
 
-    vms[vm_count] = clone;
-    vm_count += 1;
-    persist.save(&vms, vm_count, prefs) catch |e| {
+    appstate.vms[appstate.vm_count] = clone;
+    appstate.vm_count += 1;
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
         var ebuf: [64]u8 = undefined;
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
         return "save failed";
@@ -1275,28 +1264,28 @@ fn handleClone(req: []const u8) ![]const u8 {
 }
 
 fn handleDelete(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
 
     const prefix = "POST /api/delete/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
-    if (idx >= vm_count) return "invalid idx";
+    if (idx >= appstate.vm_count) return "invalid idx";
     // Destroy the VMM handle for the deleted VM
     destroyVmmHandle(idx);
     // Shift remaining
     var i = idx;
-    while (i + 1 < vm_count) : (i += 1) {
-        vms[i] = vms[i + 1];
-        g_vmm_handles[i] = g_vmm_handles[i + 1];
-        vm_started[i] = vm_started[i + 1];
+    while (i + 1 < appstate.vm_count) : (i += 1) {
+        appstate.vms[i] = appstate.vms[i + 1];
+        appstate.g_vmm_handles[i] = appstate.g_vmm_handles[i + 1];
+        appstate.vm_started[i] = appstate.vm_started[i + 1];
     }
-    g_vmm_handles[vm_count - 1] = null;
-    vm_started[vm_count - 1] = 0;
-    vm_count -= 1;
-    persist.save(&vms, vm_count, prefs) catch |e| {
+    appstate.g_vmm_handles[appstate.vm_count - 1] = null;
+    appstate.vm_started[appstate.vm_count - 1] = 0;
+    appstate.vm_count -= 1;
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
         var ebuf: [64]u8 = undefined;
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
         return "save failed";
@@ -1305,8 +1294,8 @@ fn handleDelete(req: []const u8) ![]const u8 {
 }
 
 fn handleReorder(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
 
     const prefix = "POST /api/reorder";
     _ = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
@@ -1328,19 +1317,19 @@ fn handleReorder(req: []const u8) ![]const u8 {
     if (from == null or to == null) return "missing from/to";
     const a = from.?;
     const b = to.?;
-    if (a >= vm_count or b >= vm_count) return "invalid idx";
+    if (a >= appstate.vm_count or b >= appstate.vm_count) return "invalid idx";
     if (a == b) return "ok"; // no-op
     // Swap VM configs, handles, and started timestamps
-    const tmp_vm = vms[a];
-    vms[a] = vms[b];
-    vms[b] = tmp_vm;
-    const tmp_handle = g_vmm_handles[a];
-    g_vmm_handles[a] = g_vmm_handles[b];
-    g_vmm_handles[b] = tmp_handle;
-    const tmp_started = vm_started[a];
-    vm_started[a] = vm_started[b];
-    vm_started[b] = tmp_started;
-    persist.save(&vms, vm_count, prefs) catch {
+    const tmp_vm = appstate.vms[a];
+    appstate.vms[a] = appstate.vms[b];
+    appstate.vms[b] = tmp_vm;
+    const tmp_handle = appstate.g_vmm_handles[a];
+    appstate.g_vmm_handles[a] = appstate.g_vmm_handles[b];
+    appstate.g_vmm_handles[b] = tmp_handle;
+    const tmp_started = appstate.vm_started[a];
+    appstate.vm_started[a] = appstate.vm_started[b];
+    appstate.vm_started[b] = tmp_started;
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
         logErr("persist.save failed");
         return "save failed";
     };
@@ -1348,18 +1337,18 @@ fn handleReorder(req: []const u8) ![]const u8 {
 }
 
 fn handleSave(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
 
     const prefix = "POST /api/save/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
-    if (idx >= vm_count) return "invalid idx";
+    if (idx >= appstate.vm_count) return "invalid idx";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
-    const v = &vms[idx];
+    const v = &appstate.vms[idx];
     var val_buf: [2048]u8 = undefined;
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
@@ -1431,7 +1420,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(16, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
         if (std.mem.eql(u8, key, "favorite")) v.favorite = std.mem.eql(u8, val, "1");
     }
-    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -1443,11 +1432,11 @@ fn parseIdx(req: []const u8, prefix: []const u8) ?usize {
 }
 
 fn handleSuspend(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/suspend/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
 
     var state_path: [256]u8 = undefined;
@@ -1461,15 +1450,15 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     client.waitMigrateComplete() catch return "timeout";
     v.setSavedStatePath(path[0..]);
     if (getVmmHandle(idx)) |h| {
-        g_vmm.forceStopFn(h);
-        g_vmm.reapFn(h);
+        appstate.g_vmm.forceStopFn(h);
+        appstate.g_vmm.reapFn(h);
     } else {
         qemu.forceStopVm(v);
         qemu.reapVm(v);
     }
     destroyVmmHandle(idx);
-    vm_started[idx] = 0;
-    persist.save(&vms, vm_count, prefs) catch {
+    appstate.vm_started[idx] = 0;
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
         logErr("handleSuspend: persist.save failed");
         return "save failed";
     };
@@ -1477,14 +1466,14 @@ fn handleSuspend(req: []const u8) ![]const u8 {
 }
 
 fn handlePause(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/pause/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.pauseFn(h) catch return "qmp err";
+        appstate.g_vmm.pauseFn(h) catch return "qmp err";
     } else {
         var client = qmp.QmpClient{};
         var sock_buf: [256]u8 = undefined;
@@ -1497,14 +1486,14 @@ fn handlePause(req: []const u8) ![]const u8 {
 }
 
 fn handleResume(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/resume/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.isPaused()) return "not paused";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.resumeFn(h) catch return "qmp err";
+        appstate.g_vmm.resumeFn(h) catch return "qmp err";
     } else {
         var client = qmp.QmpClient{};
         var sock_buf: [256]u8 = undefined;
@@ -1517,10 +1506,10 @@ fn handleResume(req: []const u8) ![]const u8 {
 }
 
 fn handleRename(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/rename/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
+    if (idx >= appstate.vm_count) return "invalid idx";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     var val_buf: [512]u8 = undefined;
@@ -1533,8 +1522,8 @@ fn handleRename(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "name")) {
             if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
             if (!vm.isValidVmName(val)) return "invalid name";
-            vms[idx].setName(val);
-            persist.save(&vms, vm_count, prefs) catch |e| {
+            appstate.vms[idx].setName(val);
+            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
                 var ebuf: [64]u8 = undefined;
                 logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
                 return "save failed";
@@ -1546,14 +1535,14 @@ fn handleRename(req: []const u8) ![]const u8 {
 }
 
 fn handleShutdown(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/shutdown/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.shutdownFn(h) catch return "qmp err";
+        appstate.g_vmm.shutdownFn(h) catch return "qmp err";
     } else {
         var client = qmp.QmpClient{};
         var sock_buf: [256]u8 = undefined;
@@ -1566,14 +1555,14 @@ fn handleShutdown(req: []const u8) ![]const u8 {
 }
 
 fn handleReset(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/reset/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.resetFn(h) catch return "qmp err";
+        appstate.g_vmm.resetFn(h) catch return "qmp err";
     } else {
         var client = qmp.QmpClient{};
         var sock_buf: [256]u8 = undefined;
@@ -1596,11 +1585,11 @@ fn validateSnapshotTag(tag: []const u8) bool {
 }
 
 fn handleSnapshotTake(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/snapshot/take/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
@@ -1619,7 +1608,7 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
     const decoded = urlencode.urlDecode(&decode_buf, tag);
     if (!validateSnapshotTag(decoded)) return "no name";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "create err";
+        appstate.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "create err";
     } else {
         qemu.snapshotCreate(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "create err";
     }
@@ -1627,14 +1616,14 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
 }
 
 fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "GET /api/snapshot/list/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
     const n: usize = if (getVmmHandle(idx)) |h|
-        g_vmm.snapshotListFn(h, v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch 0
+        appstate.g_vmm.snapshotListFn(h, v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch 0
     else
         qemu.snapshotList(v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch 0;
     if (n == 0 or n > raw_buf.len) return "(none)";
@@ -1656,11 +1645,11 @@ fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
 }
 
 fn handleSnapshotRevert(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/snapshot/revert/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
@@ -1679,7 +1668,7 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
     const decoded = urlencode.urlDecode(&decode_buf, tag);
     if (!validateSnapshotTag(decoded)) return "no name";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
+        appstate.g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
     } else {
         qemu.snapshotApply(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
     }
@@ -1687,11 +1676,11 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
 }
 
 fn handleSnapshotDelete(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/snapshot/delete/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
@@ -1710,7 +1699,7 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
     const decoded = urlencode.urlDecode(&decode_buf, tag);
     if (!validateSnapshotTag(decoded)) return "no name";
     if (getVmmHandle(idx)) |h| {
-        g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "delete err";
+        appstate.g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "delete err";
     } else {
         qemu.snapshotDelete(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "delete err";
     }
@@ -1718,10 +1707,10 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
 }
 
 fn handleImport(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
 
-    if (vm_count >= MAX_VMS) return "full";
+    if (appstate.vm_count >= appstate.MAX_VMS) return "full";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     // Parse key=value from body (JS sends "path=<encoded-path>")
@@ -1758,16 +1747,16 @@ fn handleImport(req: []const u8) ![]const u8 {
     cfg.setName(name);
     cfg.setDiskPath(decoded_path);
     cfg.disk_size_gb = 20;
-    cfg.memory_mb = prefs.default_memory_mb;
-    cfg.cpu_cores = prefs.default_cpu_cores;
+    cfg.memory_mb = appstate.prefs.default_memory_mb;
+    cfg.cpu_cores = appstate.prefs.default_cpu_cores;
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     cfg.setMacAddress(std.mem.span(mac));
-    cfg.vnc_port = vm.findUnusedVncPort(vms[0..vm_count]);
-    cfg.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
-    vms[vm_count] = cfg;
-    vm_count += 1;
-    persist.save(&vms, vm_count, prefs) catch |e| {
+    cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
+    cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+    appstate.vms[appstate.vm_count] = cfg;
+    appstate.vm_count += 1;
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
         var ebuf: [64]u8 = undefined;
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
         return "save failed";
@@ -1776,11 +1765,11 @@ fn handleImport(req: []const u8) ![]const u8 {
 }
 
 fn handleCad(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/cad/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
@@ -1792,11 +1781,11 @@ fn handleCad(req: []const u8) ![]const u8 {
 }
 
 fn handleMigrate(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/migrate/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return "invalid idx";
+    const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
     // Parse dest= parameter from body.
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
@@ -1826,11 +1815,11 @@ fn handleMigrate(req: []const u8) ![]const u8 {
 
 /// Stream the disk2 image file to the client as a download.
 fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "GET /api/vm/") orelse return;
-    if (idx >= vm_count) return;
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return;
+    const v = &appstate.vms[idx];
     if (!v.hasDisk2()) return;
 
     const disk2_path = v.getDisk2Path();
@@ -1873,10 +1862,10 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
 
 /// Accept a multipart/form-data file upload for disk2.
 fn handleUploadDisk(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/vm/") orelse return "invalid";
-    if (idx >= vm_count) return "invalid idx";
+    if (idx >= appstate.vm_count) return "invalid idx";
 
     // Parse multipart boundary from Content-Type header
     const ct_start = std.mem.indexOf(u8, req, "Content-Type: multipart/form-data; boundary=") orelse return "no boundary";
@@ -1944,7 +1933,7 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
 
     // Build destination path: same dir as primary disk, with _disk2 suffix.
     // Prefer the uploaded filename; fall back to the primary disk's name + extension.
-    const v = &vms[idx];
+    const v = &appstate.vms[idx];
     const primary = v.getDiskPathSlice();
     const ext = std.fs.path.extension(primary);
     const dir = std.fs.path.dirname(primary) orelse primary;
@@ -1953,28 +1942,28 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
     if (filename.len > 0) {
         const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}", .{ dir, filename }) catch return "path err";
         std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
-        vms[idx].setDisk2Path(dest);
+        appstate.vms[idx].setDisk2Path(dest);
     } else if (ext.len > 0 and ext.len < 16) {
         const name_no_ext = primary[dir.len + 1 .. primary.len - ext.len];
         const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2{s}", .{ dir, name_no_ext, ext }) catch return "path err";
         std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
-        vms[idx].setDisk2Path(dest);
+        appstate.vms[idx].setDisk2Path(dest);
     } else {
         const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2", .{ dir, primary[dir.len + 1 ..] }) catch return "path err";
         std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
-        vms[idx].setDisk2Path(dest);
+        appstate.vms[idx].setDisk2Path(dest);
     }
-    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
 /// Create OVF+VMDK export, tar+gzip it, and stream the result as a download.
 fn handleExport(conn: c.fd_t, req: []const u8) !void {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/export/") orelse return;
-    if (idx >= vm_count) return;
-    const v = &vms[idx];
+    if (idx >= appstate.vm_count) return;
+    const v = &appstate.vms[idx];
 
     // Per-export unique directory to avoid races with concurrent exports.
     var ts: std.c.timespec = undefined;
@@ -2022,7 +2011,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch { logErr("export: failed to write OVF file"); return; };
 
     if (getVmmHandle(idx)) |h| {
-        g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch { logErr("export: disk conversion (VMM) failed"); return; };
+        appstate.g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch { logErr("export: disk conversion (VMM) failed"); return; };
     } else {
         qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch { logErr("export: disk conversion (qemu) failed"); return; };
     }
@@ -2214,36 +2203,36 @@ fn handleVnetsSave(req: []const u8) ![]const u8 {
 }
 
 fn handleConfigSave(req: []const u8) ![]const u8 {
-    vms_mutex.lock();
-    defer vms_mutex.unlock();
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
     const body = getBody(req) orelse return "no body";
 
     {
         const v = bodyVal(body, "theme");
-        if (v.len > 0) prefs.theme = vm.Theme.fromStr(v);
+        if (v.len > 0) appstate.prefs.theme = vm.Theme.fromStr(v);
     }
     {
         const v = bodyVal(body, "default_memory_mb");
-        if (v.len > 0) prefs.default_memory_mb = clampPref(v, prefs.default_memory_mb, 128, 65536);
+        if (v.len > 0) appstate.prefs.default_memory_mb = clampPref(v, appstate.prefs.default_memory_mb, 128, 65536);
     }
     {
         const v = bodyVal(body, "default_cpu_cores");
-        if (v.len > 0) prefs.default_cpu_cores = clampPref(v, prefs.default_cpu_cores, 1, 256);
+        if (v.len > 0) appstate.prefs.default_cpu_cores = clampPref(v, appstate.prefs.default_cpu_cores, 1, 256);
     }
     {
         const v = bodyVal(body, "autoprotect_enabled");
-        if (v.len > 0) prefs.autoprotect_enabled_default = std.mem.eql(u8, v, "true") or std.mem.eql(u8, v, "1");
+        if (v.len > 0) appstate.prefs.autoprotect_enabled_default = std.mem.eql(u8, v, "true") or std.mem.eql(u8, v, "1");
     }
     {
         const v = bodyVal(body, "autoprotect_interval");
-        if (v.len > 0) prefs.autoprotect_interval_min_default = clampPref(v, prefs.autoprotect_interval_min_default, 1, 1440);
+        if (v.len > 0) appstate.prefs.autoprotect_interval_min_default = clampPref(v, appstate.prefs.autoprotect_interval_min_default, 1, 1440);
     }
     {
         const v = bodyVal(body, "autoprotect_max");
-        if (v.len > 0) prefs.autoprotect_max_default = clampPref(v, prefs.autoprotect_max_default, 1, 1000);
+        if (v.len > 0) appstate.prefs.autoprotect_max_default = clampPref(v, appstate.prefs.autoprotect_max_default, 1, 1000);
     }
 
-    persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
     return "ok";
 }
 
@@ -2270,11 +2259,11 @@ fn autoprotectTicker() void {
         var work_items: [16]SnapWork = undefined;
         var work_count: usize = 0;
 
-        vms_mutex.lock();
+        appstate.vms_mutex.lock();
         const now = time(null);
         var i: usize = 0;
-        while (i < vm_count and work_count < work_items.len) : (i += 1) {
-            const v = &vms[i];
+        while (i < appstate.vm_count and work_count < work_items.len) : (i += 1) {
+            const v = &appstate.vms[i];
             if (!v.autoprotect or v.status != .running or !v.hasDisk()) continue;
             if (!autoprotect.due(true, v.autoprotect_interval_min, v.autoprotect_last_epoch, now)) continue;
 
@@ -2300,7 +2289,7 @@ fn autoprotectTicker() void {
             };
             work_count += 1;
         }
-        vms_mutex.unlock();
+        appstate.vms_mutex.unlock();
 
         // Perform snapshot I/O outside the lock
         var wi: usize = 0;
@@ -2310,7 +2299,7 @@ fn autoprotectTicker() void {
             const sn = w.snap_name[0..w.snap_name_len];
 
             if (getVmmHandle(w.idx)) |h| {
-                g_vmm.snapshotCreateFn(h, dp, sn, std.heap.page_allocator) catch |e| {
+                appstate.g_vmm.snapshotCreateFn(h, dp, sn, std.heap.page_allocator) catch |e| {
                     var ebuf: [64]u8 = undefined;
                     logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotCreate failed");
                     continue;
@@ -2326,7 +2315,7 @@ fn autoprotectTicker() void {
             // Prune excess AutoProtect snapshots
             var list_buf: [4096]u8 = undefined;
             const list_result = if (getVmmHandle(w.idx)) |h|
-                g_vmm.snapshotListFn(h, dp, &list_buf, std.heap.page_allocator)
+                appstate.g_vmm.snapshotListFn(h, dp, &list_buf, std.heap.page_allocator)
             else
                 qemu.snapshotList(dp, &list_buf, std.heap.page_allocator);
 
@@ -2359,7 +2348,7 @@ fn autoprotectTicker() void {
             var d: usize = 0;
             while (d < excess and d < auto_names.len) : (d += 1) {
                 if (getVmmHandle(w.idx)) |h| {
-                    g_vmm.snapshotDeleteFn(h, dp, auto_names[d], std.heap.page_allocator) catch |e| {
+                    appstate.g_vmm.snapshotDeleteFn(h, dp, auto_names[d], std.heap.page_allocator) catch |e| {
                         var ebuf: [64]u8 = undefined;
                         logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotDelete failed");
                     };
@@ -2373,9 +2362,9 @@ fn autoprotectTicker() void {
         }
 
         // Re-acquire lock only for the save
-        vms_mutex.lock();
-        persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
-        vms_mutex.unlock();
+        appstate.vms_mutex.lock();
+        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
+        appstate.vms_mutex.unlock();
     }
 }
 
@@ -3124,8 +3113,8 @@ pub fn main() !void {
     // Ignore SIGPIPE — the only safe response to writing on a closed connection.
     _ = signal(SIGPIPE, SIG_IGN);
 
-    vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
-    g_vmm = hv_backend.createVmm(.auto);
+    appstate.vm_count = persist.load(&appstate.vms, std.heap.page_allocator, &appstate.prefs);
+    appstate.g_vmm = hv_backend.createVmm(.auto);
 
     // Allow custom API key via environment variable.
     if (appio.getenv("KV_API_KEY")) |key| {
