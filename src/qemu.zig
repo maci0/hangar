@@ -51,8 +51,9 @@ fn buildCArgv(argv: []const []const u8, arena: std.mem.Allocator) ![:null]?[*:0]
 }
 
 /// Run `argv` to completion, returning an error unless it exits with 0.
-pub fn runWait(argv: []const []const u8, allocator: std.mem.Allocator) !void {
-    const pid = try forkExec(argv, allocator);
+/// If `err_path` is non-null, stderr is redirected to that file.
+pub fn runWait(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[:0]const u8) !void {
+    const pid = try forkExec(argv, allocator, err_path);
     var status: c_int = 0;
     _ = std.c.waitpid(pid, &status, 0);
     const ustatus: u32 = @bitCast(status);
@@ -113,23 +114,24 @@ pub fn runCapture(argv: []const []const u8, out: []u8, allocator: std.mem.Alloca
 /// Offline snapshot operations via `qemu-img snapshot` on the primary disk.
 /// Used when the VM is powered off (QMP savevm/loadvm need a running QEMU).
 pub fn snapshotCreate(disk_path: []const u8, name: []const u8, allocator: std.mem.Allocator) !void {
-    try runWait(&.{ "qemu-img", "snapshot", "-c", name, disk_path }, allocator);
+    try runWait(&.{ "qemu-img", "snapshot", "-c", name, disk_path }, allocator, null);
 }
 pub fn snapshotApply(disk_path: []const u8, name: []const u8, allocator: std.mem.Allocator) !void {
-    try runWait(&.{ "qemu-img", "snapshot", "-a", name, disk_path }, allocator);
+    try runWait(&.{ "qemu-img", "snapshot", "-a", name, disk_path }, allocator, null);
 }
 pub fn snapshotDelete(disk_path: []const u8, name: []const u8, allocator: std.mem.Allocator) !void {
-    try runWait(&.{ "qemu-img", "snapshot", "-d", name, disk_path }, allocator);
+    try runWait(&.{ "qemu-img", "snapshot", "-d", name, disk_path }, allocator, null);
 }
 pub fn snapshotList(disk_path: []const u8, out: []u8, allocator: std.mem.Allocator) !usize {
     return runCapture(&.{ "qemu-img", "snapshot", "-l", disk_path }, out, allocator);
 }
 
-/// Fork and exec `argv`, redirecting all stdio to /dev/null so the child
-/// neither inherits our terminal nor blocks on a full pipe. Returns the
-/// child PID. The child resolves `argv[0]` via PATH and inherits our
-/// environment.
-fn forkExec(argv: []const []const u8, allocator: std.mem.Allocator) !std.c.pid_t {
+/// Fork and exec `argv`, redirecting stdin/stdout to /dev/null.
+/// If `err_path` is non-null, stderr is redirected to that file
+/// (created/truncated); otherwise it also goes to /dev/null.
+/// Returns the child PID. The child resolves `argv[0]` via PATH
+/// and inherits our environment.
+fn forkExec(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[:0]const u8) !std.c.pid_t {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const c_argv = try buildCArgv(argv, arena_state.allocator());
@@ -142,6 +144,16 @@ fn forkExec(argv: []const []const u8, allocator: std.mem.Allocator) !std.c.pid_t
         if (devnull >= 0) {
             _ = std.c.dup2(devnull, 0);
             _ = std.c.dup2(devnull, 1);
+        }
+        if (err_path) |path| {
+            const errfd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
+            if (errfd >= 0) {
+                _ = std.c.dup2(errfd, 2);
+                _ = std.c.close(errfd);
+            } else if (devnull >= 0) {
+                _ = std.c.dup2(devnull, 2);
+            }
+        } else if (devnull >= 0) {
             _ = std.c.dup2(devnull, 2);
         }
         _ = execvp(c_argv[0].?, c_argv.ptr);
@@ -551,6 +563,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 }
 
 /// Start a QEMU process for the given VM configuration.
+/// QEMU stderr is written to /var/tmp/kvmgui-vm-<name>.log for diagnostics.
 pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
     var args: std.ArrayList([]const u8) = .empty;
     defer args.deinit(allocator);
@@ -558,10 +571,14 @@ pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
     var bufs = ArgBuffers{};
     try buildArgs(config, &args, allocator, &bufs);
 
-    // ── Spawn ────────────────────────────────────────────────────
-    // Detach all stdio so QEMU doesn't inherit our terminal and
-    // doesn't block if its stdout/stderr pipe fills up.
-    config.pid = try forkExec(args.items, allocator);
+    // Build stderr log path from the VM name.
+    var err_path_buf: [128]u8 = undefined;
+    const err_path: ?[:0]const u8 = if (config.hasName()) blk: {
+        const path = std.fmt.bufPrintZ(&err_path_buf, "/var/tmp/kvmgui-vm-{s}.log", .{config.getNameSlice()}) catch break :blk null;
+        break :blk path;
+    } else null;
+
+    config.pid = try forkExec(args.items, allocator, err_path);
     config.status = .running;
 }
 
@@ -686,7 +703,7 @@ pub fn createDiskImage(path: []const u8, size_gb: u32, format: vm.DiskFormat, al
         size_str,
     };
 
-    runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+    runWait(&args, allocator, null) catch return QemuError.DiskImageCreationFailed;
 }
 
 /// Grow an existing disk image to `new_size_gb` using `qemu-img resize`.
@@ -697,7 +714,7 @@ pub fn resizeDiskImage(path: []const u8, new_size_gb: u32, allocator: std.mem.Al
     const size_str = try std.fmt.bufPrint(&size_buf, "{d}G", .{new_size_gb});
 
     const args = [_][]const u8{ "qemu-img", "resize", path, size_str };
-    runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+    runWait(&args, allocator, null) catch return QemuError.DiskImageCreationFailed;
 }
 
 /// Convert a disk image to a different format using `qemu-img convert`.
@@ -714,7 +731,7 @@ pub fn convertDiskImage(src_path: []const u8, src_format: vm.DiskFormat, dest_pa
             src_path,
             dest_path,
         };
-        runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+        runWait(&args, allocator, null) catch return QemuError.DiskImageCreationFailed;
     } else {
         const args = [_][]const u8{
             "qemu-img", "convert",
@@ -723,7 +740,7 @@ pub fn convertDiskImage(src_path: []const u8, src_format: vm.DiskFormat, dest_pa
             src_path,
             dest_path,
         };
-        runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+        runWait(&args, allocator, null) catch return QemuError.DiskImageCreationFailed;
     }
 }
 
@@ -735,9 +752,9 @@ pub fn convertDiskImageNoWait(src_path: []const u8, src_format: vm.DiskFormat, d
     const src_str = std.mem.span(src_format.toStr());
     const dest_str = std.mem.span(dest_format.toStr());
     if (dest_format == .vmdk) {
-        return try forkExec(&.{ "qemu-img", "convert", "-f", src_str, "-O", dest_str, "-o", "subformat=streamOptimized", src_path, dest_path }, allocator);
+        return try forkExec(&.{ "qemu-img", "convert", "-f", src_str, "-O", dest_str, "-o", "subformat=streamOptimized", src_path, dest_path }, allocator, null);
     }
-    return try forkExec(&.{ "qemu-img", "convert", "-f", src_str, "-O", dest_str, src_path, dest_path }, allocator);
+    return try forkExec(&.{ "qemu-img", "convert", "-f", src_str, "-O", dest_str, src_path, dest_path }, allocator, null);
 }
 
 /// Reap a background process started by convertDiskImageNoWait (or any
@@ -767,7 +784,7 @@ pub fn createLinkedClone(dest_path: []const u8, backing_path: []const u8, backin
     const args = [_][]const u8{
         "qemu-img", "create", "-f", "qcow2", "-o", backing_str, dest_path,
     };
-    runWait(&args, allocator) catch return QemuError.DiskImageCreationFailed;
+    runWait(&args, allocator, null) catch return QemuError.DiskImageCreationFailed;
 }
 
 /// Return true if `path` contains no shell metacharacters and is safe
@@ -1099,17 +1116,17 @@ test "fuzz: forkExec/runWait/runCapture over safe argv" {
         for (&arg) |*ch| ch.* = "abcXYZ0/.-_ "[rnd.uintLessThan(usize, 12)];
         const rarg = arg[0..rnd.uintLessThan(usize, arg.len)];
         switch (pick) {
-            0 => runWait(&.{"/bin/true"}, alloc) catch {},
-            1 => runWait(&.{ "/bin/echo", rarg }, alloc) catch {},
+            0 => runWait(&.{"/bin/true"}, alloc, null) catch {},
+            1 => runWait(&.{ "/bin/echo", rarg }, alloc, null) catch {},
             else => {
                 // bogus path → execvp fails in the child; parent must handle it.
                 const bogus = std.fmt.bufPrint(&namebuf, "/nonexistent-{s}-{d}", .{ rarg, i }) catch "/nonexistent";
-                runWait(&.{bogus}, alloc) catch {};
+                runWait(&.{bogus}, alloc, null) catch {};
             },
         }
         _ = runCapture(&.{ "/bin/echo", rarg }, &out, alloc) catch {};
         // forkExec directly, then reap our own child.
-        const pid = forkExec(&.{"/bin/true"}, alloc) catch continue;
+        const pid = forkExec(&.{"/bin/true"}, alloc, null) catch continue;
         _ = std.c.waitpid(pid, null, 0);
     }
 }
@@ -1181,7 +1198,7 @@ test "fuzz: process-control quartet on our own short-lived children" {
             continue;
         }
         // Otherwise: spawn a real, harmless child and drive the lifecycle on it.
-        const pid = forkExec(&.{ "/bin/sleep", "0.2" }, alloc) catch continue;
+        const pid = forkExec(&.{ "/bin/sleep", "0.2" }, alloc, null) catch continue;
         cfg.pid = @intCast(pid);
         _ = isVmAlive(&cfg); // likely true
         switch (rnd.uintLessThan(u8, 3)) {
@@ -1197,7 +1214,7 @@ test "fuzz: process-control quartet on our own short-lived children" {
 test "fuzz: startVm spawns real QEMU (headless/TCG) then stops + reaps" {
     const alloc = std.heap.page_allocator;
     // Probe: skip if qemu-system-x86_64 is unavailable.
-    runWait(&.{ "qemu-system-x86_64", "--version" }, alloc) catch return;
+    runWait(&.{ "qemu-system-x86_64", "--version" }, alloc, null) catch return;
 
     var prng = std.Random.DefaultPrng.init(0x57A47_F0FF);
     const rnd = prng.random();

@@ -85,6 +85,11 @@ const SHUT_WR: c_int = 1;
 const F_SETFL: c_int = 4;
 const O_NONBLOCK: c_int = 2048;
 
+const SIGPIPE: c_int = 13;
+const SIG_IGN: isize = 1;
+
+extern fn signal(sig: c_int, handler: isize) isize;
+
 // ── Rate limiter ────────────────────────────────────────────────
 const RATE_LIMIT_PER_SEC: u32 = 200; // max POST requests per second
 
@@ -98,11 +103,15 @@ fn rateLimitCheck() bool {
     const now: i64 = @intCast(ts.sec);
     const prev: i64 = @atomicLoad(i64, &g_rate_window_start, .acquire);
     if (now != prev) {
-        // Try to CAS the window forward — whoever wins resets the count.
-        _ = @cmpxchgWeak(i64, &g_rate_window_start, prev, now, .acq_rel, .monotonic);
-        // If we lost the race, another thread just reset; either way, reset count.
-        @atomicStore(u32, &g_rate_count, 0, .release);
-        return false;
+        // Try to CAS the window forward — only the winner resets the count.
+        const won = @cmpxchgWeak(i64, &g_rate_window_start, prev, now, .acq_rel, .monotonic);
+        if (won == null) {
+            // We advanced the window — reset the count and allow this request.
+            @atomicStore(u32, &g_rate_count, 0, .release);
+            return false;
+        }
+        // Lost the race; another thread advanced the window. Fall through
+        // to the normal increment check so we don't wipe their counter.
     }
     if (@atomicRmw(u32, &g_rate_count, .Add, 1, .acq_rel) >= RATE_LIMIT_PER_SEC) {
         return true;
@@ -127,11 +136,7 @@ fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/api/config")) return true;
     if (std.mem.eql(u8, path, "/api/vnets")) return true;
     // Prefix paths — ensure the prefix ends at a path boundary
-    if (std.mem.startsWith(u8, path, "/ws/vnc/")) return true;
-    if (std.mem.startsWith(u8, path, "/ws/spice/")) return true;
-    if (std.mem.startsWith(u8, path, "/ws/serial/")) return true;
     if (std.mem.startsWith(u8, path, "/api/vm/")) return true;
-    if (std.mem.startsWith(u8, path, "/api/fb/")) return true;
     if (std.mem.startsWith(u8, path, "/api/snapshot/list/")) return true;
     if (std.mem.eql(u8, path, "/api/catalog")) return true;
     if (std.mem.startsWith(u8, path, "/api/quickstart/")) return true;
@@ -288,7 +293,11 @@ fn acceptLoop(fd: c.fd_t) void {
     while (true) {
         const conn = c.accept(fd, null, null);
         if (conn < 0) break;
-        _ = std.Thread.spawn(std.Thread.SpawnConfig{}, serveHtml, .{conn}) catch continue;
+        const th = std.Thread.spawn(std.Thread.SpawnConfig{}, serveHtml, .{conn}) catch {
+            _ = c.close(conn);
+            continue;
+        };
+        th.detach();
     }
 }
 
@@ -345,6 +354,10 @@ fn serveHtml(conn: c.fd_t) void {
 
     // ── WebSocket VNC Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/vnc/")) {
+        if (!checkAuth(req)) {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "text/plain", "auth required");
+            return;
+        }
         handleWsVnc(conn, req) catch {
             writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "VNC proxy failed");
         };
@@ -353,6 +366,10 @@ fn serveHtml(conn: c.fd_t) void {
 
     // ── WebSocket SPICE Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/spice/")) {
+        if (!checkAuth(req)) {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "text/plain", "auth required");
+            return;
+        }
         handleWsSpice(conn, req) catch {
             writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "SPICE proxy failed");
         };
@@ -361,28 +378,12 @@ fn serveHtml(conn: c.fd_t) void {
 
     // ── WebSocket Serial Console ──
     if (std.mem.startsWith(u8, req, "GET /ws/serial/")) {
+        if (!checkAuth(req)) {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "text/plain", "auth required");
+            return;
+        }
         handleWsSerial(conn, req) catch {
             writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "Serial proxy failed");
-        };
-        return;
-    }
-
-    // ── File download (streaming) routes — handled first ──
-    if (std.mem.startsWith(u8, req, "GET /api/vm/") and std.mem.indexOf(u8, req, "/disk2/download") != null) {
-        handleDisk2Download(conn, req) catch {
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "Download failed");
-        };
-        return;
-    }
-    if (std.mem.startsWith(u8, req, "POST /api/vm/") and std.mem.indexOf(u8, req, "/upload-disk") != null) {
-        const resp = handleUploadDisk(req) catch "upload err";
-        const status: u16 = if (std.mem.eql(u8, resp, "ok")) HTTP_OK else HTTP_BAD_REQUEST;
-        writeHttpResponse(conn, status, "text/plain", resp);
-        return;
-    }
-    if (std.mem.startsWith(u8, req, "POST /api/export/")) {
-        handleExport(conn, req) catch {
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "export err");
         };
         return;
     }
@@ -403,6 +404,26 @@ fn serveHtml(conn: c.fd_t) void {
 
     if (needs_auth and !checkAuth(req)) {
         writeHttpResponse(conn, HTTP_BAD_REQUEST, "text/plain", "auth required");
+        return;
+    }
+
+    // ── File download (streaming) routes — handled after auth ──
+    if (std.mem.startsWith(u8, req, "GET /api/vm/") and std.mem.indexOf(u8, req, "/disk2/download") != null) {
+        handleDisk2Download(conn, req) catch {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "Download failed");
+        };
+        return;
+    }
+    if (std.mem.startsWith(u8, req, "POST /api/vm/") and std.mem.indexOf(u8, req, "/upload-disk") != null) {
+        const resp = handleUploadDisk(req) catch "upload err";
+        const upload_status: u16 = if (std.mem.eql(u8, resp, "ok")) HTTP_OK else HTTP_BAD_REQUEST;
+        writeHttpResponse(conn, upload_status, "text/plain", resp);
+        return;
+    }
+    if (std.mem.startsWith(u8, req, "POST /api/export/")) {
+        handleExport(conn, req) catch {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "export err");
+        };
         return;
     }
 
@@ -596,6 +617,8 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
     if (idx >= vm_count) return;
     const v = &vms[idx];
     if (!v.isAlive()) return;
@@ -674,6 +697,8 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
     if (idx >= vm_count) return;
     const v = &vms[idx];
     if (!v.isAlive()) return;
@@ -751,6 +776,8 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
+    vms_mutex.lock();
+    defer vms_mutex.unlock();
     if (idx >= vm_count) return;
     const v = &vms[idx];
     if (!v.isAlive() or !v.enable_serial or !v.hasName()) return;
@@ -898,23 +925,23 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     const part1 = std.fmt.bufPrint(buf[w..],
         \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
     , .{
-        idx, jsonEscape(&esc, v.getNameSlice()), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
+        idx, escapeJson(&esc, v.getNameSlice(), "name"), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
         v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(),
         std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
         if (v.hasIso()) "true" else "false", if (v.hasDisk()) "true" else "false",
-        if (v.hasIso()) jsonEscape(&esc, v.getIsoPathSlice()) else "",
-        if (v.hasNotes()) jsonEscape(&esc, v.getNotesSlice()) else "",
-        if (v.hasSharedFolder()) jsonEscape(&esc, v.getSharedFolderSlice()) else "",
-        if (v.hasUsbDevice()) jsonEscape(&esc, v.getUsbDeviceSlice()) else "",
+        if (v.hasIso()) escapeJson(&esc, v.getIsoPathSlice(), "iso_path") else "",
+        if (v.hasNotes()) escapeJson(&esc, v.getNotesSlice(), "notes") else "",
+        if (v.hasSharedFolder()) escapeJson(&esc, v.getSharedFolderSlice(), "shared_folder") else "",
+        if (v.hasUsbDevice()) escapeJson(&esc, v.getUsbDeviceSlice(), "usb_device") else "",
         if (v.guest_tools) "true" else "false",
         if (v.autoprotect) "true" else "false",
         v.autoprotect_interval_min, v.autoprotect_max,
         if (v.hasDisk2()) "true" else "false", v.disk2_size_gb,
-        if (v.hasDisk2()) jsonEscape(&esc, v.getDisk2PathSlice()) else "",
+        if (v.hasDisk2()) escapeJson(&esc, v.getDisk2PathSlice(), "disk2_path") else "",
         v.disk2_format.toIndex(),
         if (v.hasFloppy()) "true" else "false",
-        if (v.hasFloppy()) jsonEscape(&esc, v.getFloppyPathSlice()) else "",
-        if (v.hasPortForwards()) jsonEscape(&esc, v.getPortForwardsSlice()) else "",
+        if (v.hasFloppy()) escapeJson(&esc, v.getFloppyPathSlice(), "floppy_path") else "",
+        if (v.hasPortForwards()) escapeJson(&esc, v.getPortForwardsSlice(), "port_forwards") else "",
     }) catch return error.RenderFailed;
     w += part1.len;
 
@@ -970,23 +997,23 @@ fn renderJson(buf: []u8) usize {
         const part1 = std.fmt.bufPrint(buf[w..],
             \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
         , .{
-            i, jsonEscape(&esc, v.getNameSlice()), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
+            i, escapeJson(&esc, v.getNameSlice(), "name"), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
             v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(),
             std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
             if (v.hasIso()) "true" else "false", if (v.hasDisk()) "true" else "false",
-            if (v.hasIso()) jsonEscape(&esc, v.getIsoPathSlice()) else "",
-            if (v.hasNotes()) jsonEscape(&esc, v.getNotesSlice()) else "",
-            if (v.hasSharedFolder()) jsonEscape(&esc, v.getSharedFolderSlice()) else "",
-            if (v.hasUsbDevice()) jsonEscape(&esc, v.getUsbDeviceSlice()) else "",
+            if (v.hasIso()) escapeJson(&esc, v.getIsoPathSlice(), "iso_path") else "",
+            if (v.hasNotes()) escapeJson(&esc, v.getNotesSlice(), "notes") else "",
+            if (v.hasSharedFolder()) escapeJson(&esc, v.getSharedFolderSlice(), "shared_folder") else "",
+            if (v.hasUsbDevice()) escapeJson(&esc, v.getUsbDeviceSlice(), "usb_device") else "",
             if (v.guest_tools) "true" else "false",
             if (v.autoprotect) "true" else "false",
             v.autoprotect_interval_min, v.autoprotect_max,
             if (v.hasDisk2()) "true" else "false", v.disk2_size_gb,
-            if (v.hasDisk2()) jsonEscape(&esc, v.getDisk2PathSlice()) else "",
+            if (v.hasDisk2()) escapeJson(&esc, v.getDisk2PathSlice(), "disk2_path") else "",
             v.disk2_format.toIndex(),
             if (v.hasFloppy()) "true" else "false",
-            if (v.hasFloppy()) jsonEscape(&esc, v.getFloppyPathSlice()) else "",
-            if (v.hasPortForwards()) jsonEscape(&esc, v.getPortForwardsSlice()) else "",
+            if (v.hasFloppy()) escapeJson(&esc, v.getFloppyPathSlice(), "floppy_path") else "",
+            if (v.hasPortForwards()) escapeJson(&esc, v.getPortForwardsSlice(), "port_forwards") else "",
         }) catch break;
         w += part1.len;
 
@@ -1052,12 +1079,38 @@ fn handlePower(req: []const u8) ![]const u8 {
                 return "start err";
             };
         } else {
-            qemu.startVm(v, std.heap.page_allocator) catch return "start err";
+            qemu.startVm(v, std.heap.page_allocator) catch {
+                // Try to include QEMU stderr in the error response for diagnostics.
+                var log_path_buf: [128]u8 = [_]u8{0} ** 128;
+                const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/kvmgui-vm-{s}.log", .{v.getNameSlice()}) catch null;
+                const err_detail = if (log_path) |lp| readStartupLog(lp) else "";
+                if (err_detail.len > 0) {
+                    return std.fmt.allocPrint(std.heap.page_allocator, "start err: {s}", .{err_detail}) catch "start err";
+                }
+                return "start err";
+            };
         }
         vm_started[idx] = time(null);
     }
     persist.save(&vms, vm_count, prefs) catch { logErr("persist.save failed"); };
     return "ok";
+}
+
+/// Read up to 512 bytes from a QEMU stderr log file for diagnostics.
+/// Returns a heap-allocated slice (intentionally leaked) or "" if unreadable.
+fn readStartupLog(path: [*:0]const u8) []const u8 {
+    const fd = std.c.open(path, .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return "";
+    defer _ = std.c.close(fd);
+    const buf = std.heap.page_allocator.alloc(u8, 512) catch return "";
+    const n = std.c.read(fd, buf.ptr, buf.len);
+    if (n <= 0) {
+        std.heap.page_allocator.free(buf);
+        return "";
+    }
+    var end: usize = @intCast(n);
+    while (end > 0 and (buf[end - 1] == '\n' or buf[end - 1] == '\r')) end -= 1;
+    return buf[0..end];
 }
 
 fn handleNewVm(req: []const u8) ![]const u8 {
@@ -1681,16 +1734,19 @@ fn handleImport(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "path")) path = val;
     }
     if (path.len == 0) return "no path";
-    // Reject path traversal attempts
-    if (std.mem.indexOf(u8, path, "..") != null) return "bad path";
+    // URL-decode the path before validation (JS sends encoded).
+    var decode_buf: [vm.MAX_PATH]u8 = undefined;
+    const decoded_path = urlencode.urlDecode(&decode_buf, path);
+    // Reject path traversal attempts (check decoded form to catch %2e%2e).
+    if (std.mem.indexOf(u8, decoded_path, "..") != null) return "bad path";
     // Reject non-disk extensions
-    if (!(std.mem.endsWith(u8, path, ".vmdk") or std.mem.endsWith(u8, path, ".qcow2") or std.mem.endsWith(u8, path, ".qcow") or std.mem.endsWith(u8, path, ".img") or std.mem.endsWith(u8, path, ".raw"))) return "bad ext";
+    if (!(std.mem.endsWith(u8, decoded_path, ".vmdk") or std.mem.endsWith(u8, decoded_path, ".qcow2") or std.mem.endsWith(u8, decoded_path, ".qcow") or std.mem.endsWith(u8, decoded_path, ".img") or std.mem.endsWith(u8, decoded_path, ".raw"))) return "bad ext";
     // Verify the file actually exists before creating a VM config for it.
-    std.Io.Dir.cwd().access(appio.io(), path, .{}) catch return "no file";
+    std.Io.Dir.cwd().access(appio.io(), decoded_path, .{}) catch return "no file";
     var name_buf: [vm.MAX_NAME]u8 = undefined;
     const name = blk: {
-        const sep = std.mem.lastIndexOfScalar(u8, path, '/');
-        const basename = if (sep) |s| path[s + 1 ..] else path;
+        const sep = std.mem.lastIndexOfScalar(u8, decoded_path, '/');
+        const basename = if (sep) |s| decoded_path[s + 1 ..] else decoded_path;
         const dot = std.mem.lastIndexOfScalar(u8, basename, '.');
         const name_slice = if (dot) |d| basename[0..d] else basename;
         if (name_slice.len > name_buf.len) break :blk name_buf[0..name_slice.len];
@@ -1700,7 +1756,7 @@ fn handleImport(req: []const u8) ![]const u8 {
     if (!vm.isValidVmName(name)) return "bad name";
     var cfg = vm.VmConfig{};
     cfg.setName(name);
-    cfg.setDiskPath(path);
+    cfg.setDiskPath(decoded_path);
     cfg.disk_size_gb = 20;
     cfg.memory_mb = prefs.default_memory_mb;
     cfg.cpu_cores = prefs.default_cpu_cores;
@@ -1756,6 +1812,9 @@ fn handleMigrate(req: []const u8) ![]const u8 {
         }
     }
     if (dest.len == 0) return "no dest";
+    // Reject control characters and path traversal in destination URI.
+    if (std.mem.indexOfAny(u8, dest, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f") != null) return "bad dest";
+    if (std.mem.indexOf(u8, dest, "..") != null) return "bad dest";
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
     const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
@@ -1774,8 +1833,8 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
     const v = &vms[idx];
     if (!v.hasDisk2()) return;
 
-    const disk2_path = v.getDisk2PathSlice();
-    const fd = c.open(@ptrCast(disk2_path.ptr), .{ .ACCMODE = .RDONLY });
+    const disk2_path = v.getDisk2Path();
+    const fd = c.open(@ptrCast(disk2_path), .{ .ACCMODE = .RDONLY });
     if (fd < 0) return;
     defer _ = c.close(fd);
 
@@ -1784,27 +1843,31 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
     const file_size: u64 = @intCast(seek_end);
     _ = c.lseek(fd, 0, 0); // SEEK_SET = 0
 
-    const basename = std.fs.path.basename(disk2_path);
+    const basename = std.fs.path.basename(std.mem.span(disk2_path));
     var fname_buf: [256]u8 = undefined;
     const safename = sanitizeHeaderValue(&fname_buf, basename);
     var cd_header: [512]u8 = undefined;
     const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{safename}) catch return;
-    _ = c.write(conn, @ptrCast("HTTP/1.1 200 OK\r\n"), 17);
-    _ = c.write(conn, @ptrCast("Access-Control-Allow-Origin: *\r\n"), 32);
-    _ = c.write(conn, @ptrCast("Content-Type: application/octet-stream\r\n"), 40);
-    _ = c.write(conn, @ptrCast("Content-Disposition: "), 21);
-    _ = c.write(conn, cd.ptr, cd.len);
-    _ = c.write(conn, @ptrCast("\r\nContent-Length: "), 18);
-    var len_buf: [32]u8 = undefined;
-    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{file_size}) catch "0";
-    _ = c.write(conn, len_str.ptr, len_str.len);
-    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 23);
 
+    // Build response headers in one buffer, then write them at once.
+    var hdr_buf: [1024]u8 = undefined;
+    const headers = std.fmt.bufPrint(&hdr_buf,
+        "HTTP/1.1 200 OK\r\n" ++
+            "Access-Control-Allow-Origin: *\r\n" ++
+            "Content-Type: application/octet-stream\r\n" ++
+            "Content-Disposition: {s}\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n\r\n",
+        .{ cd, file_size },
+    ) catch return;
+    if (!writeAll(conn, headers.ptr, headers.len)) return error.BrokenPipe;
+
+    // Stream the file payload, checking every write.
     var buf: [65536]u8 = undefined;
     while (true) {
         const n = c.read(fd, &buf, buf.len);
         if (n <= 0) break;
-        _ = c.write(conn, &buf, @intCast(n));
+        if (!writeAll(conn, &buf, @intCast(n))) return error.BrokenPipe;
     }
 }
 
@@ -1915,7 +1978,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
 
     // Per-export unique directory to avoid races with concurrent exports.
     var dir_buf: [128]u8 = undefined;
-    const dir_path = std.fmt.bufPrint(&dir_buf, "/tmp/ovf_export.{d}.{d}", .{ idx, std.os.linux.getpid() }) catch return;
+    const dir_path = std.fmt.bufPrintZ(&dir_buf, "/tmp/ovf_export.{d}.{d}", .{ idx, std.os.linux.getpid() }) catch return;
     // Ensure a clean directory.
     _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
         logErr("export: deleteTree (pre-create) failed");
@@ -1965,7 +2028,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     // Tar+gzip the export directory
     {
         const tar_argv = [_][]const u8{ "tar", "-czf", tar_path, "-C", dir_path, "." };
-        qemu.runWait(&tar_argv, std.heap.page_allocator) catch return;
+        qemu.runWait(&tar_argv, std.heap.page_allocator, null) catch return;
         tar_cleanup = true;
     }
 
@@ -1985,22 +2048,25 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var cd_header: [512]u8 = undefined;
     const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{filename}) catch return;
 
-    _ = c.write(conn, @ptrCast("HTTP/1.1 200 OK\r\n"), 17);
-    _ = c.write(conn, @ptrCast("Access-Control-Allow-Origin: *\r\n"), 32);
-    _ = c.write(conn, @ptrCast("Content-Type: application/octet-stream\r\n"), 40);
-    _ = c.write(conn, @ptrCast("Content-Disposition: "), 21);
-    _ = c.write(conn, cd.ptr, cd.len);
-    _ = c.write(conn, @ptrCast("\r\nContent-Length: "), 18);
-    var len_buf: [32]u8 = undefined;
-    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{file_size}) catch "0";
-    _ = c.write(conn, len_str.ptr, len_str.len);
-    _ = c.write(conn, @ptrCast("\r\nConnection: close\r\n\r\n"), 23);
+    // Build response headers in one buffer, then write them at once.
+    var hdr_buf: [1024]u8 = undefined;
+    const headers = std.fmt.bufPrint(&hdr_buf,
+        "HTTP/1.1 200 OK\r\n" ++
+            "Access-Control-Allow-Origin: *\r\n" ++
+            "Content-Type: application/octet-stream\r\n" ++
+            "Content-Disposition: {s}\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n\r\n",
+        .{ cd, file_size },
+    ) catch return;
+    if (!writeAll(conn, headers.ptr, headers.len)) return error.BrokenPipe;
 
+    // Stream the tar.gz payload, checking every write.
     var buf: [65536]u8 = undefined;
     while (true) {
         const n = c.read(tar_fd, &buf, buf.len);
         if (n <= 0) break;
-        _ = c.write(conn, &buf, @intCast(n));
+        if (!writeAll(conn, &buf, @intCast(n))) return error.BrokenPipe;
     }
 
     // Cleanup
@@ -2047,53 +2113,73 @@ fn bodyVal(body: []const u8, key: []const u8) []const u8 {
 /// Escape a string for safe inclusion in a JSON string value.
 /// Writes the escaped result into `buf` and returns the escaped slice.
 /// Escapes: \" \\ \n \r \t and control characters (→ \\u00XX).
-fn jsonEscape(buf: []u8, s: []const u8) []const u8 {
-    if (s.len == 0) return "";
+const EscapeResult = struct {
+    escaped: []const u8,
+    truncated: bool,
+};
+
+fn jsonEscape(buf: []u8, s: []const u8) EscapeResult {
+    if (s.len == 0) return .{ .escaped = "", .truncated = false };
     var wi: usize = 0;
+    var truncated = false;
     for (s) |ch| {
         switch (ch) {
             '"' => {
-                if (wi + 2 > buf.len) break;
+                if (wi + 2 > buf.len) { truncated = true; break; }
                 buf[wi] = '\\'; wi += 1;
                 buf[wi] = '"'; wi += 1;
             },
             '\\' => {
-                if (wi + 2 > buf.len) break;
+                if (wi + 2 > buf.len) { truncated = true; break; }
                 buf[wi] = '\\'; wi += 1;
                 buf[wi] = '\\'; wi += 1;
             },
             '\n' => {
-                if (wi + 2 > buf.len) break;
+                if (wi + 2 > buf.len) { truncated = true; break; }
                 buf[wi] = '\\'; wi += 1;
                 buf[wi] = 'n'; wi += 1;
             },
             '\r' => {
-                if (wi + 2 > buf.len) break;
+                if (wi + 2 > buf.len) { truncated = true; break; }
                 buf[wi] = '\\'; wi += 1;
                 buf[wi] = 'r'; wi += 1;
             },
             '\t' => {
-                if (wi + 2 > buf.len) break;
+                if (wi + 2 > buf.len) { truncated = true; break; }
                 buf[wi] = '\\'; wi += 1;
                 buf[wi] = 't'; wi += 1;
             },
             0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
                 // Control character → \\u00XX
-                if (wi + 6 > buf.len) break;
+                if (wi + 6 > buf.len) { truncated = true; break; }
                 buf[wi] = '\\'; wi += 1;
                 buf[wi] = 'u'; wi += 1;
                 buf[wi] = '0'; wi += 1;
                 buf[wi] = '0'; wi += 1;
-                _ = std.fmt.bufPrint(buf[wi..], "{x:0>2}", .{ch}) catch break;
+                _ = std.fmt.bufPrint(buf[wi..], "{x:0>2}", .{ch}) catch {
+                    truncated = true;
+                    break;
+                };
                 wi += 2;
             },
             else => {
-                if (wi + 1 > buf.len) break;
+                if (wi + 1 > buf.len) { truncated = true; break; }
                 buf[wi] = ch; wi += 1;
             },
         }
     }
-    return buf[0..wi];
+    return .{ .escaped = buf[0..wi], .truncated = truncated };
+}
+
+/// Wrapper around jsonEscape that logs truncation. Returns only the escaped slice
+/// so call sites remain concise: escapeJson(&esc, s, "field_name")
+fn escapeJson(buf: []u8, s: []const u8, field: []const u8) []const u8 {
+    const result = jsonEscape(buf, s);
+    if (result.truncated) {
+        _ = field; // field name is for debugging; log a concise message
+        logErr("jsonEscape truncated");
+    }
+    return result.escaped;
 }
 
 /// Strip dangerous characters from an HTTP header value.
@@ -2784,34 +2870,48 @@ test "validateSnapshotTag: control characters rejected" {
 
 test "jsonEscape: escapes quotes and backslashes" {
     var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("\\\"", jsonEscape(&buf, "\""));
-    try std.testing.expectEqualStrings("\\\\", jsonEscape(&buf, "\\"));
-    try std.testing.expectEqualStrings("abc\\\"xyz", jsonEscape(&buf, "abc\"xyz"));
+    try std.testing.expectEqualStrings("\\\"", (jsonEscape(&buf, "\"")).escaped);
+    try std.testing.expectEqualStrings("\\\\", (jsonEscape(&buf, "\\")).escaped);
+    try std.testing.expectEqualStrings("abc\\\"xyz", (jsonEscape(&buf, "abc\"xyz")).escaped);
 }
 
 test "jsonEscape: escapes newlines, carriage returns, tabs" {
     var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("\\n", jsonEscape(&buf, "\n"));
-    try std.testing.expectEqualStrings("\\r", jsonEscape(&buf, "\r"));
-    try std.testing.expectEqualStrings("\\t", jsonEscape(&buf, "\t"));
-    try std.testing.expectEqualStrings("a\\nb\\tc", jsonEscape(&buf, "a\nb\tc"));
+    try std.testing.expectEqualStrings("\\n", (jsonEscape(&buf, "\n")).escaped);
+    try std.testing.expectEqualStrings("\\r", (jsonEscape(&buf, "\r")).escaped);
+    try std.testing.expectEqualStrings("\\t", (jsonEscape(&buf, "\t")).escaped);
+    try std.testing.expectEqualStrings("a\\nb\\tc", (jsonEscape(&buf, "a\nb\tc")).escaped);
 }
 
 test "jsonEscape: escapes control characters as \\u00XX" {
     var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("\\u0000", jsonEscape(&buf, "\x00"));
-    try std.testing.expectEqualStrings("\\u001f", jsonEscape(&buf, "\x1f"));
-    try std.testing.expectEqualStrings("\\u000b", jsonEscape(&buf, "\x0b"));
+    try std.testing.expectEqualStrings("\\u0000", (jsonEscape(&buf, "\x00")).escaped);
+    try std.testing.expectEqualStrings("\\u001f", (jsonEscape(&buf, "\x1f")).escaped);
+    try std.testing.expectEqualStrings("\\u000b", (jsonEscape(&buf, "\x0b")).escaped);
 }
 
 test "jsonEscape: passes through normal text unchanged" {
     var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("hello world 123", jsonEscape(&buf, "hello world 123"));
+    try std.testing.expectEqualStrings("hello world 123", (jsonEscape(&buf, "hello world 123")).escaped);
 }
 
 test "jsonEscape: handles empty string" {
     var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("", jsonEscape(&buf, ""));
+    try std.testing.expectEqualStrings("", (jsonEscape(&buf, "")).escaped);
+}
+
+test "jsonEscape: reports truncated on overflow" {
+    var buf: [5]u8 = undefined;
+    {
+        const r = jsonEscape(&buf, "abc");
+        try std.testing.expectEqualStrings("abc", r.escaped);
+        try std.testing.expect(!r.truncated);
+    }
+    {
+        const r = jsonEscape(&buf, "\"\"\"\"\"");
+        try std.testing.expect(r.truncated);
+        try std.testing.expect(r.escaped.len <= buf.len);
+    }
 }
 
 test "sanitizeHeaderValue: replaces double-quote with single-quote" {
@@ -2884,7 +2984,7 @@ test "fuzz: jsonEscape never panics and always fits" {
         rnd.bytes(input[0..len]);
         const result = jsonEscape(&output, input[0..len]);
         // Must always fit within output buffer
-        try std.testing.expect(result.len <= output.len);
+        try std.testing.expect(result.escaped.len <= output.len);
     }
 }
 
@@ -3015,6 +3115,9 @@ test "clampPref: zero as valid value when within range" {
     try std.testing.expectEqual(@as(u32, 1), clampPref("0", 1, 1, 10));
 }
 pub fn main() !void {
+    // Ignore SIGPIPE — the only safe response to writing on a closed connection.
+    _ = signal(SIGPIPE, SIG_IGN);
+
     vm_count = persist.load(&vms, std.heap.page_allocator, &prefs);
     g_vmm = hv_backend.createVmm(.auto);
 
@@ -3066,9 +3169,18 @@ pub fn main() !void {
     @memcpy(unix_addr.path[0..unix_path.len], unix_path);
     unix_addr.path[unix_path.len] = 0;
     const unix_len = @offsetOf(c.sockaddr.un, "path") + unix_path.len + 1;
-    _ = c.setsockopt(unix_sock, SOL_SOCKET, SO_REUSEADDR, &one, @sizeOf(c_int));
-    _ = c.bind(unix_sock, @ptrCast(&unix_addr), @intCast(unix_len));
-    _ = c.listen(unix_sock, 10);
+    if (c.setsockopt(unix_sock, SOL_SOCKET, SO_REUSEADDR, &one, @sizeOf(c_int)) != 0) {
+        logErr("Failed to set SO_REUSEADDR on Unix socket");
+        return;
+    }
+    if (c.bind(unix_sock, @ptrCast(&unix_addr), @intCast(unix_len)) != 0) {
+        logErr("Failed to bind Unix socket — is /tmp/kvmgui-daemon.sock stale?");
+        return;
+    }
+    if (c.listen(unix_sock, 10) != 0) {
+        logErr("Failed to listen on Unix socket");
+        return;
+    }
 
     std.debug.print("\n╔══════════════════════════════════════════════╗\n", .{});
     std.debug.print("║  KVMGUI Daemon v1.0                         ║\n", .{});

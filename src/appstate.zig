@@ -247,6 +247,82 @@ pub fn themeScroll(w: ?*cfltk.Fl_Scroll) void {
     }
 }
 
+/// Unregister a Fl_Input from themed tracking. Safe to call with null or
+/// unregistered widgets (no-op). Swap-removes to keep the array dense.
+pub fn unthemeInput(w: ?*cfltk.Fl_Input) void {
+    const inp = w orelse return;
+    for (0..themed_inputs_len) |i| {
+        if (themed_inputs[i] == inp) {
+            themed_inputs_len -= 1;
+            if (i < themed_inputs_len) {
+                themed_inputs[i] = themed_inputs[themed_inputs_len];
+            }
+            themed_inputs[themed_inputs_len] = null;
+            return;
+        }
+    }
+}
+
+/// Unregister a Fl_Choice from themed tracking.
+pub fn unthemeChoice(w: ?*cfltk.Fl_Choice) void {
+    const ch = w orelse return;
+    for (0..themed_choices_len) |i| {
+        if (themed_choices[i] == ch) {
+            themed_choices_len -= 1;
+            if (i < themed_choices_len) {
+                themed_choices[i] = themed_choices[themed_choices_len];
+            }
+            themed_choices[themed_choices_len] = null;
+            return;
+        }
+    }
+}
+
+/// Unregister a Fl_Browser from themed tracking.
+pub fn unthemeBrowser(w: ?*cfltk.Fl_Browser) void {
+    const b = w orelse return;
+    for (0..themed_browsers_len) |i| {
+        if (themed_browsers[i] == b) {
+            themed_browsers_len -= 1;
+            if (i < themed_browsers_len) {
+                themed_browsers[i] = themed_browsers[themed_browsers_len];
+            }
+            themed_browsers[themed_browsers_len] = null;
+            return;
+        }
+    }
+}
+
+/// Unregister a Fl_Check_Button from themed tracking.
+pub fn unthemeCheckButton(w: ?*cfltk.Fl_Check_Button) void {
+    const cb = w orelse return;
+    for (0..themed_checkbuttons_len) |i| {
+        if (themed_checkbuttons[i] == cb) {
+            themed_checkbuttons_len -= 1;
+            if (i < themed_checkbuttons_len) {
+                themed_checkbuttons[i] = themed_checkbuttons[themed_checkbuttons_len];
+            }
+            themed_checkbuttons[themed_checkbuttons_len] = null;
+            return;
+        }
+    }
+}
+
+/// Unregister a Fl_Scroll from themed tracking.
+pub fn unthemeScroll(w: ?*cfltk.Fl_Scroll) void {
+    const sc = w orelse return;
+    for (0..themed_scrolls_len) |i| {
+        if (themed_scrolls[i] == sc) {
+            themed_scrolls_len -= 1;
+            if (i < themed_scrolls_len) {
+                themed_scrolls[i] = themed_scrolls[themed_scrolls_len];
+            }
+            themed_scrolls[themed_scrolls_len] = null;
+            return;
+        }
+    }
+}
+
 pub const MAX_VMS = vm.MAX_VMS;
 
 pub var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;

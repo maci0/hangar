@@ -13,7 +13,7 @@ window.matchMedia('(prefers-color-scheme:light)').addEventListener('change',func
  if(window.kvmguiTheme==='system') window.applyTheme('system');
 });
 })();
-var vms=[]; var sel=null; var activeTab='summary'; var transitioningIdx=null;
+var vms=[]; var sel=null; var activeTab='summary'; var transitioningIdx=null; var refreshBusy=false;
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function setStatus(s){var el=document.getElementById('statusbar');if(!el)return;el.textContent=s;el.classList.remove('loading');}
 function setStatusLoading(s){var el=document.getElementById('statusbar');if(!el)return;el.textContent='⏳ '+s;el.classList.add('loading');}
@@ -56,11 +56,11 @@ else{newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
 if(tab==='settings'&&sel!==null)editVm();}
 var serverDown=false;
 function setServerDown(s){serverDown=s;var b=document.getElementById('connbanner');if(b)b.style.display=s?'flex':'none';if(s)setStatus('Server unreachable — retrying...');}
-async function refresh(){try{var listEl=document.getElementById('vmlist');if(!vms.length&&listEl){var skHtml='';for(var i=0;i<6;i++){skHtml+='<div class="skeleton sk-item" aria-hidden="true"></div>';}listEl.innerHTML=skHtml;listEl.setAttribute('aria-busy','true');}const r=await fetch('/api/vms');if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
-setServerDown(false);vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){if(!serverDown){setServerDown(true);}}}
+async function refresh(){if(refreshBusy)return;refreshBusy=true;try{var listEl=document.getElementById('vmlist');if(!vms.length&&listEl){var skHtml='';for(var i=0;i<6;i++){skHtml+='<div class="skeleton sk-item" aria-hidden="true"></div>';}listEl.innerHTML=skHtml;listEl.setAttribute('aria-busy','true');}const r=await fetch('/api/vms');if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
+setServerDown(false);vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){if(!serverDown){setServerDown(true);}}finally{refreshBusy=false;}}
 function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
-const viz=vms.map((v,i)=>({i,show:!f||v.name.toLowerCase().includes(f),fav:v.favorite==='true',v}));
+const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
 let hasFavs=false,hasNon=false,maxMem=16384;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;const m=x.v.mem||0;if(m>maxMem)maxMem=m;}
 function vmBars(v){var barMem=v.mem||1024;var memPct=Math.min(100,Math.round(barMem/maxMem*100));var cpu=v.cpu||1;var ch='',cs=Math.min(cpu,8);for(var j=0;j<cs;j++)ch+='<span class="cpu-dot"></span>';if(cpu>8)ch+='<span class="cpu-plus">+</span>';return '<div class="vm-bars"><span class="vm-bar-cpu">'+ch+'</span><span class="vm-bar-mem"><span class="vm-bar-fill" style="width:'+memPct+'%"></span><span class="vm-bar-mem-label">'+barMem+'MB</span></span></div>';}
 for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
@@ -79,7 +79,7 @@ if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+' — '+v.status;i
 else{var sb2=document.getElementById('statusbar');if(sb2)sb2.textContent=parts;}}
 async function toggleFavorite(i){if(i>=vms.length)return;const fav=vms[i].favorite==='true'?'0':'1';
 const r=await apiPost('/api/save/'+i,'favorite='+fav);if(r){if(i<vms.length){vms[i].favorite=fav==='1'?'true':'false';}renderList();if(sel===i)renderDetails();}}
-function select(i){if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!confirm('You have unsaved changes. Discard them?'))return;settingsDirty=false;}stopFb();sel=i;renderList();closeSidebar();closeToolbarMore();if(sel!==null){if(activeTab==='summary')renderDetails();else editVm();if(vms[sel]&&vms[sel].status==='running')startFb();}else{showEmptyState();}updatePowerBtn();}
+function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!confirm('You have unsaved changes. Discard them?'))return;settingsDirty=false;}stopFb();sel=i;renderList();closeSidebar();closeToolbarMore();if(sel!==null){if(activeTab==='summary')renderDetails();else editVm();if(vms[sel]&&vms[sel].status==='running')startFb();}else{showEmptyState();}updatePowerBtn();}
 function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!confirm('You have unsaved changes. Discard them?'))return;}stopFb();sel=null;renderList();showEmptyState();updatePowerBtn();}
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
 const nm=document.getElementById('vmname');const tb=document.getElementById('tabBar');
@@ -119,7 +119,7 @@ updatePowerBtn();}
 async function powerToggle(){const idx=sel;if(idx===null)return;const v=vms[idx];if(v&&(v.status==='running'||v.status==='paused')){if(!confirm('Power off VM "'+v.name+'"?\nUnsaved data may be lost.'))return;}
 var btn=document.getElementById('powerbtn');if(btn){btn.disabled=true;btn.textContent='...';}
 transitioningIdx=idx;renderList();
-const r=await apiPost('/api/power/'+idx);transitioningIdx=null;if(r)await refresh();else if(btn){updatePowerBtn();btn.disabled=false;}renderList();}
+try{const r=await apiPost('/api/power/'+idx);transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}else{if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}catch(e){transitioningIdx=null;if(btn){updatePowerBtn();btn.disabled=false;}renderList();setStatus('Power toggle failed: '+e.message);}}
 async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!confirm('Send ACPI shutdown to "'+v.name+'"?'))return;const r=await apiPost('/api/shutdown/'+sel);if(r)setStatus('Shut down guest — ACPI power button sent.');}
 async function resetGuest(){if(sel===null)return;const v=vms[sel];if(!confirm('Reset guest "'+v.name+'"?\nUnsaved data in the guest may be lost.'))return;const r=await apiPost('/api/reset/'+sel);if(r)setStatus('Reset guest — system_reset sent.');}
 async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/pause/'+sel);if(r){await refresh();setStatus('Paused guest — execution frozen.');}}
@@ -228,7 +228,7 @@ const body=['name','mem','cpu','cpu_sockets','disk','disk_format','iso_path','ma
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order',
 'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite']
 .map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
-try{const r=await apiPost('/api/save/'+idx,body);if(r){settingsDirty=false;switchTab('summary');await refresh();setStatus('Settings saved.');}
+try{const r=await apiPost('/api/save/'+idx,body);if(r){settingsDirty=false;await refresh();switchTab('summary');setStatus('Settings saved.');}
 else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}
 for(let i=0;i<formEls.length;i++)formEls[i].disabled=false;}}
 // ── VNet Editor ──
@@ -240,29 +240,38 @@ for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const
 sel.innerHTML=h;if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length)showVnetFields(vnetIdx);}
 function onVnetSelect(){const s=document.getElementById('vnet_sel');if(!s)return;vnetIdx=parseInt(s.value);if(vnetIdx>=0)showVnetFields(vnetIdx);}
 function showVnetFields(i){const n=vnetsData.networks[i];if(!n)return;
-var vn=document.getElementById('vn_name');if(!vn)return;
-vn.value=n.name||'';document.getElementById('vn_type').value=n.type||'nat';
-document.getElementById('vn_subnet').value=n.subnet||'';document.getElementById('vn_mask').value=n.mask||'';
-document.getElementById('vn_dhcp').value=n.dhcp?'1':'0';document.getElementById('vn_dstart').value=n.dhcp_start||'';
-document.getElementById('vn_dend').value=n.dhcp_end||'';document.getElementById('vn_iface').value=n.host_iface||'';
-document.getElementById('vn_gw').value=n.gateway||'';document.getElementById('vn_pf').value=n.port_forwards||'';}
+var vn=document.getElementById('vn_name');if(!vn)return;vn.value=n.name||'';
+var vt=document.getElementById('vn_type');if(vt)vt.value=n.type||'nat';
+var vs=document.getElementById('vn_subnet');if(vs)vs.value=n.subnet||'';
+var vm=document.getElementById('vn_mask');if(vm)vm.value=n.mask||'';
+var vd=document.getElementById('vn_dhcp');if(vd)vd.value=n.dhcp?'1':'0';
+var vds=document.getElementById('vn_dstart');if(vds)vds.value=n.dhcp_start||'';
+var vde=document.getElementById('vn_dend');if(vde)vde.value=n.dhcp_end||'';
+var vi=document.getElementById('vn_iface');if(vi)vi.value=n.host_iface||'';
+var vg=document.getElementById('vn_gw');if(vg)vg.value=n.gateway||'';
+var vp=document.getElementById('vn_pf');if(vp)vp.value=n.port_forwards||'';}
 function vnetSaveCurrent(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;const n=vnetsData.networks[vnetIdx];
 var vn=document.getElementById('vn_name');if(!vn)return;
 const name=vn.value.trim();if(!name){showToast('Network name is required','error');return;}
-const subnet=document.getElementById('vn_subnet').value.trim();const mask=document.getElementById('vn_mask').value.trim();
-const dstart=document.getElementById('vn_dstart').value.trim();const dend=document.getElementById('vn_dend').value.trim();
-const gw=document.getElementById('vn_gw').value.trim();const iface=document.getElementById('vn_iface').value.trim();
+var vt=document.getElementById('vn_type');var vs=document.getElementById('vn_subnet');
+var vm=document.getElementById('vn_mask');var vd=document.getElementById('vn_dhcp');
+var vds=document.getElementById('vn_dstart');var vde=document.getElementById('vn_dend');
+var vi=document.getElementById('vn_iface');var vg=document.getElementById('vn_gw');
+var vp=document.getElementById('vn_pf');
+const subnet=(vs?vs.value:'').trim();const mask=(vm?vm.value:'').trim();
+const dstart=(vds?vds.value:'').trim();const dend=(vde?vde.value:'').trim();
+const gw=(vg?vg.value:'').trim();const iface=(vi?vi.value:'').trim();
 if(subnet&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(subnet)){showToast('Invalid subnet format','error');return;}
 if(mask&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(mask)){showToast('Invalid mask format','error');return;}
 if(dstart&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(dstart)){showToast('Invalid DHCP start IP format','error');return;}
 if(dend&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(dend)){showToast('Invalid DHCP end IP format','error');return;}
 if(gw&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(gw)){showToast('Invalid gateway IP format','error');return;}
 // strip control characters from name/iface
-n.name=name.replace(/[\x00-\x1f\x7f]/g,'');n.type=document.getElementById('vn_type').value;
+n.name=name.replace(/[\x00-\x1f\x7f]/g,'');n.type=vt?vt.value:'nat';
 n.subnet=subnet;n.mask=mask;
-n.dhcp=document.getElementById('vn_dhcp').value==='1';n.dhcp_start=dstart;
+n.dhcp=vd?vd.value==='1':false;n.dhcp_start=dstart;
 n.dhcp_end=dend;n.host_iface=iface.replace(/[\x00-\x1f\x7f]/g,'');
-n.gateway=gw;n.port_forwards=(document.getElementById('vn_pf').value||'').replace(/[\x00-\x1f\x7f]/g,'');renderVnetList();}
+n.gateway=gw;n.port_forwards=(vp?vp.value||'':'').replace(/[\x00-\x1f\x7f]/g,'');renderVnetList();}
 function vnetAdd(){if(vnetsData.networks.length>=20)return;const n={name:'VMnet'+vnetsData.networks.length,type:'host_only',subnet:'192.168.100.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.100.128',dhcp_end:'192.168.100.254',host_iface:'',gateway:'',port_forwards:''};
 vnetsData.networks.push(n);vnetIdx=vnetsData.networks.length-1;renderVnetList();}
 function vnetRemove(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;vnetsData.networks.splice(vnetIdx,1);if(vnetIdx>=vnetsData.networks.length)vnetIdx=vnetsData.networks.length-1;renderVnetList();}
@@ -286,8 +295,8 @@ const r=await apiPost('/api/config',body);if(r){if(pendingTheme!==null){window.a
 // ── Dialog Focus Trap + Backdrop Click-to-Close ──
 var dialogFocusStack=[];
 var FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
-function trapFocus(dlg){var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];dlg.addEventListener('keydown',function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}});first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
-function releaseFocus(dlg){dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
+function trapFocus(dlg){var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}};dlg._trapFocusHandler=onKey;dlg.addEventListener('keydown',onKey);first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
+function releaseFocus(dlg){var handler=dlg._trapFocusHandler;if(handler){dlg.removeEventListener('keydown',handler);delete dlg._trapFocusHandler;}dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
 ['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','migratedlg','shortcutsdlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};var origClose=dlg.close;dlg.close=function(){if(dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
 // ── Sidebar Overlay Click-to-Close ──
 document.body.addEventListener('click',function(e){if(document.body.classList.contains('sidebar-overlay')&&!e.target.closest('aside')){closeSidebar();}});
@@ -357,23 +366,6 @@ function showShortcutsModal(){
   var d=document.getElementById('shortcutsdlg');
   if(d)d.showModal();
 }
-// ── Focus Trap for Dialog Modals ──
-function getFocusable(el){
-  return el.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
-}
-document.addEventListener('keydown',function(e){
-  if(e.key!=='Tab')return;
-  var openDlg=document.querySelector('dialog[open]');
-  if(!openDlg)return;
-  var focusable=getFocusable(openDlg);
-  if(focusable.length===0)return;
-  var first=focusable[0],last=focusable[focusable.length-1];
-  if(e.shiftKey){
-    if(document.activeElement===first){e.preventDefault();last.focus();}
-  }else{
-    if(document.activeElement===last){e.preventDefault();first.focus();}
-  }
-});
 // ── Periodic Refresh ──
 refresh();
 setInterval(refresh,5000);
@@ -467,7 +459,7 @@ function stopFb() {
   var displayEl = document.getElementById('display');
   if (displayEl) {
     var canvases = displayEl.querySelectorAll('canvas');
-    for (var ci = 0; ci < canvases.length; ci++) displayEl.removeChild(canvases[ci]);
+    for (var ci = 0; ci < canvases.length; ci++) { if (canvases[ci].parentNode === displayEl) displayEl.removeChild(canvases[ci]); }
     displayEl.style.display = 'none';
     displayEl.classList.remove('loading');
   }
@@ -479,7 +471,7 @@ if(serialWs){if(serialIdx===idx&&(serialWs.readyState===WebSocket.OPEN||serialWs
 serialWs.close();serialWs=null;} /* close stale CONNECTING socket before reconnect */
 const sameVm=(serialIdx===idx);
 stopSerial(!sameVm); /* clear terminal only when switching VMs */
-if(idx===null||idx>=vms.length)return;const v=vms[idx];if(v.status!=='running'||!v.hasSerial)return;
+if(idx===null||idx>=vms.length)return;const v=vms[idx];if(v.status!=='running'||v.hasSerial!=='true')return;
 serialIdx=idx;const term=document.getElementById('serialterm');const sp=document.getElementById('serialpanel');if(!term||!sp)return;sp.style.display='block';sp.classList.add('connected');
 const proto=location.protocol==='https:'?'wss:':'ws:';const ws=new WebSocket(proto+'//'+location.host+'/ws/serial/'+idx);
 serialWs=ws; // reassign before old onclose fires to avoid closing the new socket
@@ -487,6 +479,7 @@ ws.onmessage=e=>{term.value+=e.data;term.scrollTop=term.scrollHeight;};
 ws.onopen=()=>{sp.classList.add('connected');};
 ws.onclose=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}}};
 ws.onerror=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}}};
+}
 function stopSerial(clearTerm){if(clearTerm===void 0)clearTerm=true;if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;if(clearTerm){const term=document.getElementById('serialterm');if(term)term.value='';}const sp=document.getElementById('serialpanel');if(sp){sp.style.display='none';sp.classList.remove('connected');}}
 function manualDisconnectSerial(){serialManualOff=true;serialManualOffVmIdx=sel!==null?sel:-1;stopSerial(true);}
 var serialTermEl=document.getElementById('serialterm');if(serialTermEl){serialTermEl.addEventListener('keydown',function(e){if(!serialWs||serialWs.readyState!==WebSocket.OPEN)return;
@@ -511,7 +504,7 @@ if(e.ctrlKey&&!e.altKey&&!e.metaKey){
 }
 if(s){e.preventDefault();e.stopPropagation();serialWs.send(s);}});}
 if(serialReconnectTimer){clearInterval(serialReconnectTimer);}
-serialReconnectTimer=setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&sel!==serialManualOffVmIdx){serialManualOff=false;serialManualOffVmIdx=-1;}if(v.status==='running'&&v.hasSerial)startSerial(sel);else stopSerial();if(v.status==='running')startFb();else stopFb();}},3000);
+serialReconnectTimer=setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&sel!==serialManualOffVmIdx){serialManualOff=false;serialManualOffVmIdx=-1;}if(v.status==='running'&&v.hasSerial==='true')startSerial(sel);else stopSerial();if(v.status==='running')startFb();else stopFb();}},3000);
 // ── Event Delegation (CSP-safe: no inline handlers) ──
 var actionHandlers={
  toggleSidebar:function(){toggleSidebar();},deselectVm:function(){deselectVm();},

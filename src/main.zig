@@ -1828,6 +1828,7 @@ fn newVmDialog() void {
 
 // Global event handler — intercepts keyboard shortcuts + right-clicks
 fn kbHandler(event: c_int) callconv(.c) c_int {
+    if (app.modal_active) return 0;
     if (event == 1) { // FL_PUSH = 1 (mouse button press)
         if (cfltk.Fl_event_button() == 3) { // Right click
             app.selectCurrent();

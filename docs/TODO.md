@@ -2793,3 +2793,79 @@ All 15 items resolved. Zero known crash/data-loss bugs remain.
 | 7 | `migrateGuest` dialog test | ✅ Opens migratedlg modal, handles close gracefully with Escape |
 | 8 | `cloneGuest` dialog test with Full Clone button | ✅ Opens clonedlg, clicks Full Clone button, verifies VM count increases |
 
+## Tier 37 — Audit Fixes: Bugs & Polish (ongoing)
+
+Comprehensive audit of main.zig, web_server.zig, web/app.js, and web/app.css
+found ~25 issues across security, correctness, and visual polish.
+
+### 37.1 Critical / High — FLTK
+
+| # | Description | Status |
+|---|-------------|--------|
+| H1 | Themed widget arrays UAF: dialog widgets registered via `themeInput()`/`themeChoice()`/`themeCheckButton()`/`themeBrowser()`/`themeScroll()` are never unregistered on dialog close. `updateWidgetColors()` calls FLTK methods on freed pointers after theme switch. | ✅ Fixed — added `unthemeInput`/`unthemeChoice`/`unthemeBrowser`/`unthemeCheckButton`/`unthemeScroll` swap-remove functions in `appstate.zig` |
+| H2 | `kbHandler` has no `modal_active` guard: keyboard shortcuts (Ctrl+N, Ctrl+E, F2, DEL, etc.) fire during modal dialog spin loops, triggering nested dialogs that corrupt shared VM state and stale `Ed` contexts. | ✅ Fixed — added `if (app.modal_active) return 0;` guard at top of `kbHandler` |
+
+### 37.2 Critical / High — Web Server
+
+| # | Description | Status |
+|---|-------------|--------|
+| H3 | SIGPIPE risk in streaming download paths: `handleDisk2Download` and `handleExport` use raw `c.write()` without checking return values. Client disconnect mid-response sends SIGPIPE, killing the server. | ✅ Fixed — `signal(SIGPIPE, SIG_IGN)` at top of `main()` |
+| H4 | Unix socket setup errors silently ignored: `main()` uses bare `catch {}` on `setsockopt`/`bind`/`listen`. Server prints banner claiming socket is ready but it's broken. | ✅ Fixed — proper error checks + logErr on all three Unix socket calls |
+| H5 | WebSocket endpoints (`/ws/vnc/*`, `/ws/spice/*`, `/ws/serial/*`) are auth-exempt — unauthenticated VM console access via trivially enumerable VM indices. | ✅ Fixed — inline `checkAuth()` call before each WS upgrade; WS paths removed from `isAuthExempt` |
+| H6 | Framebuffer snapshot endpoint (`/api/fb/*`) is auth-exempt — leaks visual content of running VMs. | ✅ Fixed — removed `/api/fb/` from `isAuthExempt`; now requires `X-API-Key` header |
+
+### 37.3 Critical / High — Web Frontend
+
+| # | Description | Status |
+|---|-------------|--------|
+| H7 | Focus trap listener leak: `trapFocus()` adds `keydown` listener to each dialog but `releaseFocus()` never removes it. Every dialog open accumulates handlers. | ⬜ |
+| H8 | Null pointer crashes: `showVnetFields()` and `vnetSaveCurrent()` call `document.getElementById(...).value` without null checks on ~9 elements. Missing HTML element → TypeError crash. | ⬜ |
+| H9 | `refresh()` interval races with `powerToggle()`/`saveVm()`: 5-second setInterval can overwrite `vms` mid-operation. | ⬜ |
+
+### 37.4 Medium — FLTK
+
+| # | Description | Status |
+|---|-------------|--------|
+| M1 | Silent `catch {}` in remote mode: body construction for `newVmDialog` CreateCB swallows urlencode failures for disk_path and iso_path — server receives incomplete VM creation request. | ⬜ |
+| M2 | Silent disk directory creation failure in `newVmDialog`: `createDirPath` error swallowed — user sees success but VM will fail to start. | ⬜ |
+
+### 37.5 Medium — Web Server
+
+| # | Description | Status |
+|---|-------------|--------|
+| M3 | `handleExport`: `catch return` on tar failure, OVF build failure, and disk conversion failure all silently return without logging — client sees dropped connection with no explanation. | ⬜ |
+| M4 | `jsonEscape` truncation produces malformed JSON: buffer overflow silently truncates at buffer boundary, embedding a broken JSON string into the response document. | ⬜ |
+| M5 | `writeStreamHeaders` duplicates ~25 lines of `writeHttpResponse` — missing headers (CSP, X-Content-Type-Options, X-Frame-Options) on streaming responses. | ⬜ |
+| M6 | `main()` thread spawn failures silently ignored: Unix accept thread and autoprotect ticker failures are swallowed with `else |_| {}`. | ⬜ |
+| M7 | `main()` acceptLoop thread: `catch continue` swallows spawn failures without logging or closing the accepted connection fd. | ✅ already fixed in pending diff |
+
+### 37.6 Medium — Web Frontend
+
+| # | Description | Status |
+|---|-------------|--------|
+| M8 | `saveVm()` sets `settingsDirty=false` before API returns — if the save fails, unsaved-changes protection is already lost. | ⬜ |
+| M9 | `powerToggle()` button stays disabled permanently if `refresh()` inside the success path throws. | ⬜ |
+| M10 | Ghost element leak in touch reorder: if neither `pointerup` nor `pointercancel` fires (tab loses focus mid-drag), ghost stays in DOM permanently. | ⬜ |
+| M11 | `loadVnets()` doesn't handle `!r.ok`: non-2xx response leaves stale `vnetsData` — no error path. | ⬜ |
+| M12 | `batchStart()`/`batchStop()` abort all remaining operations on single failure — no skip-and-continue. | ⬜ |
+
+### 37.7 Low — Web Server
+
+| # | Description | Status |
+|---|-------------|--------|
+| L1 | `handleExport`: wrapping multiplication `*|` for `disk_cap` — would silently wrap if `disk_size_gb` exceeded clamp, producing corrupt OVF descriptor. | ⬜ |
+| L2 | `handleImport`: path traversal check on raw (possibly URL-encoded) input — `..` literal check passes on `%2e%2e`. | ⬜ |
+| L3 | `handleExport`: predictable temp paths `/tmp/ovf_export.{idx}.{pid}` — symlink attack risk. | ⬜ |
+| L4 | `c.lseek()` return value unchecked in `handleDisk2Download` and `handleExport` — seek-to-start failure causes incorrect download content. | ⬜ |
+
+### 37.8 Low — Web Frontend
+
+| # | Description | Status |
+|---|-------------|--------|
+| L5 | Dead code: double `document.body.appendChild(ctxMenu)` — second call is a no-op. | ⬜ |
+| L6 | Duplicate focus-trap implementations: `trapFocus()` (per-dialog) and `getFocusable()` (global document listener) both handle Tab in dialogs. The global one is correct; per-dialog listeners are dead weight. | ⬜ |
+| L7 | `exportSerial()`: `URL.revokeObjectURL(a.href)` called synchronously before browser processes download click — race condition. | ⬜ |
+| L8 | CSS: duplicate `border-color` on `#serialpanel.connected` — first value immediately overridden. | ⬜ |
+| L9 | CSS: dialog inputs have hover style but settings form inputs do not — visual inconsistency. | ⬜ |
+| L10 | CSS: `@media(prefers-color-scheme:light)` fallback block duplicates all custom properties — maintenance hazard. | ⬜ |
+
