@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: MIT
 (function(){
-const saved=localStorage.getItem('kvmgui-theme')||'system';
-window.kvmguiTheme=saved;
+const saved=localStorage.getItem('hangar-theme')||'system';
+window.hangarTheme=saved;
 window.applyTheme=function(t){
- window.kvmguiTheme=t;
- localStorage.setItem('kvmgui-theme',t);
+ window.hangarTheme=t;
+ localStorage.setItem('hangar-theme',t);
  const light=t==='light'||(t==='system'&&window.matchMedia('(prefers-color-scheme:light)').matches);
  document.documentElement.classList.toggle('light',light);
 };
 window.applyTheme(saved);
 window.matchMedia('(prefers-color-scheme:light)').addEventListener('change',function(){
- if(window.kvmguiTheme==='system') window.applyTheme('system');
+ if(window.hangarTheme==='system') window.applyTheme('system');
 });
 function cycleTheme(){
  var themes=['system','light','dark'];
- var cur=window.kvmguiTheme||'system';
+ var cur=window.hangarTheme||'system';
  var idx=themes.indexOf(cur);
  var next=themes[(idx+1)%themes.length];
  window.applyTheme(next);
@@ -40,7 +40,7 @@ function initLoadBar(){loadBar=document.createElement('div');loadBar.id='loadbar
 function setLoadBar(on){if(!loadBar)initLoadBar();if(on)loadBar.classList.add('active');else{loadBar.classList.remove('active');}}
 var busy=false,busyGen=0; // guard against double-submit
 function setBusy(){if(busy)return false;busy=true;var gen=++busyGen;setTimeout(function(){if(busyGen===gen){busy=false;console.warn('busy guard auto-cleared after 30s — request may be hung');}},30000);return true;} // fallback auto-clear after 30s
-async function apiPost(url,body){if(!setBusy()){showToast('Another operation is in progress — please wait.','warn');return null;}var sb=document.getElementById('statusbar');var wasIdle=apiPostPending<=0;var prev=sb?sb.textContent:'Ready';if(wasIdle){setStatusLoading('Working...');setLoadBar(true);}apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':'kvmgui'}};var r=await fetch(url,opts);if(!r.ok){var msg=await r.text().catch(function(){return '';});throw new Error(msg||'HTTP '+r.status);}apiPostPending--;if(apiPostPending<=0){setStatus(prev);setLoadBar(false);}busy=false;busyGen++;return r;}catch(e){apiPostPending--;if(apiPostPending<=0){setStatus('Error: '+e.message);setLoadBar(false);}busy=false;busyGen++;showToast(e.message||'Request failed','error');return null;}}
+async function apiPost(url,body){if(!setBusy()){showToast('Another operation is in progress — please wait.','warn');return null;}var sb=document.getElementById('statusbar');var wasIdle=apiPostPending<=0;var prev=sb?sb.textContent:'Ready';if(wasIdle){setStatusLoading('Working...');setLoadBar(true);}apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':'hangar'}};var r=await fetch(url,opts);if(!r.ok){var msg=await r.text().catch(function(){return '';});throw new Error(msg||'HTTP '+r.status);}apiPostPending--;if(apiPostPending<=0){setStatus(prev);setLoadBar(false);}busy=false;busyGen++;return r;}catch(e){apiPostPending--;if(apiPostPending<=0){setStatus('Error: '+e.message);setLoadBar(false);}busy=false;busyGen++;showToast(e.message||'Request failed','error');return null;}}
 var sidebarOpen=false;
 function toggleSidebar(){sidebarOpen=!sidebarOpen;const aside=document.querySelector('aside');const btn=document.querySelector('.hamburger');if(aside){if(sidebarOpen){aside.classList.add('open');document.body.classList.add('sidebar-overlay');}else{aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}}
 if(btn)btn.setAttribute('aria-expanded',sidebarOpen?'true':'false');}
@@ -163,7 +163,7 @@ const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag)
 async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Delete snapshot "'+tag+'"?'))return;
 const r=await apiPost('/api/snapshot/delete/'+sel,'tag='+encodeURIComponent(tag));if(r){loadSnapshots();setStatus('Deleted snapshot: '+tag);}}
 async function sendCad(){if(sel===null)return;const r=await apiPost('/api/cad/'+sel);if(r)setStatus('Ctrl+Alt+Del sent to guest.');}
-async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/export/'+sel,{method:'POST',headers:{'X-API-Key':'kvmgui'}});if(!r.ok){setStatus('Export failed: '+r.status);return;}const blob=await r.blob();const a=document.createElement('a');const url=URL.createObjectURL(blob);a.href=url;a.download=vms[sel].name+'.ova';a.click();setTimeout(function(){URL.revokeObjectURL(url);},60000);setStatus('Export downloaded.');}catch(e){setStatus('Export error: '+e);}}
+async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/export/'+sel,{method:'POST',headers:{'X-API-Key':'hangar'}});if(!r.ok){setStatus('Export failed: '+r.status);return;}const blob=await r.blob();const a=document.createElement('a');const url=URL.createObjectURL(blob);a.href=url;a.download=vms[sel].name+'.ova';a.click();setTimeout(function(){URL.revokeObjectURL(url);},60000);setStatus('Export downloaded.');}catch(e){setStatus('Export error: '+e);}}
 async function migrateGuest(){if(sel===null)return;var vm=vms[sel];var mv=document.getElementById('migrate_vmname');if(mv)mv.textContent='Migrating: '+vm.name;var md=document.getElementById('migratedlg');if(md){updateMigUri();md.showModal();}}
 function updateMigUri(){var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');var uri=document.getElementById('mig_uri');if(host&&port&&uri){uri.value='tcp:'+host.value+':'+port.value;}}
 async function doMigrate(){if(sel===null)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;var r=await apiPost('/api/migrate/'+sel,'dest='+encodeURIComponent(dest));if(!r)return;try{var j=JSON.parse(r);if(j.status!=='started'){showToast('Migration failed to start','error');return;}}catch(e){}var md=document.getElementById('migratedlg');if(md)md.close();showMigProgress();pollMigStatus();}
@@ -333,7 +333,7 @@ async function vnetSaveAll(){const r=await apiPost('/api/vnets/save',JSON.string
 // ── Preferences ──
 var pendingTheme=null;
 async function openPrefs(){var pd=document.getElementById('prefsdlg');if(!pd)return;let cfg={};try{const r=await fetch('/api/config');if(r.ok)cfg=await r.json();}catch(e){console.error('Failed to load config:',e);}
-var pt=document.getElementById('p_theme');if(pt)pt.value=cfg.theme||window.kvmguiTheme||'system';
+var pt=document.getElementById('p_theme');if(pt)pt.value=cfg.theme||window.hangarTheme||'system';
 var pdm=document.getElementById('p_default_memory_mb');if(pdm)pdm.value=cfg.default_memory_mb||2048;
 var pdc=document.getElementById('p_default_cpu_cores');if(pdc)pdc.value=cfg.default_cpu_cores||2;
 var pae=document.getElementById('p_autoprotect_enabled');if(pae)pae.value=cfg.autoprotect_enabled_default?'1':'0';
@@ -436,7 +436,7 @@ function exitDisplayOnly(){
 refresh();
 setInterval(refresh,5000);
 // ── Show keyboard shortcuts on first visit ──
-if(!localStorage.getItem('kvmgui-shortcuts-shown')){localStorage.setItem('kvmgui-shortcuts-shown','1');setTimeout(showShortcutsModal,1500);}
+if(!localStorage.getItem('hangar-shortcuts-shown')){localStorage.setItem('hangar-shortcuts-shown','1');setTimeout(showShortcutsModal,1500);}
 // ── noVNC / SPICE live viewer ──
 var rfb = null; // noVNC RFB client instance
 var spice = null; // SPICE HTML5 client instance
@@ -589,7 +589,7 @@ var actionHandlers={
  takeSnapshotFromDlg:function(){takeSnapshotFromDlg();},
  manualDisconnectSerial:function(){manualDisconnectSerial();},
  clearSerial:function(){var t=document.getElementById('serialterm');if(t)t.value='';},
- exportSerial:function(){var t=document.getElementById('serialterm');if(!t||!t.value)return;var blob=new Blob([t.value],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='kvmgui-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
+ exportSerial:function(){var t=document.getElementById('serialterm');if(!t||!t.value)return;var blob=new Blob([t.value],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='hangar-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
  savePrefs:function(){savePrefs();},saveVm:function(){saveVm();},
  vnetAdd:function(){vnetAdd();},vnetRemove:function(){vnetRemove();},
  vnetDefaults:function(){vnetDefaults();},vnetSaveCurrent:function(){vnetSaveCurrent();},

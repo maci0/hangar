@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KVMGUI Visual Test Harness
+Hangar Visual Test Harness
 ==========================
 
 Launches the application inside a virtual X11 framebuffer (Xvfb),
@@ -36,7 +36,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 REPO = Path(__file__).resolve().parent.parent.parent
-BINARY = REPO / "zig-out" / "bin" / "kvmgui"
+BINARY = REPO / "zig-out" / "bin" / "hangar"
 SCREENSHOT_DIR = Path(__file__).resolve().parent / "screenshots"
 
 # ---------------------------------------------------------------------------
@@ -634,7 +634,7 @@ class TestHarness:
         the FLTK layout is predictable for screenshot coordinate math.
         """
         import json as _json
-        config_path = Path.home() / ".config" / "kvmgui" / "vms.json"
+        config_path = Path.home() / ".config" / "hangar" / "vms.json"
         self._config_backup = None
 
         if not config_path.exists():
@@ -658,13 +658,13 @@ class TestHarness:
     def _restore_config(self):
         """Restore the original config backed up by _reset_window_prefs."""
         if self._config_backup is not None:
-            config_path = Path.home() / ".config" / "kvmgui" / "vms.json"
+            config_path = Path.home() / ".config" / "hangar" / "vms.json"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             config_path.write_text(self._config_backup)
             self._config_backup = None
 
     def start_app(self):
-        """Launch kvmgui on the virtual display."""
+        """Launch hangar on the virtual display."""
         if not BINARY.exists():
             raise FileNotFoundError(
                 f"Binary not found: {BINARY}\nRun `zig build` first."
@@ -695,7 +695,7 @@ class TestHarness:
         print(f"  App running (PID {self.app_proc.pid})")
 
     def stop_app(self):
-        """Stop the kvmgui process and restore original config."""
+        """Stop the hangar process and restore original config."""
         if self.app_proc:
             self.app_proc.terminate()
             try:
@@ -712,7 +712,7 @@ class TestHarness:
         print("  X11 input simulation ready")
 
     def find_app_window(self) -> tuple[int, int, int, int]:
-        """Find the KVMGUI window and return (x, y, width, height) of content area.
+        """Find the Hangar window and return (x, y, width, height) of content area.
 
         Uses pure X11 ctypes calls (XTranslateCoordinates + XGetGeometry)
         to get the *actual* on-screen position, not the stale hints from xprop.
@@ -721,9 +721,9 @@ class TestHarness:
         """
         assert self.x11 is not None
 
-        wid = self.x11.find_window_by_name("KVMGUI")
+        wid = self.x11.find_window_by_name("Hangar")
         if wid is None:
-            print("  ⚠ KVMGUI window not found via X11")
+            print("  ⚠ Hangar window not found via X11")
             return self._fallback_window_pos()
 
         abs_x, abs_y, w, h = self.x11.get_window_geometry(wid)
@@ -986,7 +986,7 @@ class TestHarness:
     def run_all(self):
         """Run all visual tests in sequence."""
         print("\n" + "=" * 60)
-        print("KVMGUI Visual Test Harness")
+        print("Hangar Visual Test Harness")
         print("=" * 60)
 
         try:
@@ -1070,7 +1070,7 @@ class TestHarness:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="KVMGUI Visual Test Harness")
+    parser = argparse.ArgumentParser(description="Hangar Visual Test Harness")
     parser.add_argument(
         "--keep-xvfb", action="store_true", help="Keep Xvfb running after tests"
     )

@@ -20,11 +20,11 @@ const app = @import("appstate.zig");
 const cfltk = @import("cfltk_import.zig").c;
 
 pub fn aboutDialog() void {
-    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 440, 2), @divTrunc(cfltk.Fl_h() - 420, 2), 440, 420, "About KVMGUI");
+    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 440, 2), @divTrunc(cfltk.Fl_h() - 420, 2), 440, 420, "About Hangar");
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
     cfltk.Fl_Window_size_range(dlg, 440, 420, 0, 0);
-    const ah = cfltk.Fl_Box_new(10, 10, 420, 30, "KVMGUI v1.0");
+    const ah = cfltk.Fl_Box_new(10, 10, 420, 30, "Hangar v1.0");
     cfltk.Fl_Box_set_color(ah, app.pal.bg); cfltk.Fl_Box_set_label_font(ah, 1); cfltk.Fl_Box_set_label_color(ah, app.pal.header);
     cfltk.Fl_Box_set_label_size(ah, 18);
     const ad1 = cfltk.Fl_Box_new(10, 45, 420, 20, "Lightweight QEMU/KVM Virtual Machine Manager");

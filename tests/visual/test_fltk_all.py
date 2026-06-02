@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FLTK KVMGUI automated visual tests — clicks through all UI states."""
+"""FLTK Hangar automated visual tests — clicks through all UI states."""
 import subprocess, os, time, ctypes, sys
 from pathlib import Path
 from PIL import Image, ImageStat
@@ -23,7 +23,7 @@ def test(name, fn=None):
     xvfb=subprocess.Popen(['Xvfb',XPORT,'-screen','0','1280x800x24','-ac'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     time.sleep(0.5)
     env=os.environ.copy(); env['DISPLAY']=XPORT; env.pop('WAYLAND_DISPLAY',None); env['FLTK_BACKEND']='x11'
-    app=subprocess.Popen(['./zig-out/bin/kvmgui'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    app=subprocess.Popen(['./zig-out/bin/hangar'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     time.sleep(2)
     try:
         if fn:

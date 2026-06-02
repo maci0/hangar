@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KVMGUI FLTK click-through visual test — every dialog rendered and checked."""
+"""Hangar FLTK click-through visual test — every dialog rendered and checked."""
 import subprocess, os, time, sys
 from pathlib import Path; from PIL import Image, ImageStat
 
@@ -10,7 +10,7 @@ def test(name, clicks=None):
     global ALL_OK
     xv=subprocess.Popen(['Xvfb',XPORT,'-screen','0','1280x800x24','-ac'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     time.sleep(0.5); env=os.environ.copy(); env['DISPLAY']=XPORT; env.pop('WAYLAND_DISPLAY',None); env['FLTK_BACKEND']='x11'
-    ap=subprocess.Popen(['./zig-out/bin/kvmgui'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    ap=subprocess.Popen(['./zig-out/bin/hangar'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     time.sleep(2)
     if clicks:
         try:

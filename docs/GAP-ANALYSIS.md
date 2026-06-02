@@ -1,8 +1,8 @@
-# KVMGUI — Gap Analysis vs VMware Workstation 17
+# Hangar — Gap Analysis vs VMware Workstation 17
 
 ## Feature Status
 
-| WS17 Feature | KVMGUI Status |
+| WS17 Feature | Hangar Status |
 |-------------|---------------|
 | VM Library sidebar | ✅ Fl_Browser + web sidebar with status icons |
 | Create VM wizard | ✅ Modal dialog (name/mem/cpu/disk/ISO/OS) |

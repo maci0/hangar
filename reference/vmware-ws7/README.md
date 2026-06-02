@@ -1,6 +1,6 @@
 # VMware Workstation 7 — UI reference
 
-Reference screenshots for matching KVMGUI to the VMware Workstation 7 (2009/2010)
+Reference screenshots for matching Hangar to the VMware Workstation 7 (2009/2010)
 look & feel. Sourced from period reviews (golem.de, neowin, myego.cz) plus newer
 Player shots (lo4d, wikimedia) for layout confirmation.
 
@@ -31,9 +31,9 @@ Player shots (lo4d, wikimedia) for layout confirmation.
   **Go To**, AutoProtect, **Close**, Help (bottom row).
 - "Show AutoProtect snapshots" checkbox; status line: `"You Are Here" selected`.
 
-## Feature checklist (WS7 → KVMGUI status)
+## Feature checklist (WS7 → Hangar status)
 
-| WS7 feature | KVMGUI |
+| WS7 feature | Hangar |
 | --- | --- |
 | VM create/clone/delete/import | ✓ |
 | Power on/off/suspend/resume/reset | ✓ |

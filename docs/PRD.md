@@ -1,4 +1,4 @@
-# KVMGUI — Product Requirements Document
+# Hangar — Product Requirements Document
 
 ## Elevator Pitch
 Lightweight QEMU/KVM virtual machine manager with FLTK desktop + web frontend.
@@ -21,7 +21,7 @@ Zero libvirt dependency. Single binary for each platform.
 - VNC/SPICE embedded display
 - Serial console with ring buffer
 - Snapshot management via qemu-img
-- JSON persistence in ~/.config/kvmgui/
+- JSON persistence in ~/.config/hangar/
 - GPU acceleration (virtio-gpu/virtio-vga with virglrenderer)
 - Virtual network editor
 - Export to OVF
@@ -32,8 +32,8 @@ Zero libvirt dependency. Single binary for each platform.
 ## Build Targets
 | Target | Binary | Size |
 |--------|--------|------|
-| Linux FLTK | zig-out/bin/kvmgui | ~11.8MB |
-| Linux Web | zig-out/bin/kvmgui-web | ~6.5MB |
+| Linux FLTK | zig-out/bin/hangar | ~11.8MB |
+| Linux Web | zig-out/bin/hangar-web | ~6.5MB |
 
 ## Success Metrics
 - 567/568 pure module tests passing

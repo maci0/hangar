@@ -1,8 +1,8 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KVMGUI</title><meta name="theme-color" content="#090b10" media="(prefers-color-scheme:dark)"><meta name="theme-color" content="#f8f9fc" media="(prefers-color-scheme:light)"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head><body>
+<title>Hangar</title><meta name="theme-color" content="#090b10" media="(prefers-color-scheme:dark)"><meta name="theme-color" content="#f8f9fc" media="(prefers-color-scheme:light)"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"></head><body>
 <div id="connbanner" style="display:none" aria-live="assertive" role="alert"><span>⚠️ Server unreachable — retrying automatically&hellip;</span><button class="btn ghost" data-action="dismissBanner" title="Dismiss" style="padding:0 8px;font-size:12px;line-height:1;color:var(--text)">✕</button></div>
 <aside aria-label="VM Library">
-<div class="sidebar-header"><div class="logo">K</div><h2>KVMGUI</h2></div>
+<div class="sidebar-header"><div class="logo">H</div><h2>Hangar</h2></div>
 <div class="search-wrap"><input id="search" placeholder="Search VMs..." data-action="filterList" aria-label="Search VMs"><button class="clear-btn" id="searchClear" data-action="clearSearch" title="Clear search">✕</button></div>
 <div id="vmlist" role="listbox" aria-label="VM list"></div>
 <div class="sidebar-footer"><button class="btn primary" style="width:100%" data-action="newVm" title="Create a new virtual machine">+ New VM</button></div>
@@ -31,7 +31,7 @@
 <span class="sep"></span>
 <button class="btn ghost" data-action="openVnets" title="Edit virtual networks">🌐 VNet</button>
 <button class="btn ghost" data-action="openPrefs" title="Application preferences">⚡ Prefs</button>
-<button class="btn ghost" data-action="openAbout" title="About KVMGUI">ℹ About</button>
+<button class="btn ghost" data-action="openAbout" title="About Hangar">ℹ About</button>
 <button class="btn ghost theme-toggle-btn" data-action="toggleTheme" title="Toggle light/dark/system theme">🌓</button>
 <span class="sep"></span>
 <button class="btn primary" data-action="batchStart" title="Start all stopped VMs">▶ Start All</button>
@@ -110,10 +110,10 @@
 <label for="mig_uri">Migration URI</label><input id="mig_uri" placeholder="tcp:192.168.1.100:4444" readonly style="background:var(--bg);color:var(--text-dim);cursor:not-allowed">
 </div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="migratedlg" title="Cancel">Cancel</button><button class="btn primary" data-action="doMigrate" title="Start live migration">Migrate</button></div></dialog>
-<dialog id="aboutdlg" aria-modal="true" aria-labelledby="aboutdlg-title"><h3 id="aboutdlg-title">About KVMGUI</h3>
+<dialog id="aboutdlg" aria-modal="true" aria-labelledby="aboutdlg-title"><h3 id="aboutdlg-title">About Hangar</h3>
 <div class="dialog-body" style="text-align:center">
-<div style="font-size:48px;margin-bottom:12px;width:64px;height:64px;background:var(--gradient);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;color:var(--text-on-accent);box-shadow:0 4px 16px var(--accent-glow)">K</div>
-<p style="font-size:18px;font-weight:600">KVMGUI</p>
+<div style="font-size:48px;margin-bottom:12px;width:64px;height:64px;background:var(--gradient);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;color:var(--text-on-accent);box-shadow:0 4px 16px var(--accent-glow)">H</div>
+<p style="font-size:18px;font-weight:600">Hangar</p>
 <p style="color:var(--text-muted);font-size:13px">Lightweight QEMU VM Manager</p>
 <p style="color:var(--text-dim);font-size:11px;margin-top:8px">A VMware Workstation-style GUI for QEMU/KVM.<br>Built with Zig 0.16 + FLTK 1.4 + vanilla HTML/CSS/JS.</p>
 <p style="color:var(--text-dim);font-size:11px;margin-top:12px">No libvirt dependency — direct QMP control.</p>

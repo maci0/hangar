@@ -70,11 +70,11 @@ pub fn memToX(mb: i64, w: i32) i32 {
 
 // ── Serial console socket path builder ───────────────────────────────
 
-/// Build `/tmp/kvmgui-serial-<vm_name>.sock` into `buf`, NUL-terminating it.
+/// Build `/tmp/hangar-serial-<vm_name>.sock` into `buf`, NUL-terminating it.
 /// Returns the byte length (excluding NUL), or null if it would not fit in
 /// `buf` (caller keeps its previous value). Pure: no filesystem access.
 pub fn serialSocketPath(buf: []u8, vm_name: []const u8) ?usize {
-    const prefix = "/tmp/kvmgui-serial-";
+    const prefix = "/tmp/hangar-serial-";
     const suffix = ".sock";
     const total = prefix.len + vm_name.len + suffix.len;
     if (total + 1 > buf.len) return null; // +1 for NUL
@@ -127,7 +127,7 @@ test "memToX: endpoints and clamping" {
 test "serialSocketPath: builds and NUL-terminates" {
     var buf: [256]u8 = undefined;
     const n = serialSocketPath(&buf, "myvm").?;
-    try t.expectEqualStrings("/tmp/kvmgui-serial-myvm.sock", buf[0..n]);
+    try t.expectEqualStrings("/tmp/hangar-serial-myvm.sock", buf[0..n]);
     try t.expectEqual(@as(u8, 0), buf[n]);
 }
 
@@ -181,7 +181,7 @@ test "fuzz: serialSocketPath never overflows and round-trips length" {
         if (serialSocketPath(&buf, name[0..len])) |n| {
             try t.expect(n < buf.len);
             try t.expectEqual(@as(u8, 0), buf[n]);
-            try t.expectEqualStrings("/tmp/kvmgui-serial-", buf[0..19]);
+            try t.expectEqualStrings("/tmp/hangar-serial-", buf[0..19]);
         }
     }
 }

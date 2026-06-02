@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! KVMGUI — FLTK Frontend (VM operation callbacks, remaining dialogs, main loop)
+//! Hangar — FLTK Frontend (VM operation callbacks, remaining dialogs, main loop)
 const std = @import("std");
 const vm = @import("vm.zig");
 const vnet = @import("vnet.zig");
@@ -1715,7 +1715,7 @@ fn suspendVm() void {
 
     // Generate state save path
     var state_path: [256]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&state_path, "/tmp/kvmgui-state-{s}.bin", .{v.getNameSlice()}) catch {
+    const path = std.fmt.bufPrintZ(&state_path, "/tmp/hangar-state-{s}.bin", .{v.getNameSlice()}) catch {
         app.setStatus("Failed to build state path");
         return;
     };
@@ -1834,11 +1834,11 @@ fn newVmDialog() void {
     app.themeInput(@ptrCast(disk_input));
     _ = cfltk.Fl_Input_set_value(disk_input, "20");
 
-    // Auto-generate default disk path: ~/kvmgui-vms/<name>.qcow2
+    // Auto-generate default disk path: ~/hangar-vms/<name>.qcow2
     var default_disk_buf: [512]u8 = undefined;
     const default_disk: [*:0]const u8 = blk: {
         const home = appio.getenv("HOME") orelse break :blk "";
-        const path = std.fmt.bufPrintZ(&default_disk_buf, "{s}/kvmgui-vms", .{home}) catch break :blk "";
+        const path = std.fmt.bufPrintZ(&default_disk_buf, "{s}/hangar-vms", .{home}) catch break :blk "";
         break :blk @ptrCast(path);
     };
     const nlb5 = cfltk.Fl_Box_new(10, 190, 100, 20, "Disk Path:");
@@ -1985,11 +1985,11 @@ fn newVmDialog() void {
                     }
                 }
             }
-            // If no disk path set, auto-generate: ~/kvmgui-vms/<name>.qcow2
+            // If no disk path set, auto-generate: ~/hangar-vms/<name>.qcow2
             if (cfg.getDiskPathSlice().len == 0) {
                 if (appio.getenv("HOME")) |home| {
                     var auto_buf: [vm.MAX_PATH + 1]u8 = undefined;
-                    const auto_path = std.fmt.bufPrint(&auto_buf, "{s}/kvmgui-vms/{s}.qcow2", .{ home, name }) catch "";
+                    const auto_path = std.fmt.bufPrint(&auto_buf, "{s}/hangar-vms/{s}.qcow2", .{ home, name }) catch "";
                     if (auto_path.len > 0) cfg.setDiskPath(auto_path);
                 }
             }
@@ -2451,7 +2451,7 @@ pub fn main() void {
 
     const WW: i32 = if (app.prefs.win_w > 0) app.prefs.win_w else 1200;
     const WH: i32 = if (app.prefs.win_h > 0) app.prefs.win_h else 700;
-    const win = cfltk.Fl_Window_new_wh(WW, WH, "KVMGUI");
+    const win = cfltk.Fl_Window_new_wh(WW, WH, "Hangar");
     app.win_handle = @ptrCast(win);
 
     // Menu bar with working submenus
@@ -2479,7 +2479,7 @@ pub fn main() void {
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Clone", 0, @ptrCast(&cloneCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "VM/Delete VM\tDEL", 0, @ptrCast(&deleteVmCB), null, 0);
     _ = cfltk.Fl_Menu_Bar_add(menu_bar, "View/Full Screen\tF11", 0, @ptrCast(&fullScreenCB), null, 0);
-    _ = cfltk.Fl_Menu_Bar_add(menu_bar, "Help/About KVMGUI", 0, @ptrCast(&aboutCB), null, 0);
+    _ = cfltk.Fl_Menu_Bar_add(menu_bar, "Help/About Hangar", 0, @ptrCast(&aboutCB), null, 0);
 
     // Toolbar with styled background
     const tb_y: i32 = 28;

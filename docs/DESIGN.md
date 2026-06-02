@@ -1,4 +1,4 @@
-# KVMGUI — Design & Architecture
+# Hangar — Design & Architecture
 
 ## Architecture Overview
 
@@ -77,14 +77,14 @@ sidebar + main content. Canvas for VNC framebuffer display.
 
 ## Persistence
 
-All VM configs stored in `~/.config/kvmgui/vms.json`.
+All VM configs stored in `~/.config/hangar/vms.json`.
 Hand-rolled JSON parser (no `std.json` — linker compatibility).
 `GpuDevice` enum persisted for virtio-gpu / virtio-vga selection.
 
 ## Visual Verification
 
 ```bash
-FLTK_BACKEND=x11 DISPLAY=:99 ./zig-out/bin/kvmgui
+FLTK_BACKEND=x11 DISPLAY=:99 ./zig-out/bin/hangar
 import -display :99 -window root screenshot.png
 ```
 

@@ -10,24 +10,24 @@ set -u
 cd "$(dirname "$0")/.."
 
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-ISOHOME="$(mktemp -d /tmp/kvmgui-fuzzmodalhome.XXXXXX)"
+ISOHOME="$(mktemp -d /tmp/hangar-fuzzmodalhome.XXXXXX)"
 export HOME="$ISOHOME"
 
 fail() { echo "MODAL-FUZZ FAIL: $1"; cleanup; exit 1; }
-cleanup() { pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; rm -rf "$ISOHOME"; }
+cleanup() { pkill -x hangar 2>/dev/null; pkill Xvfb 2>/dev/null; rm -rf "$ISOHOME"; }
 trap cleanup EXIT
 
 command -v Xvfb >/dev/null || { echo "SKIP: Xvfb not installed"; exit 0; }
 python3 -c "import Xlib" 2>/dev/null || { echo "SKIP: python-Xlib missing"; exit 0; }
 
 zig build || fail "build failed"
-mkdir -p "$HOME/.config/kvmgui" "$HOME/VMs"
+mkdir -p "$HOME/.config/hangar" "$HOME/VMs"
 
-pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; sleep 1
+pkill -x hangar 2>/dev/null; pkill Xvfb 2>/dev/null; sleep 1
 Xvfb :99 -screen 0 1280x800x24 -ac >/dev/null 2>&1 &
 sleep 2
 env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE FLTK_BACKEND=x11 DISPLAY=:99 \
-    ./zig-out/bin/kvmgui >/tmp/kvmgui-fuzzmodals.log 2>&1 &
+    ./zig-out/bin/hangar >/tmp/hangar-fuzzmodals.log 2>&1 &
 APP=$!
 sleep 4
 kill -0 "$APP" 2>/dev/null || fail "app died on startup"
@@ -41,13 +41,13 @@ from Xlib.ext import xtest
 d = display.Display(':99')
 SCR_W, SCR_H = 1280, 800
 
-# Find KVMGUI window
+# Find Hangar window
 root = d.screen().root
 WX, WY = 0, 0
 for c in root.query_tree().children:
     try:
         name = c.get_wm_name()
-        if name and 'KVMGUI' in name:
+        if name and 'Hangar' in name:
             geom = c.get_geometry()
             WX, WY = geom.x, geom.y
             break

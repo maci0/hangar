@@ -6,7 +6,7 @@
 //! type (bridged / NAT / host-only), an IPv4 subnet + mask, an optional DHCP
 //! range, and — for bridged switches — the host interface it bridges to.
 //!
-//! Stored separately from VM configs in `~/.config/kvmgui/networks.json`, so
+//! Stored separately from VM configs in `~/.config/hangar/networks.json`, so
 //! the editor owns its own tiny hand-rolled JSON reader/writer here (std.json
 //! is banned project-wide due to f128 linker errors with the system `cc` link
 //! step). The format mirrors `persist.zig`: a flat array of flat objects.
@@ -236,12 +236,12 @@ pub const NetworkSet = struct {
 
 fn getDir(buf: *[512]u8) ?[]const u8 {
     const home = appio.getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/kvmgui", .{home}) catch null;
+    return std.fmt.bufPrint(buf, "{s}/.config/hangar", .{home}) catch null;
 }
 
 fn getPath(buf: *[512]u8) ?[]const u8 {
     const home = appio.getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/kvmgui/networks.json", .{home}) catch null;
+    return std.fmt.bufPrint(buf, "{s}/.config/hangar/networks.json", .{home}) catch null;
 }
 
 // ── Emit ─────────────────────────────────────────────────────────────
@@ -308,7 +308,7 @@ pub fn toJson(set: *const NetworkSet, alloc: std.mem.Allocator) ![]u8 {
     return list.toOwnedSlice(alloc);
 }
 
-/// Persist `set` to `~/.config/kvmgui/networks.json`. Best-effort: creates the
+/// Persist `set` to `~/.config/hangar/networks.json`. Best-effort: creates the
 /// config dir if missing.
 pub fn save(set: *const NetworkSet) !void {
     const alloc = std.heap.page_allocator;

@@ -453,7 +453,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     }
 
     if (config.enable_serial and config.hasName()) {
-        const serial_str = try std.fmt.bufPrint(&bufs.serial_buf, "unix:/tmp/kvmgui-serial-{s}.sock,server=on,wait=off", .{config.getNameSlice()});
+        const serial_str = try std.fmt.bufPrint(&bufs.serial_buf, "unix:/tmp/hangar-serial-{s}.sock,server=on,wait=off", .{config.getNameSlice()});
         try args.append(alloc, "-serial");
         try args.append(alloc, serial_str);
     }
@@ -467,7 +467,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 
     if (config.guest_agent and config.hasName()) {
         try args.append(alloc, "-chardev");
-        const ga_str = try std.fmt.bufPrint(&bufs.serial_buf, "socket,path=/tmp/kvmgui-ga-{s}.sock,server=on,wait=off,id=ga0", .{config.getNameSlice()});
+        const ga_str = try std.fmt.bufPrint(&bufs.serial_buf, "socket,path=/tmp/hangar-ga-{s}.sock,server=on,wait=off,id=ga0", .{config.getNameSlice()});
         try args.append(alloc, ga_str);
         try args.append(alloc, "-device");
         try args.append(alloc, "virtserialport,chardev=ga0,name=org.qemu.guest_agent.0");
@@ -510,7 +510,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     }
 
     if (config.hasName()) {
-        const qmp_str = try std.fmt.bufPrint(&bufs.qmp_buf, "unix:/tmp/kvmgui-qmp-{s}.sock,server=on,wait=off", .{config.getNameSlice()});
+        const qmp_str = try std.fmt.bufPrint(&bufs.qmp_buf, "unix:/tmp/hangar-qmp-{s}.sock,server=on,wait=off", .{config.getNameSlice()});
         try args.append(alloc, "-qmp");
         try args.append(alloc, qmp_str);
     }
@@ -641,7 +641,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 }
 
 /// Start a QEMU process for the given VM configuration.
-/// QEMU stderr is written to /var/tmp/kvmgui-vm-<name>.log for diagnostics.
+/// QEMU stderr is written to /var/tmp/hangar-vm-<name>.log for diagnostics.
 pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
     var args: std.ArrayList([]const u8) = .empty;
     defer args.deinit(allocator);
@@ -652,7 +652,7 @@ pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
     // Build stderr log path from the VM name.
     var err_path_buf: [128]u8 = undefined;
     const err_path: ?[:0]const u8 = if (config.hasName()) blk: {
-        const path = std.fmt.bufPrintZ(&err_path_buf, "/var/tmp/kvmgui-vm-{s}.log", .{config.getNameSlice()}) catch break :blk null;
+        const path = std.fmt.bufPrintZ(&err_path_buf, "/var/tmp/hangar-vm-{s}.log", .{config.getNameSlice()}) catch break :blk null;
         break :blk path;
     } else null;
 
@@ -699,7 +699,7 @@ pub fn buildScriptStr(config: *const vm.VmConfig, allocator: std.mem.Allocator) 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
-    try out.appendSlice(allocator, "#!/bin/bash\n\n# KVMGUI Exported VM Launch Script\n");
+    try out.appendSlice(allocator, "#!/bin/bash\n\n# Hangar Exported VM Launch Script\n");
     if (config.hasName()) {
         try out.print(allocator, "# VM Name: {s}\n\n", .{config.getNameSlice()});
     }
@@ -1225,10 +1225,10 @@ test "fuzz: forkExec/runWait/runCapture over safe argv" {
 test "fuzz: createDiskImage/resize/snapshot over temp qcow2 with random params" {
     const alloc = std.heap.page_allocator;
     // Probe: skip cleanly if qemu-img is unavailable in this environment.
-    createDiskImage("/tmp/kvmgui-qprobe.qcow2", 1, .qcow2, alloc) catch {
+    createDiskImage("/tmp/hangar-qprobe.qcow2", 1, .qcow2, alloc) catch {
         return; // no qemu-img → nothing to fuzz here
     };
-    _ = std.Io.Dir.cwd().deleteFile(appio.io(), "/tmp/kvmgui-qprobe.qcow2") catch {};
+    _ = std.Io.Dir.cwd().deleteFile(appio.io(), "/tmp/hangar-qprobe.qcow2") catch {};
 
     var prng = std.Random.DefaultPrng.init(0xD15C_F0FF);
     const rnd = prng.random();
@@ -1238,7 +1238,7 @@ test "fuzz: createDiskImage/resize/snapshot over temp qcow2 with random params" 
 
     var i: usize = 0;
     while (i < 40) : (i += 1) {
-        const path = std.fmt.bufPrintZ(&path_buf, "/tmp/kvmgui-qfuzz-{d}-{d}.qcow2", .{ std.c.getpid(), i }) catch continue;
+        const path = std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-qfuzz-{d}-{d}.qcow2", .{ std.c.getpid(), i }) catch continue;
         const size: u32 = rnd.uintLessThan(u32, 64) + 1; // 1..64 GB (qcow2 sparse)
         const fmt = vm.DiskFormat.fromIndex(rnd.int(usize));
         createDiskImage(path, size, fmt, alloc) catch {
@@ -1260,13 +1260,13 @@ test "fuzz: createDiskImage/resize/snapshot over temp qcow2 with random params" 
 
         // Linked clone with the just-created image as backing file.
         var clone_buf: [96]u8 = undefined;
-        const clone = std.fmt.bufPrintZ(&clone_buf, "/tmp/kvmgui-qclone-{d}-{d}.qcow2", .{ std.c.getpid(), i }) catch continue;
+        const clone = std.fmt.bufPrintZ(&clone_buf, "/tmp/hangar-qclone-{d}-{d}.qcow2", .{ std.c.getpid(), i }) catch continue;
         createLinkedClone(clone, path, fmt, alloc) catch {};
         _ = std.Io.Dir.cwd().deleteFile(appio.io(), clone) catch {};
 
         // convert to VMDK (stream-optimized) — exercises convertDiskImage
         var vmdk_buf: [96]u8 = undefined;
-        const vmdk = std.fmt.bufPrintZ(&vmdk_buf, "/tmp/kvmgui-qconv-{d}-{d}.vmdk", .{ std.c.getpid(), i }) catch continue;
+        const vmdk = std.fmt.bufPrintZ(&vmdk_buf, "/tmp/hangar-qconv-{d}-{d}.vmdk", .{ std.c.getpid(), i }) catch continue;
         convertDiskImage(path, fmt, vmdk, .vmdk, alloc) catch {};
         _ = std.Io.Dir.cwd().deleteFile(appio.io(), vmdk) catch {};
     }

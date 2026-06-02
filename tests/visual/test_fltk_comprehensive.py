@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Comprehensive FLTK KVMGUI visual test — clicks through every dialog."""
+"""Comprehensive FLTK Hangar visual test — clicks through every dialog."""
 import subprocess, os, time, ctypes, sys
 from pathlib import Path; from PIL import Image, ImageStat
 XPORT=':91'; OUT=Path('tests/visual/screenshots/fltk'); OUT.mkdir(parents=True,exist_ok=True)
@@ -16,7 +16,7 @@ class X11:
 def test(name,fn=None):
     xv=subprocess.Popen(['Xvfb',XPORT,'-screen','0','1280x800x24','-ac'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     time.sleep(0.5); env=os.environ.copy(); env['DISPLAY']=XPORT; env.pop('WAYLAND_DISPLAY',None); env['FLTK_BACKEND']='x11'
-    ap=subprocess.Popen(['./zig-out/bin/kvmgui'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    ap=subprocess.Popen(['./zig-out/bin/hangar'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     time.sleep(2)
     try:
         if fn: x11=X11(XPORT); fn(x11); time.sleep(0.5)

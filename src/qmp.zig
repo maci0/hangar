@@ -32,14 +32,14 @@ const MAX_LINE = 16384;
 ///
 /// Returns `null` if the name is too long to fit in the buffer.
 pub fn socketPath(vm_name: []const u8, buf: *[256]u8) ?[]const u8 {
-    return std.fmt.bufPrint(buf, "/tmp/kvmgui-qmp-{s}.sock", .{vm_name}) catch null;
+    return std.fmt.bufPrint(buf, "/tmp/hangar-qmp-{s}.sock", .{vm_name}) catch null;
 }
 
 /// QMP client for communicating with a single QEMU instance.
 ///
 /// Usage:
 ///   var client = QmpClient{};
-///   try client.connect("/tmp/kvmgui-qmp-MyVM.sock");
+///   try client.connect("/tmp/hangar-qmp-MyVM.sock");
 ///   defer client.disconnect();
 ///   try client.pause();
 ///   try client.cont();
@@ -607,7 +607,7 @@ test "extractJsonString: value with escaped quotes" {
 test "socketPath: builds correct path" {
     var buf: [256]u8 = undefined;
     const path = socketPath("TestVM", &buf) orelse unreachable;
-    try std.testing.expectEqualStrings("/tmp/kvmgui-qmp-TestVM.sock", path);
+    try std.testing.expectEqualStrings("/tmp/hangar-qmp-TestVM.sock", path);
 }
 
 test "extractJsonString: handles tab escape" {
@@ -833,7 +833,7 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
     var iter: usize = 0;
     while (iter < 200) : (iter += 1) {
         var path_buf: [108]u8 = undefined;
-        const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/kvmgui-qmpfuzz-{d}-{d}.sock", .{ c_qmp.getpid(), iter });
+        const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-qmpfuzz-{d}-{d}.sock", .{ c_qmp.getpid(), iter });
         _ = c_qmp.unlink(path.ptr);
 
         const srv = c_qmp.socket(c_qmp.AF.UNIX, c_qmp.SOCK.STREAM, 0);
@@ -917,7 +917,7 @@ test "extractJsonString: first key in a multi-key object" {
 test "socketPath: zero-length name" {
     var buf: [256]u8 = undefined;
     const path = socketPath("", &buf) orelse unreachable;
-    try std.testing.expectEqualStrings("/tmp/kvmgui-qmp-.sock", path);
+    try std.testing.expectEqualStrings("/tmp/hangar-qmp-.sock", path);
 }
 
 test "extractJsonString: slash escape handled" {

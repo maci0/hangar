@@ -1,4 +1,4 @@
-# KVMGUI — TODO / Gap Tracker
+# Hangar — TODO / Gap Tracker
 
 Comprehensive inventory of missing features, unfinished work, and improvement
 opportunities. Organized by priority tier with cross-references to source files
@@ -656,7 +656,7 @@ Now supports all 14 missing operations matching the Web API surface.
 
 | Test | Description | Status |
 |------|-------------|--------|
-| Smoke test | Launch kvmgui under Xvfb, inject keystrokes via XTEST to create a VM, edit settings, delete it | ✅ `tests/smoke_gui.sh` updated for FLTK, passes |
+| Smoke test | Launch hangar under Xvfb, inject keystrokes via XTEST to create a VM, edit settings, delete it | ✅ `tests/smoke_gui.sh` updated for FLTK, passes |
 | Fuzz modals | Open each dialog and inject random key/click sequences | ✅ `tests/fuzz_modals.sh` |
 | Callback fuzz | Direct-fuzz main.zig callbacks via XTEST | ✅ `tests/fuzz_modals.sh` |
 
@@ -1414,7 +1414,7 @@ concatenates it directly into the destination path with zero validation.
 
 `isValidVmName` rejects `\n`, `\r`, `\t`, `"`, `'`, and NUL but allows `/`.
 A VM named `../../etc/cruft` produces socket paths like
-`/tmp/kvmgui-qmp-../../etc/cruft.sock`, escaping `/tmp/`.
+`/tmp/hangar-qmp-../../etc/cruft.sock`, escaping `/tmp/`.
 
 | File | Status |
 |------|--------|
@@ -2555,7 +2555,7 @@ bugs, and UX gaps. This tier tracks the fixes.
 |---|-------------|--------|
 | 33 | CSP `script-src 'unsafe-inline'` unnecessary — all JS is external. Remove it. | ✅ |
 | 34 | CSP missing `frame-ancestors 'none'`, `form-action 'self'`, `base-uri 'self'` | ✅ |
-| 35 | `Server: kvmgui/1.0` header leaks version — use generic `Server: kvmgui` | ✅ |
+| 35 | `Server: hangar/1.0` header leaks version — use generic `Server: hangar` | ✅ |
 
 ### 29.6 Docs — Factual Error
 

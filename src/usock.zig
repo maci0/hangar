@@ -57,7 +57,7 @@ const testing = std.testing;
 
 test "usock: connect/write/read/close round-trip over a real listener" {
     var path_buf: [108]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/kvmgui-usock-test-{d}.sock", .{c.getpid()});
+    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-usock-test-{d}.sock", .{c.getpid()});
     _ = c.unlink(path.ptr);
 
     const srv = c.socket(c.AF.UNIX, c.SOCK.STREAM, 0);
@@ -95,7 +95,7 @@ test "usock: connect/write/read/close round-trip over a real listener" {
 
 test "usock: connect to nonexistent path fails" {
     var path_buf: [108]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/kvmgui-usock-nope-{d}.sock", .{c.getpid()});
+    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-usock-nope-{d}.sock", .{c.getpid()});
     _ = c.unlink(path.ptr);
     try testing.expectError(error.ConnectionFailed, UnixStream.connect(path));
 }

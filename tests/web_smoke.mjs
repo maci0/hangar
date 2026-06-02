@@ -12,10 +12,10 @@ import { tmpdir } from 'os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const BINARY = resolve(ROOT, 'zig-out/bin/kvmgui-web');
+const BINARY = resolve(ROOT, 'zig-out/bin/hangar-web');
 
 // Use a temp HOME so test data doesn't bleed across runs.
-const TMP_HOME = mkdtempSync(resolve(tmpdir(), 'kvmgui-smoke-'));
+const TMP_HOME = mkdtempSync(resolve(tmpdir(), 'hangar-smoke-'));
 
 const PORT = process.env.KV_PORT || (process.argv.includes('--port') ? process.argv[process.argv.indexOf('--port') + 1] : '9879');
 const BASE = `http://localhost:${PORT}`;
@@ -88,7 +88,7 @@ async function selectVm(page, index) {
 }
 
 async function run() {
-    console.log('=== KVMGUI Web E2E Smoke Test ===\n');
+    console.log('=== Hangar Web E2E Smoke Test ===\n');
 
     // Spawn web server
     console.log(`Starting web server on port ${PORT}...`);
@@ -289,7 +289,7 @@ async function run() {
             try {
                 const r = await fetch('/api/reorder', {
                     method: 'POST',
-                    headers: { 'X-API-Key': 'kvmgui' },
+                    headers: { 'X-API-Key': 'hangar' },
                     body: 'from=0&to=0',
                 });
                 return r.ok;

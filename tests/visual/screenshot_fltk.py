@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture FLTK KVMGUI screenshots under Xvfb."""
+"""Capture FLTK Hangar screenshots under Xvfb."""
 import subprocess, os, time, sys
 from PIL import Image, ImageStat
 
@@ -12,7 +12,7 @@ def capture(name, click_x=None, click_y=None, key=None):
     env['DISPLAY'] = XPORT
     env.pop('WAYLAND_DISPLAY', None)
     env['FLTK_BACKEND'] = 'x11'
-    app = subprocess.Popen(['./zig-out/bin/kvmgui'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    app = subprocess.Popen(['./zig-out/bin/hangar'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
     
     if click_x:
@@ -29,11 +29,11 @@ def capture(name, click_x=None, click_y=None, key=None):
             x11.XFlush(d)
             time.sleep(0.5)
     
-    subprocess.run(['import', '-display', XPORT, '-window', 'root', f'/tmp/kvmgui_{name}.png'], timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(['import', '-display', XPORT, '-window', 'root', f'/tmp/hangar_{name}.png'], timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     app.terminate(); app.wait()
     xvfb.terminate(); xvfb.wait()
     
-    img = Image.open(f'/tmp/kvmgui_{name}.png').convert('RGB')
+    img = Image.open(f'/tmp/hangar_{name}.png').convert('RGB')
     s = ImageStat.Stat(img)
     print(f'  {name}: {img.width}x{img.height} std=({s.stddev[0]:.0f},{s.stddev[1]:.0f},{s.stddev[2]:.0f}) blank={s.stddev[0]<5}')
 

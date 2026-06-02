@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Web API integration test — validates all HTTP endpoints.
-# Requires: curl, the kvmgui-web binary built with 'zig build web'.
+# Requires: curl, the hangar-web binary built with 'zig build web'.
 set -euo pipefail
 
 PORT=9876  # Use non-default port to avoid conflicts
-BINARY="$(dirname "$0")/../zig-out/bin/kvmgui-web"
+BINARY="$(dirname "$0")/../zig-out/bin/hangar-web"
 PASS=0
 FAIL=0
 PID=""
@@ -132,7 +132,7 @@ expect_status "404 on missing path" "$BASE/api/nonexistent" 200  # Falls through
 
 echo ""
 echo "=== Static Resources ==="
-expect_body "index.html title" "$BASE/" "KVMGUI"
+expect_body "index.html title" "$BASE/" "Hangar"
 expect_status "favicon 404" "$BASE/favicon.ico" 404
 
 echo ""

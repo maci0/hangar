@@ -9,12 +9,12 @@ set -u
 cd "$(dirname "$0")/.."
 
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-ISOHOME="$(mktemp -d /tmp/kvmgui-smokehome.XXXXXX)"
+ISOHOME="$(mktemp -d /tmp/hangar-smokehome.XXXXXX)"
 export HOME="$ISOHOME"
 
-CFG="$HOME/.config/kvmgui/vms.json"
+CFG="$HOME/.config/hangar/vms.json"
 fail() { echo "SMOKE FAIL: $1"; cleanup; exit 1; }
-cleanup() { pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; rm -rf "$ISOHOME"; }
+cleanup() { pkill -x hangar 2>/dev/null; pkill Xvfb 2>/dev/null; rm -rf "$ISOHOME"; }
 trap cleanup EXIT
 
 command -v Xvfb  >/dev/null || { echo "SKIP: Xvfb not installed";  exit 0; }
@@ -22,14 +22,14 @@ command -v ffmpeg >/dev/null || { echo "SKIP: ffmpeg not installed"; exit 0; }
 python3 -c "import Xlib" 2>/dev/null || { echo "SKIP: python-Xlib missing"; exit 0; }
 
 zig build || fail "build failed"
-mkdir -p "$HOME/.config/kvmgui" "$HOME/VMs"
+mkdir -p "$HOME/.config/hangar" "$HOME/VMs"
 rm -f "$CFG"
 
-pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; sleep 1
+pkill -x hangar 2>/dev/null; pkill Xvfb 2>/dev/null; sleep 1
 Xvfb :99 -screen 0 1280x800x24 -ac >/dev/null 2>&1 &
 sleep 2
 env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE FLTK_BACKEND=x11 DISPLAY=:99 \
-    ./zig-out/bin/kvmgui >/tmp/kvmgui-smoke.log 2>&1 &
+    ./zig-out/bin/hangar >/tmp/hangar-smoke.log 2>&1 &
 APP=$!
 sleep 4
 kill -0 "$APP" 2>/dev/null || fail "app died on startup"
@@ -43,21 +43,21 @@ from Xlib.ext import xtest
 d = display.Display(':99')
 SCR_W, SCR_H = 1280, 800
 
-# Find KVMGUI window position
+# Find Hangar window position
 root = d.screen().root
 WX, WY = 0, 0
 for c in root.query_tree().children:
     try:
         name = c.get_wm_name()
-        if name and 'KVMGUI' in name:
+        if name and 'Hangar' in name:
             geom = c.get_geometry()
             WX, WY = geom.x, geom.y
-            print(f"Found KVMGUI at ({WX},{WY})", flush=True)
+            print(f"Found Hangar at ({WX},{WY})", flush=True)
             break
     except:
         pass
 else:
-    print("WARNING: KVMGUI window not found, using (0,0)", flush=True)
+    print("WARNING: Hangar window not found, using (0,0)", flush=True)
 
 def click(x, y):
     xtest.fake_input(d, X.MotionNotify, x=x, y=y); d.sync(); time.sleep(0.15)

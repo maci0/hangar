@@ -1,4 +1,4 @@
-# AGENTS.md — KVMGUI
+# AGENTS.md — Hangar
 
 Lightweight QEMU VM manager with a VMware Workstation-style GUI.
 Zig 0.16.0 + FLTK 1.4 (via cfltk C bindings). No libvirt dependency.
@@ -6,7 +6,7 @@ Zig 0.16.0 + FLTK 1.4 (via cfltk C bindings). No libvirt dependency.
 ## Build / Run / Test Commands
 
 ```bash
-zig build              # Compile FLTK frontend -> zig-out/bin/kvmgui
+zig build              # Compile FLTK frontend -> zig-out/bin/hangar
 zig build run          # Build + launch the FLTK GUI
 zig build web          # Build + launch web backend (HTTP on :9080)
 zig build test         # Run ALL unit + fuzz tests (29 modules + HV)
@@ -35,7 +35,7 @@ The FLTK GUI requires a running X server:
 
 ```bash
 Xvfb :99 -screen 0 1280x800x24 -ac &
-DISPLAY=:99 ./zig-out/bin/kvmgui &
+DISPLAY=:99 ./zig-out/bin/hangar &
 ```
 
 ## Architecture Overview
@@ -128,11 +128,11 @@ system `cc` link step. All JSON parsing/emitting is hand-rolled in
 `persist.zig`. Never import or use `std.json`.
 
 ### Build link step
-- **FLTK binary** (`kvmgui`): final linking uses system `c++` to work around
+- **FLTK binary** (`hangar`): final linking uses system `c++` to work around
   GCC 15+ `.sframe` section incompatibility.
 - **Test artifacts** (`zig build test`): use `use_llvm = true` + `use_lld = true`
   because the self-hosted backend/linker can't relocate `.sframe` in GCC's crt1.o.
-- **Web backend** (`kvmgui-web`): also uses `use_llvm = true, use_lld = true`.
+- **Web backend** (`hangar-web`): also uses `use_llvm = true, use_lld = true`.
 
 ### Zig 0.16 `std.Io` migration
 0.16 routed filesystem, process, networking, and threading through the
@@ -278,7 +278,7 @@ Follow VMware Workstation conventions:
 - "Take Snapshot" / "Revert to Snapshot"
 
 ### Config persistence
-- Save path: `~/.config/kvmgui/vms.json`
+- Save path: `~/.config/hangar/vms.json`
 - Enum fields stored as QEMU CLI strings (e.g. `"qcow2"`, `"gtk"`, `"user"`).
 - Runtime state (`status`, `pid`) is never persisted.
 - When adding new fields to VmConfig, also update: `VmJson` struct,

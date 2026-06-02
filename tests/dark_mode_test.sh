@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Dark mode screenshot test — launches KVMGUI with dark theme under Xvfb,
+# Dark mode screenshot test — launches Hangar with dark theme under Xvfb,
 # captures the main window, and verifies it renders non-blank pixels.
 #
 # Output: zig-out/captures/30-dark-main.png
@@ -9,13 +9,13 @@
 set -u
 cd "$(dirname "$0")/.."
 
-ISOHOME="$(mktemp -d /tmp/kvmgui-dm.XXXXXX)"
+ISOHOME="$(mktemp -d /tmp/hangar-dm.XXXXXX)"
 export HOME="$ISOHOME"
 
 OUTDIR="$PWD/zig-out/captures"
 mkdir -p "$OUTDIR"
 
-cleanup() { pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; rm -rf "$ISOHOME"; }
+cleanup() { pkill -x hangar 2>/dev/null; pkill Xvfb 2>/dev/null; rm -rf "$ISOHOME"; }
 trap cleanup EXIT
 
 command -v Xvfb  >/dev/null || { echo "SKIP: Xvfb not installed"; exit 0; }
@@ -27,15 +27,15 @@ python3 -c "from PIL import Image; import numpy" 2>/dev/null || {
 zig build || { echo "BUILD FAILED"; exit 1; }
 
 # Pre-create dark-theme config so the app starts in dark mode immediately.
-mkdir -p "$HOME/.config/kvmgui"
-printf '{"theme":"dark","vm":[]}' > "$HOME/.config/kvmgui/vms.json"
+mkdir -p "$HOME/.config/hangar"
+printf '{"theme":"dark","vm":[]}' > "$HOME/.config/hangar/vms.json"
 
-pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; sleep 1
+pkill -x hangar 2>/dev/null; pkill Xvfb 2>/dev/null; sleep 1
 Xvfb :99 -screen 0 1280x800x24 -ac >/dev/null 2>&1 &
 sleep 2
 
 env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE FLTK_BACKEND=x11 DISPLAY=:99 \
-    ./zig-out/bin/kvmgui >/tmp/kvmgui-dm.log 2>&1 &
+    ./zig-out/bin/hangar >/tmp/hangar-dm.log 2>&1 &
 APP=$!
 sleep 4
 kill -0 "$APP" 2>/dev/null || { echo "FAIL: app died on startup"; exit 1; }

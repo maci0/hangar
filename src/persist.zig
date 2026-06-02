@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! VM configuration persistence — JSON save/load to disk.
 //!
-//! Saves VM configurations to `~/.config/kvmgui/vms.json` and loads
+//! Saves VM configurations to `~/.config/hangar/vms.json` and loads
 //! them back at startup.  Runtime state (status, pid) is NOT persisted.
 //!
 //! Format: JSON object with `version` (integer) and `vms` (array of objects).
@@ -89,12 +89,12 @@ const VmJson = struct {
 
 fn getConfigDir(buf: *[512]u8) ?[]const u8 {
     const home = appio.getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/kvmgui", .{home}) catch null;
+    return std.fmt.bufPrint(buf, "{s}/.config/hangar", .{home}) catch null;
 }
 
 fn getConfigPath(buf: *[512]u8) ?[]const u8 {
     const home = appio.getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/kvmgui/vms.json", .{home}) catch null;
+    return std.fmt.bufPrint(buf, "{s}/.config/hangar/vms.json", .{home}) catch null;
 }
 
 // ── Enum string mappers (load direction) ────────────────────────────
@@ -518,7 +518,7 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
 // ── Save ────────────────────────────────────────────────────────────
 
-/// Save all VM configs and preferences to `~/.config/kvmgui/vms.json`.
+/// Save all VM configs and preferences to `~/.config/hangar/vms.json`.
 /// Does not persist runtime state (status, pid).
 pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
     const alloc = std.heap.page_allocator;

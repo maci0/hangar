@@ -15,14 +15,14 @@ cd "$(dirname "$0")/.."
 
 # Isolate config to a throwaway HOME so the test never touches real user data.
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-ISOHOME="$(mktemp -d /tmp/kvmgui-sshome.XXXXXX)"
+ISOHOME="$(mktemp -d /tmp/hangar-sshome.XXXXXX)"
 export HOME="$ISOHOME"
 
 OUTDIR="$PWD/zig-out/captures"
 mkdir -p "$OUTDIR"
 
 fail() { echo "SS FAIL: $1"; cleanup; exit 1; }
-cleanup() { pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; rm -rf "$ISOHOME"; }
+cleanup() { pkill -x hangar 2>/dev/null; pkill Xvfb 2>/dev/null; rm -rf "$ISOHOME"; }
 trap cleanup EXIT
 
 command -v Xvfb  >/dev/null || { echo "SKIP: Xvfb not installed";  exit 0; }
@@ -30,14 +30,14 @@ command -v ffmpeg >/dev/null || { echo "SKIP: ffmpeg not installed"; exit 0; }
 python3 -c "import Xlib" 2>/dev/null || { echo "SKIP: python-Xlib missing"; exit 0; }
 
 zig build || fail "build failed"
-mkdir -p "$HOME/.config/kvmgui" "$HOME/VMs"
+mkdir -p "$HOME/.config/hangar" "$HOME/VMs"
 
-pkill -x kvmgui 2>/dev/null; pkill Xvfb 2>/dev/null; sleep 1
+pkill -x hangar 2>/dev/null; pkill Xvfb 2>/dev/null; sleep 1
 Xvfb :99 -screen 0 1280x800x24 -ac >/dev/null 2>&1 &
 sleep 2
 
 env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE FLTK_BACKEND=x11 DISPLAY=:99 \
-    ./zig-out/bin/kvmgui >/tmp/kvmgui-ss.log 2>&1 &
+    ./zig-out/bin/hangar >/tmp/hangar-ss.log 2>&1 &
 APP=$!
 sleep 4
 kill -0 "$APP" 2>/dev/null || fail "app died on startup"
@@ -53,23 +53,23 @@ d = display.Display(':99')
 OUT = os.environ.get('OUTDIR', '/tmp')
 SCR_W, SCR_H = 1280, 800
 
-# ── Find the KVMGUI window and its screen position ──
+# ── Find the Hangar window and its screen position ──
 root = d.screen().root
 win_x, win_y = 0, 0
 win_w, win_h = SCR_W, SCR_H
 for c in root.query_tree().children:
     try:
         name = c.get_wm_name()
-        if name and 'KVMGUI' in name:
+        if name and 'Hangar' in name:
             geom = c.get_geometry()
             win_x, win_y = geom.x, geom.y
             win_w, win_h = geom.width, geom.height
-            print(f"Found KVMGUI at ({win_x},{win_y}) size {win_w}x{win_h}", flush=True)
+            print(f"Found Hangar at ({win_x},{win_y}) size {win_w}x{win_h}", flush=True)
             break
     except:
         pass
 else:
-    print("WARNING: KVMGUI window not found, using (0,0)", flush=True)
+    print("WARNING: Hangar window not found, using (0,0)", flush=True)
 
 # Offset to convert window-relative coordinates to screen coordinates.
 WX, WY = win_x, win_y

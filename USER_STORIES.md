@@ -1,4 +1,4 @@
-# KVMGUI User Stories
+# Hangar User Stories
 
 Comprehensive user journey map covering every interaction path in the application.
 
@@ -21,7 +21,7 @@ Comprehensive user journey map covering every interaction path in the applicatio
 
 ### US-1.2: Launch with Existing VMs
 **As a** returning user,
-**I want to** see my previously created VMs loaded from `~/.config/kvmgui/vms.json`,
+**I want to** see my previously created VMs loaded from `~/.config/hangar/vms.json`,
 **so that** I can continue managing my virtual machines.
 
 **Acceptance Criteria:**
@@ -216,7 +216,7 @@ Comprehensive user journey map covering every interaction path in the applicatio
 **Acceptance Criteria:**
 - All field values are written back to the VmConfig
 - VM Library and Summary panel refresh
-- Configuration is persisted to `~/.config/kvmgui/vms.json`
+- Configuration is persisted to `~/.config/hangar/vms.json`
 - Dialog closes
 
 ### US-3.6: Cancel Edit
@@ -411,7 +411,7 @@ Comprehensive user journey map covering every interaction path in the applicatio
 
 **Acceptance Criteria:**
 - "Console" tab shows a multiline text widget
-- Serial data is read from a Unix socket (`/tmp/kvmgui-serial-<name>.sock`)
+- Serial data is read from a Unix socket (`/tmp/hangar-serial-<name>.sock`)
 - Non-ASCII ANSI escape codes are filtered to prevent UI freezing
 - Data is appended incrementally (not full refresh)
 - Connection is auto-attempted when VM is running, serial is enabled, and not yet connected
@@ -437,7 +437,7 @@ Comprehensive user journey map covering every interaction path in the applicatio
 **so that** changes survive application restarts.
 
 **Acceptance Criteria:**
-- Configurations saved to `~/.config/kvmgui/vms.json`
+- Configurations saved to `~/.config/hangar/vms.json`
 - Save occurs after: creating a new VM, editing settings, or any `appRefreshAll()` call
 - Save failures are silently ignored (non-critical)
 - Runtime state (status, PID) is never persisted
@@ -448,7 +448,7 @@ Comprehensive user journey map covering every interaction path in the applicatio
 **so that** I see my VMs immediately.
 
 **Acceptance Criteria:**
-- Configurations loaded from `~/.config/kvmgui/vms.json`
+- Configurations loaded from `~/.config/hangar/vms.json`
 - Enum fields are stored as QEMU CLI strings (e.g., "qcow2", "user", "gtk")
 - Unknown enum values default to safe fallbacks
 - Hand-rolled JSON parser (no `std.json` due to f128 linker issues)

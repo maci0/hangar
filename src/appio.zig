@@ -2,7 +2,7 @@
 //! Process-wide `std.Io` instance and small timing helpers.
 //!
 //! Zig 0.16 routes filesystem, process, and networking calls through the
-//! `std.Io` interface, which must be threaded through every call. KVMGUI is a
+//! `std.Io` interface, which must be threaded through every call. Hangar is a
 //! synchronous GUI app, so we keep a single lazily-initialised threaded `Io`
 //! and hand it out on demand rather than plumbing it through every function.
 
@@ -59,9 +59,9 @@ test "appio: io() returns a usable instance and caches it" {
 extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
 test "appio: getenv known + unknown" {
-    _ = setenv("KVMGUI_TEST_VAR", "hello123", 1);
-    try testing.expectEqualStrings("hello123", getenv("KVMGUI_TEST_VAR").?);
-    try testing.expect(getenv("KVMGUI_DEFINITELY_UNSET_XYZ_42") == null);
+    _ = setenv("Hangar_TEST_VAR", "hello123", 1);
+    try testing.expectEqualStrings("hello123", getenv("Hangar_TEST_VAR").?);
+    try testing.expect(getenv("Hangar_DEFINITELY_UNSET_XYZ_42") == null);
 }
 
 test "appio: sleepMs waits at least the requested time" {

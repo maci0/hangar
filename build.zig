@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) !void {
         exe_mod.linkSystemLibrary(lib, .{});
     }
 
-    const exe_obj = b.addObject(.{ .name = "kvmgui", .root_module = exe_mod });
+    const exe_obj = b.addObject(.{ .name = "hangar", .root_module = exe_mod });
     const cxx = b.findProgram(&.{"c++"}, &.{}) catch "c++";
     const exe_link = b.addSystemCommand(&.{cxx});
     exe_link.addArtifactArg(exe_obj);
@@ -25,12 +25,12 @@ pub fn build(b: *std.Build) !void {
     exe_link.addArg("-lfltk_images");
     exe_link.addArg("-lfltk");
     exe_link.addArgs(&.{ "-lX11", "-lXext", "-lXinerama", "-lXcursor", "-lXrender", "-lXfixes", "-lXft", "-lfontconfig", "-lpango-1.0", "-lpangoxft-1.0", "-lpangoft2-1.0", "-lpangocairo-1.0", "-lcairo", "-lgobject-2.0", "-lglib-2.0", "-lharfbuzz", "-lfreetype", "-lwayland-client", "-lwayland-cursor", "-lxkbcommon", "-ldbus-1", "-ldecor-0", "-ldl", "-lpthread", "-lm", "-ljpeg", "-lpng", "-lz", "-lvncclient", "-lspice-client-glib-2.0", "-lgio-2.0", "-lfltk_gl", "-lGL" });
-    const exe_output = exe_link.addPrefixedOutputFileArg("-o", "kvmgui");
-    const exe_install = b.addInstallBinFile(exe_output, "kvmgui");
+    const exe_output = exe_link.addPrefixedOutputFileArg("-o", "hangar");
+    const exe_install = b.addInstallBinFile(exe_output, "hangar");
     b.getInstallStep().dependOn(&exe_install.step);
 
-    const run = b.step("run", "Run kvmgui");
-    const run_cmd = b.addSystemCommand(&.{b.getInstallPath(.bin, "kvmgui")});
+    const run = b.step("run", "Run hangar");
+    const run_cmd = b.addSystemCommand(&.{b.getInstallPath(.bin, "hangar")});
     run_cmd.step.dependOn(&exe_install.step);
     run.dependOn(&run_cmd.step);
 
@@ -42,11 +42,11 @@ pub fn build(b: *std.Build) !void {
     web_mod.linkSystemLibrary("spice-client-glib-2.0", .{});
     web_mod.linkSystemLibrary("gio-2.0", .{});
     web_mod.addIncludePath(.{ .cwd_relative = "/usr/include" });
-    const web_exe = b.addExecutable(.{ .name = "kvmgui-web", .root_module = web_mod, .use_llvm = true, .use_lld = true });
+    const web_exe = b.addExecutable(.{ .name = "hangar-web", .root_module = web_mod, .use_llvm = true, .use_lld = true });
     b.installArtifact(web_exe);
 
     const web_run = b.step("web", "Run web frontend");
-    const web_cmd = b.addSystemCommand(&.{b.getInstallPath(.bin, "kvmgui-web")});
+    const web_cmd = b.addSystemCommand(&.{b.getInstallPath(.bin, "hangar-web")});
     web_cmd.step.dependOn(&web_exe.step);
     web_run.dependOn(&web_cmd.step);
 

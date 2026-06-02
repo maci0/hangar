@@ -1,7 +1,7 @@
 .{
-    .name = .kvmgui,
+    .name = .hangar,
     .version = "0.1.0",
-    .fingerprint = 0x4791ed6106445a3d,
+    .fingerprint = 0xa5bb650a74c7a7e7,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{

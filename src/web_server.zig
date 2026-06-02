@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! KVMGUI — Web Frontend (HTTP server + HTML/CSS UI)
+//! Hangar — Web Frontend (HTTP server + HTML/CSS UI)
 //! Serves a VMware WS7-style UI via embedded HTTP server.
 //! Open http://localhost:9080 in any browser.
 const std = @import("std");
@@ -36,7 +36,7 @@ const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 const HTTP_INTERNAL_ERROR: u16 = 500;
 
 const BIND_ADDR: [4]u8 = .{ 0, 0, 0, 0 }; // 0.0.0.0 — accessible remotely
-const API_KEY: []const u8 = "kvmgui"; // default API key for X-API-Key auth
+const API_KEY: []const u8 = "hangar"; // default API key for X-API-Key auth
 var auth_token: [64]u8 = [_]u8{0} ** 64;
 var auth_token_len: usize = 0;
 
@@ -212,7 +212,7 @@ fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8
 
     if (!writeAll(conn, h_ct.ptr, h_ct.len)) return;
     if (!writeAll(conn, ct.ptr, ct.len)) return;
-    const h_server: []const u8 = "\r\nServer: kvmgui";
+    const h_server: []const u8 = "\r\nServer: hangar";
     if (!writeAll(conn, h_server.ptr, h_server.len)) return;
     if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
         const h_cc: []const u8 = "\r\nCache-Control: public, max-age=86400";
@@ -252,7 +252,7 @@ fn writeStreamHeaders(conn: c.fd_t, status: u16, ct: []const u8, content_len: u6
     if (!writeAll(conn, h_csp.ptr, h_csp.len)) return;
     if (!writeAll(conn, h_ct.ptr, h_ct.len)) return;
     if (!writeAll(conn, ct.ptr, ct.len)) return;
-    const h_server: []const u8 = "\r\nServer: kvmgui";
+    const h_server: []const u8 = "\r\nServer: hangar";
     if (!writeAll(conn, h_server.ptr, h_server.len)) return;
     if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
         const h_cc: []const u8 = "\r\nCache-Control: public, max-age=86400";
@@ -577,7 +577,7 @@ fn serveHtml(conn: c.fd_t) void {
 fn serveConfigRaw() ![]const u8 {
     var path_buf: [512]u8 = undefined;
     const home = appio.getenv("HOME") orelse return "{}";
-    const path = std.fmt.bufPrint(&path_buf, "{s}/.config/kvmgui/vms.json", .{home}) catch return "{}";
+    const path = std.fmt.bufPrint(&path_buf, "{s}/.config/hangar/vms.json", .{home}) catch return "{}";
     const raw = std.Io.Dir.cwd().readFileAlloc(
         appio.io(),
         path,
@@ -785,7 +785,7 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     var sock_buf: [256]u8 = undefined;
     const sock_path = std.fmt.bufPrintZ(
         &sock_buf,
-        "/tmp/kvmgui-serial-{s}.sock",
+        "/tmp/hangar-serial-{s}.sock",
         .{v.getNameSlice()},
     ) catch return;
 
@@ -1101,7 +1101,7 @@ fn handlePower(req: []const u8) ![]const u8 {
             qemu.startVm(v, std.heap.page_allocator) catch {
                 // Try to include QEMU stderr in the error response for diagnostics.
                 var log_path_buf: [128]u8 = [_]u8{0} ** 128;
-                const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/kvmgui-vm-{s}.log", .{v.getNameSlice()}) catch null;
+                const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/hangar-vm-{s}.log", .{v.getNameSlice()}) catch null;
                 const err_detail = if (log_path) |lp| readStartupLog(lp) else "";
                 if (err_detail.len > 0) {
                     return std.fmt.allocPrint(std.heap.page_allocator, "start err: {s}", .{err_detail}) catch "start err";
@@ -1496,7 +1496,7 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     if (!v.isAlive()) return "not running";
 
     var state_path: [256]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&state_path, "/tmp/kvmgui-state-{s}.bin", .{v.getNameSlice()}) catch return "path err";
+    const path = std.fmt.bufPrintZ(&state_path, "/tmp/hangar-state-{s}.bin", .{v.getNameSlice()}) catch return "path err";
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
     const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
@@ -2702,7 +2702,7 @@ test "fuzz: parseIdx never panics on random URL-like input" {
 }
 
 test "checkAuth: accepts correct default API key" {
-    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: kvmgui\r\n\r\n";
+    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: hangar\r\n\r\n";
     try std.testing.expect(checkAuth(req));
 }
 
@@ -2736,7 +2736,7 @@ test "checkAuth: rejects wrong custom auth token" {
 
 test "checkAuth: key at end with no trailing CR uses rest of request" {
     // Key at end of headers (before \r\n\r\n) — still valid.
-    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: kvmgui\r\n\r\n";
+    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: hangar\r\n\r\n";
     try std.testing.expect(checkAuth(req));
 }
 
@@ -2755,7 +2755,7 @@ test "checkAuth: key value is empty string when header ends at colon-space" {
 }
 
 test "checkAuth: partial header name match is not fooled" {
-    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key2: kvmgui\r\n\r\n";
+    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key2: hangar\r\n\r\n";
     try std.testing.expect(!checkAuth(req));
 }
 
@@ -2841,13 +2841,13 @@ test "fuzz: checkAuth never panics on random header input" {
 }
 
 test "checkAuth: multiple X-API-Key headers uses first match" {
-    const req = "GET /api/vms HTTP/1.1\r\nX-API-Key: wrong\r\nX-API-Key: kvmgui\r\n\r\n";
+    const req = "GET /api/vms HTTP/1.1\r\nX-API-Key: wrong\r\nX-API-Key: hangar\r\n\r\n";
     try std.testing.expect(!checkAuth(req)); // first match is "wrong"
 }
 
 test "checkAuth: X-API-Key in body is ignored (only headers searched)" {
     // checkAuth only searches headers (before \r\n\r\n) — body keys are ignored.
-    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\n\r\nX-API-Key: kvmgui\r\n";
+    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\n\r\nX-API-Key: hangar\r\n";
     try std.testing.expect(!checkAuth(req));
 }
 
@@ -2857,7 +2857,7 @@ test "checkAuth: binary null in key value" {
     @memcpy(buf[0..prefix.len], prefix);
     @memset(buf[prefix.len..][0..5], 0); // null bytes in key value
     buf[prefix.len + 5] = '\r';
-    // Null bytes mean the provided key won't match "kvmgui" even if prefix is correct
+    // Null bytes mean the provided key won't match "hangar" even if prefix is correct
     try std.testing.expect(!checkAuth(buf[0 .. prefix.len + 6]));
 }
 
@@ -3278,7 +3278,7 @@ pub fn main() !void {
     }
 
     // Create Unix socket listener for local clients
-    const unix_path = "/tmp/kvmgui-daemon.sock";
+    const unix_path = "/tmp/hangar-daemon.sock";
     _ = c.unlink(unix_path);
     const unix_sock = c.socket(AF_UNIX, SOCK_STREAM, 0);
     unix_sock_fd = unix_sock;
@@ -3295,7 +3295,7 @@ pub fn main() !void {
         return;
     }
     if (c.bind(unix_sock, @ptrCast(&unix_addr), @intCast(unix_len)) != 0) {
-        logErr("Failed to bind Unix socket — is /tmp/kvmgui-daemon.sock stale?");
+        logErr("Failed to bind Unix socket — is /tmp/hangar-daemon.sock stale?");
         return;
     }
     if (c.listen(unix_sock, 10) != 0) {
@@ -3304,7 +3304,7 @@ pub fn main() !void {
     }
 
     std.debug.print("\n╔══════════════════════════════════════════════╗\n", .{});
-    std.debug.print("║  KVMGUI Daemon v1.0                         ║\n", .{});
+    std.debug.print("║  Hangar Daemon v1.0                         ║\n", .{});
     std.debug.print("║  TCP:   http://0.0.0.0:{d}                 ║\n", .{port});
     std.debug.print("║  Unix:  unix://{s}       ║\n", .{unix_path});
     std.debug.print("║  Health: GET /api/health                    ║\n", .{});

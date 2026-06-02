@@ -22,7 +22,7 @@ python3 -c "from PIL import Image" 2>/dev/null || { echo "SKIP: Pillow not insta
 zig build || fail "build failed"
 
 # ── Override config for dark theme & predictable window size ──
-CONFIG_PATH="$HOME/.config/kvmgui/vms.json"
+CONFIG_PATH="$HOME/.config/hangar/vms.json"
 BACKUP_PATH=""
 ORIG_RAW=""
 

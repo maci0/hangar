@@ -31,7 +31,7 @@ cx, cy, cw, ch = h.win_pos
 # resized it.  Use xdotool to set the exact size we expect.
 if cw != 1200 or ch != 700:
     subprocess.run(
-        ["xdotool", "search", "--name", "KVMGUI", "windowsize", "1200", "700"],
+        ["xdotool", "search", "--name", "Hangar", "windowsize", "1200", "700"],
         env={"DISPLAY": h.display},
         timeout=3,
     )
@@ -210,7 +210,7 @@ press_esc()
 # ══════════════════════════════════════════════════════════════════
 click_menu(M_HELP)
 time.sleep(0.3)
-# "About KVMGUI" is 1st item in Help menu
+# "About Hangar" is 1st item in Help menu
 x11.click(M_HELP + 20, cy + 22 + 1 * 22)
 time.sleep(0.6)
 ss("all_14_about")

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Web UI visual end-to-end test — screenshots every view + modal.
-// Requires: puppeteer, a running kvmgui-web binary.
+// Requires: puppeteer, a running hangar-web binary.
 // Usage: node tests/visual/e2e_web_screenshots.mjs [--port PORT]
 
 import puppeteer from 'puppeteer';
@@ -12,7 +12,7 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../..');
 const SCREENSHOT_DIR = resolve(ROOT, 'tests/visual/screenshots/web');
-const BINARY = resolve(ROOT, 'zig-out/bin/kvmgui-web');
+const BINARY = resolve(ROOT, 'zig-out/bin/hangar-web');
 
 const PORT = process.env.KV_PORT || (process.argv.includes('--port') ? process.argv[process.argv.indexOf('--port') + 1] : '9877');
 const BASE = `http://localhost:${PORT}`;
@@ -141,7 +141,7 @@ async function run() {
     // Start server
     console.log(`Starting web server on port ${PORT}...`);
     // Clean state from previous runs
-    try { spawn('rm', ['-f', `${process.env.HOME}/.config/kvmgui/vms.json`], { stdio: 'pipe' }); } catch {}
+    try { spawn('rm', ['-f', `${process.env.HOME}/.config/hangar/vms.json`], { stdio: 'pipe' }); } catch {}
     serverPid = spawn(BINARY, [], {
         cwd: ROOT,
         env: { ...process.env, KV_PORT: PORT, KV_API_KEY: API_KEY },

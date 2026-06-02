@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! vmrun — CLI tool for managing KVMGUI VMs remotely.
+//! vmrun — CLI tool for managing Hangar VMs remotely.
 //!
-//! Connects to a KVMGUI web server via the transport abstraction layer
+//! Connects to a Hangar web server via the transport abstraction layer
 //! and issues commands: list, start, stop, restart, clone, delete, suspend,
 //! pause, resume, shutdown, reset, rename, cad, snapshots, linked-clone,
 //! import, export.
@@ -34,7 +34,7 @@ const c = std.c;
 const transport = @import("transport.zig");
 
 const usage =
-    \\vmrun — KVMGUI remote VM manager
+    \\vmrun — Hangar remote VM manager
     \\
     \\Usage: vmrun <server-url> <command> [args...]
     \\

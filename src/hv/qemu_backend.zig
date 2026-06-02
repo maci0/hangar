@@ -194,7 +194,7 @@ fn getDisplayPort(ctx: hv.VmmHandle) ?u16 {
 fn getSerialSocket(ctx: hv.VmmHandle) ?[]const u8 {
     const qv = getQv(ctx);
     if (!qv.config.enable_serial or !qv.config.hasName()) return null;
-    // Socket path is /tmp/kvmgui-serial-<name>.sock — computed at runtime.
+    // Socket path is /tmp/hangar-serial-<name>.sock — computed at runtime.
     return null; // Caller should use uimath.serialSocketPath
 }
 

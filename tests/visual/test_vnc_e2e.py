@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-KVMGUI VNC End-to-End Test
+Hangar VNC End-to-End Test
 ==========================
 
 Tests the complete VNC display pipeline end-to-end:
   QEMU VNC server → libvncclient → framebuffer → Cairo → libui-ng Area widget
 
 Strategy:
-  1. Pre-seed ~/.config/kvmgui/vms.json with a VM configured for embedded VNC
+  1. Pre-seed ~/.config/hangar/vms.json with a VM configured for embedded VNC
   2. Create a tiny disk image (QEMU boots to SeaBIOS "No bootable device")
-  3. Launch KVMGUI in Xvfb — it loads the config, VM appears in the list
+  3. Launch Hangar in Xvfb — it loads the config, VM appears in the list
   4. Click "▶ Start" toolbar button → QEMU spawns with -vnc localhost:N
   5. Wait for VNC connection (auto-retry via 33ms display timer)
   6. Click the "Display" tab
@@ -54,7 +54,7 @@ from test_visual import X11, take_screenshot, analyse_image, ImageStats, TestRes
 # ---------------------------------------------------------------------------
 
 REPO = Path(__file__).resolve().parent.parent.parent
-BINARY = REPO / "zig-out" / "bin" / "kvmgui"
+BINARY = REPO / "zig-out" / "bin" / "hangar"
 SCREENSHOT_DIR = Path(__file__).resolve().parent / "screenshots" / "vnc_e2e"
 
 VNC_PORT = 5955  # Display :55, unlikely to conflict
@@ -94,7 +94,7 @@ def create_test_environment(tmpdir: str) -> str:
 
     Returns the absolute disk image path.
     """
-    config_dir = Path(tmpdir) / ".config" / "kvmgui"
+    config_dir = Path(tmpdir) / ".config" / "hangar"
     config_dir.mkdir(parents=True)
 
     vm_dir = Path(tmpdir) / "VMs"
@@ -273,7 +273,7 @@ class VncE2ETest:
             raise RuntimeError(f"VNC port {VNC_PORT} already in use — cannot run test")
 
         # Create isolated test environment
-        self.tmpdir = tempfile.mkdtemp(prefix="kvmgui-vnc-test-")
+        self.tmpdir = tempfile.mkdtemp(prefix="hangar-vnc-test-")
         log.info("Temp HOME: %s", self.tmpdir)
         create_test_environment(self.tmpdir)
 
@@ -336,7 +336,7 @@ class VncE2ETest:
         log.info("X11 input ready")
 
     def start_app(self):
-        """Launch kvmgui on the virtual display with isolated HOME."""
+        """Launch hangar on the virtual display with isolated HOME."""
         env = self._make_env()
         log.info("Launching %s...", BINARY.name)
         self.app_proc = subprocess.Popen(
@@ -363,7 +363,7 @@ class VncE2ETest:
 
     def _find_window(self) -> tuple:
         assert self.x11 is not None
-        wid = self.x11.find_window_by_name("KVMGUI")
+        wid = self.x11.find_window_by_name("Hangar")
         if wid:
             pos = self.x11.get_window_geometry(wid)
             log.info(
@@ -699,7 +699,7 @@ class VncE2ETest:
     def run_all(self) -> bool:
         """Run all VNC end-to-end tests. Returns True if all passed."""
         print("\n" + "=" * 60)
-        print("KVMGUI VNC End-to-End Test")
+        print("Hangar VNC End-to-End Test")
         print("=" * 60)
 
         try:
@@ -779,7 +779,7 @@ class VncE2ETest:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="KVMGUI VNC End-to-End Test — verifies the full VNC display pipeline",
+        description="Hangar VNC End-to-End Test — verifies the full VNC display pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:

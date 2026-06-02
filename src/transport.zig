@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! KVMGUI — Transport Abstraction Layer
+//! Hangar — Transport Abstraction Layer
 //! Supports Unix sockets, TCP/HTTP, and shared memory for client↔daemon communication.
 const std = @import("std");
 const c = std.c;
@@ -274,15 +274,15 @@ test "Url parse: tcp" {
 }
 
 test "Url parse: unix" {
-    const u = Url.parse("unix:///var/run/kvmgui.sock").?;
+    const u = Url.parse("unix:///var/run/hangar.sock").?;
     try std.testing.expectEqual(Proto.unix, u.proto);
-    try std.testing.expectEqualStrings("/var/run/kvmgui.sock", u.path[0..u.path_len]);
+    try std.testing.expectEqualStrings("/var/run/hangar.sock", u.path[0..u.path_len]);
 }
 
 test "Url parse: shm" {
-    const u = Url.parse("shm:///kvmgui").?;
+    const u = Url.parse("shm:///hangar").?;
     try std.testing.expectEqual(Proto.shm, u.proto);
-    try std.testing.expectEqualStrings("/kvmgui", u.path[0..u.path_len]);
+    try std.testing.expectEqualStrings("/hangar", u.path[0..u.path_len]);
 }
 
 test "Url parse: no scheme defaults to tcp" {
