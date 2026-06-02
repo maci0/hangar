@@ -2977,3 +2977,60 @@ tokens. Light theme uses brighter surfaces with slightly stronger blur
 | `zig build` | ✅ Clean |
 | `zig build test` | ✅ 1770/1770 pass |
 
+---
+
+## Tier 39 — Cross-UI Feature Parity & QEMU Capability Gaps
+
+Audit of FLTK ↔ Web feature parity plus QEMU capabilities not yet surfaced
+in either UI.
+
+### 39.1 — Web UI features missing from FLTK
+
+| # | Description | Status |
+|---|-------------|--------|
+| 1 | Interactive serial terminal input: FLTK serial is read-only `Fl_Browser`; Web serial is fully interactive (sends escape sequences, arrow keys, Ctrl+letter) | ⬜ |
+| 2 | Toast notification system: Web has success/error/info/warn toasts with auto-dismiss; FLTK has only status bar text | ⬜ |
+| 3 | Undo delete: Web shows undo toast on VM delete with full config restore; FLTK has no undo mechanism | ⬜ |
+| 4 | Drag-to-reorder VM list: Web has HTML5 DnD + touch pointer-event reorder; FLTK `Fl_Browser` does not support DnD — consider click-button reorder (Move Up/Move Down) | ⬜ |
+| 5 | Skeleton loading states: Web shows shimmer placeholders during initial VM list load; FLTK directly populates | ⬜ |
+| 6 | Serial terminal export/clear: Web has Export .txt + Clear buttons; FLTK serial has neither | ⬜ |
+
+### 39.2 — FLTK features missing from Web
+
+| # | Description | Status |
+|---|-------------|--------|
+| 7 | Migration with progress/polling/cancel: FLTK migration does QMP polling with progress bar and cancel; Web is fire-and-forget | ⬜ |
+| 8 | Real OVF export with `qemu-img convert` to VMDK: FLTK does async disk conversion with progress; Web streams a pre-built OVA blob | ⬜ |
+| 9 | MAC address auto-generation on VM create/edit: FLTK generates unique MACs with collision checking; Web delegates to server (create endpoint may not set MAC) | ⬜ |
+| 10 | VM liveness polling timer: FLTK has a 2-second timer that reaps dead VMs and disconnects dead displays; Web relies on periodic refresh() calls | ⬜ |
+| 11 | Context menu on VM list: FLTK has right-click context menu (Power, Settings, Clone, Rename, Delete, Snapshot); Web has context menu but fewer items | ⬜ |
+
+### 39.3 — QEMU features not surfaced in either UI
+
+| # | Description | Status |
+|---|-------------|--------|
+| 12 | Boot order UI: backend supports `pxe` in boot order enum; neither UI exposes boot device ordering or PXE boot | ⬜ |
+| 13 | USB tablet toggle: `-device usb-tablet` provides smooth mouse in VNC/SPICE; not configurable in either UI | ⬜ |
+| 14 | virtio-rng toggle: `-object rng-random -device virtio-rng-pci` for guest entropy; not exposed | ⬜ |
+| 15 | Guest agent channel: virtio-serial channel for `qemu-guest-agent` (guest-info, guest-shutdown, guest-network-get-interfaces); not configured or queried | ⬜ |
+| 16 | CPU model selection: always defaults to `host` (KVM) or `qemu64` (TCG); no UI to pick specific models | ⬜ |
+| 17 | Watchdog: `-watchdog i6300esb` with action (reset/poweroff/pause/none); not exposed | ⬜ |
+| 18 | Disk cache mode: `-drive cache=writeback|writethrough|none|directsync|unsafe`; hardcoded in arg builder | ⬜ |
+| 19 | TPM: `-tpmdev` + `-device tpm-tis` for virtual TPM 2.0 (required for Windows 11 guests) | ⬜ |
+| 20 | Secure Boot / SMM: `-machine q35,smm=on` + UEFI firmware vars for Secure Boot | ⬜ |
+| 21 | Hyper-V enlightenments: `-cpu host,hv_relaxed,hv_spinlocks=0x1fff,...` for Windows guest optimization | ⬜ |
+| 22 | Hugepages / memory backend: `-mem-prealloc`, `-mem-path /dev/hugepages` for performance | ⬜ |
+| 23 | IO threads: `-object iothread` + `virtio-blk-pci,iothread=...` for block I/O threading | ⬜ |
+| 24 | Disk I/O throttling: `-drive throttling.bps-total=...` for rate limiting; not in VM config model | ⬜ |
+| 25 | Ballooning: `-balloon virtio` for memory balloon driver; no QMP balloon commands | ⬜ |
+| 26 | Host autostart: no option to auto-start VMs when host boots (systemd service per VM) | ⬜ |
+
+### 39.4 — Polish & Infrastructure
+
+| # | Description | Status |
+|---|-------------|--------|
+| 27 | FLTK dark mode screenshots auto-compare against golden references (add to `zig build test` or smoke) | ⬜ |
+| 28 | Web UI fullscreen (F11) mode for display-only view (hide sidebar/toolbar/statusbar when in display tab) | ⬜ |
+| 29 | Keyboard shortcut reference overlay parity: FLTK shows in About dialog; Web shows dedicated modal on first visit | ⬜ |
+| 30 | `zig build web-smoke` should run as part of CI-like `zig build test` umbrella (currently separate step) | ⬜ |
+
