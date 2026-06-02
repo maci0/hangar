@@ -19,7 +19,7 @@ pub const SpinMutex = struct {
             if (spins & 63 == 0) {
                 // Yield to the OS every 64 spins to avoid 100% CPU
                 // under contention while keeping the fast-path lock-free.
-                std.Thread.yield() catch {};
+                _ = std.c.sched_yield();
             } else {
                 std.atomic.spinLoopHint();
             }

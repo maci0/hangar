@@ -360,6 +360,15 @@ pub const VmStatus = enum(u8) {
             .suspended => "Suspended",
         };
     }
+
+    /// Parse a VmStatus from its toStr representation.
+    pub fn fromStr(s: []const u8) VmStatus {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: VmStatus = @enumFromInt(f.value);
+            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .stopped;
+    }
 };
 
 // ── Guest OS Type ────────────────────────────────────────────────────
@@ -1964,6 +1973,18 @@ test "VmStatus: label values" {
     try std.testing.expectEqualStrings("Powered On", std.mem.span(VmStatus.running.label()));
     try std.testing.expectEqualStrings("Paused", std.mem.span(VmStatus.paused.label()));
     try std.testing.expectEqualStrings("Suspended", std.mem.span(VmStatus.suspended.label()));
+}
+
+test "VmStatus: fromStr values" {
+    try std.testing.expectEqual(VmStatus.stopped, VmStatus.fromStr("stopped"));
+    try std.testing.expectEqual(VmStatus.running, VmStatus.fromStr("running"));
+    try std.testing.expectEqual(VmStatus.paused, VmStatus.fromStr("paused"));
+    try std.testing.expectEqual(VmStatus.suspended, VmStatus.fromStr("suspended"));
+}
+
+test "VmStatus: fromStr unknown defaults to stopped" {
+    try std.testing.expectEqual(VmStatus.stopped, VmStatus.fromStr("invalid"));
+    try std.testing.expectEqual(VmStatus.stopped, VmStatus.fromStr(""));
 }
 
 // -- DisplayResolution (full standard suite) --

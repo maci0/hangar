@@ -19,8 +19,6 @@ const std = @import("std");
 const vm = @import("vm.zig");
 const appio = @import("appio.zig");
 
-const W = std.posix.W;
-
 /// libc PATH-searching exec. `std.process` in 0.16 routes spawning through the
 /// `std.Io` interface, which would hand the child an empty environment unless
 /// we capture and forward the parent environ. A direct `fork`+`execvp` instead
@@ -57,7 +55,7 @@ pub fn runWait(argv: []const []const u8, allocator: std.mem.Allocator, err_path:
     var status: c_int = 0;
     _ = std.c.waitpid(pid, &status, 0);
     const ustatus: u32 = @bitCast(status);
-    if (!W.IFEXITED(ustatus) or W.EXITSTATUS(ustatus) != 0) {
+    if ((ustatus & 0x7f) != 0 or (ustatus >> 8) & 0xff != 0) {
         return QemuError.ProcessFailed;
     }
 }
@@ -107,7 +105,7 @@ pub fn runCapture(argv: []const []const u8, out: []u8, allocator: std.mem.Alloca
     var status: c_int = 0;
     _ = std.c.waitpid(pid, &status, 0);
     const ustatus: u32 = @bitCast(status);
-    if (!W.IFEXITED(ustatus) or W.EXITSTATUS(ustatus) != 0) return QemuError.ProcessFailed;
+    if ((ustatus & 0x7f) != 0 or (ustatus >> 8) & 0xff != 0) return QemuError.ProcessFailed;
     return total;
 }
 
@@ -720,13 +718,13 @@ pub fn buildScriptStr(config: *const vm.VmConfig, allocator: std.mem.Allocator) 
 /// process may take time to exit; `isVmAlive` handles reaping.
 pub fn stopVm(config: *const vm.VmConfig) void {
     const pid = config.pid orelse return;
-    _ = std.posix.kill(@intCast(pid), std.posix.SIG.TERM) catch {};
+    _ = std.c.kill(pid, std.c.SIG.TERM);
 }
 
 /// Send SIGKILL to the QEMU process. Does not block or reap.
 pub fn forceStopVm(config: *const vm.VmConfig) void {
     const pid = config.pid orelse return;
-    _ = std.posix.kill(@intCast(pid), std.posix.SIG.KILL) catch {};
+    _ = std.c.kill(pid, std.c.SIG.KILL);
 }
 
 /// Check if the QEMU process is still running. If it exited, reaps it
@@ -736,7 +734,7 @@ pub fn isVmAlive(config: *vm.VmConfig) bool {
 
     // Use waitpid with WNOHANG to check status without blocking.
     var status: c_int = 0;
-    const reaped = std.c.waitpid(@intCast(pid), &status, W.NOHANG);
+    const reaped = std.c.waitpid(@intCast(pid), &status, std.c.W.NOHANG);
     if (reaped == 0) {
         // Still running
         return true;
@@ -840,12 +838,12 @@ pub fn convertDiskImageNoWait(src_path: []const u8, src_format: vm.DiskFormat, d
 /// `false` on failure.
 pub fn tryReapChild(pid: std.c.pid_t) ?bool {
     var status: c_int = 0;
-    const r = std.c.waitpid(pid, &status, W.NOHANG);
+    const r = std.c.waitpid(pid, &status, std.c.W.NOHANG);
     if (r == 0) return null;                   // still running
     if (r < 0) return false;                   // error / already reaped
     const ustatus: u32 = @bitCast(status);
-    if (!W.IFEXITED(ustatus)) return false;
-    return W.EXITSTATUS(ustatus) == 0;
+    if ((ustatus & 0x7f) != 0) return false;   // signalled or stopped
+    return (ustatus >> 8) & 0xff == 0;
 }
 
 /// Create a linked clone: a new qcow2 image backed by `backing_path`.
