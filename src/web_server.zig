@@ -1065,11 +1065,15 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     defer vms_mutex.unlock();
 
     if (vm_count >= MAX_VMS) return "full";
-    // Parse body: name=...&mem=...&cpu=...&disk=...
+    // Parse body: name=...&mem=...&cpu=...&disk=... plus all advanced fields (for undo restore)
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     var cfg = vm.VmConfig{};
     var val_buf: [2048]u8 = undefined;
+    var has_autoprotect: bool = false;
+    var has_mac: bool = false;
+    var has_vnc_port: bool = false;
+    var has_spice_port: bool = false;
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
         var kv = std.mem.splitScalar(u8, pair, '=');
@@ -1083,19 +1087,76 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         }
         if (std.mem.eql(u8, key, "mem")) cfg.memory_mb = vm.clampMemory(form_parsers.parseU32OrDefault(val, 2048));
         if (std.mem.eql(u8, key, "cpu")) cfg.cpu_cores = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, 2));
+        if (std.mem.eql(u8, key, "cpu_sockets")) cfg.cpu_sockets = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, 1));
         if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = vm.clampDiskSize(form_parsers.parseU32OrDefault(val, 20));
+        if (std.mem.eql(u8, key, "disk_format")) cfg.disk_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk_format.toIndex());
+        if (std.mem.eql(u8, key, "iso_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            cfg.setIsoPath(val);
+        }
+        if (std.mem.eql(u8, key, "mac_address")) { if (vm.isValidMac(val)) { cfg.setMacAddress(val); has_mac = true; } }
+        if (std.mem.eql(u8, key, "network")) cfg.nics[0].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "firmware")) cfg.firmware = vm.BootFirmware.fromStr(val);
+        if (std.mem.eql(u8, key, "shared_folder")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            cfg.setSharedFolder(val);
+        }
+        if (std.mem.eql(u8, key, "usb")) cfg.setUsbDevice(val);
+        if (std.mem.eql(u8, key, "guest_tools")) cfg.guest_tools = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "autoprotect")) { cfg.autoprotect = std.mem.eql(u8, val, "1"); has_autoprotect = true; }
+        if (std.mem.eql(u8, key, "ap_interval")) cfg.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch cfg.autoprotect_interval_min));
+        if (std.mem.eql(u8, key, "ap_max")) cfg.autoprotect_max = @max(1, @min(1000, std.fmt.parseInt(u32, val, 10) catch cfg.autoprotect_max));
+        if (std.mem.eql(u8, key, "disk2_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            cfg.setDisk2Path(val);
+        }
+        if (std.mem.eql(u8, key, "disk2_size")) cfg.disk2_size_gb = std.fmt.parseInt(u32, val, 10) catch cfg.disk2_size_gb;
+        if (std.mem.eql(u8, key, "disk2_format")) cfg.disk2_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk2_format.toIndex());
+        if (std.mem.eql(u8, key, "floppy")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            cfg.setFloppyPath(val);
+        }
+        if (std.mem.eql(u8, key, "nic2")) cfg.nics[1].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic2_mac")) { if (vm.isValidMac(val)) cfg.setNic2Mac(val); }
+        if (std.mem.eql(u8, key, "nic3")) cfg.nics[2].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic3_mac")) { if (vm.isValidMac(val)) cfg.setNic3Mac(val); }
+        if (std.mem.eql(u8, key, "portfw")) cfg.setPortForwards(val);
+        if (std.mem.eql(u8, key, "notes")) cfg.setNotes(val);
+        if (std.mem.eql(u8, key, "enable_3d")) cfg.enable_3d = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "gpu_device")) cfg.gpu_device = vm.GpuDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.gpu_device.toIndex());
+        if (std.mem.eql(u8, key, "display")) cfg.display = vm.DisplayType.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.display.toIndex());
+        if (std.mem.eql(u8, key, "display_resolution")) cfg.display_resolution = vm.DisplayResolution.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.display_resolution.toIndex());
+        if (std.mem.eql(u8, key, "guest_os")) cfg.guest_os = vm.GuestOs.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.guest_os.toIndex());
+        if (std.mem.eql(u8, key, "audio")) cfg.audio = vm.AudioDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.audio.toIndex());
+        if (std.mem.eql(u8, key, "boot_order")) cfg.boot_order = vm.BootOrder.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.boot_order.toIndex());
+        if (std.mem.eql(u8, key, "accel")) cfg.accel = form_parsers.parseAccel(val);
+        if (std.mem.eql(u8, key, "embed_display")) cfg.embed_display = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "vnc_port")) {
+            const p = std.fmt.parseInt(u16, val, 10) catch cfg.vnc_port;
+            if (vm.isValidDisplayPort(p)) { cfg.vnc_port = p; has_vnc_port = true; }
+        }
+        if (std.mem.eql(u8, key, "spice_port")) {
+            const p = std.fmt.parseInt(u16, val, 10) catch cfg.spice_port;
+            if (vm.isValidDisplayPort(p)) { cfg.spice_port = p; has_spice_port = true; }
+        }
+        if (std.mem.eql(u8, key, "enable_serial")) cfg.enable_serial = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "num_displays")) cfg.num_displays = @max(1, @min(16, std.fmt.parseInt(u32, val, 10) catch cfg.num_displays));
+        if (std.mem.eql(u8, key, "favorite")) cfg.favorite = std.mem.eql(u8, val, "1");
     }
 
-    // Apply AutoProtect defaults from preferences
-    cfg.autoprotect = prefs.autoprotect_enabled_default;
-    cfg.autoprotect_interval_min = prefs.autoprotect_interval_min_default;
-    cfg.autoprotect_max = prefs.autoprotect_max_default;
-
-    var mac_buf: [18]u8 = undefined;
-    const mac = vm.generateMacAddress(&mac_buf);
-    cfg.setMacAddress(std.mem.span(mac));
-    cfg.vnc_port = vm.findUnusedVncPort(vms[0..vm_count]);
-    cfg.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
+    // Apply defaults for fields not explicitly provided
+    if (!has_autoprotect) {
+        cfg.autoprotect = prefs.autoprotect_enabled_default;
+        cfg.autoprotect_interval_min = prefs.autoprotect_interval_min_default;
+        cfg.autoprotect_max = prefs.autoprotect_max_default;
+    }
+    if (!has_mac) {
+        var mac_buf: [18]u8 = undefined;
+        const mac = vm.generateMacAddress(&mac_buf);
+        cfg.setMacAddress(std.mem.span(mac));
+    }
+    if (!has_vnc_port) cfg.vnc_port = vm.findUnusedVncPort(vms[0..vm_count]);
+    if (!has_spice_port) cfg.spice_port = vm.findUnusedSpicePort(vms[0..vm_count]);
     vms[vm_count] = cfg;
     vm_count += 1;
     persist.save(&vms, vm_count, prefs) catch |e| {

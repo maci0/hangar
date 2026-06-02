@@ -102,7 +102,7 @@ main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;posit
 .btn.danger{background:var(--danger-subtle);border-color:var(--danger);color:var(--danger)}
 .btn.danger:hover{background:var(--danger);color:var(--text-on-danger);box-shadow:0 2px 8px var(--danger-glow)}
 .btn.danger:focus-visible{outline:2px solid var(--danger);outline-offset:2px}
-.btn.ghost{background:transparent;border-color:transparent;color:var(--text-muted)}
+.btn.ghost{background:transparent;border-color:var(--border);color:var(--text-muted)}
 .btn.ghost:hover{background:var(--raised);color:var(--text)}
 .content-area{flex:1;overflow-y:auto;padding:22px 28px 42px;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 .content-area::-webkit-scrollbar{width:5px}
