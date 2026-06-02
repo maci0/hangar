@@ -353,7 +353,6 @@ dialog .btn-row .btn{padding:8px 18px;font-size:13px}
   display:flex;align-items:center;gap:12px;z-index:100;
   letter-spacing:-0.1px;
 }
-#statusbar .stat-dot{width:6px;height:6px;border-radius:50%;background:var(--text-dim)}
 
 /* ═══════════════════════════════════════════════
    ▎LOADING BAR
@@ -527,7 +526,6 @@ aside .vm-item .star.fav{color:var(--warn)}
   background-size:200px 100%;animation:shimmer 1.6s ease infinite;border-radius:var(--radius);
 }
 .sk-item{height:36px;margin-bottom:2px;border-radius:var(--radius)}
-.sk-card{height:64px;border-radius:var(--radius-lg)}
 
 /* ═══════════════════════════════════════════════
    ▎RESPONSIVE — Tablet
