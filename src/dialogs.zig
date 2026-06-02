@@ -84,14 +84,16 @@ pub fn prefsDialog() void {
     cfltk.Fl_Box_set_color(pl0, app.pal.bg);
     cfltk.Fl_Box_set_label_font(pl0, 1); cfltk.Fl_Box_set_label_color(pl0, app.pal.text_dim);
     var mb: [16]u8 = undefined;
-    const mem_input = cfltk.Fl_Input_new(140, 38, 270, 24, std.fmt.bufPrintZ(&mb, "{d}", .{app.prefs.default_memory_mb}) catch "2048");
+    const mem_input = cfltk.Fl_Input_new(140, 38, 270, 24, "");
     app.themeInput(@ptrCast(mem_input));
+    _ = cfltk.Fl_Input_set_value(mem_input, std.fmt.bufPrintZ(&mb, "{d}", .{app.prefs.default_memory_mb}) catch "2048");
     const pl1 = cfltk.Fl_Box_new(10, 70, 130, 20, "Default CPU Cores:");
     cfltk.Fl_Box_set_color(pl1, app.pal.bg);
     cfltk.Fl_Box_set_label_font(pl1, 1); cfltk.Fl_Box_set_label_color(pl1, app.pal.text_dim);
     var cb2: [16]u8 = undefined;
-    const cpu_input = cfltk.Fl_Input_new(140, 68, 270, 24, std.fmt.bufPrintZ(&cb2, "{d}", .{app.prefs.default_cpu_cores}) catch "2");
+    const cpu_input = cfltk.Fl_Input_new(140, 68, 270, 24, "");
     app.themeInput(@ptrCast(cpu_input));
+    _ = cfltk.Fl_Input_set_value(cpu_input, std.fmt.bufPrintZ(&cb2, "{d}", .{app.prefs.default_cpu_cores}) catch "2");
 
     const pl2 = cfltk.Fl_Box_new(10, 100, 130, 20, "AutoProtect:");
     cfltk.Fl_Box_set_color(pl2, app.pal.bg);
@@ -104,15 +106,17 @@ pub fn prefsDialog() void {
     cfltk.Fl_Box_set_color(pl3, app.pal.bg);
     cfltk.Fl_Box_set_label_font(pl3, 1); cfltk.Fl_Box_set_label_color(pl3, app.pal.text_dim);
     var ab: [16]u8 = undefined;
-    const ap_int_input = cfltk.Fl_Input_new(140, 128, 270, 24, std.fmt.bufPrintZ(&ab, "{d}", .{app.prefs.autoprotect_interval_min_default}) catch "60");
+    const ap_int_input = cfltk.Fl_Input_new(140, 128, 270, 24, "");
     app.themeInput(@ptrCast(ap_int_input));
+    _ = cfltk.Fl_Input_set_value(ap_int_input, std.fmt.bufPrintZ(&ab, "{d}", .{app.prefs.autoprotect_interval_min_default}) catch "60");
 
     const pl4 = cfltk.Fl_Box_new(10, 160, 130, 20, "Max Snapshots:");
     cfltk.Fl_Box_set_color(pl4, app.pal.bg);
     cfltk.Fl_Box_set_label_font(pl4, 1); cfltk.Fl_Box_set_label_color(pl4, app.pal.text_dim);
     var ac: [16]u8 = undefined;
-    const ap_max_input = cfltk.Fl_Input_new(140, 158, 270, 24, std.fmt.bufPrintZ(&ac, "{d}", .{app.prefs.autoprotect_max_default}) catch "10");
+    const ap_max_input = cfltk.Fl_Input_new(140, 158, 270, 24, "");
     app.themeInput(@ptrCast(ap_max_input));
+    _ = cfltk.Fl_Input_set_value(ap_max_input, std.fmt.bufPrintZ(&ac, "{d}", .{app.prefs.autoprotect_max_default}) catch "10");
 
     const th = cfltk.Fl_Box_new(10, 195, 130, 20, "Theme:");
     cfltk.Fl_Box_set_color(th, app.pal.bg);

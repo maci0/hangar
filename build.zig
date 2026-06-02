@@ -114,4 +114,7 @@ pub fn build(b: *std.Build) !void {
     web_smoke.dependOn(&web_exe.step);
     const web_smoke_cmd = b.addSystemCommand(&.{ "node", "tests/web_smoke.mjs" });
     web_smoke.dependOn(&web_smoke_cmd.step);
+
+    // ── Include web-smoke in the umbrella test step ──
+    test_step.dependOn(&web_smoke_cmd.step);
 }

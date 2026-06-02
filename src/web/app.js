@@ -225,7 +225,20 @@ const fields=[
 ['Accelerator','e_accel','select',v.accel||'auto'],['Audio','e_audio','select',v.audio||0],
 {s:'Storage &amp; Notes'},['Disk 2 Path','e_disk2_path','text',v.disk2_path||''],['Disk 2 Size','e_disk2_size','number',v.disk2_size||0,'min="0" max="65536" step="1"'],
 ['Disk 2 Format','e_disk2_format','select',v.disk2_format||0],['Floppy','e_floppy','text',v.floppy_path||''],
-['Favorite','e_favorite','select',v.favorite==='true'?'1':'0'],['Notes','e_notes','text',v.notes||'']];
+['Favorite','e_favorite','select',v.favorite==='true'?'1':'0'],['Notes','e_notes','text',v.notes||''],
+{s:'QEMU Capabilities'},
+['Guest Agent','e_guest_agent','select',v.guest_agent==='true'?'1':'0'],
+['virtio-rng Entropy','e_virtio_rng','select',v.virtio_rng==='true'?'1':'0'],
+['TPM','e_tpm','select',v.tpm==='true'?'1':'0'],
+['Secure Boot','e_secure_boot','select',v.secure_boot==='true'?'1':'0'],
+['Hyper-V Enlightenments','e_hyperv_enlightenments','select',v.hyperv_enlightenments==='true'?'1':'0'],
+['Hugepages','e_hugepages','select',v.hugepages==='true'?'1':'0'],
+['Watchdog','e_watchdog','select',v.watchdog||0],
+['Ballooning','e_ballooning','select',v.ballooning==='true'?'1':'0'],
+['Host Autostart','e_host_autostart','select',v.host_autostart==='true'?'1':'0'],
+['I/O Threads','e_io_threads','number',v.io_threads||0,'min="0" max="64" step="1"'],
+['Disk BPS Throttle','e_disk_bps_throttle','number',v.disk_bps_throttle||0,'min="0" step="1"'],
+['Disk IOPS Throttle','e_disk_iops_throttle','number',v.disk_iops_throttle||0,'min="0" step="1"']];
 const selects={e_network:[['user','NAT (User)'],['bridge','Bridged'],['none','None']],
 e_firmware:[['bios','BIOS'],['uefi','UEFI']],e_disk_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
 e_disk2_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
@@ -238,7 +251,12 @@ e_accel:[['auto','Auto (best available)'],['tcg','TCG (software)'],['kvm','KVM (
 e_enable_serial:[['0','No'],['1','Yes']],e_favorite:[['0','No'],['1','Yes']],
 e_guest_tools:[['0','No'],['1','Yes']],e_autoprotect:[['0','Off'],['1','On']],
 e_nic2:[['none','None'],['user','NAT'],['bridge','Bridged']],
-e_nic3:[['none','None'],['user','NAT'],['bridge','Bridged']]};
+e_nic3:[['none','None'],['user','NAT'],['bridge','Bridged']],
+e_guest_agent:[['0','No'],['1','Yes']],e_virtio_rng:[['0','No'],['1','Yes']],
+e_tpm:[['0','No'],['1','Yes']],e_secure_boot:[['0','No'],['1','Yes']],
+e_hyperv_enlightenments:[['0','No'],['1','Yes']],e_hugepages:[['0','No'],['1','Yes']],
+e_ballooning:[['0','No'],['1','Yes']],e_host_autostart:[['0','No'],['1','Yes']],
+e_watchdog:[['0','None'],['1','Reset Guest'],['2','Power Off Guest'],['3','Pause Guest']]};
 let h='<div class="settings-form">';
 for(const f of fields){
 if(f.s!==undefined){h+=`<h4 class="form-section-header">${f.s}</h4>`;continue;}
@@ -256,7 +274,9 @@ const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select
 const body=['name','mem','cpu','cpu_sockets','disk','disk_format','iso_path','mac_address','network','firmware','shared_folder','usb','guest_tools','autoprotect',
 'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','nic2','nic2_mac','nic3','nic3_mac','portfw','notes',
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order',
-'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite']
+'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
+'guest_agent','virtio_rng','tpm','secure_boot','hyperv_enlightenments','hugepages','watchdog','ballooning','host_autostart',
+'io_threads','disk_bps_throttle','disk_iops_throttle']
 .map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
 try{const r=await apiPost('/api/save/'+idx,body);if(r){settingsDirty=false;await refresh();switchTab('summary');setStatus('Settings saved.');}
 else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}
@@ -369,17 +389,20 @@ var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventList
     ctxMenu.appendChild(mi);});
 });
 // ── Keyboard Shortcuts ──
-document.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&e.key==='s'&&activeTab==='settings'&&sel!==null){e.preventDefault();saveVm();return;}
+document.addEventListener('keydown',function(e){var shift=e.shiftKey;
+if((e.ctrlKey||e.metaKey)&&e.key==='s'&&activeTab==='settings'&&sel!==null){e.preventDefault();saveVm();return;}
 if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
 if(e.key==='ArrowUp'||e.key==='ArrowDown'){var listEl=document.getElementById('vmlist');if(listEl&&listEl.contains(e.target)){e.preventDefault();var dir=e.key==='ArrowUp'?-1:1;var idx=sel===null?(dir<0?vms.length-1:0):Math.max(0,Math.min(vms.length-1,sel+dir));select(idx);return;}}
 if(e.key==='Escape'){
   var anyOpen=false;['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','shortcutsdlg'].forEach(function(id){var d=document.getElementById(id);if(!d)return;if(d.hasAttribute('open')){d.close();anyOpen=true;}});
+  if(!anyOpen&&document.body.classList.contains('displayonly')){exitDisplayOnly();return;}
   if(!anyOpen&&sel!==null){if(activeTab==='settings'&&settingsDirty){if(!confirm('You have unsaved changes. Discard them?'))return;}sel=null;renderList();showEmptyState();}
   return;
 }
 if(e.key==='?'&&!e.ctrlKey&&!e.metaKey){e.preventDefault();showShortcutsModal();return;}
-if(e.ctrlKey&&e.key==='n'){e.preventDefault();newVm();return;}
+if(e.ctrlKey&&e.key==='n'){e.preventDefault();if(shift)cloneGuest();else newVm();return;}
 if(e.ctrlKey&&e.key==='e'){e.preventDefault();if(sel!==null)editVm();return;}
+if(e.key==='F2'){e.preventDefault();if(sel!==null)editVm();return;}
 if(e.ctrlKey&&e.key==='w'){e.preventDefault();deselectVm();return;}
 if(e.ctrlKey&&e.key==='i'){e.preventDefault();importGuest();return;}
 if(e.ctrlKey&&e.key==='s'){e.preventDefault();if(sel!==null)suspendGuest();return;}
@@ -387,7 +410,9 @@ if(e.ctrlKey&&e.key==='p'){e.preventDefault();openPrefs();return;}
 if(e.ctrlKey&&e.key==='f'){e.preventDefault();var searchEl=document.getElementById('search');if(searchEl){searchEl.focus();searchEl.select();}return;}
 if(e.ctrlKey&&e.key==='Enter'){e.preventDefault();if(sel!==null)editVm();return;}
 if(e.key==='F5'){e.preventDefault();refresh();return;}
-if(e.key==='F11'){e.preventDefault();if(!document.fullscreenElement)document.documentElement.requestFullscreen().catch(function(){});else document.exitFullscreen();return;}
+if(e.key==='F11'){e.preventDefault();if(document.body.classList.contains('displayonly')){exitDisplayOnly();}
+else if(rfb||spice){enterDisplayOnly();}
+else if(!document.fullscreenElement)document.documentElement.requestFullscreen().catch(function(){});else document.exitFullscreen();return;}
 if(e.key==='Delete'){if(sel!==null)deleteVm();return;}
 if(e.key==='Enter'){if(sel!==null)powerToggle();return;}
 if(e.altKey&&e.key==='ArrowUp'&&sel!==null&&sel>0){e.preventDefault();reorderVm(sel,sel-1);return;}
@@ -396,6 +421,16 @@ if(e.altKey&&e.key==='ArrowDown'&&sel!==null&&sel<vms.length-1){e.preventDefault
 function showShortcutsModal(){
   var d=document.getElementById('shortcutsdlg');
   if(d)d.showModal();
+}
+function enterDisplayOnly(){
+  document.body.classList.add('displayonly');
+  document.documentElement.requestFullscreen().catch(function(){});
+  setStatus('Display-only — F11 or Esc to exit');
+}
+function exitDisplayOnly(){
+  document.body.classList.remove('displayonly');
+  if(document.fullscreenElement)document.exitFullscreen();
+  setStatus('Exited display-only mode');
 }
 // ── Periodic Refresh ──
 refresh();

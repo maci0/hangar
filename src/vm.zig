@@ -636,6 +636,52 @@ pub const GpuDevice = enum(u8) {
     pub fn label(self: GpuDevice) [*:0]const u8 { return switch (self) { .virtio_gpu_gl => "Virtio-GPU (virgl)", .virtio_vga_gl => "Virtio-VGA (virgl)", }; }
 };
 
+// ── Watchdog Action ─────────────────────────────────────────────────
+
+/// Watchdog device action when the guest timer expires.
+pub const WatchdogAction = enum(u8) {
+    none = 0,
+    reset = 1,
+    poweroff = 2,
+    pause = 3,
+
+    pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
+
+    pub fn toIndex(self: WatchdogAction) usize {
+        return @intFromEnum(self);
+    }
+
+    pub fn fromIndex(i: usize) WatchdogAction {
+        if (i >= count) return .none;
+        return @enumFromInt(@as(u8, @intCast(i)));
+    }
+
+    pub fn toStr(self: WatchdogAction) [*:0]const u8 {
+        return switch (self) {
+            .none => "none",
+            .reset => "reset",
+            .poweroff => "poweroff",
+            .pause => "pause",
+        };
+    }
+
+    pub fn label(self: WatchdogAction) [*:0]const u8 {
+        return switch (self) {
+            .none => "None",
+            .reset => "Reset Guest",
+            .poweroff => "Power Off Guest",
+            .pause => "Pause Guest",
+        };
+    }
+
+    pub fn fromStr(s: []const u8) WatchdogAction {
+        if (std.mem.eql(u8, s, "reset")) return .reset;
+        if (std.mem.eql(u8, s, "poweroff")) return .poweroff;
+        if (std.mem.eql(u8, s, "pause")) return .pause;
+        return .none;
+    }
+};
+
 // ── Accelerator ─────────────────────────────────────────────────────
 
 /// Which virtualisation accelerator to use.
@@ -780,6 +826,28 @@ pub const VmConfig = struct {
     enable_serial: bool = true,
     /// Enable virtio-rng entropy device for the guest.
     virtio_rng: bool = false,
+    /// Guest agent channel (virtio-serial for qemu-guest-agent).
+    guest_agent: bool = false,
+    /// Watchdog device with configurable action.
+    watchdog: WatchdogAction = .none,
+    /// TPM 2.0 device for the guest (required for Windows 11).
+    tpm: bool = false,
+    /// Secure Boot via UEFI + SMM (requires firmware=uefi).
+    secure_boot: bool = false,
+    /// Hyper-V enlightenments for Windows guest optimization.
+    hyperv_enlightenments: bool = false,
+    /// Hugepages / memory preallocation for performance.
+    hugepages: bool = false,
+    /// Number of IO threads for block devices (0 = disabled, 1+ = enabled).
+    io_threads: u32 = 0,
+    /// Disk I/O throttling: max bytes per second (0 = unlimited).
+    disk_bps_throttle: u64 = 0,
+    /// Disk I/O throttling: max IOPS (0 = unlimited).
+    disk_iops_throttle: u32 = 0,
+    /// Virtio memory balloon device for dynamic memory management.
+    ballooning: bool = false,
+    /// Auto-start VM when host boots.
+    host_autostart: bool = false,
 
     // ── Runtime state (not persisted) ────────────────────────────
     status: VmStatus = .stopped,
@@ -2200,6 +2268,17 @@ test "fuzz: VmConfig defaults survive random partial mutation" {
         cfg.accel = VmAccel.fromIndex(rnd.int(usize));
         cfg.enable_serial = rnd.boolean();
         cfg.virtio_rng = rnd.boolean();
+        cfg.guest_agent = rnd.boolean();
+        cfg.watchdog = WatchdogAction.fromIndex(rnd.int(usize));
+        cfg.tpm = rnd.boolean();
+        cfg.secure_boot = rnd.boolean();
+        cfg.hyperv_enlightenments = rnd.boolean();
+        cfg.hugepages = rnd.boolean();
+        cfg.io_threads = rnd.int(u32);
+        cfg.disk_bps_throttle = rnd.int(u64);
+        cfg.disk_iops_throttle = rnd.int(u32);
+        cfg.ballooning = rnd.boolean();
+        cfg.host_autostart = rnd.boolean();
         cfg.embed_display = rnd.boolean();
         cfg.enable_3d = rnd.boolean();
         cfg.guest_tools = rnd.boolean();
@@ -2218,6 +2297,18 @@ test "fuzz: VmConfig defaults survive random partial mutation" {
         try std.testing.expectEqual(@as(u32, 1440), cfg.autoprotect_interval_min);
         try std.testing.expectEqual(@as(i64, 0), cfg.autoprotect_last_epoch);
         try std.testing.expectEqual(@as(u32, 0), cfg.autoprotect_last_seq);
+        try std.testing.expect(!cfg.virtio_rng);
+        try std.testing.expect(!cfg.guest_agent);
+        try std.testing.expectEqual(WatchdogAction.none, cfg.watchdog);
+        try std.testing.expect(!cfg.tpm);
+        try std.testing.expect(!cfg.secure_boot);
+        try std.testing.expect(!cfg.hyperv_enlightenments);
+        try std.testing.expect(!cfg.hugepages);
+        try std.testing.expectEqual(@as(u32, 0), cfg.io_threads);
+        try std.testing.expectEqual(@as(u64, 0), cfg.disk_bps_throttle);
+        try std.testing.expectEqual(@as(u32, 0), cfg.disk_iops_throttle);
+        try std.testing.expect(!cfg.ballooning);
+        try std.testing.expect(!cfg.host_autostart);
     }
 }
 

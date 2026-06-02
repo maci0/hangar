@@ -71,6 +71,17 @@ const VmJson = struct {
     spice_port: u16 = 5930,
     enable_serial: bool = true,
     virtio_rng: bool = false,
+    guest_agent: bool = false,
+    watchdog: []const u8 = "none",
+    tpm: bool = false,
+    secure_boot: bool = false,
+    hyperv_enlightenments: bool = false,
+    hugepages: bool = false,
+    io_threads: u32 = 0,
+    disk_bps_throttle: u64 = 0,
+    disk_iops_throttle: u32 = 0,
+    ballooning: bool = false,
+    host_autostart: bool = false,
     num_displays: u32 = 1,
 };
 
@@ -135,6 +146,10 @@ fn parseAudioDevice(s: []const u8) vm.AudioDevice {
 fn parseGpuDevice(s: []const u8) vm.GpuDevice {
     if (std.mem.eql(u8, s, "virtio_gpu_gl")) return .virtio_gpu_gl;
     return .virtio_vga_gl;
+}
+
+fn parseWatchdogAction(s: []const u8) vm.WatchdogAction {
+    return vm.WatchdogAction.fromStr(s);
 }
 
 fn parseBootOrder(s: []const u8) vm.BootOrder {
@@ -203,6 +218,17 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.spice_port = j.spice_port;
     cfg.enable_serial = j.enable_serial;
     cfg.virtio_rng = j.virtio_rng;
+    cfg.guest_agent = j.guest_agent;
+    cfg.watchdog = parseWatchdogAction(j.watchdog);
+    cfg.tpm = j.tpm;
+    cfg.secure_boot = j.secure_boot;
+    cfg.hyperv_enlightenments = j.hyperv_enlightenments;
+    cfg.hugepages = j.hugepages;
+    cfg.io_threads = j.io_threads;
+    cfg.disk_bps_throttle = j.disk_bps_throttle;
+    cfg.disk_iops_throttle = j.disk_iops_throttle;
+    cfg.ballooning = j.ballooning;
+    cfg.host_autostart = j.host_autostart;
     cfg.num_displays = j.num_displays;
     return cfg;
 }
@@ -439,6 +465,50 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emitBool(list, alloc, cfg.virtio_rng);
     try emit(list, alloc, ",\n");
 
+    try emit(list, alloc, "      \"guest_agent\": ");
+    try emitBool(list, alloc, cfg.guest_agent);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"watchdog\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.watchdog.toStr()));
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"tpm\": ");
+    try emitBool(list, alloc, cfg.tpm);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"secure_boot\": ");
+    try emitBool(list, alloc, cfg.secure_boot);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"hyperv_enlightenments\": ");
+    try emitBool(list, alloc, cfg.hyperv_enlightenments);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"hugepages\": ");
+    try emitBool(list, alloc, cfg.hugepages);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"io_threads\": ");
+    try emitInt(list, alloc, cfg.io_threads);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"disk_bps_throttle\": ");
+    try emitInt(list, alloc, cfg.disk_bps_throttle);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"disk_iops_throttle\": ");
+    try emitInt(list, alloc, cfg.disk_iops_throttle);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"ballooning\": ");
+    try emitBool(list, alloc, cfg.ballooning);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"host_autostart\": ");
+    try emitBool(list, alloc, cfg.host_autostart);
+    try emit(list, alloc, ",\n");
+
     try emit(list, alloc, "      \"num_displays\": ");
     try emitInt(list, alloc, cfg.num_displays);
     try emit(list, alloc, "\n");
@@ -457,7 +527,7 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
     var dir_buf: [512]u8 = undefined;
     if (getConfigDir(&dir_buf)) |dir_path| {
         std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
-            _ = std.c.write(2, "persist: createDirPath failed\n", 29);
+            _ = std.c.write(2, "persist: createDirPath failed\n", 30);
         };
     }
 
@@ -949,6 +1019,61 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
         } else if (std.mem.eql(u8, key, "virtio_rng")) {
             if (parseJsonBool(cur)) |r| {
                 cfg.virtio_rng = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "guest_agent")) {
+            if (parseJsonBool(cur)) |r| {
+                cfg.guest_agent = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "watchdog")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.watchdog = parseWatchdogAction(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "tpm")) {
+            if (parseJsonBool(cur)) |r| {
+                cfg.tpm = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "secure_boot")) {
+            if (parseJsonBool(cur)) |r| {
+                cfg.secure_boot = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "hyperv_enlightenments")) {
+            if (parseJsonBool(cur)) |r| {
+                cfg.hyperv_enlightenments = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "hugepages")) {
+            if (parseJsonBool(cur)) |r| {
+                cfg.hugepages = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "io_threads")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.io_threads = @intCast(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "disk_bps_throttle")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.disk_bps_throttle = @as(u64, @intCast(r.value));
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "disk_iops_throttle")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.disk_iops_throttle = @intCast(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "ballooning")) {
+            if (parseJsonBool(cur)) |r| {
+                cfg.ballooning = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "host_autostart")) {
+            if (parseJsonBool(cur)) |r| {
+                cfg.host_autostart = r.value;
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "num_displays")) {
@@ -1612,6 +1737,17 @@ fn fuzzConfig(rnd: std.Random, sbuf: []u8) vm.VmConfig {
     c.embed_display = rnd.boolean();
     c.enable_serial = rnd.boolean();
     c.virtio_rng = rnd.boolean();
+    c.guest_agent = rnd.boolean();
+    c.watchdog = vm.WatchdogAction.fromIndex(rnd.int(usize));
+    c.tpm = rnd.boolean();
+    c.secure_boot = rnd.boolean();
+    c.hyperv_enlightenments = rnd.boolean();
+    c.hugepages = rnd.boolean();
+    c.io_threads = rnd.int(u32);
+    c.disk_bps_throttle = rnd.int(u64);
+    c.disk_iops_throttle = rnd.int(u32);
+    c.ballooning = rnd.boolean();
+    c.host_autostart = rnd.boolean();
     c.enable_3d = rnd.boolean();
     const rstr = struct {
         fn get(r: std.Random, b: []u8) []const u8 {

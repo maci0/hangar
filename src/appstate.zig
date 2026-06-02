@@ -116,7 +116,9 @@ pub fn cycleTheme() void {
     applyTheme(next);
     prefs.theme = next;
     // Persist immediately so the choice survives restart.
-    persist.save(&vms, vm_count, prefs) catch {};
+    persist.save(&vms, vm_count, prefs) catch {
+        _ = std.c.write(2, "appstate: theme persist.save failed\n", 36);
+    };
     var buf: [64]u8 = undefined;
     const msg = std.fmt.bufPrintZ(&buf, "Theme: {s}", .{next.label()}) catch "Theme changed";
     setStatus(msg);

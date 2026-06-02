@@ -942,7 +942,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 
     // Remaining fields
     const part2 = std.fmt.bufPrint(buf[w..],
-        \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+        \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"guest_agent":{s},"watchdog":{d},"tpm":{s},"secure_boot":{s},"hyperv_enlightenments":{s},"hugepages":{s},"io_threads":{d},"disk_bps_throttle":{d},"disk_iops_throttle":{d},"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
     , .{
         if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
         std.mem.span(v.nics[1].mode.toStr()),
@@ -952,6 +952,17 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         v.num_displays,
         if (v.enable_serial) "true" else "false",
         if (v.virtio_rng) "true" else "false",
+        if (v.guest_agent) "true" else "false",
+        v.watchdog.toIndex(),
+        if (v.tpm) "true" else "false",
+        if (v.secure_boot) "true" else "false",
+        if (v.hyperv_enlightenments) "true" else "false",
+        if (v.hugepages) "true" else "false",
+        v.io_threads,
+        v.disk_bps_throttle,
+        v.disk_iops_throttle,
+        if (v.ballooning) "true" else "false",
+        if (v.host_autostart) "true" else "false",
         if (v.enable_3d) "true" else "false",
         v.gpu_device.toIndex(),
         v.display.toIndex(),
@@ -1015,7 +1026,7 @@ fn renderJson(buf: []u8) usize {
 
         // Remaining fields
         const part2 = std.fmt.bufPrint(buf[w..],
-            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}}}
+            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"guest_agent":{s},"watchdog":{d},"tpm":{s},"secure_boot":{s},"hyperv_enlightenments":{s},"hugepages":{s},"io_threads":{d},"disk_bps_throttle":{d},"disk_iops_throttle":{d},"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}}}
         , .{
             if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
             std.mem.span(v.nics[1].mode.toStr()),
@@ -1025,6 +1036,17 @@ fn renderJson(buf: []u8) usize {
             v.num_displays,
             if (v.enable_serial) "true" else "false",
             if (v.virtio_rng) "true" else "false",
+            if (v.guest_agent) "true" else "false",
+            v.watchdog.toIndex(),
+            if (v.tpm) "true" else "false",
+            if (v.secure_boot) "true" else "false",
+            if (v.hyperv_enlightenments) "true" else "false",
+            if (v.hugepages) "true" else "false",
+            v.io_threads,
+            v.disk_bps_throttle,
+            v.disk_iops_throttle,
+            if (v.ballooning) "true" else "false",
+            if (v.host_autostart) "true" else "false",
             if (v.enable_3d) "true" else "false",
             v.gpu_device.toIndex(),
             v.display.toIndex(),
@@ -1194,6 +1216,17 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "virtio_rng")) cfg.virtio_rng = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "num_displays")) cfg.num_displays = @max(1, @min(16, std.fmt.parseInt(u32, val, 10) catch cfg.num_displays));
         if (std.mem.eql(u8, key, "favorite")) cfg.favorite = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "guest_agent")) cfg.guest_agent = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "watchdog")) cfg.watchdog = vm.WatchdogAction.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.watchdog.toIndex());
+        if (std.mem.eql(u8, key, "tpm")) cfg.tpm = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "secure_boot")) cfg.secure_boot = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "hyperv_enlightenments")) cfg.hyperv_enlightenments = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "hugepages")) cfg.hugepages = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "io_threads")) cfg.io_threads = std.fmt.parseInt(u32, val, 10) catch cfg.io_threads;
+        if (std.mem.eql(u8, key, "disk_bps_throttle")) cfg.disk_bps_throttle = std.fmt.parseInt(u64, val, 10) catch cfg.disk_bps_throttle;
+        if (std.mem.eql(u8, key, "disk_iops_throttle")) cfg.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch cfg.disk_iops_throttle;
+        if (std.mem.eql(u8, key, "ballooning")) cfg.ballooning = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "host_autostart")) cfg.host_autostart = std.mem.eql(u8, val, "1");
     }
 
     // Apply defaults for fields not explicitly provided
@@ -1431,6 +1464,17 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "virtio_rng")) v.virtio_rng = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(16, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
         if (std.mem.eql(u8, key, "favorite")) v.favorite = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "guest_agent")) v.guest_agent = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "watchdog")) v.watchdog = vm.WatchdogAction.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.watchdog.toIndex());
+        if (std.mem.eql(u8, key, "tpm")) v.tpm = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "secure_boot")) v.secure_boot = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "hyperv_enlightenments")) v.hyperv_enlightenments = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "hugepages")) v.hugepages = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "io_threads")) v.io_threads = std.fmt.parseInt(u32, val, 10) catch v.io_threads;
+        if (std.mem.eql(u8, key, "disk_bps_throttle")) v.disk_bps_throttle = std.fmt.parseInt(u64, val, 10) catch v.disk_bps_throttle;
+        if (std.mem.eql(u8, key, "disk_iops_throttle")) v.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch v.disk_iops_throttle;
+        if (std.mem.eql(u8, key, "ballooning")) v.ballooning = std.mem.eql(u8, val, "1");
+        if (std.mem.eql(u8, key, "host_autostart")) v.host_autostart = std.mem.eql(u8, val, "1");
     }
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
     return "ok";
@@ -2317,7 +2361,9 @@ fn livenessTicker() void {
             }
         }
         if (changed) {
-            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {};
+            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
+                logErr("autoprotect: persist.save failed");
+            };
         }
     }
 }

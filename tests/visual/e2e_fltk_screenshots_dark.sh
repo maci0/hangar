@@ -64,6 +64,7 @@ python3 tests/visual/screenshot_all_dialogs.py | sed 's/^/  /'
 # ── Move screenshots to dark-specific directory ──
 SCREENSHOT_DIR="tests/visual/screenshots"
 DARK_DIR="tests/visual/screenshots_dark"
+GOLDEN_DIR="tests/visual/screenshots_dark_golden"
 rm -rf "$DARK_DIR"
 mv "$SCREENSHOT_DIR" "$DARK_DIR"
 mkdir -p "$SCREENSHOT_DIR"  # recreate so downstream isn't confused
@@ -140,6 +141,53 @@ print('{:.2f}'.format(math.sqrt(mse)))
     echo "  Diff OK: all pairs show meaningful difference"
 else
     echo "  Skipping light/dark diff (light screenshots not available — run 'zig build fltk-screenshots' first)"
+fi
+
+# ── Golden-reference comparison ──
+GOLDEN_COUNT=0
+if [ -d "$GOLDEN_DIR" ] && [ "$(find "$GOLDEN_DIR" -name 'all_*.png' 2>/dev/null | wc -l)" -ge "$EXPECTED" ]; then
+    echo ""
+    echo "  Comparing against golden references in $GOLDEN_DIR ..."
+    GOLDEN_FAILS=0
+    for f in "$GOLDEN_DIR"/all_*.png; do
+        base=$(basename "$f")
+        new="$DARK_DIR/$base"
+        if [ -f "$new" ]; then
+            GOLDEN_COUNT=$((GOLDEN_COUNT + 1))
+            RMSE=$(python3 -c "
+from PIL import Image, ImageChops
+import math
+a = Image.open('$f').convert('RGB')
+b = Image.open('$new').convert('RGB')
+# resize to common size for comparison
+w = min(a.size[0], b.size[0])
+h = min(a.size[1], b.size[1])
+a = a.resize((w, h))
+b = b.resize((w, h))
+diff = ImageChops.difference(a, b)
+hist = diff.histogram()
+sq = sum(c * (i % 256)**2 for i, c in enumerate(hist))
+mse = sq / float(w * h * 3)
+print('{:.2f}'.format(math.sqrt(mse)))
+" 2>/dev/null || echo "999")
+            if (( $(echo "$RMSE > 30.0" | bc -l) )); then
+                echo "  ⚠ REGRESSION: $base (RMSE=$RMSE, threshold=30.0)"
+                GOLDEN_FAILS=$((GOLDEN_FAILS + 1))
+            elif (( $(echo "$RMSE > 10.0" | bc -l) )); then
+                echo "  ⚡ MINOR: $base (RMSE=$RMSE)"
+            fi
+        fi
+    done
+    if [ "$GOLDEN_FAILS" -gt 0 ]; then
+        echo ""
+        echo "  Golden comparison: $GOLDEN_FAILS/$GOLDEN_COUNT regressions (RMSE > 30)"
+        echo "  Run 'zig build fltk-screenshots-dark' to update golden references"
+        fail "$GOLDEN_FAILS dark screenshot regressions detected"
+    fi
+    echo "  Golden comparison OK: $GOLDEN_COUNT screenshots match references"
+else
+    echo "  Golden references not found — run 'zig build fltk-screenshots-dark' first to seed them"
+    echo "  (copy $DARK_DIR → $GOLDEN_DIR after visual review)"
 fi
 
 echo "PASS: all $EXPECTED dark-mode FLTK screenshots captured and non-blank"

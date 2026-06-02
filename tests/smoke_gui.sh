@@ -81,7 +81,11 @@ def dlg_center(dw, dh):
 click(WX + 45, WY + 48)
 time.sleep(1.0)
 
-# 2. Type a VM name into the New VM dialog
+# 2. Click the VM Name input field to focus it, then type "Smoke"
+#    Dialog 460x430, name input at rel (120, 38, 330, 24)
+dx_nv, dy_nv = dlg_center(460, 430)
+click(dx_nv + 285, dy_nv + 50)
+time.sleep(0.3)
 kc = d.keysym_to_keycode(XK.XK_s)
 xtest.fake_input(d, X.KeyPress, kc); d.sync(); xtest.fake_input(d, X.KeyRelease, kc); d.sync()
 time.sleep(0.1)
@@ -98,9 +102,8 @@ kc = d.keysym_to_keycode(XK.XK_e)
 xtest.fake_input(d, X.KeyPress, kc); d.sync(); xtest.fake_input(d, X.KeyRelease, kc); d.sync()
 time.sleep(0.3)
 
-# 3. Click "Create" button: dlg 460x260, Create btn rel (280+40, 215+15)
-dx, dy = dlg_center(460, 260)
-click(dx + 320, dy + 230)
+# 3. Click "Create" button: dlg 460x430, Create btn rel (280, 394, 80, 30)
+click(dx_nv + 320, dy_nv + 409)
 time.sleep(2.0)
 
 # 4. Open menus via keyboard — Ctrl+N then Escape to dismiss
@@ -120,9 +123,9 @@ click(WX + 230, WY + 5)  # Help menu
 time.sleep(0.3)
 key(XK.XK_Down); time.sleep(0.2)
 key(XK.XK_Return); time.sleep(1.0)
-# Close About: dlg 400x250, OK btn rel (310+40, 210+15)
-dx, dy = dlg_center(400, 250)
-click(dx + 350, dy + 225)
+# Close About: dlg 440x420, OK btn rel (350, 370, 80, 30)
+dx, dy = dlg_center(440, 420)
+click(dx + 390, dy + 385)
 time.sleep(0.5)
 
 print("driven", flush=True)

@@ -50,6 +50,7 @@
 <div id="tabSummary" role="tabpanel" aria-labelledby="tabBtnSummary"><div class="empty-state"><svg class="empty-icon"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to view its details, or create a new one.</p></div></div>
 <div id="tabSettings" role="tabpanel" aria-labelledby="tabBtnSettings" style="display:none"><div class="empty-state"><svg class="empty-icon"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div></div>
 </div></main>
+<div class="displayonly-bar"><span>🖥 Display-only fullscreen</span><span><kbd>F11</kbd> or <kbd>Esc</kbd> to exit</span></div>
 <div id="statusbar" role="status" aria-live="polite">Ready</div>
 <div id="mig_bar_container" style="display:none;height:4px;background:var(--border);margin:0;padding:0"><div id="mig_progress" style="height:100%;width:0;background:var(--accent);transition:width 0.3s"></div></div>
 <span id="mig_pct" style="display:none;font-size:11px;color:var(--text-dim);padding:2px 8px"></span>
@@ -118,7 +119,8 @@
 <p style="color:var(--text-dim);font-size:11px;margin-top:12px">No libvirt dependency — direct QMP control.</p>
 <p style="color:var(--text-muted);font-size:12px;font-weight:600;margin-top:16px">Keyboard Shortcuts</p>
 <p style="color:var(--text-dim);font-size:11px;line-height:1.8">
-Ctrl+N New VM &nbsp;·&nbsp; Ctrl+E Edit Settings &nbsp;·&nbsp; Ctrl+I Import<br>
+Ctrl+N New VM &nbsp;·&nbsp; Ctrl+Shift+N Clone<br>
+Ctrl+E / F2 Edit Settings &nbsp;·&nbsp; Ctrl+I Import<br>
 Ctrl+S Suspend &nbsp;·&nbsp; Ctrl+P Preferences &nbsp;·&nbsp; Ctrl+F Search<br>
 Del Delete VM &nbsp;·&nbsp; Enter Power Toggle &nbsp;·&nbsp; Ctrl+W Deselect<br>
 F5 Refresh &nbsp;·&nbsp; F11 Fullscreen &nbsp;·&nbsp; ? Shortcuts &nbsp;·&nbsp; Esc Close
@@ -128,20 +130,22 @@ F5 Refresh &nbsp;·&nbsp; F11 Fullscreen &nbsp;·&nbsp; ? Shortcuts &nbsp;·&nbs
 <dialog id="shortcutsdlg" aria-modal="true" aria-labelledby="shortcutsdlg-title"><h3 id="shortcutsdlg-title">Keyboard Shortcuts</h3>
 <div class="dialog-body"><table class="shortcuts-table">
 <tr><td><kbd>Ctrl+N</kbd></td><td>New VM</td></tr>
+<tr><td><kbd>Ctrl+Shift+N</kbd></td><td>Clone VM</td></tr>
 <tr><td><kbd>Ctrl+E</kbd></td><td>Edit Settings</td></tr>
+<tr><td><kbd>F2</kbd></td><td>Edit Settings</td></tr>
 <tr><td><kbd>Ctrl+I</kbd></td><td>Import VM</td></tr>
 <tr><td><kbd>Ctrl+S</kbd></td><td>Save Settings / Suspend VM</td></tr>
 <tr><td><kbd>Ctrl+P</kbd></td><td>Preferences</td></tr>
 <tr><td><kbd>Ctrl+F</kbd></td><td>Search VM Library</td></tr>
 <tr><td><kbd>Ctrl+Enter</kbd></td><td>Edit Settings</td></tr>
+<tr><td><kbd>Ctrl+W</kbd></td><td>Deselect VM</td></tr>
 <tr><td><kbd>Enter</kbd></td><td>Power On / Off</td></tr>
 <tr><td><kbd>Delete</kbd></td><td>Delete VM</td></tr>
 <tr><td><kbd>F5</kbd></td><td>Refresh VM List</td></tr>
-<tr><td><kbd>F11</kbd></td><td>Toggle Fullscreen</td></tr>
-<tr><td><kbd>Ctrl+W</kbd></td><td>Deselect VM</td></tr>
+<tr><td><kbd>F11</kbd></td><td>Fullscreen (display-only w/ VNC/SPICE)</td></tr>
 <tr><td><kbd>Alt+↑</kbd></td><td>Move VM Up</td></tr>
 <tr><td><kbd>Alt+↓</kbd></td><td>Move VM Down</td></tr>
-<tr><td><kbd>Escape</kbd></td><td>Close Dialog / Deselect</td></tr>
+<tr><td><kbd>Escape</kbd></td><td>Close Dialog / Exit Display-only / Deselect</td></tr>
 <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
 </table></div>
 <div class="btn-row"><button class="btn" data-action="closeDlg" data-dialog="shortcutsdlg">Close</button></div></dialog>

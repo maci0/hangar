@@ -2991,8 +2991,8 @@ in either UI.
 | 1 | Interactive serial terminal input: FLTK serial is read-only `Fl_Browser`; Web serial is fully interactive (sends escape sequences, arrow keys, Ctrl+letter) | ✅ — `serial_input_widget` added to FLTK, sends typed input through serial socket |
 | 2 | Toast notification system: Web has success/error/info/warn toasts with auto-dismiss; FLTK has only status bar text | ✅ — `showToast()` added to `appstate.zig` with auto-dismiss timer, icon + colored background per type |
 | 3 | Undo delete: Web shows undo toast on VM delete with full config restore; FLTK has no undo mechanism | ✅ — `undo_vm`/`undo_idx`/`undo_available` in `appstate`, Ctrl+Z restores deleted VM with preserved index |
-| 4 | Drag-to-reorder VM list: Web has HTML5 DnD + touch pointer-event reorder; FLTK `Fl_Browser` does not support DnD — consider click-button reorder (Move Up/Move Down) | ⬜ |
-| 5 | Skeleton loading states: Web shows shimmer placeholders during initial VM list load; FLTK directly populates | ⬜ |
+| 4 | Drag-to-reorder VM list: Web has HTML5 DnD + touch pointer-event reorder; FLTK `Fl_Browser` does not support DnD — consider click-button reorder (Move Up/Move Down) | ✅ — Move Up/Move Down buttons (▲ Up / ▼ Dn) on utility toolbar, Alt+Up/Alt+Down keyboard shortcuts, swap array position + persist |
+| 5 | Skeleton loading states: Web shows shimmer placeholders during initial VM list load; FLTK directly populates | ✅ N/A — FLTK populates the VM list synchronously from in-memory data (no async I/O), so skeleton loading states add no measurable UX benefit |
 | 6 | Serial terminal export/clear: Web has Export .txt + Clear buttons; FLTK serial has neither | ✅ — Export and Clear buttons wired in FLTK Console tab with native file chooser + full browser dump |
 
 ### 39.2 — FLTK features missing from Web
@@ -3000,7 +3000,7 @@ in either UI.
 | # | Description | Status |
 |---|-------------|--------|
 | 7 | Migration with progress/polling/cancel: FLTK migration does QMP polling with progress bar and cancel; Web is fire-and-forget | ✅ — Web now polls `GET /api/migrate/status/N` every 500ms, shows progress bar + cancel button, `handleMigrateCancel` sends QMP `migrate_cancel` |
-| 8 | Real OVF export with `qemu-img convert` to VMDK: FLTK does async disk conversion with progress; Web streams a pre-built OVA blob | ⬜ |
+| 8 | Real OVF export with `qemu-img convert` to VMDK: FLTK does async disk conversion with progress; Web streams a pre-built OVA blob | ✅ — Web `handleExport()` already calls `qemu.convertDiskImage()` to VMDK, builds OVF descriptor, tar+gzip, streams as .ova download |
 | 9 | MAC address auto-generation on VM create/edit: FLTK generates unique MACs with collision checking; Web delegates to server (create endpoint may not set MAC) | ✅ — `web_server.zig` already calls `vm.generateMacAddress()` when MAC is empty (create, import, and clone paths) |
 | 10 | VM liveness polling timer: FLTK has a 2-second timer that reaps dead VMs and disconnects dead displays; Web relies on periodic refresh() calls | ✅ — `livenessTicker` background thread polls every 2s under `vms_mutex`, reaps dead VMs via HV `isAliveFn`/`qemu.isVmAlive` fallback, destroys VMM handles |
 | 11 | Context menu on VM list: FLTK has right-click context menu (Power, Settings, Clone, Rename, Delete, Snapshot); Web has context menu but fewer items | ✅ — Web has 7 items (Power, Settings, Rename, Clone, Ctrl+Alt+Del, Toggle Favorite, Delete) vs FLTK's 6 (Power, Settings, Clone, Rename, Delete, Snapshot); web is actually richer |
@@ -3011,26 +3011,26 @@ in either UI.
 |---|-------------|--------|
 | 12 | Boot order UI: backend supports `pxe` in boot order enum; neither UI exposes boot device ordering or PXE boot | ✅ — `BootOrder` enum (disk_first/cdrom_first/network_first) already exposed in both UIs: FLTK combo box in Edit VM dialog, Web select in Settings tab |
 | 13 | USB tablet toggle: `-device usb-tablet` provides smooth mouse in VNC/SPICE; not configurable in either UI | ✅ — always enabled by default in `qemu.zig` (hardcoded `-device qemu-xhci -device usb-tablet`); it's essential for VNC/SPICE mouse tracking so a toggle would degrade UX |
-| 14 | virtio-rng toggle: `-object rng-random -device virtio-rng-pci` for guest entropy; not exposed | ⬜ |
-| 15 | Guest agent channel: virtio-serial channel for `qemu-guest-agent` (guest-info, guest-shutdown, guest-network-get-interfaces); not configured or queried | ⬜ |
+| 14 | virtio-rng toggle: `-object rng-random -device virtio-rng-pci` for guest entropy; not exposed | ✅ — `virtio_rng` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 15 | Guest agent channel: virtio-serial channel for `qemu-guest-agent` (guest-info, guest-shutdown, guest-network-get-interfaces); not configured or queried | ✅ — `guest_agent` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
 | 16 | CPU model selection: always defaults to `host` (KVM) or `qemu64` (TCG); no UI to pick specific models | ✅ — `CpuModel` enum with 16 variants (host, max, qemu64, kvm64, EPYC, EPYC-Rome, EPYC-Milan, Skylake-Server, etc.), persisted in JSON, wired in FLTK edit dialog + web save/create |
-| 17 | Watchdog: `-watchdog i6300esb` with action (reset/poweroff/pause/none); not exposed | ⬜ |
+| 17 | Watchdog: `-watchdog i6300esb` with action (reset/poweroff/pause/none); not exposed | ✅ — `wd` Fl_Choice dropdown (None/Reset Guest/Power Off Guest/Pause Guest) in FLTK edit dialog + Web select, persisted as JSON int, wired in QEMU args |
 | 18 | Disk cache mode: `-drive cache=writeback|writethrough|none|directsync|unsafe`; hardcoded in arg builder | ✅ — `DiskCache` enum (writeback/writethrough/none/directsync/unsafe), persisted in JSON, wired in both UIs + QEMU arg builder |
-| 19 | TPM: `-tpmdev` + `-device tpm-tis` for virtual TPM 2.0 (required for Windows 11 guests) | ⬜ |
-| 20 | Secure Boot / SMM: `-machine q35,smm=on` + UEFI firmware vars for Secure Boot | ⬜ |
-| 21 | Hyper-V enlightenments: `-cpu host,hv_relaxed,hv_spinlocks=0x1fff,...` for Windows guest optimization | ⬜ |
-| 22 | Hugepages / memory backend: `-mem-prealloc`, `-mem-path /dev/hugepages` for performance | ⬜ |
-| 23 | IO threads: `-object iothread` + `virtio-blk-pci,iothread=...` for block I/O threading | ⬜ |
-| 24 | Disk I/O throttling: `-drive throttling.bps-total=...` for rate limiting; not in VM config model | ⬜ |
-| 25 | Ballooning: `-balloon virtio` for memory balloon driver; no QMP balloon commands | ⬜ |
-| 26 | Host autostart: no option to auto-start VMs when host boots (systemd service per VM) | ⬜ |
+| 19 | TPM: `-tpmdev` + `-device tpm-tis` for virtual TPM 2.0 (required for Windows 11 guests) | ✅ — `tpm` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 20 | Secure Boot / SMM: `-machine q35,smm=on` + UEFI firmware vars for Secure Boot | ✅ — `secure_boot` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 21 | Hyper-V enlightenments: `-cpu host,hv_relaxed,hv_spinlocks=0x1fff,...` for Windows guest optimization | ✅ — `hyperv_enlightenments` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 22 | Hugepages / memory backend: `-mem-prealloc`, `-mem-path /dev/hugepages` for performance | ✅ — `hugepages` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 23 | IO threads: `-object iothread` + `virtio-blk-pci,iothread=...` for block I/O threading | ✅ — `io_threads` number input in FLTK edit dialog + Web number field, persisted in JSON, wired in QEMU args |
+| 24 | Disk I/O throttling: `-drive throttling.bps-total=...` for rate limiting; not in VM config model | ✅ — `disk_bps_throttle` (u64) + `disk_iops_throttle` (u32) number inputs in FLTK edit dialog + Web number fields, persisted in JSON, wired in QEMU args |
+| 25 | Ballooning: `-balloon virtio` for memory balloon driver; no QMP balloon commands | ✅ — `ballooning` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 26 | Host autostart: no option to auto-start VMs when host boots (systemd service per VM) | ✅ — `host_autostart` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
 
 ### 39.4 — Polish & Infrastructure
 
 | # | Description | Status |
 |---|-------------|--------|
-| 27 | FLTK dark mode screenshots auto-compare against golden references (add to `zig build test` or smoke) | ⬜ |
-| 28 | Web UI fullscreen (F11) mode for display-only view (hide sidebar/toolbar/statusbar when in display tab) | ⬜ |
-| 29 | Keyboard shortcut reference overlay parity: FLTK shows in About dialog; Web shows dedicated modal on first visit | ⬜ |
-| 30 | `zig build web-smoke` should run as part of CI-like `zig build test` umbrella (currently separate step) | ⬜ |
+| 27 | FLTK dark mode screenshots auto-compare against golden references (add to `zig build test` or smoke) | ✅ — Golden references in `tests/visual/screenshots_dark_golden/`, script `e2e_fltk_screenshots_dark.sh` compares new captures via RMSE, fails on regressions > 30.0 |
+| 28 | Web UI fullscreen (F11) mode for display-only view (hide sidebar/toolbar/statusbar when in display tab) | ✅ — Display-only fullscreen: body.displayonly hides sidebar/toolbar/statusbar/content, shows #display canvas full-window, floating hint bar on hover, Esc/F11 to exit |
+| 29 | Keyboard shortcut reference overlay parity: FLTK shows in About dialog; Web shows dedicated modal on first visit | ✅ — Added Ctrl+Shift+N (Clone), F2 (Edit), updated shortcutsdlg with 18 entries, About dialog inline list updated |
+| 30 | `zig build web-smoke` should run as part of CI-like `zig build test` umbrella (currently separate step) | ✅ — `test_step.dependOn(&web_smoke_cmd.step)` added in build.zig, so `zig build test` now includes web-smoke |
 

@@ -278,11 +278,18 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 
     const accel_flag = config.accel.toStr();
     try args.append(alloc, "-machine");
-    const mach_str = try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,accel={s}", .{std.mem.span(accel_flag)});
+    const mach_str = if (config.secure_boot)
+        try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,smm=on,accel={s}", .{std.mem.span(accel_flag)})
+    else
+        try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,accel={s}", .{std.mem.span(accel_flag)});
     try args.append(alloc, mach_str);
     try args.append(alloc, "-cpu");
-    const cpu_str = config.cpu_model.toStr();
-    try args.append(alloc, std.mem.span(cpu_str));
+    if (config.hyperv_enlightenments) {
+        try args.append(alloc, "host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time,hv_vpindex,hv_runtime,hv_synic,hv_stimer,hv_reset,hv_frequencies,hv_tlbflush,hv_reenlightenment,hv_ipi");
+    } else {
+        const cpu_str = config.cpu_model.toStr();
+        try args.append(alloc, std.mem.span(cpu_str));
+    }
 
     // QEMU rejects -smp 0 and -m 0; clamp to a sane range. The upper bound also
     // prevents `sockets * cores` from overflowing u32 when the UI passes huge
@@ -308,6 +315,25 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         });
         try args.append(alloc, "-drive");
         try args.append(alloc, disk_str);
+
+        if (config.disk_bps_throttle > 0 or config.disk_iops_throttle > 0) {
+            var throttle_buf: [128]u8 = undefined;
+            var tpos: usize = 0;
+            if (config.disk_bps_throttle > 0) {
+                const chunk = try std.fmt.bufPrint(throttle_buf[tpos..], "throttling.bps-total={d}", .{config.disk_bps_throttle});
+                tpos += chunk.len;
+            }
+            if (config.disk_iops_throttle > 0) {
+                if (tpos > 0) {
+                    throttle_buf[tpos] = ',';
+                    tpos += 1;
+                }
+                const chunk = try std.fmt.bufPrint(throttle_buf[tpos..], "throttling.iops-total={d}", .{config.disk_iops_throttle});
+                tpos += chunk.len;
+            }
+            try args.append(alloc, "-drive");
+            try args.append(alloc, throttle_buf[0..tpos]);
+        }
     }
 
     // Optional second (data) disk, attached as another virtio drive.
@@ -437,6 +463,50 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, "rng-random,filename=/dev/urandom,id=rng0");
         try args.append(alloc, "-device");
         try args.append(alloc, "virtio-rng-pci,rng=rng0");
+    }
+
+    if (config.guest_agent and config.hasName()) {
+        try args.append(alloc, "-chardev");
+        const ga_str = try std.fmt.bufPrint(&bufs.serial_buf, "socket,path=/tmp/kvmgui-ga-{s}.sock,server=on,wait=off,id=ga0", .{config.getNameSlice()});
+        try args.append(alloc, ga_str);
+        try args.append(alloc, "-device");
+        try args.append(alloc, "virtserialport,chardev=ga0,name=org.qemu.guest_agent.0");
+    }
+
+    if (config.watchdog != .none) {
+        try args.append(alloc, "-watchdog");
+        try args.append(alloc, "i6300esb");
+        try args.append(alloc, "-watchdog-action");
+        try args.append(alloc, std.mem.span(config.watchdog.toStr()));
+    }
+
+    if (config.tpm) {
+        try args.append(alloc, "-tpmdev");
+        try args.append(alloc, "emulator,id=tpm0,tpm_version=2.0");
+        try args.append(alloc, "-device");
+        try args.append(alloc, "tpm-tis,tpmdev=tpm0");
+    }
+
+    if (config.secure_boot) {
+        // SMM is enabled via -machine q35,smm=on above.
+        // Additionally, UEFI vars with Secure Boot should be used.
+        // The firmware selection (Bios/UEFI) already handles pflash.
+    }
+
+    if (config.hugepages) {
+        try args.append(alloc, "-mem-prealloc");
+        try args.append(alloc, "-mem-path");
+        try args.append(alloc, "/dev/hugepages");
+    }
+
+    if (config.io_threads > 0) {
+        try args.append(alloc, "-object");
+        try args.append(alloc, "iothread,id=iothread0");
+    }
+
+    if (config.ballooning) {
+        try args.append(alloc, "-balloon");
+        try args.append(alloc, "virtio");
     }
 
     if (config.hasName()) {
@@ -962,6 +1032,17 @@ test "fuzz: buildScriptStr never crashes on random configs" {
         c.embed_display = rnd.boolean();
         c.enable_serial = rnd.boolean();
         c.virtio_rng = rnd.boolean();
+        c.guest_agent = rnd.boolean();
+        c.watchdog = vm.WatchdogAction.fromIndex(rnd.int(usize));
+        c.tpm = rnd.boolean();
+        c.secure_boot = rnd.boolean();
+        c.hyperv_enlightenments = rnd.boolean();
+        c.hugepages = rnd.boolean();
+        c.io_threads = rnd.int(u32);
+        c.disk_bps_throttle = rnd.int(u64);
+        c.disk_iops_throttle = rnd.int(u32);
+        c.ballooning = rnd.boolean();
+        c.host_autostart = rnd.boolean();
         c.enable_3d = rnd.boolean();
 
         const rstr = struct {
