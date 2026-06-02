@@ -64,6 +64,15 @@ pub const DiskFormat = enum(u8) {
             .vdi => "VDI",
         };
     }
+
+    /// Parse a DiskFormat from its toStr representation.
+    pub fn fromStr(s: []const u8) DiskFormat {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: DiskFormat = @enumFromInt(f.value);
+            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .qcow2;
+    }
 };
 
 // ── Disk Cache Mode ──────────────────────────────────────────────────
@@ -161,10 +170,11 @@ pub const NetworkMode = enum(u8) {
         const lower = if (s.len < 32) blk: {
             var buf: [32]u8 = undefined;
             break :blk std.ascii.lowerString(&buf, s);
-        } else return .none;
+        } else return .user;
         if (std.mem.eql(u8, lower, "user")) return .user;
         if (std.mem.eql(u8, lower, "bridge")) return .bridge;
-        return .none;
+        if (std.mem.eql(u8, lower, "none")) return .none;
+        return .user;
     }
 };
 
@@ -243,6 +253,15 @@ pub const DisplayResolution = enum(u8) {
             .res_1920x1080 => 1080,
         };
     }
+
+    /// Parse a DisplayResolution from its toStr representation.
+    pub fn fromStr(s: []const u8) DisplayResolution {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: DisplayResolution = @enumFromInt(f.value);
+            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .auto;
+    }
 };
 
 // ── Display Type ─────────────────────────────────────────────────────
@@ -287,6 +306,17 @@ pub const DisplayType = enum(u8) {
             .vnc => "VNC",
             .none => "None (headless)",
         };
+    }
+
+    /// Parse a DisplayType from its toStr representation.
+    pub fn fromStr(s: []const u8) DisplayType {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: DisplayType = @enumFromInt(f.value);
+            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+        }
+        // Backward compatibility: old JSON files may have "spice" instead of "spice-app".
+        if (std.mem.eql(u8, s, "spice")) return .spice;
+        return .gtk;
     }
 };
 
@@ -425,6 +455,15 @@ pub const BootOrder = enum(u8) {
             .network_first => "Network (PXE)",
         };
     }
+
+    /// Parse a BootOrder from its toStr representation.
+    pub fn fromStr(s: []const u8) BootOrder {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: BootOrder = @enumFromInt(f.value);
+            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .disk_first;
+    }
 };
 
 // ── CPU Model ────────────────────────────────────────────────────────
@@ -536,6 +575,15 @@ pub const AudioDevice = enum(u8) {
             .ac97 => "AC97",
         };
     }
+
+    /// Parse an AudioDevice from its toStr representation.
+    pub fn fromStr(s: []const u8) AudioDevice {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: AudioDevice = @enumFromInt(f.value);
+            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .none;
+    }
 };
 
 // ── Boot Firmware ────────────────────────────────────────────────────
@@ -634,6 +682,13 @@ pub const GpuDevice = enum(u8) {
     pub fn fromIndex(i: usize) GpuDevice { if (i >= count) return .virtio_vga_gl; return @enumFromInt(@as(u8, @intCast(i))); }
     pub fn toStr(self: GpuDevice) [*:0]const u8 { return switch (self) { .virtio_gpu_gl => "virtio_gpu_gl", .virtio_vga_gl => "virtio_vga_gl", }; }
     pub fn label(self: GpuDevice) [*:0]const u8 { return switch (self) { .virtio_gpu_gl => "Virtio-GPU (virgl)", .virtio_vga_gl => "Virtio-VGA (virgl)", }; }
+    pub fn fromStr(s: []const u8) GpuDevice {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: GpuDevice = @enumFromInt(f.value);
+            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .virtio_vga_gl;
+    }
 };
 
 // ── Watchdog Action ─────────────────────────────────────────────────
@@ -723,6 +778,15 @@ pub const VmAccel = enum(u8) {
             .hvf => "HVF (macOS)",
             .whpx => "WHPX (Windows)",
         };
+    }
+
+    /// Parse a VmAccel from its toStr representation.
+    pub fn fromStr(s: []const u8) VmAccel {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: VmAccel = @enumFromInt(f.value);
+            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .auto;
     }
 
     /// Returns the platform-appropriate hardware accelerator for the current OS.
@@ -2515,9 +2579,9 @@ test "NetworkMode: fromStr values" {
     try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromStr("none"));
 }
 
-test "NetworkMode: fromStr unknown defaults to none" {
-    try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromStr("invalid"));
-    try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromStr(""));
+test "NetworkMode: fromStr unknown defaults to user" {
+    try std.testing.expectEqual(NetworkMode.user, NetworkMode.fromStr("invalid"));
+    try std.testing.expectEqual(NetworkMode.user, NetworkMode.fromStr(""));
 }
 
 test "BootFirmware: fromStr values" {

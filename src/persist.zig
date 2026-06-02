@@ -100,10 +100,7 @@ fn getConfigPath(buf: *[512]u8) ?[]const u8 {
 // ── Enum string mappers (load direction) ────────────────────────────
 
 fn parseDiskFormat(s: []const u8) vm.DiskFormat {
-    if (std.mem.eql(u8, s, "raw")) return .raw;
-    if (std.mem.eql(u8, s, "vmdk")) return .vmdk;
-    if (std.mem.eql(u8, s, "vdi")) return .vdi;
-    return .qcow2;
+    return vm.DiskFormat.fromStr(s);
 }
 
 fn parseDiskCache(s: []const u8) vm.DiskCache {
@@ -111,41 +108,27 @@ fn parseDiskCache(s: []const u8) vm.DiskCache {
 }
 
 fn parseDisplayType(s: []const u8) vm.DisplayType {
-    if (std.mem.eql(u8, s, "sdl")) return .sdl;
-    if (std.mem.eql(u8, s, "spice-app") or std.mem.eql(u8, s, "spice")) return .spice;
-    if (std.mem.eql(u8, s, "vnc")) return .vnc;
-    if (std.mem.eql(u8, s, "none")) return .none;
-    return .gtk;
+    return vm.DisplayType.fromStr(s);
 }
 
 fn parseNetworkMode(s: []const u8) vm.NetworkMode {
-    if (std.mem.eql(u8, s, "bridge")) return .bridge;
-    if (std.mem.eql(u8, s, "none")) return .none;
-    return .user;
+    return vm.NetworkMode.fromStr(s);
 }
 
 fn parseFirmware(s: []const u8) vm.BootFirmware {
-    if (std.mem.eql(u8, s, "uefi")) return .uefi;
-    return .bios;
+    return vm.BootFirmware.fromStr(s);
 }
 
 fn parseGuestOs(s: []const u8) vm.GuestOs {
-    if (std.mem.eql(u8, s, "windows")) return .windows;
-    if (std.mem.eql(u8, s, "freebsd")) return .freebsd;
-    if (std.mem.eql(u8, s, "macos")) return .macos;
-    if (std.mem.eql(u8, s, "other")) return .other;
-    return .linux;
+    return vm.GuestOs.fromStr(s);
 }
 
 fn parseAudioDevice(s: []const u8) vm.AudioDevice {
-    if (std.mem.eql(u8, s, "intel-hda")) return .hda;
-    if (std.mem.eql(u8, s, "AC97")) return .ac97;
-    return .none;
+    return vm.AudioDevice.fromStr(s);
 }
 
 fn parseGpuDevice(s: []const u8) vm.GpuDevice {
-    if (std.mem.eql(u8, s, "virtio_gpu_gl")) return .virtio_gpu_gl;
-    return .virtio_vga_gl;
+    return vm.GpuDevice.fromStr(s);
 }
 
 fn parseWatchdogAction(s: []const u8) vm.WatchdogAction {
@@ -153,19 +136,11 @@ fn parseWatchdogAction(s: []const u8) vm.WatchdogAction {
 }
 
 fn parseBootOrder(s: []const u8) vm.BootOrder {
-    if (std.mem.eql(u8, s, "dcn")) return .cdrom_first;
-    if (std.mem.eql(u8, s, "ncd")) return .network_first;
-    return .disk_first;
+    return vm.BootOrder.fromStr(s);
 }
 
 pub fn parseAccel(s: []const u8) vm.VmAccel {
-    // Old format: "enable_kvm": true → "auto", false → "tcg" handled elsewhere.
-    if (std.mem.eql(u8, s, "auto")) return .auto;
-    if (std.mem.eql(u8, s, "tcg")) return .tcg;
-    if (std.mem.eql(u8, s, "kvm")) return .kvm;
-    if (std.mem.eql(u8, s, "hvf")) return .hvf;
-    if (std.mem.eql(u8, s, "whpx")) return .whpx;
-    return .auto;
+    return vm.VmAccel.fromStr(s);
 }
 
 // ── Conversion: VmJson → VmConfig ───────────────────────────────────
@@ -382,7 +357,7 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emit(list, alloc, "      \"enable_3d\": ");
     try emitBool(list, alloc, cfg.enable_3d);
     try emit(list, alloc, ",\n      \"gpu_device\": ");
-    try emitJsonStr(list, alloc, if (cfg.gpu_device == .virtio_gpu_gl) "virtio_gpu_gl" else "virtio_vga_gl");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.gpu_device.toStr()));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"guest_tools\": ");

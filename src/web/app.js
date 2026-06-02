@@ -158,28 +158,32 @@ if(!t||t==='(none)'){el.innerHTML='<div style="color:var(--text-dim)">No snapsho
 const lines=t.split('\n');let h='';for(const ln of lines){const tag=ln.trim();if(!tag)continue;
 h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"><span>${escHtml(tag)}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}">Del</button></span></div>`;}
 el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
-async function revertSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Revert to snapshot "'+tag+'"? This will discard current state.'))return;
-const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);var sd=document.getElementById('snapdlg');if(sd)sd.close();}}
-async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Delete snapshot "'+tag+'"?'))return;
+async function revertSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Revert to snapshot "'+tag+'"? This will discard current state.'))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
+const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);var sd=document.getElementById('snapdlg');if(sd)sd.close();}else{loadSnapshots();}}
+async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Delete snapshot "'+tag+'"?'))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
 const r=await apiPost('/api/snapshot/delete/'+sel,'tag='+encodeURIComponent(tag));if(r){loadSnapshots();setStatus('Deleted snapshot: '+tag);}}
 async function sendCad(){if(sel===null)return;const r=await apiPost('/api/cad/'+sel);if(r)setStatus('Ctrl+Alt+Del sent to guest.');}
 async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/export/'+sel,{method:'POST',headers:{'X-API-Key':'hangar'}});if(!r.ok){setStatus('Export failed: '+r.status);return;}const blob=await r.blob();const a=document.createElement('a');const url=URL.createObjectURL(blob);a.href=url;a.download=vms[sel].name+'.ova';a.click();setTimeout(function(){URL.revokeObjectURL(url);},60000);setStatus('Export downloaded.');}catch(e){setStatus('Export error: '+e);}}
 async function migrateGuest(){if(sel===null)return;var vm=vms[sel];var mv=document.getElementById('migrate_vmname');if(mv)mv.textContent='Migrating: '+vm.name;var md=document.getElementById('migratedlg');if(md){updateMigUri();md.showModal();}}
 function updateMigUri(){var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');var uri=document.getElementById('mig_uri');if(host&&port&&uri){uri.value='tcp:'+host.value+':'+port.value;}}
-async function doMigrate(){if(sel===null)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;var r=await apiPost('/api/migrate/'+sel,'dest='+encodeURIComponent(dest));if(!r)return;try{var j=JSON.parse(r);if(j.status!=='started'){showToast('Migration failed to start','error');return;}}catch(e){}var md=document.getElementById('migratedlg');if(md)md.close();showMigProgress();pollMigStatus();}
+var migrating=false;
+async function doMigrate(){if(sel===null||migrating)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;migrating=true;var r=await apiPost('/api/migrate/'+sel,'dest='+encodeURIComponent(dest));if(!r){migrating=false;return;}try{var j=JSON.parse(r);if(j.status!=='started'){showToast('Migration failed to start','error');migrating=false;return;}}catch(e){}var md=document.getElementById('migratedlg');if(md)md.close();showMigProgress();pollMigStatus();}
 var migPollTimer=null;
-function showMigProgress(){var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar&&info){bar.style.display='block';info.style.display='inline';info.textContent='Migration in progress...';}if(cancel)cancel.style.display='inline';}
-function hideMigProgress(){if(migPollTimer){clearTimeout(migPollTimer);migPollTimer=null;}var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar)bar.style.display='none';if(info)info.style.display='none';if(cancel)cancel.style.display='none';}
+function showMigProgress(){var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar&&info){bar.style.display='block';info.style.display='inline';info.textContent='Migration in progress...';var fill=bar.firstElementChild;if(fill)fill.style.width='0%';}if(cancel)cancel.style.display='inline';}
+function hideMigProgress(){migrating=false;if(migPollTimer){clearTimeout(migPollTimer);migPollTimer=null;}var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar)bar.style.display='none';if(info)info.style.display='none';if(cancel)cancel.style.display='none';}
 async function pollMigStatus(){if(sel===null){hideMigProgress();return;}
 var t='';try{var resp=await fetch('/api/migrate/status/'+sel);t=await resp.text();}catch(e){}
 var info=document.getElementById('mig_pct');var bar=document.getElementById('mig_progress');
 if(!info||!bar)return;
+var fill=bar.firstElementChild;
 if(!t){info.textContent='Migration failed — connection lost';hideMigProgress();setStatus('Migration failed');return;}
 try{
 var s=JSON.parse(t);
-if(s.status==='completed'){info.textContent='Migration completed.';bar.style.width='100%';bar.style.background='var(--success)';setStatus('Migration completed');setTimeout(hideMigProgress,3000);return;}
-if(s.status==='failed'||s.status==='error'){info.textContent='Migration failed.';bar.style.background='var(--danger)';setStatus('Migration failed');setTimeout(hideMigProgress,3000);return;}
-if(s.status==='cancelled'){info.textContent='Migration cancelled.';bar.style.background='var(--amber)';setStatus('Migration cancelled');setTimeout(hideMigProgress,3000);return;}
+if(s.status==='completed'){info.textContent='Migration completed.';if(fill){fill.style.width='100%';fill.style.background='var(--success)';}setStatus('Migration completed');setTimeout(hideMigProgress,3000);return;}
+if(s.status==='failed'||s.status==='error'){info.textContent='Migration failed.';if(fill)fill.style.background='var(--danger)';setStatus('Migration failed');setTimeout(hideMigProgress,3000);return;}
+if(s.status==='cancelled'){info.textContent='Migration cancelled.';if(fill)fill.style.background='var(--amber)';setStatus('Migration cancelled');setTimeout(hideMigProgress,3000);return;}
+// Update progress bar if server provides percentage
+if(typeof s.pct==='number'&&fill){fill.style.width=Math.min(100,Math.max(0,s.pct))+'%';}
 info.textContent='Migration '+s.status+'...';
 }catch(e){info.textContent='Migration polling error';}
 migPollTimer=setTimeout(pollMigStatus,500);}
@@ -197,7 +201,7 @@ if(c<1||c>256){showToast('CPU cores must be 1–256','error');return;}
 if(d<1||d>65536){showToast('Disk size must be 1–65536 GB','error');return;}
 const r=await apiPost('/api/new','name='+encodeURIComponent(n)+'&mem='+m+'&cpu='+c+'&disk='+d);if(r){var ndlg=document.getElementById('newdlg');if(ndlg)ndlg.close();await refresh();}}
 async function deleteVm(){if(sel===null)return;if(!confirm('Delete this VM?'))return;var deleted=vms[sel];var deletedIdx=sel;var r=await apiPost('/api/delete/'+sel);if(r){sel=null;var delName=deleted.name;await refresh();toastUndo('Deleted "'+escHtml(delName)+'"',async function(){var body='name='+encodeURIComponent(delName);var fm=[['mem','mem'],['cpu','cpu'],['cpu_sockets','cpu_sockets'],['disk','disk'],['disk_format','disk_format'],['guest_os','guest_os'],['net','network'],['fw','firmware'],['mac','mac_address'],['nic2_mode','nic2'],['nic3_mode','nic3'],['iso_path','iso_path'],['shared_folder','shared_folder'],['usb_device','usb'],['guest_tools','guest_tools'],['autoprotect','autoprotect'],['autoprotect_interval','ap_interval'],['autoprotect_max','ap_max'],['disk2_path','disk2_path'],['disk2_size','disk2_size'],['disk2_format','disk2_format'],['floppy_path','floppy'],['nic2_mac','nic2_mac'],['nic3_mac','nic3_mac'],['port_forwards','portfw'],['display','display'],['display_resolution','display_resolution'],['vnc_port','vnc_port'],['spice_port','spice_port'],['hasSerial','enable_serial'],['num_displays','num_displays'],['favorite','favorite'],['notes','notes'],['enable_3d','enable_3d'],['gpu_device','gpu_device'],['audio','audio'],['boot_order','boot_order'],['accel','accel'],['embed_display','embed_display']];fm.forEach(function(m){var v=deleted[m[0]];if(v!==undefined&&v!==null&&v!=='')body+='&'+m[1]+'='+encodeURIComponent(v);});await apiPost('/api/create',body);await refresh();});}}
-function reorderVm(from,to){var oldFrom=from,oldTo=to,oldSel=sel;apiPost('/api/reorder','from='+from+'&to='+to).then(function(r){if(r){sel=to;refresh();toastUndo('Moved "'+escHtml(vms[to]?vms[to].name:'VM')+'"',function(){apiPost('/api/reorder','from='+oldTo+'&to='+oldFrom).then(function(r2){if(r2){sel=oldSel;refresh();}});});}});}
+function reorderVm(from,to){var oldFrom=from,oldTo=to,oldSel=sel;apiPost('/api/reorder','from='+from+'&to='+to).then(async function(r){if(r){sel=to;await refresh();toastUndo('Moved "'+escHtml(vms[to]?vms[to].name:'VM')+'"',function(){apiPost('/api/reorder','from='+oldTo+'&to='+oldFrom).then(async function(r2){if(r2){sel=oldSel;await refresh();}});});}});}
 function editVm(){if(sel===null)return;if(activeTab==='settings'&&settingsDirty){if(!confirm('You have unsaved changes. Discard them?'))return;}switchTab('settings');if(sel===null||sel>=vms.length)return;
 const v=vms[sel];
 var tb=document.getElementById('tabBar');var nm=document.getElementById('vmname');if(tb)tb.style.display='flex';if(nm)nm.textContent=v.name;
@@ -332,7 +336,7 @@ vnetsData={networks:def};vnetIdx=0;renderVnetList();}
 async function vnetSaveAll(){const r=await apiPost('/api/vnets/save',JSON.stringify(vnetsData));if(r){var vd=document.getElementById('vnetdlg');if(vd)vd.close();setStatus('VNet settings saved.');}}
 // ── Preferences ──
 var pendingTheme=null;
-async function openPrefs(){var pd=document.getElementById('prefsdlg');if(!pd)return;let cfg={};try{const r=await fetch('/api/config');if(r.ok)cfg=await r.json();}catch(e){console.error('Failed to load config:',e);}
+async function openPrefs(){var pd=document.getElementById('prefsdlg');if(!pd)return;pendingTheme=null;let cfg={};try{const r=await fetch('/api/config');if(r.ok)cfg=await r.json();}catch(e){console.error('Failed to load config:',e);}
 var pt=document.getElementById('p_theme');if(pt)pt.value=cfg.theme||window.hangarTheme||'system';
 var pdm=document.getElementById('p_default_memory_mb');if(pdm)pdm.value=cfg.default_memory_mb||2048;
 var pdc=document.getElementById('p_default_cpu_cores');if(pdc)pdc.value=cfg.default_cpu_cores||2;
@@ -376,6 +380,12 @@ var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventList
   ctxMenu.style.visibility='';
   var items=[
     ['▶ Power On/Off',function(){if(ctxVmIdx>=0){select(ctxVmIdx);powerToggle();}}],
+    ['⏸ Pause',function(){if(ctxVmIdx>=0){select(ctxVmIdx);pauseGuest();}}],
+    ['▶ Resume',function(){if(ctxVmIdx>=0){select(ctxVmIdx);resumeGuest();}}],
+    ['💾 Suspend',function(){if(ctxVmIdx>=0){select(ctxVmIdx);suspendGuest();}}],
+    ['⏻ Shut Down',function(){if(ctxVmIdx>=0){select(ctxVmIdx);shutdownGuest();}}],
+    ['↻ Reset',function(){if(ctxVmIdx>=0){select(ctxVmIdx);resetGuest();}}],
+    ['🚚 Migrate',function(){if(ctxVmIdx>=0){select(ctxVmIdx);migrateGuest();}}],
     ['⚙ Settings',function(){if(ctxVmIdx>=0){select(ctxVmIdx);editVm();}}],
     ['✎ Rename',function(){if(ctxVmIdx>=0){select(ctxVmIdx);renameGuest();}}],
     ['⧉ Clone',function(){if(ctxVmIdx>=0){select(ctxVmIdx);cloneGuest();}}],
@@ -453,9 +463,10 @@ function startFb() {
   displayEl.classList.add('loading');
 
   // Dispatch based on display type: 2 = SPICE, 3 = VNC
-  if (v.display === 2) {
+  var dt = Number(v.display);
+  if (dt === 2) {
     startSpice(idx, displayEl, v);
-  } else if (v.display === 3) {
+  } else if (dt === 3) {
     startVnc(idx, displayEl);
   }
   // Other display types (GTK, SDL, None) have no remote framebuffer; skip.
@@ -602,6 +613,7 @@ var actionHandlers={
  switchTab:function(el){switchTab(el.getAttribute('data-tab')||'summary');},
  closeDlg:function(el){var id=el.getAttribute('data-dialog');if(id){var d=document.getElementById(id);if(d)d.close();}},
  dismissBanner:function(){var b=document.getElementById('connbanner');if(b)b.style.display='none';serverDown=false;setStatus('');},
+ cancelMigrate:function(){cancelMigrate();},
  applyTheme:function(el){pendingTheme=el.value;},
  toggleTheme:function(){cycleTheme();},
  filterList:function(){filterList();},

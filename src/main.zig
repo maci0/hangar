@@ -182,7 +182,9 @@ fn startWebServer() void {
 
 fn webServerThreadMain() void {
     web_server.main() catch |err| {
-        std.debug.print("Web server error: {}\n", .{err});
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Web server error: {}\n", .{err}) catch "Web server error\n";
+        _ = std.c.write(2, msg.ptr, msg.len - 1);
     };
     app.web_running = false;
 }

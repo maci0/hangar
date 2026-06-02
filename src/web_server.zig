@@ -71,6 +71,7 @@ const SOL_SOCKET: c_int = 1;
 const SO_REUSEADDR: c_int = 2;
 const SO_RCVTIMEO: c_int = 20;
 const SHUT_WR: c_int = 1;
+const SHUT_RDWR: c_int = 2;
 const F_SETFL: c_int = 4;
 const O_NONBLOCK: c_int = 2048;
 
@@ -137,23 +138,31 @@ fn clampPref(v: []const u8, fallback: u32, lo: u32, hi: u32) u32 {
     return if (val < lo) lo else if (val > hi) hi else val;
 }
 
+fn findHeader(headers: []const u8, name: []const u8) ?[]const u8 {
+    var pos: usize = 0;
+    while (pos < headers.len) {
+        if (std.mem.startsWith(u8, headers[pos..], name)) {
+            const val_start = pos + name.len;
+            const val_end = std.mem.indexOfScalar(u8, headers[val_start..], '\r') orelse (headers.len - val_start);
+            return headers[val_start .. val_start + val_end];
+        }
+        if (std.mem.indexOfScalarPos(u8, headers, pos, '\n')) |nl| {
+            pos = nl + 1;
+        } else break;
+    }
+    return null;
+}
+
 fn checkAuth(req: []const u8) bool {
+    const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return false;
+    const headers = req[0..hdr_end];
+
     if (auth_token_len > 0) {
-        const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return false;
-        const headers = req[0..hdr_end];
-        const key_start = std.mem.indexOf(u8, headers, "X-API-Key: ") orelse return false;
-        const key_val_start = key_start + "X-API-Key: ".len;
-        const key_end = std.mem.indexOfScalar(u8, headers[key_val_start..], '\r') orelse (headers.len - key_val_start);
-        const provided = headers[key_val_start .. key_val_start + key_end];
+        const provided = findHeader(headers, "X-API-Key: ") orelse return false;
         return std.mem.eql(u8, provided, auth_token[0..auth_token_len]);
     }
     // No custom token set — fall back to built-in API_KEY
-    const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return false;
-    const headers = req[0..hdr_end];
-    const key_start = std.mem.indexOf(u8, headers, "X-API-Key: ") orelse return false;
-    const key_val_start = key_start + "X-API-Key: ".len;
-    const key_end = std.mem.indexOfScalar(u8, headers[key_val_start..], '\r') orelse (headers.len - key_val_start);
-    const provided = headers[key_val_start .. key_val_start + key_end];
+    const provided = findHeader(headers, "X-API-Key: ") orelse return false;
     return std.mem.eql(u8, provided, API_KEY);
 }
 
@@ -654,7 +663,8 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
                 // Send shutdown signal to peer via empty write
                 ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch break;
             }
-            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_WR);
+            // Shutdown both directions so the peer thread unblocks.
+            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
         }
     }.run, .{&ctx});
 
@@ -674,7 +684,8 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
                 if (rlen == 0) continue;
                 _ = c.write(ctx_ptr.vnc_fd, buf[0..rlen].ptr, rlen);
             }
-            _ = c.shutdown(ctx_ptr.vnc_fd, SHUT_WR);
+            // Shutdown both directions so the peer thread unblocks.
+            _ = c.shutdown(ctx_ptr.vnc_fd, SHUT_RDWR);
         }
     }.run, .{&ctx});
 
@@ -733,7 +744,8 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
                 if (n <= 0) break;
                 ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch break;
             }
-            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_WR);
+            // Shutdown both directions so the peer thread unblocks.
+            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
         }
     }.run, .{&ctx});
 
@@ -753,7 +765,8 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
                 if (rlen == 0) continue;
                 _ = c.write(ctx_ptr.spice_fd, buf[0..rlen].ptr, rlen);
             }
-            _ = c.shutdown(ctx_ptr.spice_fd, SHUT_WR);
+            // Shutdown both directions so the peer thread unblocks.
+            _ = c.shutdown(ctx_ptr.spice_fd, SHUT_RDWR);
         }
     }.run, .{&ctx});
 
@@ -808,7 +821,8 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
                 if (n <= 0) break;
                 ws.writeFrame(ctx_ptr.ws_fd, .text, buf[0..@intCast(n)]) catch break;
             }
-            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_WR);
+            // Shutdown both directions so the peer thread unblocks.
+            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
         }
     }.run, .{&ctx});
 
@@ -828,7 +842,8 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
                 if (rlen == 0) continue;
                 _ = c.write(ctx_ptr.serial_fd, buf[0..rlen].ptr, rlen);
             }
-            _ = c.shutdown(ctx_ptr.serial_fd, SHUT_WR);
+            // Shutdown both directions so the peer thread unblocks.
+            _ = c.shutdown(ctx_ptr.serial_fd, SHUT_RDWR);
         }
     }.run, .{&ctx});
 
@@ -2064,7 +2079,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var ts: std.c.timespec = undefined;
     _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     var dir_buf: [128]u8 = undefined;
-    const dir_path = std.fmt.bufPrintZ(&dir_buf, "/tmp/ovf_export.{d}.{d}.{d}", .{ idx, std.os.linux.getpid(), ts.nsec }) catch return;
+    const dir_path = std.fmt.bufPrintZ(&dir_buf, "/tmp/ovf_export.{d}.{d}.{d}", .{ idx, std.c.getpid(), ts.nsec }) catch return;
     // Ensure a clean directory.
     _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
         logErr("export: deleteTree (pre-create) failed");
@@ -2078,7 +2093,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     };
 
     var tar_buf: [160]u8 = undefined;
-    const tar_path = std.fmt.bufPrintZ(&tar_buf, "/tmp/ovf_export.{d}.{d}.tar.gz", .{ idx, std.os.linux.getpid() }) catch return;
+    const tar_path = std.fmt.bufPrintZ(&tar_buf, "/tmp/ovf_export.{d}.{d}.tar.gz", .{ idx, std.c.getpid() }) catch return;
     var tar_cleanup: bool = false;
     defer if (tar_cleanup) {
         _ = c.unlink(tar_path);
@@ -2185,13 +2200,20 @@ fn handleVnetsJson(buf: []u8) []const u8 {
 }
 
 /// Parse key=value body data. Returns empty slice when not found.
+/// Anchors key match at query-string boundaries (start of body or after &)
+/// to avoid matching substrings of other keys (e.g. "cpu" inside "diskcpu").
 fn bodyVal(body: []const u8, key: []const u8) []const u8 {
     var pat_buf: [64]u8 = undefined;
     const pat = std.fmt.bufPrint(&pat_buf, "{s}=", .{key}) catch return "";
-    if (std.mem.indexOf(u8, body, pat)) |idx| {
-        const start = idx + pat.len;
-        const end = std.mem.indexOfScalar(u8, body[start..], '&') orelse (body.len - start);
-        return body[start .. start + end];
+    var search_pos: usize = 0;
+    while (std.mem.indexOfPos(u8, body, search_pos, pat)) |idx| {
+        // Anchored: must be at start of body or preceded by '&'.
+        if (idx == 0 or body[idx - 1] == '&') {
+            const start = idx + pat.len;
+            const end = std.mem.indexOfScalar(u8, body[start..], '&') orelse (body.len - start);
+            return body[start .. start + end];
+        }
+        search_pos = idx + 1;
     }
     return "";
 }
@@ -2331,7 +2353,7 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-const index_html = @embedFile("index.html");
+const index_html = @embedFile("web/index.html");
 const app_css = @embedFile("web/app.css");
 const app_js = @embedFile("web/app.js");
 const novnc_js = @embedFile("web/novnc.js");

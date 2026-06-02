@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hangar — VM Manager</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+
+<svg style="display:none" aria-hidden="true">
+  <defs>
+    <symbol id="icon-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+      <line x1="8" y1="21" x2="16" y2="21"/>
+      <line x1="12" y1="17" x2="12" y2="21"/>
+    </symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div id="connbanner" style="display:none">
+  <span>⚠ Connection lost</span>
+  <button class="btn" data-action="dismissBanner">Dismiss</button>
+</div>
+
+<!-- ═══ Sidebar ═══ -->
+<aside id="sidebar" role="navigation" aria-label="VM Library">
+  <div class="sidebar-header">
+    <div class="logo" aria-hidden="true">H</div>
+    <h2>Hangar</h2>
+  </div>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search VMs…" data-action="filterList" aria-label="Search VMs" autocomplete="off">
+    <button id="searchClear" class="clear-btn" data-action="clearSearch" aria-label="Clear search">✕</button>
+  </div>
+  <div id="vmlist" role="listbox" aria-label="VM Library">
+    <div class="empty-state" style="padding:40px 20px;text-align:center">
+      <p style="color:var(--text-dim);font-size:12px">No VMs</p>
+    </div>
+  </div>
+</aside>
+
+<!-- ═══ Main Content ═══ -->
+<main id="main-content">
+  <!-- Toolbar -->
+  <div class="toolbar" role="toolbar" aria-label="VM actions">
+    <button class="hamburger" data-action="toggleSidebar" aria-label="Toggle sidebar" aria-expanded="false">☰</button>
+    <button id="powerbtn" class="btn primary keep-mobile" data-action="powerToggle">▶ Power On</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="btn" data-action="editVm" title="Settings">⚙ Settings</button>
+    <button class="btn" data-action="renameGuest" title="Rename">✎ Rename</button>
+    <button class="btn" data-action="newVm" title="New VM">＋ New</button>
+    <button class="btn" data-action="takeSnapshot" title="Take Snapshot">📸 Snapshot</button>
+    <button class="btn" data-action="cloneGuest" title="Clone">⧉ Clone</button>
+    <button class="btn" data-action="sendCad" title="Ctrl+Alt+Del">⌨ CAD</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="btn" data-action="shutdownGuest" title="Shut Down Guest">⏻ Shut Down</button>
+    <button class="btn" data-action="resetGuest" title="Reset">↻ Reset</button>
+    <button class="btn" data-action="pauseGuest" title="Pause">⏸ Pause</button>
+    <button class="btn" data-action="resumeGuest" title="Resume">▶ Resume</button>
+    <button class="btn" data-action="suspendGuest" title="Suspend to Disk">💾 Suspend</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="btn" data-action="migrateGuest" title="Migrate">🚚 Migrate</button>
+    <button class="btn" data-action="exportOvf" title="Export OVF">📦 Export</button>
+    <button class="btn" data-action="importGuest" title="Import">📥 Import</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="btn" data-action="batchStart" title="Batch Start">▶▶ All</button>
+    <button class="btn danger" data-action="batchStop" title="Batch Stop">⏹⏹ All</button>
+    <button class="btn danger" data-action="deleteVm" title="Delete VM">🗑 Delete</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="btn" data-action="openPrefs" title="Preferences">🔧 Prefs</button>
+    <button class="btn" data-action="openVnets" title="Virtual Networks">🌐 VNets</button>
+    <button class="btn" data-action="openAbout" title="About">ℹ About</button>
+    <button class="btn theme-toggle-btn" data-action="toggleTheme" title="Toggle theme" aria-label="Toggle theme">🌓</button>
+    <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-expanded="false" style="display:none">⋯</button>
+    <div class="toolbar-more-popover" role="menu" aria-label="More actions"></div>
+  </div>
+
+  <!-- Content Area -->
+  <div class="content-area">
+    <!-- Display panel (VNC/SPICE framebuffer) -->
+    <div id="display">
+      <canvas id="fbcanvas" tabindex="-1"></canvas>
+    </div>
+
+    <!-- Serial console panel -->
+    <div id="serialpanel">
+      <textarea id="serialterm" readonly rows="14" placeholder="Serial console — not connected" aria-label="Serial console"></textarea>
+      <div style="display:flex;gap:6px;padding:6px 14px 10px;background:var(--serial-bg);border-top:1px solid var(--border)">
+        <button class="btn" data-action="clearSerial" style="font-size:11px;padding:3px 10px">Clear</button>
+        <button class="btn" data-action="exportSerial" style="font-size:11px;padding:3px 10px">Export</button>
+        <button class="btn" data-action="manualDisconnectSerial" style="font-size:11px;padding:3px 10px">Disconnect</button>
+      </div>
+    </div>
+
+    <!-- VM Header + Tabs -->
+    <div class="vm-header">
+      <h1 id="vmname">Select a VM</h1>
+      <div id="tabBar" class="tab-bar" role="tablist" style="display:none">
+        <button class="tab-btn active" data-action="switchTab" data-tab="summary" role="tab" aria-selected="true">Summary</button>
+        <button class="tab-btn" data-action="switchTab" data-tab="settings" role="tab" aria-selected="false">Settings</button>
+      </div>
+    </div>
+
+    <!-- Tab: Summary -->
+    <div id="tabSummary" role="tabpanel" aria-label="Summary">
+      <div class="empty-state">
+        <svg class="empty-icon"><use href="#icon-monitor"/></svg>
+        <h3>No Virtual Machine Selected</h3>
+        <p>Select a VM from the sidebar to view its details, or create a new one.</p>
+      </div>
+    </div>
+
+    <!-- Tab: Settings (hidden) -->
+    <div id="tabSettings" role="tabpanel" aria-label="Settings" aria-hidden="true" style="display:none">
+      <div class="empty-state">
+        <svg class="empty-icon"><use href="#icon-settings"/></svg>
+        <h3>No Virtual Machine Selected</h3>
+        <p>Select a VM from the sidebar to edit its settings.</p>
+      </div>
+    </div>
+
+    <!-- Migration progress bar -->
+    <div id="mig_bar_container" style="margin-top:20px">
+      <div id="mig_progress" style="display:none;height:4px;background:var(--border);border-radius:2px;margin-bottom:6px;overflow:hidden">
+        <div style="height:100%;width:0;background:var(--accent);border-radius:2px;transition:width 300ms ease"></div>
+      </div>
+      <span id="mig_pct" style="display:none;font-size:12px;color:var(--text-muted)"></span>
+      <button id="mig_cancel" class="btn danger" data-action="cancelMigrate" style="display:none;margin-left:12px;font-size:11px;padding:3px 10px">Cancel</button>
+    </div>
+  </div>
+</main>
+
+<!-- Status Bar -->
+<div id="statusbar" role="status" aria-live="polite">Ready</div>
+
+<!-- Toast Container -->
+<div id="toast-container" aria-live="polite"></div>
+
+<!-- ═══ Dialogs ═══ -->
+
+<!-- New VM Dialog -->
+<dialog id="newdlg" aria-label="New Virtual Machine">
+  <form method="dialog" onsubmit="return false">
+    <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">New Virtual Machine</h3>
+    <div style="padding:16px 24px">
+      <label for="n_name">Name</label>
+      <input id="n_name" type="text" required maxlength="128" style="width:100%;margin:4px 0 12px">
+      <label for="n_mem">Memory (MB)</label>
+      <input id="n_mem" type="number" value="2048" min="128" max="65536" step="1" style="width:100%;margin:4px 0 12px">
+      <label for="n_cpu">CPU Cores</label>
+      <input id="n_cpu" type="number" value="2" min="1" max="256" step="1" style="width:100%;margin:4px 0 12px">
+      <label for="n_disk">Disk Size (GB)</label>
+      <input id="n_disk" type="number" value="20" min="1" max="65536" step="1" style="width:100%;margin:4px 0 12px">
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn" data-action="closeDlg" data-dialog="newdlg">Cancel</button>
+      <button type="button" class="btn primary" data-action="createVm">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Snapshot Dialog -->
+<dialog id="snapdlg" aria-label="Snapshots">
+  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Snapshots</h3>
+  <div style="padding:16px 24px">
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input id="s_tag" type="text" placeholder="Snapshot tag name" style="flex:1">
+      <button type="button" class="btn primary" data-action="takeSnapshotFromDlg">Take</button>
+    </div>
+    <div id="snaplist" style="max-height:260px;overflow-y:auto"></div>
+  </div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="snapdlg">Close</button>
+  </div>
+</dialog>
+
+<!-- Clone Dialog -->
+<dialog id="clonedlg" aria-label="Clone VM">
+  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Clone Virtual Machine</h3>
+  <div style="padding:16px 24px">
+    <p>Clone <strong id="clone_name"></strong>?</p>
+  </div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="clonedlg">Cancel</button>
+    <button type="button" class="btn" data-action="doClone" data-clone-linked="0">Full Clone</button>
+    <button type="button" class="btn primary" data-action="doClone" data-clone-linked="1">Linked Clone</button>
+  </div>
+</dialog>
+
+<!-- VNet Editor Dialog -->
+<dialog id="vnetdlg" aria-label="Virtual Network Editor" style="width:min(560px,95vw)">
+  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Virtual Network Editor</h3>
+  <div style="padding:16px 24px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div>
+      <select id="vnet_sel" size="6" data-action="onVnetSelect" style="width:100%;height:180px" aria-label="Network list"></select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <label for="vn_name">Name</label><input id="vn_name" type="text">
+      <label for="vn_type">Type</label>
+      <select id="vn_type"><option value="nat">NAT</option><option value="bridged">Bridged</option><option value="host_only">Host-Only</option></select>
+      <label for="vn_subnet">Subnet</label><input id="vn_subnet" type="text" placeholder="192.168.1.0">
+      <label for="vn_mask">Netmask</label><input id="vn_mask" type="text" placeholder="255.255.255.0">
+      <label for="vn_dhcp">DHCP</label>
+      <select id="vn_dhcp"><option value="0">Off</option><option value="1">On</option></select>
+      <label for="vn_dstart">DHCP Start</label><input id="vn_dstart" type="text" placeholder="192.168.1.100">
+      <label for="vn_dend">DHCP End</label><input id="vn_dend" type="text" placeholder="192.168.1.200">
+      <label for="vn_iface">Host Interface</label><input id="vn_iface" type="text">
+      <label for="vn_gw">Gateway</label><input id="vn_gw" type="text">
+      <label for="vn_pf">Port Forwards</label><input id="vn_pf" type="text" placeholder="host:guest,...">
+    </div>
+  </div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="vnetSaveCurrent">Save Network</button>
+    <button type="button" class="btn" data-action="vnetAdd">Add</button>
+    <button type="button" class="btn danger" data-action="vnetRemove">Remove</button>
+    <button type="button" class="btn" data-action="vnetDefaults">Defaults</button>
+    <button type="button" class="btn primary" data-action="vnetSaveAll">Save All</button>
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="vnetdlg">Close</button>
+  </div>
+</dialog>
+
+<!-- Preferences Dialog -->
+<dialog id="prefsdlg" aria-label="Preferences">
+  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Preferences</h3>
+  <div style="padding:16px 24px">
+    <label for="p_theme">Theme</label>
+    <select id="p_theme" data-action="applyTheme" style="width:100%;margin:4px 0 12px">
+      <option value="system">System</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+    <label for="p_default_memory_mb">Default Memory (MB)</label>
+    <input id="p_default_memory_mb" type="number" value="2048" min="128" max="65536" step="1" style="width:100%;margin:4px 0 12px">
+    <label for="p_default_cpu_cores">Default CPU Cores</label>
+    <input id="p_default_cpu_cores" type="number" value="2" min="1" max="256" step="1" style="width:100%;margin:4px 0 12px">
+    <label for="p_autoprotect_enabled">AutoProtect Default</label>
+    <select id="p_autoprotect_enabled" style="width:100%;margin:4px 0 12px">
+      <option value="0">Off</option><option value="1">On</option>
+    </select>
+    <label for="p_autoprotect_interval">AutoProtect Interval (min)</label>
+    <input id="p_autoprotect_interval" type="number" value="60" min="1" max="1440" step="1" style="width:100%;margin:4px 0 12px">
+    <label for="p_autoprotect_max">AutoProtect Max Snapshots</label>
+    <input id="p_autoprotect_max" type="number" value="10" min="1" max="100" step="1" style="width:100%;margin:4px 0 12px">
+  </div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="prefsdlg">Cancel</button>
+    <button type="button" class="btn primary" data-action="savePrefs">Save</button>
+  </div>
+</dialog>
+
+<!-- About Dialog -->
+<dialog id="aboutdlg" aria-label="About Hangar">
+  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">About Hangar</h3>
+  <div style="padding:16px 24px;text-align:center">
+    <div style="width:48px;height:48px;background:var(--gradient);border-radius:var(--radius);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--text-on-accent);margin-bottom:12px">H</div>
+    <p style="font-weight:600;font-size:15px">Hangar VM Manager</p>
+    <p style="color:var(--text-muted);font-size:13px;margin-top:4px">Lightweight QEMU VM manager</p>
+    <p style="color:var(--text-dim);font-size:12px;margin-top:8px">Zig + FLTK + noVNC/SPICE web UI</p>
+  </div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="aboutdlg">Close</button>
+  </div>
+</dialog>
+
+<!-- Migrate Dialog -->
+<dialog id="migratedlg" aria-label="Migrate VM">
+  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Migrate Virtual Machine</h3>
+  <div style="padding:16px 24px">
+    <p style="margin-bottom:12px"><strong id="migrate_vmname"></strong></p>
+    <label for="mig_host">Target Host</label>
+    <input id="mig_host" type="text" placeholder="hostname or IP" style="width:100%;margin:4px 0 12px">
+    <label for="mig_port">Target Port</label>
+    <input id="mig_port" type="number" value="4444" min="1" max="65535" style="width:100%;margin:4px 0 12px">
+    <label for="mig_uri">Migration URI</label>
+    <input id="mig_uri" type="text" readonly style="width:100%;margin:4px 0 12px;color:var(--text-dim)">
+  </div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="migratedlg">Cancel</button>
+    <button type="button" class="btn primary" data-action="doMigrate">Migrate</button>
+  </div>
+</dialog>
+
+<!-- Keyboard Shortcuts Dialog -->
+<dialog id="shortcutsdlg" aria-label="Keyboard Shortcuts">
+  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Keyboard Shortcuts</h3>
+  <div style="padding:16px 24px">
+    <table style="width:100%;font-size:13px;border-collapse:collapse">
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">↑↓</kbd></td><td>Navigate VM list</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Enter</kbd></td><td>Power On/Off selected VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Delete</kbd></td><td>Delete selected VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Esc</kbd></td><td>Close dialog / Deselect VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">F5</kbd></td><td>Refresh VM list</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">F11</kbd></td><td>Fullscreen / Display-only mode</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+F</kbd></td><td>Focus search</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+S</kbd></td><td>Save settings (Settings tab)</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+Enter</kbd></td><td>Edit VM settings</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Alt+↑↓</kbd></td><td>Reorder VM in list</td></tr>
+    </table>
+  </div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="shortcutsdlg">Close</button>
+  </div>
+</dialog>
+
+<!-- Display-only overlay bar -->
+<div class="displayonly-bar">
+  <span>Display-only mode</span>
+  <kbd>F11</kbd><span>or</span><kbd>Esc</kbd><span>to exit</span>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
