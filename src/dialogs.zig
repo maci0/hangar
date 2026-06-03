@@ -69,11 +69,58 @@ pub fn aboutDialog() void {
     cfltk.Fl_delete_widget(@ptrCast(dlg));
 }
 
-pub fn prefsDialog() void {
-    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 420, 2), @divTrunc(cfltk.Fl_h() - 320, 2), 420, 320, "Preferences");
+pub fn shortcutsDialog() void {
+    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 440, 2), @divTrunc(cfltk.Fl_h() - 380, 2), 440, 380, "Keyboard Shortcuts");
     cfltk.Fl_Window_make_modal(dlg, 1);
     cfltk.Fl_Window_set_color(dlg, app.pal.bg);
-    cfltk.Fl_Window_size_range(dlg, 420, 320, 0, 0);
+    cfltk.Fl_Window_size_range(dlg, 440, 380, 0, 0);
+    const title = cfltk.Fl_Box_new(10, 10, 420, 26, "Keyboard Shortcuts");
+    cfltk.Fl_Box_set_color(title, app.pal.bg);
+    cfltk.Fl_Box_set_label_font(title, 1);
+    cfltk.Fl_Box_set_label_size(title, 16);
+    cfltk.Fl_Box_set_label_color(title, app.pal.header);
+    const sep = cfltk.Fl_Box_new(10, 40, 420, 2, "");
+    cfltk.Fl_Box_set_box(sep, 1);
+    cfltk.Fl_Box_set_color(sep, app.pal.border);
+    const ks_text =
+        \\\u2191\u2193         Navigate VM list       Del         Delete VM
+        \\Enter      Power On/Off            Esc         Close / Deselect
+        \\F2         Edit VM settings        F5          Refresh VM list
+        \\F11        Full Screen toggle
+        \\Ctrl+N     New VM                  Ctrl+W      Home (deselect)
+        \\Ctrl+Q     Quit Hangar             Ctrl+I      Import VM
+        \\Ctrl+E     Edit VM settings        Ctrl+S      Suspend VM
+        \\Ctrl+P     Preferences             Ctrl+F      Focus search
+        \\Ctrl+Z     Undo delete VM          Ctrl+Sh+N   Clone VM
+        \\Alt+\u2191\u2193      Reorder VM in list
+    ;
+    const ks_box = cfltk.Fl_Box_new(10, 50, 420, 250, ks_text);
+    cfltk.Fl_Box_set_color(ks_box, app.pal.bg);
+    cfltk.Fl_Box_set_label_font(ks_box, 4); // FL_COURIER
+    cfltk.Fl_Box_set_label_color(ks_box, app.pal.text_dim);
+    cfltk.Fl_Box_set_label_size(ks_box, 12);
+    const cb = cfltk.Fl_Button_new(350, 330, 80, 30, "Close");
+    cfltk.Fl_Button_set_color(cb, app.pal.accent);
+    cfltk.Fl_Button_set_label_color(cb, app.pal.accent_text);
+    const CLOSE = struct {
+        fn g(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
+            if (d) |dd| cfltk.Fl_Window_hide(@ptrCast(@alignCast(dd)));
+        }
+    };
+    cfltk.Fl_Button_set_callback(cb, &CLOSE.g, @ptrCast(@alignCast(dlg)));
+    cfltk.Fl_Window_end(dlg);
+    cfltk.Fl_Window_show(dlg);
+    app.modal_active = true;
+    while (cfltk.Fl_Window_shown(dlg) != 0) { _ = cfltk.Fl_wait(); }
+    app.modal_active = false;
+    cfltk.Fl_delete_widget(@ptrCast(dlg));
+}
+
+pub fn prefsDialog() void {
+    const dlg = cfltk.Fl_Window_new(@divTrunc(cfltk.Fl_w() - 420, 2), @divTrunc(cfltk.Fl_h() - 350, 2), 420, 350, "Preferences");
+    cfltk.Fl_Window_make_modal(dlg, 1);
+    cfltk.Fl_Window_set_color(dlg, app.pal.bg);
+    cfltk.Fl_Window_size_range(dlg, 420, 350, 0, 0);
 
     const ph = cfltk.Fl_Box_new(10, 10, 400, 22, "Defaults for new VMs");
     cfltk.Fl_Box_set_color(ph, app.pal.bg);
@@ -118,10 +165,19 @@ pub fn prefsDialog() void {
     app.themeInput(@ptrCast(ap_max_input));
     _ = cfltk.Fl_Input_set_value(ap_max_input, std.fmt.bufPrintZ(&ac, "{d}", .{app.prefs.autoprotect_max_default}) catch "10");
 
-    const th = cfltk.Fl_Box_new(10, 195, 130, 20, "Theme:");
+    const pd0 = cfltk.Fl_Box_new(10, 190, 130, 20, "Default VM Directory:");
+    cfltk.Fl_Box_set_color(pd0, app.pal.bg);
+    cfltk.Fl_Box_set_label_font(pd0, 1); cfltk.Fl_Box_set_label_color(pd0, app.pal.text_dim);
+    const dir_input = cfltk.Fl_Input_new(140, 188, 270, 24, "");
+    app.themeInput(@ptrCast(dir_input));
+    if (app.prefs.default_vm_dir_len > 0) {
+        _ = cfltk.Fl_Input_set_value(dir_input, app.prefs.default_vm_dir_buf[0..app.prefs.default_vm_dir_len :0]);
+    }
+
+    const th = cfltk.Fl_Box_new(10, 225, 130, 20, "Theme:");
     cfltk.Fl_Box_set_color(th, app.pal.bg);
     cfltk.Fl_Box_set_label_font(th, 1); cfltk.Fl_Box_set_label_color(th, app.pal.text_dim);
-    const theme_choice = cfltk.Fl_Choice_new(140, 192, 270, 24, "");
+    const theme_choice = cfltk.Fl_Choice_new(140, 222, 270, 24, "");
     app.themeChoice(@ptrCast(theme_choice));
     _ = cfltk.Fl_Choice_add_choice(theme_choice, "System");
     _ = cfltk.Fl_Choice_add_choice(theme_choice, "Light");
@@ -135,6 +191,7 @@ pub fn prefsDialog() void {
         ap_check: ?*cfltk.Fl_Check_Button,
         ap_int: ?*cfltk.Fl_Input,
         ap_max: ?*cfltk.Fl_Input,
+        dir: ?*cfltk.Fl_Input,
         theme: ?*cfltk.Fl_Choice,
         dlg: ?*cfltk.Fl_Window,
     };
@@ -144,6 +201,7 @@ pub fn prefsDialog() void {
         .ap_check = @ptrCast(ap_check),
         .ap_int = @ptrCast(ap_int_input),
         .ap_max = @ptrCast(ap_max_input),
+        .dir = @ptrCast(dir_input),
         .theme = @ptrCast(theme_choice),
         .dlg = @ptrCast(dlg),
     };
@@ -190,6 +248,13 @@ pub fn prefsDialog() void {
                     };
                 }
             }
+            if (pp.dir) |di| {
+                const val = std.mem.span(cfltk.Fl_Input_value(di));
+                const n = @min(val.len, app.prefs.default_vm_dir_buf.len - 1);
+                @memcpy(app.prefs.default_vm_dir_buf[0..n], val[0..n]);
+                app.prefs.default_vm_dir_buf[n] = 0;
+                app.prefs.default_vm_dir_len = @intCast(n);
+            }
             if (pp.theme) |tc| {
                 const v: i32 = cfltk.Fl_Choice_value(tc);
                 const new_theme: vm.Theme = switch (v) { 2 => .dark, 1 => .light, else => .system };
@@ -200,7 +265,7 @@ pub fn prefsDialog() void {
             if (pp.dlg) |d| cfltk.Fl_Window_hide(d);
         }
     };
-    const save_btn = cfltk.Fl_Button_new(230, 280, 80, 30, "Save");
+    const save_btn = cfltk.Fl_Button_new(230, 310, 80, 30, "Save");
     cfltk.Fl_Button_set_color(save_btn, app.pal.accent); cfltk.Fl_Button_set_label_color(save_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_callback(save_btn, &SaveCB.go, &pd);
 
@@ -210,7 +275,7 @@ pub fn prefsDialog() void {
             if (pp.dlg) |d| cfltk.Fl_Window_hide(d);
         }
     };
-    const cancel_btn = cfltk.Fl_Button_new(320, 280, 90, 30, "Cancel");
+    const cancel_btn = cfltk.Fl_Button_new(320, 310, 90, 30, "Cancel");
     cfltk.Fl_Button_set_color(cancel_btn, app.pal.gray_btn); cfltk.Fl_Button_set_label_color(cancel_btn, app.pal.accent_text);
     cfltk.Fl_Button_set_callback(cancel_btn, &CancelCB.go, &pd);
 
@@ -397,6 +462,18 @@ pub fn exportOvfDialog() void {
         app.setStatus("Path too long for OVF export");
         return;
     };
+
+    var vmdk2_name_buf: [256]u8 = undefined;
+    var vmdk2_href: []const u8 = "";
+    var disk2_bytes: u64 = 0;
+    if (v.hasDisk2()) {
+        disk2_bytes = @as(u64, v.disk2_size_gb) * 1024 * 1024 * 1024;
+        vmdk2_href = std.fmt.bufPrint(&vmdk2_name_buf, "{s}-disk2.vmdk", .{base}) catch {
+            app.setStatus("Path too long for OVF export (disk2)");
+            return;
+        };
+    }
+
     const spec = ovf.Spec{
         .name = v.getNameSlice(),
         .cpu_cores = v.cpu_cores,
@@ -405,6 +482,9 @@ pub fn exportOvfDialog() void {
         .vmdk_href = vmdk_href,
         .vmdk_size_bytes = disk_bytes,
         .has_network = v.nics[0].mode != .none,
+        .disk2_href = vmdk2_href,
+        .disk2_capacity_bytes = disk2_bytes,
+        .disk2_size_bytes = disk2_bytes,
     };
 
     var ovf_buf: [ovf.max_descriptor_len]u8 = undefined;
@@ -433,8 +513,27 @@ pub fn exportOvfDialog() void {
                 return;
             };
             std.heap.page_allocator.free(vmdk_full);
+            if (v.hasDisk2()) {
+                const disk2_path = v.getDisk2PathSlice();
+                const vmdk2_full = std.heap.page_allocator.dupeZ(u8, vmdk2_href) catch {
+                    app.setStatus("OVF saved, but disk2 VMDK path buffer allocation failed");
+                    return;
+                };
+                app.g_vmm.convertDiskFn(h, disk2_path, vmdk2_full, @intFromEnum(v.disk2_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
+                    std.heap.page_allocator.free(vmdk2_full);
+                    app.setStatus("OVF saved, but disk2 VMDK conversion failed");
+                    return;
+                };
+                std.heap.page_allocator.free(vmdk2_full);
+            }
             app.setStatus("OVF package exported successfully");
         } else {
+            // Convert disk2 synchronously if present (async machinery only tracks one pid).
+            if (v.hasDisk2()) {
+                qemu.convertDiskImage(v.getDisk2PathSlice(), v.disk2_format, vmdk2_href, .vmdk, std.heap.page_allocator) catch {
+                    app.setStatus("OVF saved, but disk2 VMDK conversion failed");
+                };
+            }
             // Async conversion — returns immediately so UI stays responsive.
             ovf_conv_pid = qemu.convertDiskImageNoWait(disk_path, v.disk_format, vmdk_full, .vmdk, std.heap.page_allocator) catch {
                 std.heap.page_allocator.free(vmdk_full);
@@ -633,6 +732,7 @@ pub fn migrateDialog() void {
         dlg: ?*cfltk.Fl_Window,
         idx: usize,
         qc: qmp.QmpClient,
+        done: bool,
     };
     var md = MD{
         .uri = @ptrCast(uri_input),
@@ -640,6 +740,7 @@ pub fn migrateDialog() void {
         .dlg = @ptrCast(dlg),
         .idx = idx,
         .qc = qmp.QmpClient{},
+        .done = false,
     };
 
     const MigrateFn = struct {
@@ -695,9 +796,8 @@ pub fn migrateDialog() void {
                 }
 
                 // Poll migration status every 500ms (non-blocking via Fl::wait)
-                var done = false;
                 var timeout: usize = 600; // 5 minutes max (600 * 500ms)
-                while (!done and timeout > 0) : (timeout -= 1) {
+                while (!mdp.done and timeout > 0) : (timeout -= 1) {
                     _ = cfltk.Fl_wait_for(0.5);
                     var out_buf: [64]u8 = undefined;
                     const status = mdp.qc.queryMigrateStatus(&out_buf) catch break;
@@ -706,7 +806,7 @@ pub fn migrateDialog() void {
                             cfltk.Fl_Box_set_label(sl, "Migration completed successfully.");
                             cfltk.Fl_Box_set_label_color(sl, app.pal.success);
                         }
-                        done = true;
+                        mdp.done = true;
                     } else if (std.mem.eql(u8, status, "failed") or std.mem.eql(u8, status, "cancelled")) {
                         if (mdp.status) |sl| {
                             var buf: [128]u8 = undefined;
@@ -714,7 +814,7 @@ pub fn migrateDialog() void {
                             cfltk.Fl_Box_set_label(sl, lbl.ptr);
                             cfltk.Fl_Box_set_label_color(sl, app.pal.danger);
                         }
-                        done = true;
+                        mdp.done = true;
                     } else {
                         if (mdp.status) |sl| {
                             var buf: [128]u8 = undefined;
@@ -723,7 +823,7 @@ pub fn migrateDialog() void {
                         }
                     }
                 }
-                if (!done) {
+                if (!mdp.done) {
                     if (mdp.status) |sl| {
                         cfltk.Fl_Box_set_label(sl, "Migration timed out.");
                         cfltk.Fl_Box_set_label_color(sl, app.pal.danger);
@@ -737,7 +837,9 @@ pub fn migrateDialog() void {
     const CancelFn = struct {
         fn go(_: ?*cfltk.Fl_Widget, d: ?*anyopaque) callconv(.c) void {
             const mdp: *MD = @ptrCast(@alignCast(d orelse return));
-            // Connect QMP and cancel
+            mdp.done = true;
+            // Disconnect any in-progress connection before reconnecting.
+            mdp.qc.disconnect();
             var sock_buf: [256]u8 = undefined;
             const sock = qmp.socketPath(app.vms[mdp.idx].getNameSlice(), &sock_buf) orelse return;
             mdp.qc.connect(sock) catch {
@@ -794,7 +896,7 @@ test "firstUnusedSubnet: contiguous block -> first free after gap" {
     var ns = vnet.NetworkSet{};
     for (100..105) |oct| {
         var subnet: [16]u8 = undefined;
-        const s = std.fmt.bufPrintZ(&subnet, "192.168.{d}.0", .{oct}) catch unreachable;
+        const s = try std.fmt.bufPrintZ(&subnet, "192.168.{d}.0", .{oct});
         _ = ns.add("VMnet", .nat, s, "255.255.255.0", false, "", "", "");
     }
     try std.testing.expectEqual(@as(u8, 105), firstUnusedSubnet(&ns));
@@ -842,7 +944,7 @@ test "firstUnusedSubnet: max networks filled -> returns next unused" {
     // Fill all 20 available slots with contiguous 100..119
     for (100..120) |oct| {
         var subnet: [16]u8 = undefined;
-        const s = std.fmt.bufPrintZ(&subnet, "192.168.{d}.0", .{oct}) catch unreachable;
+        const s = try std.fmt.bufPrintZ(&subnet, "192.168.{d}.0", .{oct});
         _ = ns.add("VMnet", .nat, s, "255.255.255.0", false, "", "", "");
     }
     try std.testing.expectEqual(@as(u8, 120), firstUnusedSubnet(&ns));
@@ -862,4 +964,35 @@ test "firstUnusedSubnet: sparse allocation -> first gap found" {
     _ = ns.add("VMnet2", .nat, "192.168.105.0", "255.255.255.0", false, "", "", "");
     // 100 used, 101 free, 102 used -> first free is 101
     try std.testing.expectEqual(@as(u8, 101), firstUnusedSubnet(&ns));
+}
+
+test "fuzz: firstUnusedSubnet never panics and returns in [100,240]" {
+    var prng = std.Random.DefaultPrng.init(0x5AB_D00);
+    const rnd = prng.random();
+    var oct_buf: [16]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        var ns = vnet.NetworkSet{};
+        const count = rnd.uintLessThan(usize, 25);
+        for (0..count) |_| {
+            const oct = rnd.intRangeAtMost(u8, 1, 254);
+            const subnet = std.fmt.bufPrintZ(&oct_buf, "192.168.{d}.0", .{oct}) catch continue;
+            const vtype: vnet.VNetType = if (rnd.boolean()) .nat else if (rnd.boolean()) .bridged else .host_only;
+            _ = ns.add("VMnet", vtype, subnet, "255.255.255.0", rnd.boolean(), "", "", "");
+        }
+        // Also add some non-192.168 subnets sometimes
+        if (rnd.boolean()) {
+            _ = ns.add("VMnetX", .nat, "10.0.0.0", "255.255.255.0", false, "", "", "");
+        }
+        if (rnd.boolean()) {
+            _ = ns.add("VMnetY", .nat, "172.16.0.0", "255.255.0.0", false, "", "", "");
+        }
+        // Add a malformed subnet occasionally
+        if (rnd.uintLessThan(u8, 10) < 2) {
+            _ = ns.add("VMnetB", .nat, "bad", "255.255.255.0", false, "", "", "");
+        }
+        const result = firstUnusedSubnet(&ns);
+        try std.testing.expect(result >= 100);
+        try std.testing.expect(result <= 240);
+    }
 }

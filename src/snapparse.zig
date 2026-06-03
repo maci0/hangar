@@ -150,7 +150,7 @@ test "snapparse: row with only an ID and no tag returns empty" {
 test "snapparse: Max name length exactly at cap" {
     var buf: [128]u8 = undefined;
     const name = "A" ** (SNAP_NAME_CAP + 10);
-    const line = std.fmt.bufPrint(&buf, "1 {s} 0 B\n", .{name}) catch unreachable;
+    const line = try std.fmt.bufPrint(&buf, "1 {s} 0 B\n", .{name});
     const n = parse(line);
     try t.expectEqual(@as(usize, 1), n.count);
     try t.expect(n.nameSlice(0).len <= SNAP_NAME_CAP - 1);

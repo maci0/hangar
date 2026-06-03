@@ -49,8 +49,10 @@ var toolbarMoreOpen=false;
 function toggleToolbarMore(){toolbarMoreOpen=!toolbarMoreOpen;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');
 if(tb){if(toolbarMoreOpen){tb.classList.add('open-more');}else{tb.classList.remove('open-more');}}
 if(btn)btn.setAttribute('aria-expanded',toolbarMoreOpen?'true':'false');
-if(popover){if(toolbarMoreOpen){popover.classList.add('open');}else{popover.classList.remove('open');}}
+if(popover){if(toolbarMoreOpen){populateToolbarMore(popover);positionToolbarMore(popover,btn);popover.classList.add('open');}else{popover.classList.remove('open');}}
 }
+function populateToolbarMore(popover){popover.innerHTML='';const tb=document.querySelector('.toolbar');if(!tb)return;const hidden=tb.querySelectorAll('.btn:not(.keep-mobile):not(.toolbar-more):not(.theme-toggle-btn)');hidden.forEach(function(b){if(!b.matches('.btn:not(.keep-mobile)'))return;const clone=document.createElement('button');clone.className='btn';clone.textContent=b.textContent||b.getAttribute('title')||b.getAttribute('aria-label')||'';clone.setAttribute('data-action',b.getAttribute('data-action')||'');popover.appendChild(clone);});}
+function positionToolbarMore(popover,btn){if(!btn)return;var r=btn.getBoundingClientRect();popover.style.top=(r.bottom+4)+'px';popover.style.right=(window.innerWidth-r.right)+'px';popover.style.left='auto';popover.style.bottom='auto';}
 function closeToolbarMore(){if(!toolbarMoreOpen)return;toolbarMoreOpen=false;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');if(tb)tb.classList.remove('open-more');if(btn)btn.setAttribute('aria-expanded','false');if(popover)popover.classList.remove('open');}
 function clearSearch(){var s=document.getElementById('search');if(!s)return;s.value='';filterList();}
 var settingsDirty=false;
@@ -200,7 +202,7 @@ if(m<128||m>65536){showToast('Memory must be 128–65536 MB','error');return;}
 if(c<1||c>256){showToast('CPU cores must be 1–256','error');return;}
 if(d<1||d>65536){showToast('Disk size must be 1–65536 GB','error');return;}
 const r=await apiPost('/api/new','name='+encodeURIComponent(n)+'&mem='+m+'&cpu='+c+'&disk='+d);if(r){var ndlg=document.getElementById('newdlg');if(ndlg)ndlg.close();await refresh();}}
-async function deleteVm(){if(sel===null)return;if(!confirm('Delete this VM?'))return;var deleted=vms[sel];var deletedIdx=sel;var r=await apiPost('/api/delete/'+sel);if(r){sel=null;var delName=deleted.name;await refresh();toastUndo('Deleted "'+escHtml(delName)+'"',async function(){var body='name='+encodeURIComponent(delName);var fm=[['mem','mem'],['cpu','cpu'],['cpu_sockets','cpu_sockets'],['disk','disk'],['disk_format','disk_format'],['guest_os','guest_os'],['net','network'],['fw','firmware'],['mac','mac_address'],['nic2_mode','nic2'],['nic3_mode','nic3'],['iso_path','iso_path'],['shared_folder','shared_folder'],['usb_device','usb'],['guest_tools','guest_tools'],['autoprotect','autoprotect'],['autoprotect_interval','ap_interval'],['autoprotect_max','ap_max'],['disk2_path','disk2_path'],['disk2_size','disk2_size'],['disk2_format','disk2_format'],['floppy_path','floppy'],['nic2_mac','nic2_mac'],['nic3_mac','nic3_mac'],['port_forwards','portfw'],['display','display'],['display_resolution','display_resolution'],['vnc_port','vnc_port'],['spice_port','spice_port'],['hasSerial','enable_serial'],['num_displays','num_displays'],['favorite','favorite'],['notes','notes'],['enable_3d','enable_3d'],['gpu_device','gpu_device'],['audio','audio'],['boot_order','boot_order'],['accel','accel'],['embed_display','embed_display']];fm.forEach(function(m){var v=deleted[m[0]];if(v!==undefined&&v!==null&&v!=='')body+='&'+m[1]+'='+encodeURIComponent(v);});await apiPost('/api/create',body);await refresh();});}}
+async function deleteVm(){if(sel===null)return;if(!confirm('Delete this VM?'))return;var deleted=vms[sel];var r=await apiPost('/api/delete/'+sel);if(r){sel=null;var delName=deleted.name;await refresh();toastUndo('Deleted "'+escHtml(delName)+'"',async function(){await apiPost('/api/undo');await refresh();});}}
 function reorderVm(from,to){var oldFrom=from,oldTo=to,oldSel=sel;apiPost('/api/reorder','from='+from+'&to='+to).then(async function(r){if(r){sel=to;await refresh();toastUndo('Moved "'+escHtml(vms[to]?vms[to].name:'VM')+'"',function(){apiPost('/api/reorder','from='+oldTo+'&to='+oldFrom).then(async function(r2){if(r2){sel=oldSel;await refresh();}});});}});}
 function editVm(){if(sel===null)return;if(activeTab==='settings'&&settingsDirty){if(!confirm('You have unsaved changes. Discard them?'))return;}switchTab('settings');if(sel===null||sel>=vms.length)return;
 const v=vms[sel];
@@ -209,7 +211,9 @@ const fields=[
 {s:'Basic'},['Name','e_name','text',v.name||'','required maxlength="128"'],['Guest OS','e_guest_os','select',v.guest_os||0],
 ['Memory (MB)','e_mem','number',v.mem||2048,'required min="128" max="65536" step="1"'],['CPU Cores','e_cpu','number',v.cpu||2,'required min="1" max="256" step="1"'],
 ['CPU Sockets','e_cpu_sockets','number',v.cpu_sockets||1,'min="1" max="64" step="1"'],
+['CPU Model','e_cpu_model','select',v.cpu_model||'host'],
 ['Disk Size (GB)','e_disk','number',v.disk||20,'required min="1" max="65536" step="1"'],['Disk Format','e_disk_format','select',v.disk_format||0],
+['Disk Cache','e_disk_cache','select',v.disk_cache||0],
 ['ISO Path','e_iso_path','text',v.iso_path||''],['Firmware','e_firmware','select',v.fw||'bios'],
 ['Boot Order','e_boot_order','select',v.boot_order||0],
 {s:'Network &amp; Boot'},['Network','e_network','select',v.net||'user'],['MAC Address','e_mac_address','text',v.mac_address||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
@@ -217,6 +221,7 @@ const fields=[
 ['NIC 3','e_nic3','select',v.nic3_mode||'none'],['NIC 3 MAC','e_nic3_mac','text',v.nic3_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
 ['Port Forwards','e_portfw','text',v.port_forwards||''],
 {s:'Sharing'},['Shared Folder','e_shared_folder','text',v.shared_folder||''],['USB Device','e_usb','text',v.usb_device||''],
+['USB Policy','e_usb_policy','select',v.usb_policy||0],
 ['Guest Tools','e_guest_tools','select',v.guest_tools==='true'?'1':'0'],
 {s:'AutoProtect'},['AutoProtect','e_autoprotect','select',v.autoprotect==='true'?'1':'0'],
 ['AP Interval','e_ap_interval','number',v.autoprotect_interval||60,'min="1" max="1440" step="1"'],
@@ -246,6 +251,8 @@ const fields=[
 const selects={e_network:[['user','NAT (User)'],['bridge','Bridged'],['none','None']],
 e_firmware:[['bios','BIOS'],['uefi','UEFI']],e_disk_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
 e_disk2_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
+e_disk_cache:[['0','Writeback'],['1','Writethrough'],['2','None'],['3','Direct Sync'],['4','Unsafe']],
+e_cpu_model:[['host','Host'],['host-passthrough','Host Passthrough'],['max','Max'],['qemu64','QEMU64'],['kvm64','KVM64'],['EPYC','EPYC'],['EPYC-Rome','EPYC-Rome'],['EPYC-Milan','EPYC-Milan'],['Skylake-Server','Skylake-Server'],['Skylake-Client','Skylake-Client'],['Cascadelake-Server','Cascadelake-Server'],['Icelake-Server','Icelake-Server'],['Nehalem','Nehalem'],['Westmere','Westmere'],['SandyBridge','SandyBridge'],['IvyBridge','IvyBridge'],['Haswell','Haswell'],['Broadwell','Broadwell'],['Opteron_G5','Opteron G5'],['Cooperlake','Cooperlake'],['SapphireRapids','SapphireRapids'],['GraniteRapids','GraniteRapids'],['Neoverse-N1','Neoverse-N1'],['Neoverse-N2','Neoverse-N2'],['Neoverse-V1','Neoverse-V1'],['aarch64','AArch64']],
 e_enable_3d:[['0','No'],['1','Yes']],e_gpu_device:[['0','Virtio-GPU'],['1','Virtio-VGA']],
 e_display:[['0','GTK'],['1','SDL'],['2','SPICE'],['3','VNC'],['4','None']],
 e_display_resolution:[['0','Auto'],['1','800x600'],['2','1024x768'],['3','1280x800'],['4','1920x1080']],
@@ -260,7 +267,8 @@ e_guest_agent:[['0','No'],['1','Yes']],e_virtio_rng:[['0','No'],['1','Yes']],
 e_tpm:[['0','No'],['1','Yes']],e_secure_boot:[['0','No'],['1','Yes']],
 e_hyperv_enlightenments:[['0','No'],['1','Yes']],e_hugepages:[['0','No'],['1','Yes']],
 e_ballooning:[['0','No'],['1','Yes']],e_host_autostart:[['0','No'],['1','Yes']],
-e_watchdog:[['0','None'],['1','Reset Guest'],['2','Power Off Guest'],['3','Pause Guest']]};
+e_watchdog:[['0','None'],['1','Reset Guest'],['2','Power Off Guest'],['3','Pause Guest']],
+e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
 let h='<div class="settings-form">';
 for(const f of fields){
 if(f.s!==undefined){h+=`<h4 class="form-section-header">${f.s}</h4>`;continue;}
@@ -275,7 +283,7 @@ var ts=document.getElementById('tabSettings');if(ts)ts.innerHTML=h;settingsDirty
 async function saveVm(){const idx=sel;if(idx===null)return;const btn=document.getElementById('savevmbtn');if(btn){btn.disabled=true;btn.textContent='Saving...';}
 saveInFlight=true;
 const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
-const body=['name','mem','cpu','cpu_sockets','disk','disk_format','iso_path','mac_address','network','firmware','shared_folder','usb','guest_tools','autoprotect',
+const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
 'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','nic2','nic2_mac','nic3','nic3_mac','portfw','notes',
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order',
 'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
@@ -338,6 +346,7 @@ async function vnetSaveAll(){const r=await apiPost('/api/vnets/save',JSON.string
 var pendingTheme=null;
 async function openPrefs(){var pd=document.getElementById('prefsdlg');if(!pd)return;pendingTheme=null;let cfg={};try{const r=await fetch('/api/config');if(r.ok)cfg=await r.json();}catch(e){console.error('Failed to load config:',e);}
 var pt=document.getElementById('p_theme');if(pt)pt.value=cfg.theme||window.hangarTheme||'system';
+var pdv=document.getElementById('p_default_vm_dir');if(pdv)pdv.value=cfg.default_vm_dir||'';
 var pdm=document.getElementById('p_default_memory_mb');if(pdm)pdm.value=cfg.default_memory_mb||2048;
 var pdc=document.getElementById('p_default_cpu_cores');if(pdc)pdc.value=cfg.default_cpu_cores||2;
 var pae=document.getElementById('p_autoprotect_enabled');if(pae)pae.value=cfg.autoprotect_enabled_default?'1':'0';
@@ -345,7 +354,7 @@ var pai=document.getElementById('p_autoprotect_interval');if(pai)pai.value=cfg.a
 var pam=document.getElementById('p_autoprotect_max');if(pam)pam.value=cfg.autoprotect_max_default||10;
 pd.showModal();}
 function openAbout(){var ad=document.getElementById('aboutdlg');if(ad)ad.showModal();}
-async function savePrefs(){const body=['theme','default_memory_mb','default_cpu_cores','autoprotect_enabled','autoprotect_interval','autoprotect_max']
+async function savePrefs(){const body=['theme','default_vm_dir','default_memory_mb','default_cpu_cores','autoprotect_enabled','autoprotect_interval','autoprotect_max']
 .map(id=>{const el=document.getElementById('p_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
 const r=await apiPost('/api/config',body);if(r){if(pendingTheme!==null){window.applyTheme(pendingTheme);pendingTheme=null;}var pd=document.getElementById('prefsdlg');if(pd)pd.close();setStatus('Preferences saved.');}}
 // ── Dialog Focus Trap + Backdrop Click-to-Close ──
@@ -623,6 +632,7 @@ var filterTimer=null;
 document.body.addEventListener('click',function(e){
  var el=e.target.closest('[data-action]');if(!el)return;
  var action=el.getAttribute('data-action');var h=actionHandlers[action];if(h)h(el);
+ if(e.target.closest('.toolbar-more-popover'))closeToolbarMore();
 });
 document.body.addEventListener('input',function(e){
  if(e.target.closest('#tabSettings'))settingsDirty=true;
@@ -645,6 +655,7 @@ document.body.addEventListener('keydown',function(e){
  }
 });
 window.addEventListener('beforeunload',function(){stopFb();stopSerial(true);if(serialReconnectTimer){clearInterval(serialReconnectTimer);serialReconnectTimer=null;}});
+window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=document.querySelector('.toolbar-more-popover');var btn=document.querySelector('.toolbar-more');if(popover&&btn)positionToolbarMore(popover,btn);}});
 // ── Drag-to-reorder VM list ──
 (function initDragReorder(){
   var dragIdx=null;

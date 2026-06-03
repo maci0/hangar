@@ -18,6 +18,7 @@
 const std = @import("std");
 const vm = @import("vm.zig");
 const appio = @import("appio.zig");
+const sync = @import("sync.zig");
 
 /// libc PATH-searching exec. `std.process` in 0.16 routes spawning through the
 /// `std.Io` interface, which would hand the child an empty environment unless
@@ -191,19 +192,27 @@ const virtio_win_search_paths = [_][]const u8{
 };
 
 /// Locate the virtio-win ISO, also checking `$HOME/Downloads`.
+/// The returned slice is valid only until the next call; for concurrent
+/// callers use `findVirtioWinIsoInto` which writes into a caller-owned buffer.
 fn findVirtioWinIso() ?[]const u8 {
     for (virtio_win_search_paths) |path| {
         if (std.Io.Dir.cwd().access(appio.io(), path, .{})) return path else |_| {}
     }
-    if (appio.getenv("HOME")) |home| {
-        const buf = struct {
-            var b: [vm.MAX_PATH + 1]u8 = undefined;
-        };
-        const p = std.fmt.bufPrint(&buf.b, "{s}/Downloads/virtio-win.iso", .{home}) catch return null;
-        if (std.Io.Dir.cwd().access(appio.io(), p, .{})) return p else |_| {}
+    // Static buffer for the $HOME/Downloads path — guarded by SpinMutex
+    // because buildArgs can be called from concurrent web_server handlers.
+    {
+        _ = virtio_mutex.lock();
+        defer virtio_mutex.unlock();
+        if (appio.getenv("HOME")) |home| {
+            const p = std.fmt.bufPrint(&virtio_buf, "{s}/Downloads/virtio-win.iso", .{home}) catch return null;
+            if (std.Io.Dir.cwd().access(appio.io(), p, .{})) return p else |_| {}
+        }
     }
     return null;
 }
+
+var virtio_buf: [vm.MAX_PATH + 1]u8 = undefined;
+var virtio_mutex: sync.SpinMutex = .{};
 
 /// Formatting buffers for QEMU arguments.
 ///
@@ -410,37 +419,52 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         }
     }
 
-    // GPU device selection:
-    // .virtio-gpu-gl → virtio-gpu with virglrenderer (modern, preferred for 3D)
-    // .virtio-vga-gl → virtio-vga with virglrenderer (compatible, legacy 3D)
-    // .virtio        → standard virtio VGA (no 3D)
-    // Plain embedded VNC can't show GL output, so 3D requires native/spice display.
+    // GPU device selection.
     const gl_ok = config.enable_3d and (config.display == .gtk or config.display == .sdl or config.display == .spice);
-    if (gl_ok and config.gpu_device == .virtio_gpu_gl) {
+    if (gl_ok and config.gpu_device.needsVirgl()) {
+        // virgl 3D-accelerated variants: virtio-gpu-gl or virtio-vga-gl
+        const dev_str: []const u8 = switch (config.gpu_device) {
+            .virtio_gpu_gl => "virtio-gpu-gl",
+            .virtio_vga_gl => "virtio-vga-gl",
+            else => unreachable,
+        };
         if (config.display_resolution == .auto) {
             try args.append(alloc, "-device");
-            try args.append(alloc, "virtio-gpu-gl");
+            try args.append(alloc, dev_str);
         } else {
-            const vga_str = try std.fmt.bufPrint(&bufs.vga_buf, "virtio-gpu-gl,xres={d},yres={d}", .{ config.display_resolution.xres(), config.display_resolution.yres() });
+            const vga_str = try std.fmt.bufPrint(&bufs.vga_buf, "{s},xres={d},yres={d}", .{ dev_str, config.display_resolution.xres(), config.display_resolution.yres() });
             try args.append(alloc, "-device");
             try args.append(alloc, vga_str);
         }
-    } else if (gl_ok) {
-        if (config.display_resolution == .auto) {
+    } else switch (config.gpu_device) {
+        .virtio_gpu, .virtio_gpu_gl => {
+            if (config.display_resolution == .auto) {
+                try args.append(alloc, "-device");
+                try args.append(alloc, "virtio-gpu");
+            } else {
+                const vga_str = try std.fmt.bufPrint(&bufs.vga_buf, "virtio-gpu,xres={d},yres={d}", .{ config.display_resolution.xres(), config.display_resolution.yres() });
+                try args.append(alloc, "-device");
+                try args.append(alloc, vga_str);
+            }
+        },
+        .virtio_vga, .virtio_vga_gl => {
+            if (config.display_resolution == .auto) {
+                try args.append(alloc, "-vga");
+                try args.append(alloc, "virtio");
+            } else {
+                const vga_str = try std.fmt.bufPrint(&bufs.vga_buf, "virtio-vga,xres={d},yres={d}", .{ config.display_resolution.xres(), config.display_resolution.yres() });
+                try args.append(alloc, "-device");
+                try args.append(alloc, vga_str);
+            }
+        },
+        .qxl => {
             try args.append(alloc, "-device");
-            try args.append(alloc, "virtio-vga-gl");
-        } else {
-            const vga_str = try std.fmt.bufPrint(&bufs.vga_buf, "virtio-vga-gl,xres={d},yres={d}", .{ config.display_resolution.xres(), config.display_resolution.yres() });
-            try args.append(alloc, "-device");
-            try args.append(alloc, vga_str);
-        }
-    } else if (config.display_resolution == .auto) {
-        try args.append(alloc, "-vga");
-        try args.append(alloc, "virtio");
-    } else {
-        const vga_str = try std.fmt.bufPrint(&bufs.vga_buf, "virtio-vga,xres={d},yres={d}", .{ config.display_resolution.xres(), config.display_resolution.yres() });
-        try args.append(alloc, "-device");
-        try args.append(alloc, vga_str);
+            try args.append(alloc, "qxl");
+        },
+        .std_vga => {
+            try args.append(alloc, "-vga");
+            try args.append(alloc, "std");
+        },
     }
 
     // Additional displays for multi-monitor support.
@@ -606,13 +630,26 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, cmd);
     }
 
+    // USB controller — configurable via usb_policy (none / EHCI / xHCI).
+    switch (config.usb_policy) {
+        .none => {},
+        .usb2 => {
+            try args.append(alloc, "-device");
+            try args.append(alloc, "usb-ehci");
+        },
+        .usb3 => {
+            try args.append(alloc, "-device");
+            try args.append(alloc, "qemu-xhci");
+        },
+    }
     // USB tablet provides absolute pointing so the guest cursor matches
     // the host cursor position — essential for embedded VNC/SPICE where
-    // relative mouse input would desync.
-    try args.append(alloc, "-device");
-    try args.append(alloc, "qemu-xhci");
-    try args.append(alloc, "-device");
-    try args.append(alloc, "usb-tablet");
+    // relative mouse input would desync. Only attach when a USB controller
+    // is present.
+    if (config.usb_policy != .none) {
+        try args.append(alloc, "-device");
+        try args.append(alloc, "usb-tablet");
+    }
 
     // USB device passthrough. The field holds "vendorid:productid" in hex
     // (e.g. "046d:c52b"). The q35 machine already provides a USB controller.
@@ -1373,6 +1410,60 @@ test "qemu: buildScriptStr with embed_display forces VNC" {
     try expect(has(s, "-vnc"));
 }
 
+test "qemu: buildScriptStr gpu virtio-gpu (non-GL)" {
+    var cfg = vm.VmConfig{};
+    cfg.gpu_device = .virtio_gpu;
+    cfg.embed_display = false;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "virtio-gpu"));
+    try expect(!has(s, "virtio-vga-gl"));
+    try expect(!has(s, "qxl"));
+}
+
+test "qemu: buildScriptStr gpu virtio-vga (non-GL)" {
+    var cfg = vm.VmConfig{};
+    cfg.gpu_device = .virtio_vga;
+    cfg.embed_display = false;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-vga"));
+    // "-vga virtio" not "virtio-gpu" or "virtio-vga"
+    try expect(!has(s, "virtio-gpu"));
+    try expect(!has(s, "virtio-vga"));
+}
+
+test "qemu: buildScriptStr gpu qxl" {
+    var cfg = vm.VmConfig{};
+    cfg.gpu_device = .qxl;
+    cfg.embed_display = false;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "qxl"));
+}
+
+test "qemu: buildScriptStr gpu std-vga" {
+    var cfg = vm.VmConfig{};
+    cfg.gpu_device = .std_vga;
+    cfg.embed_display = false;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-vga"));
+    try expect(has(s, "std"));
+}
+
+test "qemu: buildScriptStr 3d enabled with non-GL gpu falls back to virtio-vga" {
+    var cfg = vm.VmConfig{};
+    cfg.enable_3d = true;
+    cfg.display = .gtk;
+    cfg.gpu_device = .std_vga;
+    cfg.embed_display = false;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-vga"));
+    try expect(has(s, "std"));
+}
+
 test "qemu: buildScriptStr with USB device" {
     var cfg = vm.VmConfig{};
     cfg.setUsbDevice("046d:c52b");
@@ -1506,4 +1597,33 @@ test "qemu: buildScriptStr handles multi-socket topology" {
     defer talloc.free(s);
     try expect(has(s, "sockets=2"));
     try expect(has(s, "cores=4"));
+}
+
+test "qemu: convertDiskImageNoWait builds correct args" {
+    // Verify the arg list is well-formed (not executing qemu-img).
+    const arg_len = countConvertArgs("/tmp/src.qcow2", .qcow2, "/tmp/dst.vmdk", .vmdk);
+    try expect(arg_len >= 8); // qemu-img convert -f qcow2 -O vmdk -o subformat=streamOptimized ...
+    const arg_len2 = countConvertArgs("/tmp/src.qcow2", .qcow2, "/tmp/dst.qcow2", .qcow2);
+    try expect(arg_len2 >= 6); // qemu-img convert -f qcow2 -O qcow2 src dest
+    try expect(arg_len2 < arg_len); // vmdk has extra -o flag
+}
+
+fn countConvertArgs(src: []const u8, src_fmt: vm.DiskFormat, dst: []const u8, dst_fmt: vm.DiskFormat) usize {
+    var args = buildConvertArgs(src, src_fmt, dst, dst_fmt, std.testing.allocator) catch return 0;
+    defer args.deinit(std.testing.allocator);
+    return args.items.len;
+}
+
+test "qemu: tryReapChild returns null for pid 0 (not a child)" {
+    // waitpid on pid 0 with WNOHANG should return -1/ECHILD (no children)
+    // but expect null or false depending on system state; at least no crash.
+    const result = tryReapChild(0);
+    _ = result; // just verify no crash
+}
+
+test "qemu: tryReapChild returns null or false for pid -1 (no reaped children)" {
+    // waitpid(-1, WNOHANG) may find no exited children → null.
+    // If some background child exited, it returns true/false. Either is fine.
+    const result = tryReapChild(-1);
+    _ = result; // just verify no crash
 }

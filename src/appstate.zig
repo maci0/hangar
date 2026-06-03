@@ -678,7 +678,7 @@ pub fn refreshDetails() void {
                 if (!status_err) {
                     if (status_bar) |s| {
                         if (v.isAlive() and vm_started[idx] > 0) {
-                            const elapsed: u64 = @intCast(vm_started[idx]);
+                            const elapsed: u64 = @intCast(@max(vm_started[idx], 0));
                             const hrs = elapsed / 3600;
                             const mins = (elapsed % 3600) / 60;
                             const secs = elapsed % 60;

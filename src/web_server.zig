@@ -435,6 +435,12 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "GET /api/config")) {
         content_type = "application/json; charset=utf-8";
         response = try serveConfigRaw();
+    } else if (std.mem.startsWith(u8, req, "GET /api/catalog")) {
+        content_type = "application/json; charset=utf-8";
+        response = handleCatalog(&snap_buf);
+    } else if (std.mem.startsWith(u8, req, "GET /api/quickstart/")) {
+        response = try handleQuickstart(req);
+        content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "GET /api/vm/")) {
         content_type = "application/json; charset=utf-8";
         response = renderVmDetail(req, &detail_buf) catch blk: {
@@ -449,6 +455,9 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/delete/")) {
         response = try handleDelete(req);
+        content_type = "text/plain";
+    } else if (std.mem.startsWith(u8, req, "POST /api/undo")) {
+        response = try handleUndo();
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/reorder")) {
         response = try handleReorder(req);
@@ -568,7 +577,15 @@ fn serveHtml(conn: c.fd_t) void {
             status = HTTP_BAD_REQUEST;
             response = jsonErr(&json_err_buf, response);
             content_type = "application/json; charset=utf-8";
+        } else if (std.mem.eql(u8, response, "full") or std.mem.eql(u8, response, "no body") or std.mem.eql(u8, response, "invalid name") or std.mem.eql(u8, response, "bad path")) {
+            status = HTTP_BAD_REQUEST;
+            response = jsonErr(&json_err_buf, response);
+            content_type = "application/json; charset=utf-8";
         } else if (std.mem.eql(u8, response, "no vnc") or std.mem.eql(u8, response, "no spice")) {
+            status = HTTP_INTERNAL_ERROR;
+            response = jsonErr(&json_err_buf, response);
+            content_type = "application/json; charset=utf-8";
+        } else if (std.mem.eql(u8, response, "save failed")) {
             status = HTTP_INTERNAL_ERROR;
             response = jsonErr(&json_err_buf, response);
             content_type = "application/json; charset=utf-8";
@@ -933,7 +950,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 
     // First 32 fields
     const part1 = std.fmt.bufPrint(buf[w..],
-        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
+        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
     , .{
         idx, escapeJson(&esc, v.getNameSlice(), "name"), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
         v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(), v.disk_cache.toIndex(),
@@ -943,6 +960,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         if (v.hasNotes()) escapeJson(&esc, v.getNotesSlice(), "notes") else "",
         if (v.hasSharedFolder()) escapeJson(&esc, v.getSharedFolderSlice(), "shared_folder") else "",
         if (v.hasUsbDevice()) escapeJson(&esc, v.getUsbDeviceSlice(), "usb_device") else "",
+        v.usb_policy.toIndex(),
         if (v.guest_tools) "true" else "false",
         if (v.autoprotect) "true" else "false",
         v.autoprotect_interval_min, v.autoprotect_max,
@@ -955,9 +973,9 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     }) catch return error.RenderFailed;
     w += part1.len;
 
-    // Remaining fields
-    const part2 = std.fmt.bufPrint(buf[w..],
-        \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"guest_agent":{s},"watchdog":{d},"tpm":{s},"secure_boot":{s},"hyperv_enlightenments":{s},"hugepages":{s},"io_threads":{d},"disk_bps_throttle":{d},"disk_iops_throttle":{d},"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+    // Remaining fields — split to stay under 32-arg limit
+    const part2a = std.fmt.bufPrint(buf[w..],
+        \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"guest_agent":{s},"watchdog":{d},"tpm":{s},"secure_boot":{s},"hyperv_enlightenments":{s},"hugepages":{s},"io_threads":{d},"disk_bps_throttle":{d},"disk_iops_throttle":{d}
     , .{
         if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
         std.mem.span(v.nics[1].mode.toStr()),
@@ -976,6 +994,12 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         v.io_threads,
         v.disk_bps_throttle,
         v.disk_iops_throttle,
+    }) catch return error.RenderFailed;
+    w += part2a.len;
+
+    const part2b = std.fmt.bufPrint(buf[w..],
+        \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+    , .{
         if (v.ballooning) "true" else "false",
         if (v.host_autostart) "true" else "false",
         if (v.enable_3d) "true" else "false",
@@ -985,13 +1009,14 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         v.guest_os.toIndex(),
         v.audio.toIndex(),
         v.boot_order.toIndex(),
+        std.mem.span(v.cpu_model.toStr()),
         std.mem.span(v.accel.toStr()),
         if (v.embed_display) "true" else "false",
         v.vnc_port,
         v.spice_port,
         if (v.favorite) "true" else "false",
     }) catch return error.RenderFailed;
-    w += part2.len;
+    w += part2b.len;
     return buf[0..w];
 }
 
@@ -1017,7 +1042,7 @@ fn renderJson(buf: []u8) usize {
 
         // First block: up through port_forwards
         const part1 = std.fmt.bufPrint(buf[w..],
-            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
+            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
         , .{
             i, escapeJson(&esc, v.getNameSlice(), "name"), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
             v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(), v.disk_cache.toIndex(),
@@ -1027,6 +1052,7 @@ fn renderJson(buf: []u8) usize {
             if (v.hasNotes()) escapeJson(&esc, v.getNotesSlice(), "notes") else "",
             if (v.hasSharedFolder()) escapeJson(&esc, v.getSharedFolderSlice(), "shared_folder") else "",
             if (v.hasUsbDevice()) escapeJson(&esc, v.getUsbDeviceSlice(), "usb_device") else "",
+            v.usb_policy.toIndex(),
             if (v.guest_tools) "true" else "false",
             if (v.autoprotect) "true" else "false",
             v.autoprotect_interval_min, v.autoprotect_max,
@@ -1039,9 +1065,9 @@ fn renderJson(buf: []u8) usize {
         }) catch break;
         w += part1.len;
 
-        // Remaining fields
-        const part2 = std.fmt.bufPrint(buf[w..],
-            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"guest_agent":{s},"watchdog":{d},"tpm":{s},"secure_boot":{s},"hyperv_enlightenments":{s},"hugepages":{s},"io_threads":{d},"disk_bps_throttle":{d},"disk_iops_throttle":{d},"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}}}
+        // Remaining fields — split to stay under 32-arg limit
+        const part2a = std.fmt.bufPrint(buf[w..],
+            \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"guest_agent":{s},"watchdog":{d},"tpm":{s},"secure_boot":{s},"hyperv_enlightenments":{s},"hugepages":{s},"io_threads":{d},"disk_bps_throttle":{d},"disk_iops_throttle":{d}
         , .{
             if (v.nics[0].mac_len > 0) v.getMacAddressSlice() else "",
             std.mem.span(v.nics[1].mode.toStr()),
@@ -1060,6 +1086,12 @@ fn renderJson(buf: []u8) usize {
             v.io_threads,
             v.disk_bps_throttle,
             v.disk_iops_throttle,
+        }) catch break;
+        w += part2a.len;
+
+        const part2b = std.fmt.bufPrint(buf[w..],
+            \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}}}
+        , .{
             if (v.ballooning) "true" else "false",
             if (v.host_autostart) "true" else "false",
             if (v.enable_3d) "true" else "false",
@@ -1069,6 +1101,7 @@ fn renderJson(buf: []u8) usize {
             v.guest_os.toIndex(),
             v.audio.toIndex(),
             v.boot_order.toIndex(),
+            std.mem.span(v.cpu_model.toStr()),
             std.mem.span(v.accel.toStr()),
             if (v.embed_display) "true" else "false",
             v.vnc_port,
@@ -1076,13 +1109,17 @@ fn renderJson(buf: []u8) usize {
             if (v.favorite) "true" else "false",
             appstate.vm_started[i],
         }) catch break;
-        w += part2.len;
+        w += part2b.len;
     }
     if (w >= buf.len) return 0;
     buf[w] = ']';
     w += 1;
     return w;
 }
+
+/// Per-request error detail buffer for start-failure diagnostics.
+/// Overwritten on each failed start; no allocation needed.
+var start_err_buf: [640]u8 = undefined;
 
 fn handlePower(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
@@ -1116,10 +1153,11 @@ fn handlePower(req: []const u8) ![]const u8 {
             qemu.startVm(v, std.heap.page_allocator) catch {
                 // Try to include QEMU stderr in the error response for diagnostics.
                 var log_path_buf: [128]u8 = [_]u8{0} ** 128;
+                var log_content_buf: [512]u8 = undefined;
                 const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/hangar-vm-{s}.log", .{v.getNameSlice()}) catch null;
-                const err_detail = if (log_path) |lp| readStartupLog(lp) else "";
+                const err_detail = if (log_path) |lp| readStartupLog(lp, &log_content_buf) else "";
                 if (err_detail.len > 0) {
-                    return std.fmt.allocPrint(std.heap.page_allocator, "start err: {s}", .{err_detail}) catch "start err";
+                    return std.fmt.bufPrint(&start_err_buf, "start err: {s}", .{err_detail}) catch "start err";
                 }
                 return "start err";
             };
@@ -1131,20 +1169,17 @@ fn handlePower(req: []const u8) ![]const u8 {
 }
 
 /// Read up to 512 bytes from a QEMU stderr log file for diagnostics.
-/// Returns a heap-allocated slice (intentionally leaked) or "" if unreadable.
-fn readStartupLog(path: [*:0]const u8) []const u8 {
+/// Writes into `out` and returns the populated slice, or "" if unreadable.
+fn readStartupLog(path: [*:0]const u8, out: []u8) []const u8 {
     const fd = std.c.open(path, .{ .ACCMODE = .RDONLY });
     if (fd < 0) return "";
     defer _ = std.c.close(fd);
-    const buf = std.heap.page_allocator.alloc(u8, 512) catch return "";
-    const n = std.c.read(fd, buf.ptr, buf.len);
-    if (n <= 0) {
-        std.heap.page_allocator.free(buf);
-        return "";
-    }
+    const max_read = @min(out.len, 512);
+    const n = std.c.read(fd, out.ptr, max_read);
+    if (n <= 0) return "";
     var end: usize = @intCast(n);
-    while (end > 0 and (buf[end - 1] == '\n' or buf[end - 1] == '\r')) end -= 1;
-    return buf[0..end];
+    while (end > 0 and (out[end - 1] == '\n' or out[end - 1] == '\r')) end -= 1;
+    return out[0..end];
 }
 
 fn handleNewVm(req: []const u8) ![]const u8 {
@@ -1175,6 +1210,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "mem")) cfg.memory_mb = vm.clampMemory(form_parsers.parseU32OrDefault(val, 2048));
         if (std.mem.eql(u8, key, "cpu")) cfg.cpu_cores = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, 2));
         if (std.mem.eql(u8, key, "cpu_sockets")) cfg.cpu_sockets = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, 1));
+        if (std.mem.eql(u8, key, "cpu_model")) cfg.cpu_model = vm.CpuModel.fromStr(val);
         if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = vm.clampDiskSize(form_parsers.parseU32OrDefault(val, 20));
         if (std.mem.eql(u8, key, "disk_format")) cfg.disk_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk_format.toIndex());
         if (std.mem.eql(u8, key, "disk_cache")) cfg.disk_cache = vm.DiskCache.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk_cache.toIndex());
@@ -1190,6 +1226,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             cfg.setSharedFolder(val);
         }
         if (std.mem.eql(u8, key, "usb")) cfg.setUsbDevice(val);
+        if (std.mem.eql(u8, key, "usb_policy")) cfg.usb_policy = vm.UsbPolicy.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.usb_policy.toIndex());
         if (std.mem.eql(u8, key, "guest_tools")) cfg.guest_tools = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "autoprotect")) { cfg.autoprotect = std.mem.eql(u8, val, "1"); has_autoprotect = true; }
         if (std.mem.eql(u8, key, "ap_interval")) cfg.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch cfg.autoprotect_interval_min));
@@ -1267,6 +1304,94 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     return "ok";
 }
 
+const CatalogEntry = struct {
+    id: []const u8,
+    name: []const u8,
+    guest_os: usize,
+    memory_mb: u32,
+    cpu_cores: u32,
+    disk_size_gb: u32,
+    description: []const u8,
+};
+
+const catalog: [3]CatalogEntry = .{
+    .{ .id = "ubuntu2404", .name = "Ubuntu 24.04 LTS", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 40, .description = "Ubuntu 24.04 Noble Numbat — latest LTS" },
+    .{ .id = "fedora40", .name = "Fedora 40", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .description = "Fedora 40 Workstation" },
+    .{ .id = "debian12", .name = "Debian 12", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .description = "Debian 12 Bookworm — stable" },
+};
+
+fn handleCatalog(buf: []u8) []const u8 {
+    if (buf.len == 0) return "[]";
+    var w: usize = 0;
+    buf[w] = '[';
+    w += 1;
+    for (catalog, 0..) |entry, i| {
+        if (i > 0) {
+            if (w >= buf.len) return "[]";
+            buf[w] = ',';
+            w += 1;
+        }
+        const part = std.fmt.bufPrint(buf[w..],
+            \\{{"id":"{s}","name":"{s}","guest_os":{d},"memory_mb":{d},"cpu_cores":{d},"disk_size_gb":{d},"description":"{s}"}}
+        , .{ entry.id, entry.name, entry.guest_os, entry.memory_mb, entry.cpu_cores, entry.disk_size_gb, entry.description }) catch return "[]";
+        w += part.len;
+    }
+    if (w >= buf.len) return "[]";
+    buf[w] = ']';
+    w += 1;
+    return buf[0..w];
+}
+
+fn handleQuickstart(req: []const u8) ![]const u8 {
+    const prefix = "GET /api/quickstart/";
+    const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
+    const rest = req[start + prefix.len ..];
+    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
+    const slug = rest[0..end];
+
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+
+    if (appstate.vm_count >= appstate.MAX_VMS) return "full";
+
+    // Find the matching catalog entry.
+    var template: ?CatalogEntry = null;
+    for (catalog) |entry| {
+        if (std.mem.eql(u8, entry.id, slug)) {
+            template = entry;
+            break;
+        }
+    }
+    const tmpl = template orelse return "not found";
+
+    var cfg = vm.VmConfig{};
+    cfg.setName(tmpl.name);
+    cfg.memory_mb = tmpl.memory_mb;
+    cfg.cpu_cores = tmpl.cpu_cores;
+    cfg.disk_size_gb = tmpl.disk_size_gb;
+    cfg.guest_os = vm.GuestOs.fromIndex(tmpl.guest_os);
+
+    // Apply sensible defaults.
+    cfg.autoprotect = appstate.prefs.autoprotect_enabled_default;
+    cfg.autoprotect_interval_min = appstate.prefs.autoprotect_interval_min_default;
+    cfg.autoprotect_max = appstate.prefs.autoprotect_max_default;
+
+    var mac_buf: [18]u8 = undefined;
+    const mac = vm.generateMacAddress(&mac_buf);
+    cfg.setMacAddress(std.mem.span(mac));
+    cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
+    cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+
+    appstate.vms[appstate.vm_count] = cfg;
+    appstate.vm_count += 1;
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+        var ebuf: [64]u8 = undefined;
+        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        return "save failed";
+    };
+    return "ok";
+}
+
 fn handleClone(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
@@ -1331,6 +1456,10 @@ fn handleDelete(req: []const u8) ![]const u8 {
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
     const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
+    // Save undo state before deleting.
+    appstate.undo_vm = appstate.vms[idx];
+    appstate.undo_idx = idx;
+    appstate.undo_available = true;
     // Destroy the VMM handle for the deleted VM
     destroyVmmHandle(idx);
     // Shift remaining
@@ -1343,6 +1472,34 @@ fn handleDelete(req: []const u8) ![]const u8 {
     appstate.g_vmm_handles[appstate.vm_count - 1] = null;
     appstate.vm_started[appstate.vm_count - 1] = 0;
     appstate.vm_count -= 1;
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+        var ebuf: [64]u8 = undefined;
+        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        return "save failed";
+    };
+    return "ok";
+}
+
+fn handleUndo() ![]const u8 {
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+
+    if (!appstate.undo_available) return "no undo";
+    if (appstate.vm_count >= appstate.MAX_VMS) return "full";
+
+    // Shift VMs down from undo_idx to make room.
+    var i = appstate.vm_count;
+    while (i > appstate.undo_idx) {
+        appstate.vms[i] = appstate.vms[i - 1];
+        appstate.g_vmm_handles[i] = appstate.g_vmm_handles[i - 1];
+        appstate.vm_started[i] = appstate.vm_started[i - 1];
+        i -= 1;
+    }
+    appstate.vms[appstate.undo_idx] = appstate.undo_vm;
+    appstate.g_vmm_handles[appstate.undo_idx] = null;
+    appstate.vm_count += 1;
+    appstate.undo_available = false;
+
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
         var ebuf: [64]u8 = undefined;
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
@@ -1422,6 +1579,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "mem")) v.memory_mb = vm.clampMemory(std.fmt.parseInt(u32, val, 10) catch v.memory_mb);
         if (std.mem.eql(u8, key, "cpu")) v.cpu_cores = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch v.cpu_cores);
         if (std.mem.eql(u8, key, "cpu_sockets")) v.cpu_sockets = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch v.cpu_sockets);
+        if (std.mem.eql(u8, key, "cpu_model")) v.cpu_model = vm.CpuModel.fromStr(val);
         if (std.mem.eql(u8, key, "disk")) v.disk_size_gb = vm.clampDiskSize(std.fmt.parseInt(u32, val, 10) catch v.disk_size_gb);
         if (std.mem.eql(u8, key, "disk_format")) v.disk_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk_format.toIndex());
         if (std.mem.eql(u8, key, "disk_cache")) v.disk_cache = vm.DiskCache.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk_cache.toIndex());
@@ -1437,6 +1595,7 @@ fn handleSave(req: []const u8) ![]const u8 {
             v.setSharedFolder(val);
         }
         if (std.mem.eql(u8, key, "usb")) v.setUsbDevice(val);
+        if (std.mem.eql(u8, key, "usb_policy")) v.usb_policy = vm.UsbPolicy.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.usb_policy.toIndex());
         if (std.mem.eql(u8, key, "guest_tools")) v.guest_tools = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "autoprotect")) v.autoprotect = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "ap_interval")) v.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_interval_min));
@@ -1519,6 +1678,7 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     defer client.disconnect();
     client.suspendToFile(path) catch return "migrate err";
     client.waitMigrateComplete() catch return "timeout";
+    v.status = .suspended;
     v.setSavedStatePath(path[0..]);
     if (getVmmHandle(idx)) |h| {
         appstate.g_vmm.forceStopFn(h);
@@ -2108,6 +2268,28 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var path_buf: [vm.MAX_PATH]u8 = undefined;
     const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return;
 
+    // Convert disk1 to VMDK
+    if (getVmmHandle(idx)) |h| {
+        appstate.g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch { logErr("export: disk1 conversion (VMM) failed"); return; };
+    } else {
+        qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch { logErr("export: disk1 conversion (qemu) failed"); return; };
+    }
+
+    // Convert disk2 if present
+    var disk2_href: []const u8 = "";
+    var disk2_cap: u64 = 0;
+    if (v.hasDisk2()) {
+        disk2_href = "disk2.vmdk";
+        disk2_cap = @as(u64, v.disk2_size_gb) * 1024 * 1024 * 1024;
+        const d2_path = std.fmt.bufPrint(&path_buf, "{s}/disk2.vmdk", .{dir_path}) catch return;
+        if (getVmmHandle(idx)) |h2| {
+            appstate.g_vmm.convertDiskFn(h2, v.getDisk2PathSlice(), d2_path, @intFromEnum(v.disk2_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch { logErr("export: disk2 conversion (VMM) failed"); return; };
+        } else {
+            qemu.convertDiskImage(v.getDisk2PathSlice(), v.disk2_format, d2_path, .vmdk, std.heap.page_allocator) catch { logErr("export: disk2 conversion (qemu) failed"); return; };
+        }
+    }
+
+    // Build OVF descriptor after all conversions
     const disk_cap = @as(u64, v.disk_size_gb) * 1024 * 1024 * 1024;
     const spec = ovf.Spec{
         .name = v.getNameSlice(),
@@ -2117,6 +2299,9 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         .vmdk_href = vmdk_name,
         .vmdk_size_bytes = 0,
         .has_network = v.nics[0].mode != .none,
+        .disk2_href = disk2_href,
+        .disk2_capacity_bytes = disk2_cap,
+        .disk2_size_bytes = 0,
     };
     var ovf_buf: [ovf.max_descriptor_len]u8 = undefined;
     const xml = ovf.buildDescriptor(spec, &ovf_buf) catch { logErr("export: OVF descriptor build failed"); return; };
@@ -2124,12 +2309,6 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, v.getNameSlice() });
     defer std.heap.page_allocator.free(ovf_path);
     std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch { logErr("export: failed to write OVF file"); return; };
-
-    if (getVmmHandle(idx)) |h| {
-        appstate.g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch { logErr("export: disk conversion (VMM) failed"); return; };
-    } else {
-        qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch { logErr("export: disk conversion (qemu) failed"); return; };
-    }
 
     // Tar+gzip the export directory
     {
@@ -2352,6 +2531,15 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
     {
         const v = bodyVal(body, "autoprotect_max");
         if (v.len > 0) appstate.prefs.autoprotect_max_default = clampPref(v, appstate.prefs.autoprotect_max_default, 1, 1000);
+    }
+    {
+        const v = bodyVal(body, "default_vm_dir");
+        if (v.len > 0) {
+            const n = @min(v.len, vm.MAX_PATH);
+            @memcpy(appstate.prefs.default_vm_dir_buf[0..n], v[0..n]);
+            appstate.prefs.default_vm_dir_buf[n] = 0;
+            appstate.prefs.default_vm_dir_len = @intCast(n);
+        }
     }
 
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
@@ -3177,6 +3365,121 @@ test "writeAll: detects closed fd" {
     try std.testing.expect(!writeAll(fds[1], "x".ptr, 1));
 }
 
+// ── handleCatalog ──
+
+test "handleCatalog: empty buffer returns empty array literal" {
+    var buf: [0]u8 = undefined;
+    const result = handleCatalog(&buf);
+    try std.testing.expectEqualStrings("[]", result);
+}
+
+test "handleCatalog: produces valid JSON array with 3 entries" {
+    var buf: [4096]u8 = undefined;
+    const result = handleCatalog(&buf);
+    try std.testing.expect(result.len > 2);
+    try std.testing.expect(result[0] == '[');
+    try std.testing.expect(result[result.len - 1] == ']');
+    // Each catalog entry must appear.
+    try std.testing.expect(std.mem.indexOf(u8, result, "ubuntu2404") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "fedora40") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "debian12") != null);
+    // Must be valid JSON: no trailing garbage, brace-balanced.
+    var depth: usize = 0;
+    for (result) |ch| {
+        if (ch == '{') depth += 1;
+        if (ch == '}') depth -= 1;
+    }
+    try std.testing.expectEqual(@as(usize, 0), depth);
+}
+
+test "handleCatalog: tiny buffer that overflows mid-write returns []" {
+    var buf: [4]u8 = undefined;
+    const result = handleCatalog(&buf);
+    try std.testing.expectEqualStrings("[]", result);
+}
+
+test "handleQuickstart: missing space after slug returns 'invalid'" {
+    const result = try handleQuickstart("GET /api/quickstart/ubuntu2404");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleQuickstart: empty slug returns 'not found'" {
+    const result = try handleQuickstart("GET /api/quickstart/ HTTP/1.1");
+    try std.testing.expectEqualStrings("not found", result);
+}
+
+test "handleQuickstart: unknown slug returns 'not found'" {
+    const result = try handleQuickstart("GET /api/quickstart/nonexistent HTTP/1.1");
+    try std.testing.expectEqualStrings("not found", result);
+}
+
+test "handleQuickstart: full VM array returns 'full'" {
+    appstate.vm_count = appstate.MAX_VMS;
+    defer appstate.vm_count = 0;
+    const result = try handleQuickstart("GET /api/quickstart/ubuntu2404 HTTP/1.1");
+    try std.testing.expectEqualStrings("full", result);
+}
+
+// ── handleUndo ──
+
+test "handleUndo: returns 'no undo' when undo_available is false" {
+    appstate.undo_available = false;
+    defer appstate.undo_available = false;
+    const result = try handleUndo();
+    try std.testing.expectEqualStrings("no undo", result);
+}
+
+test "handleUndo: returns 'full' when vm_count is at MAX_VMS" {
+    appstate.undo_available = true;
+    defer appstate.undo_available = false;
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = appstate.MAX_VMS;
+    defer appstate.vm_count = prev_count;
+    const result = try handleUndo();
+    try std.testing.expectEqualStrings("full", result);
+}
+
+test "handleUndo: restores the deleted VM at its original index" {
+    const restorer = struct {
+        fn restore() void {
+            appstate.vm_count = prev_count;
+            appstate.undo_available = was_undo;
+            appstate.vms[undo_idx] = saved;
+        }
+        var prev_count: usize = 0;
+        var was_undo: bool = false;
+        var undo_idx: usize = 0;
+        var saved: vm.VmConfig = undefined;
+    };
+    appstate.vms_mutex.lock();
+    restorer.prev_count = appstate.vm_count;
+    restorer.was_undo = appstate.undo_available;
+    restorer.undo_idx = 0;
+    restorer.saved = appstate.vms[0];
+    // Insert a test VM at index 0 and delete it.
+    appstate.vms[0] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[0].setName("undo_test_vm");
+    appstate.vms[0].memory_mb = 512;
+    appstate.vm_count = 1;
+    appstate.undo_vm = appstate.vms[0];
+    appstate.undo_idx = 0;
+    appstate.undo_available = true;
+    appstate.undo_vm.setName("restored_undo_vm");
+    appstate.vm_count = 0; // simulate deletion
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        restorer.restore();
+        appstate.vms_mutex.unlock();
+    }
+
+    const result = try handleUndo();
+    try std.testing.expectEqualStrings("ok", result);
+    try std.testing.expectEqual(@as(usize, 1), appstate.vm_count);
+    try std.testing.expectEqualStrings("restored_undo_vm", appstate.vms[0].getNameSlice());
+    try std.testing.expect(!appstate.undo_available);
+}
+
 // ── isAuthExempt ──
 
 test "isAuthExempt: root and static assets are exempt for GET" {
@@ -3369,4 +3672,29 @@ pub fn main() !void {
         };
         th.detach();
     }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────
+
+test "findHeader: exact match" {
+    const headers = "Host: localhost\r\nX-API-Key: secret123\r\nContent-Type: text/html\r\n";
+    const val = findHeader(headers, "X-API-Key: ");
+    try std.testing.expect(val != null);
+    try std.testing.expectEqualStrings("secret123", val.?);
+}
+
+test "findHeader: not found" {
+    const headers = "Host: localhost\r\nContent-Type: text/html\r\n";
+    try std.testing.expectEqual(@as(?[]const u8, null), findHeader(headers, "X-API-Key: "));
+}
+
+test "findHeader: empty headers" {
+    try std.testing.expectEqual(@as(?[]const u8, null), findHeader("", "Host: "));
+}
+
+test "findHeader: value with colon" {
+    const headers = "Location: http://example.com:8080\r\n";
+    const val = findHeader(headers, "Location: ");
+    try std.testing.expect(val != null);
+    try std.testing.expectEqualStrings("http://example.com:8080", val.?);
 }

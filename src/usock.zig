@@ -104,3 +104,17 @@ test "usock: overly long path is rejected before any syscall" {
     const long = "/tmp/" ++ ("x" ** 200);
     try testing.expectError(error.NameTooLong, UnixStream.connect(long));
 }
+
+test "fuzz: connect never panics with random paths" {
+    var prng = std.Random.DefaultPrng.init(0xAF01_F00);
+    const rnd = prng.random();
+    var iter: usize = 0;
+    while (iter < 2000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, 150);
+        var path: [150]u8 = undefined;
+        for (path[0..len]) |*ch| ch.* = rnd.intRangeAtMost(u8, 32, 126);
+        if (UnixStream.connect(path[0..len])) |stream| {
+            stream.close();
+        } else |_| {}
+    }
+}

@@ -104,14 +104,9 @@ pub fn parseU32OrDefault(input: []const u8, default: u32) u32 {
 }
 
 /// Parse a QEMU acceleration string ("auto", "tcg", "kvm", "hvf", "whpx") into a VmAccel enum.
-/// Defaults to .auto for unrecognized values.
+/// Delegates to VmAccel.fromStr (case-insensitive). Defaults to .auto for unrecognized values.
 pub fn parseAccel(s: []const u8) vm.VmAccel {
-    if (std.ascii.eqlIgnoreCase(s, "auto")) return .auto;
-    if (std.ascii.eqlIgnoreCase(s, "tcg")) return .tcg;
-    if (std.ascii.eqlIgnoreCase(s, "kvm")) return .kvm;
-    if (std.ascii.eqlIgnoreCase(s, "hvf")) return .hvf;
-    if (std.ascii.eqlIgnoreCase(s, "whpx")) return .whpx;
-    return .auto;
+    return vm.VmAccel.fromStr(s);
 }
 
 // ── Tests ───────────────────────────────────────────────────────────

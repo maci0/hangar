@@ -5,7 +5,6 @@
 //! as a texture and render it with BGRA→RGBA swizzle on the GPU.
 //! Falls back to the software Fl_RGB_Image path if GL is unavailable.
 
-const std = @import("std");
 const app = @import("appstate.zig");
 const cfltk = @import("cfltk_import.zig").c;
 

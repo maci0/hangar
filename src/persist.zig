@@ -44,6 +44,7 @@ const VmJson = struct {
     disk2_size_gb: u32 = 0,
     disk2_format: []const u8 = "qcow2",
     usb_device: []const u8 = "",
+    usb_policy: []const u8 = "usb2",
     nic2_mode: []const u8 = "none",
     nic2_mac: []const u8 = "",
     nic3_mode: []const u8 = "none",
@@ -131,6 +132,10 @@ fn parseGpuDevice(s: []const u8) vm.GpuDevice {
     return vm.GpuDevice.fromStr(s);
 }
 
+fn parseUsbPolicy(s: []const u8) vm.UsbPolicy {
+    return vm.UsbPolicy.fromStr(s);
+}
+
 fn parseWatchdogAction(s: []const u8) vm.WatchdogAction {
     return vm.WatchdogAction.fromStr(s);
 }
@@ -166,6 +171,7 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.disk2_size_gb = j.disk2_size_gb;
     cfg.disk2_format = parseDiskFormat(j.disk2_format);
     cfg.setUsbDevice(j.usb_device);
+    cfg.usb_policy = parseUsbPolicy(j.usb_policy);
     cfg.nics[1].mode = parseNetworkMode(j.nic2_mode);
     cfg.setNic2Mac(j.nic2_mac);
     cfg.nics[2].mode = parseNetworkMode(j.nic3_mode);
@@ -336,6 +342,10 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"usb_device\": ");
     try emitJsonStr(list, alloc, cfg.getUsbDeviceSlice());
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"usb_policy\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.usb_policy.toStr()));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"nic2_mode\": ");
@@ -641,12 +651,24 @@ fn parseJsonString(s: []const u8, out_buf: []u8) ?struct { value: []const u8, re
     return null; // unterminated string
 }
 
-/// Parse a JSON integer value (unsigned, decimal only).
+/// Parse a JSON integer value (unsigned, decimal only). Returns u32.
 fn parseJsonInt(s: []const u8) ?struct { value: u32, rest: []const u8 } {
+    const r = parseJsonIntGeneric(u32, s) orelse return null;
+    return .{ .value = r.value, .rest = r.rest };
+}
+
+/// Parse a JSON integer value as u64 for wide fields (disk_bps_throttle, autoprotect_last_epoch).
+fn parseJsonInt64(s: []const u8) ?struct { value: u64, rest: []const u8 } {
+    const r = parseJsonIntGeneric(u64, s) orelse return null;
+    return .{ .value = r.value, .rest = r.rest };
+}
+
+/// Generic JSON integer parser. Returns null on overflow, no digits, or parse failure.
+fn parseJsonIntGeneric(comptime T: type, s: []const u8) ?struct { value: T, rest: []const u8 } {
     var i: usize = 0;
     while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
     if (i == 0) return null;
-    const val = std.fmt.parseInt(u32, s[0..i], 10) catch return null;
+    const val = std.fmt.parseInt(T, s[0..i], 10) catch return null;
     return .{ .value = val, .rest = s[i..] };
 }
 
@@ -819,6 +841,11 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cfg.setUsbDevice(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "usb_policy")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.usb_policy = parseUsbPolicy(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic2_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.nics[1].mode = parseNetworkMode(r.value);
@@ -875,8 +902,8 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "autoprotect_last_epoch")) {
-            if (parseJsonInt(cur)) |r| {
-                cfg.autoprotect_last_epoch = r.value;
+            if (parseJsonInt64(cur)) |r| {
+                cfg.autoprotect_last_epoch = @intCast(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "autoprotect_last_seq")) {
@@ -1032,8 +1059,8 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "disk_bps_throttle")) {
-            if (parseJsonInt(cur)) |r| {
-                cfg.disk_bps_throttle = @as(u64, @intCast(r.value));
+            if (parseJsonInt64(cur)) |r| {
+                cfg.disk_bps_throttle = r.value;
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "disk_iops_throttle")) {
@@ -1287,6 +1314,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.ballooning = true;
     original.host_autostart = true;
     original.num_displays = 2;
+    original.usb_policy = .usb3;
 
     const json = VmJson{
         .name = original.getNameSlice(),
@@ -1308,6 +1336,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .disk2_size_gb = original.disk2_size_gb,
         .disk2_format = std.mem.span(original.disk2_format.toStr()),
         .usb_device = original.getUsbDeviceSlice(),
+        .usb_policy = std.mem.span(original.usb_policy.toStr()),
         .nic2_mode = std.mem.span(original.nics[1].mode.toStr()),
         .nic2_mac = original.getNic2MacSlice(),
         .nic3_mode = std.mem.span(original.nics[2].mode.toStr()),
@@ -1370,6 +1399,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqual(@as(u32, 50), restored.disk2_size_gb);
     try std.testing.expectEqual(vm.DiskFormat.raw, restored.disk2_format);
     try std.testing.expectEqualStrings("046d:c52b", restored.getUsbDeviceSlice());
+    try std.testing.expectEqual(vm.UsbPolicy.usb3, restored.usb_policy);
     try std.testing.expectEqual(vm.NetworkMode.none, restored.nics[1].mode);
     try std.testing.expectEqualStrings("02:11:22:33:44:55", restored.getNic2MacSlice());
     try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[2].mode);
@@ -1471,11 +1501,12 @@ test "parseAccel: maps strings to enums with safe defaults" {
     try std.testing.expectEqual(vm.VmAccel.kvm, parseAccel("kvm"));
     try std.testing.expectEqual(vm.VmAccel.hvf, parseAccel("hvf"));
     try std.testing.expectEqual(vm.VmAccel.whpx, parseAccel("whpx"));
-    // Unknown / empty / mixed-case → safe default (auto)
+    // Unknown / empty → safe default (auto)
     try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("unknown"));
     try std.testing.expectEqual(vm.VmAccel.auto, parseAccel(""));
-    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("KVM"));
-    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("Hvf"));
+    // Case-insensitive matching (delegates to VmAccel.fromStr)
+    try std.testing.expectEqual(vm.VmAccel.kvm, parseAccel("KVM"));
+    try std.testing.expectEqual(vm.VmAccel.hvf, parseAccel("Hvf"));
 }
 
 test "parseGpuDevice: maps strings to enums" {
@@ -1551,6 +1582,7 @@ test "emit→parse JSON text round-trip preserves all fields" {
     original.disk2_size_gb = 50;
     original.disk2_format = .raw;
     original.setUsbDevice("046d:c52b");
+    original.usb_policy = .usb3;
     original.nics[1].mode = .bridge;
     original.setNic2Mac("02:11:22:33:44:55");
     original.nics[2].mode = .user;
@@ -1620,6 +1652,7 @@ test "emit→parse JSON text round-trip preserves all fields" {
     try std.testing.expectEqual(@as(u32, 50), restored.disk2_size_gb);
     try std.testing.expectEqual(vm.DiskFormat.raw, restored.disk2_format);
     try std.testing.expectEqualStrings("046d:c52b", restored.getUsbDeviceSlice());
+    try std.testing.expectEqual(vm.UsbPolicy.usb3, restored.usb_policy);
     try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[1].mode);
     try std.testing.expectEqualStrings("02:11:22:33:44:55", restored.getNic2MacSlice());
     try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[2].mode);
@@ -1653,6 +1686,26 @@ test "emit→parse: strings with special characters survive round-trip" {
 
     try std.testing.expectEqualStrings("Test\"VM", restored.getNameSlice());
     try std.testing.expectEqualStrings("tab:\there\nnewline\r\nend", restored.getNotesSlice());
+}
+
+test "emit→parse: large u64/i64 values survive round-trip" {
+    const alloc = std.testing.allocator;
+
+    var original = vm.VmConfig{};
+    original.setName("LargeVals");
+    original.disk_bps_throttle = 8589934592; // 8 GB/s, exceeds u32
+    original.autoprotect_last_epoch = 1717000000; // within i32 range but ensure i64
+    original.autoprotect_last_epoch = @bitCast(@as(u64, 4102444800)); // ~2100-01-01T00:00:00, exceeds u32
+
+    var list: List = .empty;
+    defer list.deinit(alloc);
+    try emitVmJson(&list, alloc, &original);
+
+    var restored = vm.VmConfig{};
+    _ = parseVmObject(list.items, &restored);
+
+    try std.testing.expectEqual(@as(u64, 8589934592), restored.disk_bps_throttle);
+    try std.testing.expectEqual(@as(i64, @bitCast(@as(u64, 4102444800))), restored.autoprotect_last_epoch);
 }
 
 test "parseVmObject: empty object yields defaults" {
@@ -2048,6 +2101,26 @@ test "parseJsonInt: max u32 value" {
 test "parseJsonInt: value too large for u32 returns null" {
     try std.testing.expect(parseJsonInt("4294967296") == null); // > max u32
     try std.testing.expect(parseJsonInt("99999999999") == null);
+}
+
+test "parseJsonInt64: decimal parse" {
+    const r = parseJsonInt64("42,").?;
+    try std.testing.expectEqual(@as(u64, 42), r.value);
+    try std.testing.expectEqualStrings(",", r.rest);
+    try std.testing.expect(parseJsonInt64("abc") == null);
+    try std.testing.expect(parseJsonInt64("") == null);
+}
+
+test "parseJsonInt64: large u64 values survive" {
+    const r = parseJsonInt64("8589934592").?; // 8 GB/s throttle
+    try std.testing.expectEqual(@as(u64, 8589934592), r.value);
+    try std.testing.expectEqualStrings("", r.rest);
+    const r2 = parseJsonInt64("18446744073709551615").?; // max u64
+    try std.testing.expectEqual(@as(u64, 18446744073709551615), r2.value);
+}
+
+test "parseJsonInt64: value too large for u64 returns null" {
+    try std.testing.expect(parseJsonInt64("18446744073709551616") == null); // > max u64
 }
 
 test "parseJsonBool: with whitespace before" {

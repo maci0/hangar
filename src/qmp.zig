@@ -874,6 +874,11 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
         client.changeCdrom("/tmp/x.iso") catch {};
         client.ejectCdrom() catch {};
         client.suspendToFile("/tmp/x.state") catch {};
+        _ = client.queryMigrateStatus(&out) catch {};
+        _ = client.isMigrateComplete() catch {};
+        client.liveMigrate("tcp:localhost:4444") catch {};
+        client.cancelMigrate() catch {};
+        client.quit() catch {};
         client.disconnect();
     }
     // Reaching here = no crash/overflow/hang across 200 garbage sessions.

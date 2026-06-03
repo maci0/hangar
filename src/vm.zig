@@ -498,6 +498,14 @@ pub const CpuModel = enum(u8) {
     Haswell = 15,
     Broadwell = 16,
     Opteron_G5 = 17,
+    host_passthrough = 18,
+    Cooperlake = 19,
+    SapphireRapids = 20,
+    GraniteRapids = 21,
+    Neoverse_N1 = 22,
+    Neoverse_N2 = 23,
+    Neoverse_V1 = 24,
+    aarch64 = 25,
 
     pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
 
@@ -530,6 +538,14 @@ pub const CpuModel = enum(u8) {
             .Haswell => "Haswell",
             .Broadwell => "Broadwell",
             .Opteron_G5 => "Opteron_G5",
+            .host_passthrough => "host-passthrough",
+            .Cooperlake => "Cooperlake",
+            .SapphireRapids => "SapphireRapids",
+            .GraniteRapids => "GraniteRapids",
+            .Neoverse_N1 => "Neoverse-N1",
+            .Neoverse_N2 => "Neoverse-N2",
+            .Neoverse_V1 => "Neoverse-V1",
+            .aarch64 => "aarch64",
         };
     }
 
@@ -686,17 +702,96 @@ pub const Theme = enum(u8) {
 pub const GpuDevice = enum(u8) {
     virtio_gpu_gl = 0,
     virtio_vga_gl = 1,
+    virtio_gpu = 2,
+    virtio_vga = 3,
+    qxl = 4,
+    std_vga = 5,
+
     pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
     pub fn toIndex(self: GpuDevice) usize { return @intFromEnum(self); }
     pub fn fromIndex(i: usize) GpuDevice { if (i >= count) return .virtio_vga_gl; return @enumFromInt(@as(u8, @intCast(i))); }
-    pub fn toStr(self: GpuDevice) [*:0]const u8 { return switch (self) { .virtio_gpu_gl => "virtio_gpu_gl", .virtio_vga_gl => "virtio_vga_gl", }; }
-    pub fn label(self: GpuDevice) [*:0]const u8 { return switch (self) { .virtio_gpu_gl => "Virtio-GPU (virgl)", .virtio_vga_gl => "Virtio-VGA (virgl)", }; }
+    pub fn toStr(self: GpuDevice) [*:0]const u8 {
+        return switch (self) {
+            .virtio_gpu_gl => "virtio_gpu_gl",
+            .virtio_vga_gl => "virtio_vga_gl",
+            .virtio_gpu => "virtio_gpu",
+            .virtio_vga => "virtio_vga",
+            .qxl => "qxl",
+            .std_vga => "std_vga",
+        };
+    }
+    pub fn label(self: GpuDevice) [*:0]const u8 {
+        return switch (self) {
+            .virtio_gpu_gl => "Virtio-GPU (virgl 3D)",
+            .virtio_vga_gl => "Virtio-VGA (virgl 3D)",
+            .virtio_gpu => "Virtio-GPU",
+            .virtio_vga => "Virtio-VGA",
+            .qxl => "QXL (SPICE)",
+            .std_vga => "Standard VGA",
+        };
+    }
     pub fn fromStr(s: []const u8) GpuDevice {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: GpuDevice = @enumFromInt(f.value);
             if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
         }
         return .virtio_vga_gl;
+    }
+
+    /// Returns true if this GPU device requires virgl (3D acceleration).
+    pub fn needsVirgl(self: GpuDevice) bool {
+        return switch (self) {
+            .virtio_gpu_gl, .virtio_vga_gl => true,
+            else => false,
+        };
+    }
+};
+
+// ── USB Policy ───────────────────────────────────────────────────────
+
+/// USB controller policy controlling which USB host controller QEMU emulates.
+pub const UsbPolicy = enum(u8) {
+    none = 0,
+    usb2 = 1,
+    usb3 = 2,
+
+    pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
+
+    pub fn toIndex(self: UsbPolicy) usize {
+        return @intFromEnum(self);
+    }
+
+    /// Maps a combobox index to a `UsbPolicy`.  Out-of-range defaults to `.usb2`.
+    pub fn fromIndex(i: usize) UsbPolicy {
+        if (i >= count) return .usb2;
+        return @enumFromInt(@as(u8, @intCast(i)));
+    }
+
+    /// Returns the QEMU controller identifier.
+    pub fn toStr(self: UsbPolicy) [*:0]const u8 {
+        return switch (self) {
+            .none => "none",
+            .usb2 => "usb2",
+            .usb3 => "usb3",
+        };
+    }
+
+    /// Human-readable label for the UI.
+    pub fn label(self: UsbPolicy) [*:0]const u8 {
+        return switch (self) {
+            .none => "None",
+            .usb2 => "USB 2.0 (EHCI)",
+            .usb3 => "USB 3.0 (xHCI)",
+        };
+    }
+
+    /// Parse a UsbPolicy from its toStr representation.
+    pub fn fromStr(s: []const u8) UsbPolicy {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: UsbPolicy = @enumFromInt(f.value);
+            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .usb2;
     }
 };
 
@@ -789,11 +884,11 @@ pub const VmAccel = enum(u8) {
         };
     }
 
-    /// Parse a VmAccel from its toStr representation.
+    /// Parse a VmAccel from its toStr representation (case-insensitive).
     pub fn fromStr(s: []const u8) VmAccel {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: VmAccel = @enumFromInt(f.value);
-            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
         return .auto;
     }
@@ -939,6 +1034,9 @@ pub const VmConfig = struct {
     disk2_path_len: u16 = 0,
     disk2_size_gb: u32 = 0,
     disk2_format: DiskFormat = .qcow2,
+
+    // ── USB controller policy (persisted) ─────────────────────────
+    usb_policy: UsbPolicy = .usb2,
 
     // ── USB passthrough device, "vendorid:productid" hex (persisted) ──
     usb_device_buf: [64]u8 = [_]u8{0} ** 64,
@@ -1754,12 +1852,21 @@ test "CpuModel: toStr values" {
     try std.testing.expectEqualStrings("Haswell", std.mem.span(CpuModel.Haswell.toStr()));
     try std.testing.expectEqualStrings("Broadwell", std.mem.span(CpuModel.Broadwell.toStr()));
     try std.testing.expectEqualStrings("Opteron_G5", std.mem.span(CpuModel.Opteron_G5.toStr()));
+    try std.testing.expectEqualStrings("host-passthrough", std.mem.span(CpuModel.host_passthrough.toStr()));
+    try std.testing.expectEqualStrings("Cooperlake", std.mem.span(CpuModel.Cooperlake.toStr()));
+    try std.testing.expectEqualStrings("SapphireRapids", std.mem.span(CpuModel.SapphireRapids.toStr()));
+    try std.testing.expectEqualStrings("GraniteRapids", std.mem.span(CpuModel.GraniteRapids.toStr()));
+    try std.testing.expectEqualStrings("Neoverse-N1", std.mem.span(CpuModel.Neoverse_N1.toStr()));
+    try std.testing.expectEqualStrings("Neoverse-N2", std.mem.span(CpuModel.Neoverse_N2.toStr()));
+    try std.testing.expectEqualStrings("Neoverse-V1", std.mem.span(CpuModel.Neoverse_V1.toStr()));
+    try std.testing.expectEqualStrings("aarch64", std.mem.span(CpuModel.aarch64.toStr()));
 }
 
 test "CpuModel: label values" {
     try std.testing.expectEqualStrings("host", std.mem.span(CpuModel.host.label()));
     try std.testing.expectEqualStrings("max", std.mem.span(CpuModel.max.label()));
     try std.testing.expectEqualStrings("qemu64", std.mem.span(CpuModel.qemu64.label()));
+    try std.testing.expectEqualStrings("kvm64", std.mem.span(CpuModel.kvm64.label()));
 }
 
 test "CpuModel: fromStr round-trip" {
@@ -2179,6 +2286,7 @@ test "fuzz: enum fromIndex always yields a valid variant" {
         try std.testing.expect(AudioDevice.fromIndex(i).toIndex() < AudioDevice.count);
         try std.testing.expect(BootFirmware.fromIndex(i).toIndex() < BootFirmware.count);
         try std.testing.expect(GpuDevice.fromIndex(i).toIndex() < GpuDevice.count);
+        try std.testing.expect(UsbPolicy.fromIndex(i).toIndex() < UsbPolicy.count);
         try std.testing.expect(Theme.fromIndex(i).toIndex() < Theme.count);
         try std.testing.expect(DiskCache.fromIndex(i).toIndex() < DiskCache.count);
         try std.testing.expect(VmAccel.fromIndex(i).toIndex() < VmAccel.count);
@@ -2586,12 +2694,62 @@ test "GpuDevice: toStr values" {
 }
 
 test "GpuDevice: label values" {
-    try std.testing.expectEqualStrings("Virtio-GPU (virgl)", std.mem.span(GpuDevice.virtio_gpu_gl.label()));
-    try std.testing.expectEqualStrings("Virtio-VGA (virgl)", std.mem.span(GpuDevice.virtio_vga_gl.label()));
+    try std.testing.expectEqualStrings("Virtio-GPU (virgl 3D)", std.mem.span(GpuDevice.virtio_gpu_gl.label()));
+    try std.testing.expectEqualStrings("Virtio-VGA (virgl 3D)", std.mem.span(GpuDevice.virtio_vga_gl.label()));
+    try std.testing.expectEqualStrings("Virtio-GPU", std.mem.span(GpuDevice.virtio_gpu.label()));
+    try std.testing.expectEqualStrings("Virtio-VGA", std.mem.span(GpuDevice.virtio_vga.label()));
+    try std.testing.expectEqualStrings("QXL (SPICE)", std.mem.span(GpuDevice.qxl.label()));
+    try std.testing.expectEqualStrings("Standard VGA", std.mem.span(GpuDevice.std_vga.label()));
+}
+
+test "GpuDevice: needsVirgl only true for GL variants" {
+    try std.testing.expect(GpuDevice.virtio_gpu_gl.needsVirgl());
+    try std.testing.expect(GpuDevice.virtio_vga_gl.needsVirgl());
+    try std.testing.expect(!GpuDevice.virtio_gpu.needsVirgl());
+    try std.testing.expect(!GpuDevice.virtio_vga.needsVirgl());
+    try std.testing.expect(!GpuDevice.qxl.needsVirgl());
+    try std.testing.expect(!GpuDevice.std_vga.needsVirgl());
 }
 
 test "GpuDevice: out-of-range fromIndex defaults" {
     try std.testing.expectEqual(GpuDevice.virtio_vga_gl, GpuDevice.fromIndex(99));
+}
+
+// -- UsbPolicy --
+test "UsbPolicy: fromIndex round-trip" {
+    try std.testing.expectEqual(UsbPolicy.none, UsbPolicy.fromIndex(0));
+    try std.testing.expectEqual(UsbPolicy.usb2, UsbPolicy.fromIndex(1));
+    try std.testing.expectEqual(UsbPolicy.usb3, UsbPolicy.fromIndex(2));
+    try std.testing.expectEqual(UsbPolicy.usb2, UsbPolicy.fromIndex(99));
+}
+
+test "UsbPolicy: toIndex inverts fromIndex" {
+    for (0..UsbPolicy.count) |i| {
+        try std.testing.expectEqual(i, UsbPolicy.fromIndex(i).toIndex());
+    }
+}
+
+test "UsbPolicy: toStr values" {
+    try std.testing.expectEqualStrings("none", std.mem.span(UsbPolicy.none.toStr()));
+    try std.testing.expectEqualStrings("usb2", std.mem.span(UsbPolicy.usb2.toStr()));
+    try std.testing.expectEqualStrings("usb3", std.mem.span(UsbPolicy.usb3.toStr()));
+}
+
+test "UsbPolicy: label values" {
+    try std.testing.expectEqualStrings("None", std.mem.span(UsbPolicy.none.label()));
+    try std.testing.expectEqualStrings("USB 2.0 (EHCI)", std.mem.span(UsbPolicy.usb2.label()));
+    try std.testing.expectEqualStrings("USB 3.0 (xHCI)", std.mem.span(UsbPolicy.usb3.label()));
+}
+
+test "UsbPolicy: fromStr values" {
+    try std.testing.expectEqual(UsbPolicy.none, UsbPolicy.fromStr("none"));
+    try std.testing.expectEqual(UsbPolicy.usb2, UsbPolicy.fromStr("usb2"));
+    try std.testing.expectEqual(UsbPolicy.usb3, UsbPolicy.fromStr("usb3"));
+}
+
+test "UsbPolicy: fromStr unknown defaults to usb2" {
+    try std.testing.expectEqual(UsbPolicy.usb2, UsbPolicy.fromStr("invalid"));
+    try std.testing.expectEqual(UsbPolicy.usb2, UsbPolicy.fromStr(""));
 }
 
 test "NetworkMode: fromStr values" {

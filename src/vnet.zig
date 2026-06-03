@@ -262,7 +262,16 @@ fn emitStr(list: *List, alloc: std.mem.Allocator, s: []const u8) !void {
             '\n' => try list.appendSlice(alloc, "\\n"),
             '\r' => try list.appendSlice(alloc, "\\r"),
             '\t' => try list.appendSlice(alloc, "\\t"),
-            else => try list.append(alloc, c),
+            else => {
+                if (c < 0x20) {
+                    var esc_buf: [6]u8 = undefined;
+                    const esc = std.fmt.bufPrint(&esc_buf, "\\u{x:0>4}", .{@as(u32, c)}) catch
+                        return error.OutOfMemory;
+                    try list.appendSlice(alloc, esc);
+                } else {
+                    try list.append(alloc, c);
+                }
+            },
         }
     }
     try list.append(alloc, '"');
@@ -697,6 +706,15 @@ test "VirtualNetwork: C-string (NUL-terminated) accessors" {
     try testing.expectEqualStrings("10.0.0.1", std.mem.span(n.getGateway()));
     // Each span length must equal the tracked slice length.
     try testing.expectEqual(n.getNameSlice().len, std.mem.span(n.getName()).len);
+}
+
+test "vnet: emitStr escapes control characters as \\uXXXX" {
+    var list: List = .empty;
+    try emitStr(&list, testing.allocator, "\x00\x01\x1f");
+    const s = try list.toOwnedSlice(testing.allocator);
+    defer testing.allocator.free(s);
+    // nul → \u0000, SOH → \u0001, US → \u001f
+    try testing.expectEqualStrings("\"\\u0000\\u0001\\u001f\"", s);
 }
 
 test "vnet: emitStr escapes survive emit -> parse round-trip" {

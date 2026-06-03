@@ -207,6 +207,8 @@ main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;posit
   min-height:48px;z-index:5;
 }
 .toolbar .sep{width:1px;background:var(--border);margin:0 6px;align-self:stretch}
+/* toolbar-more is hidden on wide screens; shown via media query */
+.toolbar-more{display:none}
 /* ─── Buttons ─── */
 .btn{
   padding:7px 14px;

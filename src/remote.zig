@@ -89,3 +89,30 @@ test "remoteRefreshVmList: no-op when remote_url_len is 0" {
     remoteRefreshVmList();
     try testing.expectEqual(before, app.vm_count);
 }
+
+test "fuzz: apiGet/apiPost/remoteRefreshVmList never panic with random URLs" {
+    var prng = std.Random.DefaultPrng.init(0x8E0_7E57);
+    const rnd = prng.random();
+    var buf: [256]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 5000) : (iter += 1) {
+        app.remote_mode = true;
+        // Use unix:// scheme so connections fail fast (no DNS blocking).
+        const prefix = "unix:///";
+        @memcpy(app.remote_url[0..prefix.len], prefix);
+        const tail = rnd.uintLessThan(usize, @min(60, app.remote_url.len - prefix.len));
+        for (app.remote_url[prefix.len..][0..tail]) |*c| c.* = rnd.intRangeAtMost(u8, 33, 126);
+        app.remote_url_len = prefix.len + tail;
+        // apiGet -- should return 0 or some valid usize, never panic
+        const gn = apiGet("/api/vms", &buf);
+        try testing.expect(gn <= buf.len);
+        // apiPost -- should return 0 or some valid usize, never panic
+        @memset(buf[0..32], 'x');
+        const pn = apiPost("/api/save/0", buf[0..@min(32, buf.len - 1)], &buf);
+        try testing.expect(pn <= buf.len);
+        // remoteRefreshVmList -- should never panic
+        const before = app.vm_count;
+        remoteRefreshVmList();
+        _ = before;
+    }
+}

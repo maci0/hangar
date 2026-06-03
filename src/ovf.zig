@@ -24,6 +24,10 @@ pub const Spec = struct {
     vmdk_size_bytes: u64,
     /// true → an e1000 NIC item is emitted.
     has_network: bool,
+    /// Optional second disk (omitted when href is empty).
+    disk2_capacity_bytes: u64 = 0,
+    disk2_href: []const u8 = "",
+    disk2_size_bytes: u64 = 0,
 };
 
 /// Build a minimal but valid OVF 1.0 envelope for `spec` into `buf`.
@@ -47,16 +51,28 @@ pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
         " xmlns:vssd=\"http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData\">\n");
 
     // References
-    try list.print(a, "  <References>\n    <File ovf:href=\"", .{});
+    try w(&list, a, "  <References>\n");
+    try list.print(a, "    <File ovf:href=\"", .{});
     try esc(&list, a, spec.vmdk_href);
-    try list.print(a, "\" ovf:id=\"file1\" ovf:size=\"{d}\"/>\n  </References>\n", .{spec.vmdk_size_bytes});
+    try list.print(a, "\" ovf:id=\"file1\" ovf:size=\"{d}\"/>", .{spec.vmdk_size_bytes});
+    if (spec.disk2_href.len > 0) {
+        try w(&list, a, "\n    <File ovf:href=\"");
+        try esc(&list, a, spec.disk2_href);
+        try list.print(a, "\" ovf:id=\"file2\" ovf:size=\"{d}\"/>", .{spec.disk2_size_bytes});
+    }
+    try w(&list, a, "\n  </References>\n");
 
     // DiskSection
     try w(&list, a, "  <DiskSection>\n    <Info>Virtual disks</Info>\n");
     try list.print(a,
         "    <Disk ovf:capacity=\"{d}\" ovf:capacityAllocationUnits=\"byte\" ovf:diskId=\"vmdisk1\"" ++
-        " ovf:fileRef=\"file1\" ovf:format=\"http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized\"/>\n" ++
-        "  </DiskSection>\n", .{spec.disk_capacity_bytes});
+        " ovf:fileRef=\"file1\" ovf:format=\"http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized\"/>", .{spec.disk_capacity_bytes});
+    if (spec.disk2_href.len > 0) {
+        try list.print(a,
+            "\n    <Disk ovf:capacity=\"{d}\" ovf:capacityAllocationUnits=\"byte\" ovf:diskId=\"vmdisk2\"" ++
+            " ovf:fileRef=\"file2\" ovf:format=\"http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized\"/>", .{spec.disk2_capacity_bytes});
+    }
+    try w(&list, a, "\n  </DiskSection>\n");
 
     // NetworkSection
     if (spec.has_network) {
@@ -87,7 +103,7 @@ pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
         "<rasd:InstanceID>2</rasd:InstanceID><rasd:ResourceType>4</rasd:ResourceType>" ++
         "<rasd:VirtualQuantity>{d}</rasd:VirtualQuantity></Item>\n", .{ spec.memory_mb, spec.memory_mb });
 
-    // SCSI controller + disk
+    // SCSI controller + disk(s)
     try w(&list, a,
         "      <Item><rasd:Address>0</rasd:Address><rasd:ElementName>SCSI Controller</rasd:ElementName>" ++
         "<rasd:InstanceID>3</rasd:InstanceID><rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>" ++
@@ -95,13 +111,20 @@ pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
         "      <Item><rasd:ElementName>Hard Disk 1</rasd:ElementName>" ++
         "<rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource><rasd:InstanceID>4</rasd:InstanceID>" ++
         "<rasd:Parent>3</rasd:Parent><rasd:ResourceType>17</rasd:ResourceType></Item>\n");
+    if (spec.disk2_href.len > 0) {
+        try w(&list, a,
+            "      <Item><rasd:ElementName>Hard Disk 2</rasd:ElementName>" ++
+            "<rasd:HostResource>ovf:/disk/vmdisk2</rasd:HostResource><rasd:InstanceID>5</rasd:InstanceID>" ++
+            "<rasd:Parent>3</rasd:Parent><rasd:ResourceType>17</rasd:ResourceType></Item>\n");
+    }
 
     if (spec.has_network) {
-        try w(&list, a,
+        const net_id: u8 = if (spec.disk2_href.len > 0) 6 else 5;
+        try list.print(a,
             "      <Item><rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>" ++
             "<rasd:Connection>VM Network</rasd:Connection><rasd:ElementName>Ethernet 1</rasd:ElementName>" ++
-            "<rasd:InstanceID>5</rasd:InstanceID><rasd:ResourceSubType>E1000</rasd:ResourceSubType>" ++
-            "<rasd:ResourceType>10</rasd:ResourceType></Item>\n");
+            "<rasd:InstanceID>{d}</rasd:InstanceID><rasd:ResourceSubType>E1000</rasd:ResourceSubType>" ++
+            "<rasd:ResourceType>10</rasd:ResourceType></Item>\n", .{net_id});
     }
 
     try w(&list, a, "    </VirtualHardwareSection>\n  </VirtualSystem>\n</Envelope>\n");
@@ -184,10 +207,13 @@ test "fuzz: buildDescriptor never crashes on random specs" {
     var prng = std.Random.DefaultPrng.init(0x0FF_C0DE);
     const rnd = prng.random();
     var namebuf: [64]u8 = undefined;
+    var hrefbuf: [32]u8 = undefined;
     var iter: usize = 0;
     while (iter < 3000) : (iter += 1) {
         const n = rnd.uintLessThan(usize, namebuf.len);
         for (namebuf[0..n]) |*c| c.* = rnd.int(u8);
+        const hlen = rnd.uintLessThan(usize, hrefbuf.len);
+        for (hrefbuf[0..hlen]) |*c| c.* = rnd.int(u8);
         const spec = Spec{
             .name = namebuf[0..n],
             .cpu_cores = rnd.int(u32),
@@ -196,6 +222,9 @@ test "fuzz: buildDescriptor never crashes on random specs" {
             .vmdk_href = "d.vmdk",
             .vmdk_size_bytes = rnd.int(u64),
             .has_network = rnd.boolean(),
+            .disk2_href = hrefbuf[0..hlen],
+            .disk2_capacity_bytes = rnd.int(u64),
+            .disk2_size_bytes = rnd.int(u64),
         };
         const xml = buildDescriptor(spec, &buf) catch continue;
         try t.expect(std.mem.endsWith(u8, xml, "</Envelope>\n"));
@@ -275,6 +304,51 @@ test "ovf: network section present when has_network is true" {
     };
     const xml = try buildDescriptor(spec, &buf);
     try t.expect(std.mem.indexOf(u8, xml, "E1000") != null);
+}
+
+test "ovf: dual disk descriptor includes file2 + vmdisk2 + Hard Disk 2" {
+    var buf: [max_descriptor_len]u8 = undefined;
+    const spec = Spec{
+        .name = "DualDisk",
+        .cpu_cores = 2,
+        .memory_mb = 2048,
+        .disk_capacity_bytes = 10 * 1024 * 1024 * 1024,
+        .vmdk_href = "disk1.vmdk",
+        .vmdk_size_bytes = 5000000,
+        .has_network = true,
+        .disk2_href = "disk2.vmdk",
+        .disk2_capacity_bytes = 5 * 1024 * 1024 * 1024,
+        .disk2_size_bytes = 3000000,
+    };
+    const xml = try buildDescriptor(spec, &buf);
+    try t.expect(std.mem.indexOf(u8, xml, "file2") != null);
+    try t.expect(std.mem.indexOf(u8, xml, "disk2.vmdk") != null);
+    try t.expect(std.mem.indexOf(u8, xml, "vmdisk2") != null);
+    try t.expect(std.mem.indexOf(u8, xml, "Hard Disk 2") != null);
+    try t.expect(std.mem.indexOf(u8, xml, "ovf:size=\"3000000\"") != null);
+    try t.expect(std.mem.indexOf(u8, xml, "capacity=\"5368709120\"") != null);
+    // Ethernet InstanceID should be 6 when disk2 is present.
+    try t.expect(std.mem.indexOf(u8, xml, "<rasd:InstanceID>6</rasd:InstanceID>") != null);
+}
+
+test "ovf: dual disk without network — InstanceID 5 is disk2, no Ethernet" {
+    var buf: [max_descriptor_len]u8 = undefined;
+    const spec = Spec{
+        .name = "DualNoNet",
+        .cpu_cores = 1,
+        .memory_mb = 1024,
+        .disk_capacity_bytes = 1024,
+        .vmdk_href = "d1.vmdk",
+        .vmdk_size_bytes = 100,
+        .has_network = false,
+        .disk2_href = "d2.vmdk",
+        .disk2_capacity_bytes = 512,
+        .disk2_size_bytes = 50,
+    };
+    const xml = try buildDescriptor(spec, &buf);
+    try t.expect(std.mem.indexOf(u8, xml, "vmdisk2") != null);
+    try t.expect(std.mem.indexOf(u8, xml, "E1000") == null);
+    try t.expect(std.mem.indexOf(u8, xml, "NetworkSection") == null);
 }
 
 test "fuzz: esc function handles all byte values" {

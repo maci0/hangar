@@ -78,7 +78,7 @@
     <button class="btn" data-action="openVnets" title="Virtual Networks">🌐 VNets</button>
     <button class="btn" data-action="openAbout" title="About">ℹ About</button>
     <button class="btn theme-toggle-btn" data-action="toggleTheme" title="Toggle theme" aria-label="Toggle theme">🌓</button>
-    <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-expanded="false" style="display:none">⋯</button>
+    <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-expanded="false">⋯</button>
     <div class="toolbar-more-popover" role="menu" aria-label="More actions"></div>
   </div>
 
@@ -236,6 +236,8 @@
       <option value="light">Light</option>
       <option value="dark">Dark</option>
     </select>
+    <label for="p_default_vm_dir">Default VM Directory</label>
+    <input id="p_default_vm_dir" type="text" placeholder="~/.local/share/hangar" style="width:100%;margin:4px 0 12px">
     <label for="p_default_memory_mb">Default Memory (MB)</label>
     <input id="p_default_memory_mb" type="number" value="2048" min="128" max="65536" step="1" style="width:100%;margin:4px 0 12px">
     <label for="p_default_cpu_cores">Default CPU Cores</label>
