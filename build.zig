@@ -4,6 +4,37 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // ── zig-webui Desktop App ──
+    const zig_webui_dep = b.dependency("zig_webui", .{
+        .target = target,
+        .optimize = optimize,
+        .is_static = true,
+    });
+    const webui_mod = zig_webui_dep.module("webui");
+
+    const webui_app_mod = b.createModule(.{
+        .root_source_file = b.path("src/webui_app.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "webui", .module = webui_mod },
+        },
+    });
+    webui_app_mod.link_libc = true;
+
+    const webui_app = b.addExecutable(.{
+        .name = "hangar-webui",
+        .root_module = webui_app_mod,
+        .use_llvm = true,
+        .use_lld = true,
+    });
+    b.installArtifact(webui_app);
+
+    const webui_run = b.step("webui", "Run webui desktop app");
+    const webui_run_cmd = b.addSystemCommand(&.{b.getInstallPath(.bin, "hangar-webui")});
+    webui_run_cmd.step.dependOn(&webui_app.step);
+    webui_run.dependOn(&webui_run_cmd.step);
+
     // ── FLTK Frontend ──
     const exe_mod = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize });
     exe_mod.link_libc = true;
@@ -58,7 +89,7 @@ pub fn build(b: *std.Build) !void {
 
     // ── Unit tests ──
     const test_step = b.step("test", "Run unit tests");
-    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "serialpath", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "remote", "filter", "vmlist", "urlencode", "spice_client", "vnc_client", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "vnet_label", "dialogs", "appstate_test" };
+    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "serial_console", "serialpath", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "remote", "filter", "vmlist", "urlencode", "spice_client", "vnc_client", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "vnet_label", "dialogs", "appstate_test", "webui_app" };
     for (test_mods) |mod| {
         const src_path = b.fmt("src/{s}.zig", .{mod});
         const tm = b.createModule(.{ .root_source_file = b.path(src_path), .target = target, .optimize = optimize });
@@ -71,6 +102,9 @@ pub fn build(b: *std.Build) !void {
         }
         if (std.mem.eql(u8, mod, "vnc_client")) {
             tm.linkSystemLibrary("libvncclient", .{});
+        }
+        if (std.mem.eql(u8, mod, "webui_app")) {
+            tm.addImport("webui", webui_mod);
         }
         const tests = b.addTest(.{ .root_module = tm, .use_llvm = true, .use_lld = true });
         const run_tests = b.addRunArtifact(tests);

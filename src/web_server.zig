@@ -21,6 +21,7 @@ const snapparse = @import("snapparse.zig");
 const sync = @import("sync.zig");
 const urlencode = @import("urlencode.zig");
 const form_parsers = @import("form_parsers.zig");
+const path_helpers = @import("path_helpers.zig");
 
 extern fn time(t: ?*c_long) c_long;
 extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
@@ -122,6 +123,7 @@ fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/app.css")) return true;
     if (std.mem.startsWith(u8, path, "/favicon")) return true;
     if (std.mem.eql(u8, path, "/api/vms")) return true;
+    if (std.mem.eql(u8, path, "/api/capabilities")) return true;
     if (std.mem.eql(u8, path, "/api/health")) return true;
     if (std.mem.eql(u8, path, "/api/config")) return true;
     if (std.mem.eql(u8, path, "/api/vnets")) return true;
@@ -429,6 +431,9 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "application/json; charset=utf-8";
         const json_bytes = renderJson(&json_buf);
         response = if (json_bytes > 0) json_buf[0..json_bytes] else "[]";
+    } else if (std.mem.startsWith(u8, req, "GET /api/capabilities")) {
+        content_type = "application/json; charset=utf-8";
+        response = handleCapabilities(&snap_buf);
     } else if (std.mem.startsWith(u8, req, "GET /api/health")) {
         response = "{\"status\":\"ok\",\"version\":\"1.0\"}";
         content_type = "application/json; charset=utf-8";
@@ -1320,6 +1325,15 @@ const catalog: [3]CatalogEntry = .{
     .{ .id = "debian12", .name = "Debian 12", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .description = "Debian 12 Bookworm — stable" },
 };
 
+/// Returns the capabilities of the backend — max NICs, max extra disks, etc.
+/// The frontend uses this to dynamically render NIC/disk form fields instead
+/// of hardcoding nic2/nic3/disk2.
+fn handleCapabilities(buf: []u8) []const u8 {
+    return std.fmt.bufPrint(buf,
+        \\{{"max_vms":{d},"max_nics":{d},"max_extra_disks":{d},"max_displays":16,"version":"1.0"}}
+    , .{ vm.MAX_VMS, vm.MAX_NICS, vm.MAX_EXTRA_DISKS }) catch "{}";
+}
+
 fn handleCatalog(buf: []u8) []const u8 {
     if (buf.len == 0) return "[]";
     var w: usize = 0;
@@ -1964,24 +1978,12 @@ fn handleImport(req: []const u8) ![]const u8 {
     // Verify the file actually exists before creating a VM config for it.
     std.Io.Dir.cwd().access(appio.io(), decoded_path, .{}) catch return "no file";
     var name_buf: [vm.MAX_NAME]u8 = undefined;
-    const name = blk: {
-        const sep = std.mem.lastIndexOfScalar(u8, decoded_path, '/');
-        const basename = if (sep) |s| decoded_path[s + 1 ..] else decoded_path;
-        const dot = std.mem.lastIndexOfScalar(u8, basename, '.');
-        const name_slice = if (dot) |d| basename[0..d] else basename;
-        if (name_slice.len > name_buf.len) break :blk name_buf[0..name_slice.len];
-        @memcpy(name_buf[0..name_slice.len], name_slice);
-        break :blk name_buf[0..name_slice.len];
-    };
+    const name = path_helpers.basenameWithoutExt(decoded_path, &name_buf);
     if (!vm.isValidVmName(name)) return "bad name";
     var cfg = vm.VmConfig{};
     cfg.setName(name);
     cfg.setDiskPath(decoded_path);
-    {
-        const dot = std.mem.lastIndexOfScalar(u8, decoded_path, '.');
-        const ext = if (dot) |d| decoded_path[d + 1 ..] else "";
-        cfg.disk_format = form_parsers.diskFormatFromExtension(ext);
-    }
+    cfg.disk_format = vm.DiskFormat.fromExtension(decoded_path);
     cfg.disk_size_gb = 20;
     cfg.memory_mb = appstate.prefs.default_memory_mb;
     cfg.cpu_cores = appstate.prefs.default_cpu_cores;

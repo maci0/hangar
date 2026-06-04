@@ -5,6 +5,7 @@
 //! as a texture and render it with BGRA→RGBA swizzle on the GPU.
 //! Falls back to the software Fl_RGB_Image path if GL is unavailable.
 
+const std = @import("std");
 const app = @import("appstate.zig");
 const cfltk = @import("cfltk_import.zig").c;
 
@@ -36,6 +37,8 @@ extern fn glDisableVertexAttribArray(index: gl.GLuint) void;
 extern fn glGenTextures(n: gl.GLsizei, textures: [*c]gl.GLuint) void;
 extern fn glDeleteTextures(n: gl.GLsizei, textures: [*c]const gl.GLuint) void;
 extern fn glActiveTexture(texture: gl.GLenum) void;
+extern fn glGetShaderInfoLog(shader: gl.GLuint, bufSize: gl.GLsizei, length: [*c]gl.GLsizei, infoLog: [*c]u8) void;
+extern fn glGetProgramInfoLog(program: gl.GLuint, bufSize: gl.GLsizei, length: [*c]gl.GLsizei, infoLog: [*c]u8) void;
 
 // GL 2.0+ constants — not in <GL/gl.h> headers that aro can parse.
 const GL_VERTEX_SHADER: gl.GLenum = 0x8B31;
@@ -99,7 +102,13 @@ fn compileShader(kind: gl.GLenum, src: [*c]const u8) gl.GLuint {
     glCompileShader(s);
     var ok: gl.GLint = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (ok == 0) return 0;
+    if (ok == 0) {
+        var log_buf: [512]u8 = undefined;
+        glGetShaderInfoLog(s, log_buf.len, null, &log_buf);
+        const kind_str: [*:0]const u8 = if (kind == GL_VERTEX_SHADER) "vertex" else "fragment";
+        std.debug.print("[hangar] GL {s} shader compile failed: {s}\n", .{ kind_str, &log_buf });
+        return 0;
+    }
     return s;
 }
 
@@ -123,6 +132,9 @@ fn initGL() bool {
     var ok: gl.GLint = 0;
     glGetProgramiv(prog, GL_LINK_STATUS, &ok);
     if (ok == 0) {
+        var log_buf: [512]u8 = undefined;
+        glGetProgramInfoLog(prog, log_buf.len, null, &log_buf);
+        std.debug.print("[hangar] GL program link failed: {s}\n", .{&log_buf});
         glDeleteProgram(prog);
         return false;
     }
@@ -146,10 +158,15 @@ fn initGL() bool {
 
 /// Render a BGRA framebuffer to the GL window.
 /// Call only from the Fl_Gl_Window draw callback or when the context is current.
+/// `fb` must be at least 4-byte aligned (BGRA pixel data).
 pub fn renderGL(fb: [*]const u8, fw: c_int, fh: c_int) void {
     if (app.gl_display == null) return;
-    if (!initGL()) return;
     if (fw <= 0 or fh <= 0) return;
+
+    // BGRA pixel data requires 4-byte alignment for glTexImage2D.
+    if (@intFromPtr(fb) & 3 != 0) return;
+
+    if (!initGL()) return;
 
     _ = cfltk.Fl_Gl_Window_make_current(app.gl_display);
     if (cfltk.Fl_Gl_Window_context_valid(app.gl_display) == 0) return;

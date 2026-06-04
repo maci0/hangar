@@ -345,3 +345,13 @@ test "qemu_backend: getSerialSocket returns null when serial disabled" {
     const sock = getSerialSocket(handle);
     try std.testing.expect(sock == null);
 }
+
+test "qemu_backend: create convenience function returns valid vmm+handle" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("test-create");
+    const result = try create(&cfg, .tcg, std.testing.allocator);
+    defer result.vmm.deinitFn(result.handle);
+    try std.testing.expect(@intFromPtr(result.vmm.startFn) != 0);
+    try std.testing.expect(@intFromPtr(result.handle) != 0);
+    try std.testing.expectEqual(hv.Backend.qemu, result.vmm.backend);
+}

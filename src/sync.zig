@@ -60,7 +60,7 @@ test "SpinMutex: mutual exclusion under contention keeps a counter exact" {
     };
 
     var threads: [N]std.Thread = undefined;
-    for (&threads) |*th| th.* = try std.Thread.spawn(.{}, Worker.run, .{ &m, &counter });
+    for (&threads) |*th| th.* = try std.Thread.spawn(std.Thread.SpawnConfig{}, Worker.run, .{ &m, &counter });
     for (threads) |th| th.join();
 
     try std.testing.expectEqual(@as(u64, N * ITERS), counter);
@@ -107,7 +107,7 @@ test "fuzz: SpinMutex under random thread scheduling" {
     };
 
     var threads: [N]std.Thread = undefined;
-    for (&threads) |*th| th.* = try std.Thread.spawn(.{}, Worker.run, .{ &m, &counter });
+    for (&threads) |*th| th.* = try std.Thread.spawn(std.Thread.SpawnConfig{}, Worker.run, .{ &m, &counter });
     for (threads) |th| th.join();
 
     try std.testing.expectEqual(@as(u64, N * ITERS), counter);

@@ -337,6 +337,54 @@ test "Connection.close: no-op when shm is null and fd is -1" {
     try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
 }
 
+test "Connection.connect + request: TCP round-trip via localhost" {
+    // Create a listening TCP socket on an OS-assigned port.
+    const lfd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
+    try std.testing.expect(lfd >= 0);
+    defer _ = c.close(lfd);
+
+    var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
+    addr.family = c.AF.INET;
+    addr.addr = std.mem.nativeToBig(u32, 0x7F_00_00_01); // 127.0.0.1
+    addr.port = 0; // OS-assigned port
+    try std.testing.expectEqual(@as(c_int, 0), c.bind(lfd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)));
+    try std.testing.expectEqual(@as(c_int, 0), c.listen(lfd, 1));
+
+    // Get the assigned port.
+    var addrlen: c.socklen_t = @sizeOf(c.sockaddr.in);
+    _ = c.getsockname(lfd, @ptrCast(&addr), &addrlen);
+    const port = std.mem.bigToNative(u16, addr.port);
+    try std.testing.expect(port > 0);
+
+    // Background thread: accept one connection, serve an HTTP response.
+    const ServerCtx = struct {
+        lfd: c.fd_t,
+        fn run(ctx: @This()) void {
+            const cfd = c.accept(ctx.lfd, null, null);
+            if (cfd < 0) return;
+            defer _ = c.close(cfd);
+            const resp = "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}";
+            _ = c.write(cfd, resp, resp.len);
+        }
+    };
+    const server = ServerCtx{ .lfd = lfd };
+    const th = try std.Thread.spawn(std.Thread.SpawnConfig{}, ServerCtx.run, .{server});
+
+    // Connect and send a request.
+    var host_buf: [32]u8 = undefined;
+    const host = try std.fmt.bufPrint(&host_buf, "http://127.0.0.1:{d}", .{port});
+    const url = Url.parse(host) orelse return error.ParseFailed;
+    var conn = Connection.connect(&url) orelse return error.ConnectFailed;
+    defer conn.close();
+
+    var resp: [256]u8 = undefined;
+    const n = conn.request("GET", "/api/status", null, &resp);
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.mem.indexOf(u8, resp[0..n], "{\"ok\":true}") != null);
+
+    th.join();
+}
+
 test "fuzz: Url.parse never panics on random inputs" {
     var prng = std.Random.DefaultPrng.init(0x7A0A5A0B);
     const rnd = prng.random();

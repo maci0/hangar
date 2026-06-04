@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const appio = @import("appio.zig");
+const appstate = @import("appstate.zig");
 
 /// Hard cap on virtual switches. VMware Workstation exposes VMnet0..VMnet19.
 pub const MAX_VNETS: usize = 20;
@@ -232,18 +233,6 @@ pub const NetworkSet = struct {
     }
 };
 
-// ── Persistence paths ────────────────────────────────────────────────
-
-fn getDir(buf: *[512]u8) ?[]const u8 {
-    const home = appio.getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/hangar", .{home}) catch null;
-}
-
-fn getPath(buf: *[512]u8) ?[]const u8 {
-    const home = appio.getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/hangar/networks.json", .{home}) catch null;
-}
-
 // ── Emit ─────────────────────────────────────────────────────────────
 
 const List = std.ArrayList(u8);
@@ -323,14 +312,14 @@ pub fn save(set: *const NetworkSet) !void {
     const alloc = std.heap.page_allocator;
 
     var dir_buf: [512]u8 = undefined;
-    if (getDir(&dir_buf)) |dir_path| {
+    if (appstate.configDir(&dir_buf)) |dir_path| {
         std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
             _ = std.c.write(2, "vnet: createDirPath failed\n", 27);
         };
     }
 
     var path_buf: [512]u8 = undefined;
-    const file_path = getPath(&path_buf) orelse return error.HomeNotFound;
+    const file_path = appstate.networksPath(&path_buf) orelse return error.HomeNotFound;
 
     const json = try toJson(set, alloc);
     defer alloc.free(json);
@@ -361,23 +350,43 @@ fn readString(s: []const u8, out: []u8) ?struct { value: []const u8, rest: []con
         const c = s[i];
         if (c == '"') return .{ .value = out[0..out_len], .rest = s[i + 1 ..] };
         if (c == '\\' and i + 1 < s.len) {
+            if (s[i + 1] == 'u' and i + 5 < s.len) {
+                const hex = s[i + 2 .. i + 6];
+                const codepoint = std.fmt.parseInt(u16, hex, 16) catch return null;
+                if (codepoint < 0x80) {
+                    if (out_len >= out.len) return null;
+                    out[out_len] = @intCast(codepoint);
+                    out_len += 1;
+                } else if (codepoint < 0x800) {
+                    if (out_len + 1 >= out.len) return null;
+                    out[out_len] = @intCast(0xC0 | (codepoint >> 6));
+                    out[out_len + 1] = @intCast(0x80 | (codepoint & 0x3F));
+                    out_len += 2;
+                } else {
+                    if (out_len + 2 >= out.len) return null;
+                    out[out_len] = @intCast(0xE0 | (codepoint >> 12));
+                    out[out_len + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+                    out[out_len + 2] = @intCast(0x80 | (codepoint & 0x3F));
+                    out_len += 3;
+                }
+                i += 6;
+                continue;
+            }
             const esc: u8 = switch (s[i + 1]) {
                 'n' => '\n',
                 'r' => '\r',
                 't' => '\t',
                 else => s[i + 1],
             };
-            if (out_len < out.len) {
-                out[out_len] = esc;
-                out_len += 1;
-            }
+            if (out_len >= out.len) return null;
+            out[out_len] = esc;
+            out_len += 1;
             i += 2;
             continue;
         }
-        if (out_len < out.len) {
-            out[out_len] = c;
-            out_len += 1;
-        }
+        if (out_len >= out.len) return null;
+        out[out_len] = c;
+        out_len += 1;
         i += 1;
     }
     return null;
@@ -536,7 +545,7 @@ pub fn fromJson(content: []const u8) NetworkSet {
 pub fn load() NetworkSet {
     const alloc = std.heap.page_allocator;
     var path_buf: [512]u8 = undefined;
-    const file_path = getPath(&path_buf) orelse return NetworkSet.defaults();
+    const file_path = appstate.networksPath(&path_buf) orelse return NetworkSet.defaults();
 
     const content = std.Io.Dir.cwd().readFileAlloc(
         appio.io(),
@@ -774,6 +783,29 @@ test "vnet: readString unterminated returns null" {
 test "vnet: readString escape at end returns null" {
     var out: [64]u8 = undefined;
     try testing.expect(readString("\"trailing\\", &out) == null);
+}
+
+test "vnet: readString \\u escape decodes UTF-8" {
+    var out: [64]u8 = undefined;
+    // \u20AC = € (3-byte UTF-8: E2 82 AC)
+    const r = readString("\"\\u20AC100\"", &out).?;
+    try testing.expectEqualStrings("€100", r.value);
+}
+
+test "vnet: readString invalid \\u hex returns null" {
+    var out: [64]u8 = undefined;
+    try testing.expect(readString("\"\\uGGGG\"", &out) == null);
+}
+
+test "vnet: readString truncation returns null" {
+    var out: [3]u8 = undefined;
+    try testing.expect(readString("\"abcd\"", &out) == null);
+}
+
+test "vnet: readString \\u truncation returns null" {
+    var out: [3]u8 = undefined;
+    // \u20AC = € needs 3 bytes, "€x" needs 4 → overflow
+    try testing.expect(readString("\"\\u20ACx\"", &out) == null);
 }
 
 test "vnet: fieldStr with missing key returns empty" {

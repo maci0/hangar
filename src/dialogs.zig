@@ -374,7 +374,10 @@ pub fn vnetDialog() void {
     const CloseCB = struct {
         fn go(_: ?*cfltk.Fl_Widget, data: ?*anyopaque) callconv(.c) void {
             const vdp: *VDlg = @ptrCast(@alignCast(data orelse return));
-            vnet.save(vdp.ns) catch { app.setStatus("Failed to save virtual network configuration"); };
+            vnet.save(vdp.ns) catch {
+                app.setStatus("Failed to save virtual network configuration");
+                return;
+            };
             if (vdp.dlg) |d| cfltk.Fl_Window_hide(d);
         }
     };

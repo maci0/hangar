@@ -13,6 +13,7 @@ const vnc = @import("vnc_client.zig");
 const spice = @import("spice_client.zig");
 const hv_iface = @import("hv/interface.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
+const appio = @import("appio.zig");
 const cfltk = @import("cfltk_import.zig").c;
 const persist = @import("persist.zig");
 const filter_ = @import("filter.zig");
@@ -702,4 +703,24 @@ pub fn refreshDetails() void {
             }
         }
     }
+}
+
+// ── Config path helpers ────────────────────────────────────────────
+
+/// Return the hangar config directory path, or null if HOME is unset.
+pub fn configDir(buf: *[512]u8) ?[]const u8 {
+    const home = appio.getenv("HOME") orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/.config/hangar", .{home}) catch null;
+}
+
+/// Return the path to vms.json, or null if HOME is unset.
+pub fn vmsPath(buf: *[512]u8) ?[]const u8 {
+    const home = appio.getenv("HOME") orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/.config/hangar/vms.json", .{home}) catch null;
+}
+
+/// Return the path to networks.json, or null if HOME is unset.
+pub fn networksPath(buf: *[512]u8) ?[]const u8 {
+    const home = appio.getenv("HOME") orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/.config/hangar/networks.json", .{home}) catch null;
 }

@@ -848,7 +848,7 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
         if (c_qmp.bind(srv, @ptrCast(&addr), addrlen) != 0) continue;
         if (c_qmp.listen(srv, 1) != 0) continue;
 
-        var th = try std.Thread.spawn(.{}, qmpFuzzServer, .{ srv, rnd.int(u64) });
+        var th = try std.Thread.spawn(std.Thread.SpawnConfig{}, qmpFuzzServer, .{ srv, rnd.int(u64) });
         defer th.join();
 
         var client = QmpClient{};

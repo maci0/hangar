@@ -2,6 +2,7 @@
 zig-out/
 .zig-cache/
 zig-cache/
+zig-pkg/
 
 # Object files & loose compiled binaries (scratch from IUP-era experiments)
 *.o

@@ -69,8 +69,20 @@ pub const DiskFormat = enum(u8) {
     pub fn fromStr(s: []const u8) DiskFormat {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: DiskFormat = @enumFromInt(f.value);
-            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
+        return .qcow2;
+    }
+
+    /// Detect disk format from a file extension (case-insensitive).
+    /// "img" maps to raw; unrecognized extensions default to qcow2.
+    pub fn fromExtension(path: []const u8) DiskFormat {
+        const dot = std.mem.lastIndexOfScalar(u8, path, '.');
+        const ext = if (dot) |d| path[d + 1 ..] else "";
+        if (std.ascii.eqlIgnoreCase(ext, "qcow2")) return .qcow2;
+        if (std.ascii.eqlIgnoreCase(ext, "vmdk")) return .vmdk;
+        if (std.ascii.eqlIgnoreCase(ext, "vdi")) return .vdi;
+        if (std.ascii.eqlIgnoreCase(ext, "raw") or std.ascii.eqlIgnoreCase(ext, "img")) return .raw;
         return .qcow2;
     }
 };
@@ -118,12 +130,12 @@ pub const DiskCache = enum(u8) {
         };
     }
 
-    /// Parse a QEMU cache string (e.g. from JSON).
+    /// Parse a QEMU cache string (e.g. from JSON), case-insensitive.
     pub fn fromStr(s: []const u8) DiskCache {
-        if (std.mem.eql(u8, s, "writethrough")) return .writethrough;
-        if (std.mem.eql(u8, s, "none")) return .none;
-        if (std.mem.eql(u8, s, "directsync")) return .directsync;
-        if (std.mem.eql(u8, s, "unsafe")) return .unsafe;
+        if (std.ascii.eqlIgnoreCase(s, "writethrough")) return .writethrough;
+        if (std.ascii.eqlIgnoreCase(s, "none")) return .none;
+        if (std.ascii.eqlIgnoreCase(s, "directsync")) return .directsync;
+        if (std.ascii.eqlIgnoreCase(s, "unsafe")) return .unsafe;
         return .writeback;
     }
 };
@@ -187,6 +199,17 @@ pub const Nic = struct {
     mode: NetworkMode = .none,
     mac_buf: [18]u8 = [_]u8{0} ** 18,
     mac_len: u16 = 0,
+};
+
+/// Maximum number of extra (non-primary) disk images.
+pub const MAX_EXTRA_DISKS: usize = 4;
+
+/// An extra disk image attached to a VM (persisted).
+pub const ExtraDisk = struct {
+    path_buf: [MAX_PATH + 1]u8 = [_]u8{0} ** (MAX_PATH + 1),
+    path_len: u16 = 0,
+    size_gb: u32 = 0,
+    format: DiskFormat = .qcow2,
 };
 
 // ── Display Resolution ───────────────────────────────────────────────
@@ -258,7 +281,7 @@ pub const DisplayResolution = enum(u8) {
     pub fn fromStr(s: []const u8) DisplayResolution {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: DisplayResolution = @enumFromInt(f.value);
-            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
         return .auto;
     }
@@ -312,10 +335,10 @@ pub const DisplayType = enum(u8) {
     pub fn fromStr(s: []const u8) DisplayType {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: DisplayType = @enumFromInt(f.value);
-            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
         // Backward compatibility: old JSON files may have "spice" instead of "spice-app".
-        if (std.mem.eql(u8, s, "spice")) return .spice;
+        if (std.ascii.eqlIgnoreCase(s, "spice")) return .spice;
         return .gtk;
     }
 };
@@ -365,7 +388,7 @@ pub const VmStatus = enum(u8) {
     pub fn fromStr(s: []const u8) VmStatus {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: VmStatus = @enumFromInt(f.value);
-            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
         return .stopped;
     }
@@ -469,7 +492,7 @@ pub const BootOrder = enum(u8) {
     pub fn fromStr(s: []const u8) BootOrder {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: BootOrder = @enumFromInt(f.value);
-            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
         return .disk_first;
     }
@@ -557,7 +580,7 @@ pub const CpuModel = enum(u8) {
     pub fn fromStr(s: []const u8) CpuModel {
         inline for (0..count) |i| {
             const m = fromIndex(i);
-            if (std.mem.eql(u8, s, std.mem.span(m.toStr()))) return m;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(m.toStr()))) return m;
         }
         return .host;
     }
@@ -605,7 +628,7 @@ pub const AudioDevice = enum(u8) {
     pub fn fromStr(s: []const u8) AudioDevice {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: AudioDevice = @enumFromInt(f.value);
-            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
         return .none;
     }
@@ -683,8 +706,8 @@ pub const Theme = enum(u8) {
     }
 
     pub fn fromStr(s: []const u8) Theme {
-        if (std.mem.eql(u8, s, "system")) return .system;
-        if (std.mem.eql(u8, s, "dark")) return .dark;
+        if (std.ascii.eqlIgnoreCase(s, "system")) return .system;
+        if (std.ascii.eqlIgnoreCase(s, "dark")) return .dark;
         return .light; // default
     }
 
@@ -733,7 +756,7 @@ pub const GpuDevice = enum(u8) {
     pub fn fromStr(s: []const u8) GpuDevice {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: GpuDevice = @enumFromInt(f.value);
-            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
         return .virtio_vga_gl;
     }
@@ -789,7 +812,7 @@ pub const UsbPolicy = enum(u8) {
     pub fn fromStr(s: []const u8) UsbPolicy {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: UsbPolicy = @enumFromInt(f.value);
-            if (std.mem.eql(u8, s, std.mem.span(variant.toStr()))) return variant;
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
         return .usb2;
     }
@@ -834,9 +857,9 @@ pub const WatchdogAction = enum(u8) {
     }
 
     pub fn fromStr(s: []const u8) WatchdogAction {
-        if (std.mem.eql(u8, s, "reset")) return .reset;
-        if (std.mem.eql(u8, s, "poweroff")) return .poweroff;
-        if (std.mem.eql(u8, s, "pause")) return .pause;
+        if (std.ascii.eqlIgnoreCase(s, "reset")) return .reset;
+        if (std.ascii.eqlIgnoreCase(s, "poweroff")) return .poweroff;
+        if (std.ascii.eqlIgnoreCase(s, "pause")) return .pause;
         return .none;
     }
 };
@@ -1034,6 +1057,9 @@ pub const VmConfig = struct {
     disk2_path_len: u16 = 0,
     disk2_size_gb: u32 = 0,
     disk2_format: DiskFormat = .qcow2,
+
+    // ── Extra (non-primary) disk images (persisted) ───────────────
+    extra_disks: [MAX_EXTRA_DISKS]ExtraDisk = [_]ExtraDisk{ExtraDisk{}} ** MAX_EXTRA_DISKS,
 
     // ── USB controller policy (persisted) ─────────────────────────
     usb_policy: UsbPolicy = .usb2,
@@ -1288,6 +1314,32 @@ pub const VmConfig = struct {
 
     pub fn hasDisk2(self: *const VmConfig) bool {
         return self.disk2_path_len > 0;
+    }
+
+    // ── Extra disk accessors ─────────────────────────────────────
+
+    pub fn getExtraDiskPath(self: *const VmConfig, i: usize) [*:0]const u8 {
+        return @ptrCast(&self.extra_disks[i].path_buf);
+    }
+
+    pub fn getExtraDiskPathSlice(self: *const VmConfig, i: usize) []const u8 {
+        return self.extra_disks[i].path_buf[0..self.extra_disks[i].path_len];
+    }
+
+    pub fn setExtraDiskPath(self: *VmConfig, i: usize, s: []const u8) void {
+        const len: u16 = @intCast(@min(s.len, MAX_PATH));
+        @memcpy(self.extra_disks[i].path_buf[0..len], s[0..len]);
+        self.extra_disks[i].path_buf[len] = 0;
+        self.extra_disks[i].path_len = len;
+    }
+
+    pub fn clearExtraDiskPath(self: *VmConfig, i: usize) void {
+        self.extra_disks[i].path_buf[0] = 0;
+        self.extra_disks[i].path_len = 0;
+    }
+
+    pub fn hasExtraDisk(self: *const VmConfig, i: usize) bool {
+        return self.extra_disks[i].path_len > 0;
     }
 
     // ── USB passthrough accessors ────────────────────────────────
@@ -1734,6 +1786,47 @@ test "DiskFormat: label values" {
     try std.testing.expectEqualStrings("Raw", std.mem.span(DiskFormat.raw.label()));
     try std.testing.expectEqualStrings("VMDK", std.mem.span(DiskFormat.vmdk.label()));
     try std.testing.expectEqualStrings("VDI", std.mem.span(DiskFormat.vdi.label()));
+}
+
+test "DiskFormat: fromExtension qcow2" {
+    try std.testing.expectEqual(DiskFormat.qcow2, DiskFormat.fromExtension("disk.qcow2"));
+    try std.testing.expectEqual(DiskFormat.qcow2, DiskFormat.fromExtension("DISK.QCOW2"));
+    try std.testing.expectEqual(DiskFormat.qcow2, DiskFormat.fromExtension("/path/to/vm.qcow2"));
+    try std.testing.expectEqual(DiskFormat.qcow2, DiskFormat.fromExtension("disk.QcOw2"));
+}
+
+test "DiskFormat: fromExtension raw" {
+    try std.testing.expectEqual(DiskFormat.raw, DiskFormat.fromExtension("disk.raw"));
+    try std.testing.expectEqual(DiskFormat.raw, DiskFormat.fromExtension("disk.RAW"));
+}
+
+test "DiskFormat: fromExtension img maps to raw" {
+    try std.testing.expectEqual(DiskFormat.raw, DiskFormat.fromExtension("disk.img"));
+    try std.testing.expectEqual(DiskFormat.raw, DiskFormat.fromExtension("disk.IMG"));
+}
+
+test "DiskFormat: fromExtension vmdk" {
+    try std.testing.expectEqual(DiskFormat.vmdk, DiskFormat.fromExtension("disk.vmdk"));
+    try std.testing.expectEqual(DiskFormat.vmdk, DiskFormat.fromExtension("DISK.VMDK"));
+}
+
+test "DiskFormat: fromExtension vdi" {
+    try std.testing.expectEqual(DiskFormat.vdi, DiskFormat.fromExtension("disk.vdi"));
+    try std.testing.expectEqual(DiskFormat.vdi, DiskFormat.fromExtension("disk.VDI"));
+}
+
+test "DiskFormat: fromExtension unknown defaults to qcow2" {
+    try std.testing.expectEqual(DiskFormat.qcow2, DiskFormat.fromExtension("disk.vhd"));
+    try std.testing.expectEqual(DiskFormat.qcow2, DiskFormat.fromExtension("disk"));
+    try std.testing.expectEqual(DiskFormat.qcow2, DiskFormat.fromExtension(""));
+}
+
+test "DiskFormat: fromStr values" {
+    try std.testing.expectEqual(DiskFormat.qcow2, DiskFormat.fromStr("qcow2"));
+    try std.testing.expectEqual(DiskFormat.raw, DiskFormat.fromStr("raw"));
+    try std.testing.expectEqual(DiskFormat.vmdk, DiskFormat.fromStr("vmdk"));
+    try std.testing.expectEqual(DiskFormat.vdi, DiskFormat.fromStr("vdi"));
+    try std.testing.expectEqual(DiskFormat.qcow2, DiskFormat.fromStr("unknown"));
 }
 
 // -- DiskCache --

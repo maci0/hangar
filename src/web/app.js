@@ -253,7 +253,7 @@ e_firmware:[['bios','BIOS'],['uefi','UEFI']],e_disk_format:[['0','QCOW2'],['1','
 e_disk2_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
 e_disk_cache:[['0','Writeback'],['1','Writethrough'],['2','None'],['3','Direct Sync'],['4','Unsafe']],
 e_cpu_model:[['host','Host'],['host-passthrough','Host Passthrough'],['max','Max'],['qemu64','QEMU64'],['kvm64','KVM64'],['EPYC','EPYC'],['EPYC-Rome','EPYC-Rome'],['EPYC-Milan','EPYC-Milan'],['Skylake-Server','Skylake-Server'],['Skylake-Client','Skylake-Client'],['Cascadelake-Server','Cascadelake-Server'],['Icelake-Server','Icelake-Server'],['Nehalem','Nehalem'],['Westmere','Westmere'],['SandyBridge','SandyBridge'],['IvyBridge','IvyBridge'],['Haswell','Haswell'],['Broadwell','Broadwell'],['Opteron_G5','Opteron G5'],['Cooperlake','Cooperlake'],['SapphireRapids','SapphireRapids'],['GraniteRapids','GraniteRapids'],['Neoverse-N1','Neoverse-N1'],['Neoverse-N2','Neoverse-N2'],['Neoverse-V1','Neoverse-V1'],['aarch64','AArch64']],
-e_enable_3d:[['0','No'],['1','Yes']],e_gpu_device:[['0','Virtio-GPU'],['1','Virtio-VGA']],
+e_enable_3d:[['0','No'],['1','Yes']],e_gpu_device:[['0','Virtio-GPU (3D)'],['1','Virtio-VGA (3D)'],['2','Virtio-GPU'],['3','Virtio-VGA'],['4','QXL'],['5','Standard VGA']],
 e_display:[['0','GTK'],['1','SDL'],['2','SPICE'],['3','VNC'],['4','None']],
 e_display_resolution:[['0','Auto'],['1','800x600'],['2','1024x768'],['3','1280x800'],['4','1920x1080']],
 e_guest_os:[['0','Linux'],['1','Windows'],['2','FreeBSD'],['3','macOS'],['4','Other']],
@@ -571,6 +571,9 @@ function manualDisconnectSerial(){serialManualOff=true;serialManualOffVmIdx=sel!
 var serialTermEl=document.getElementById('serialterm');if(serialTermEl){serialTermEl.addEventListener('keydown',function(e){if(!serialWs||serialWs.readyState!==WebSocket.OPEN)return;
 var s=null;
 if(e.ctrlKey&&!e.altKey&&!e.metaKey){
+ // Allow browser copy/paste/select-all shortcuts
+ if(e.key==='c'||e.key==='C'||e.key==='x'||e.key==='X'){if(e.target.selectionStart!==e.target.selectionEnd)return;}
+ if(e.key==='a'||e.key==='A'||e.key==='v'||e.key==='V')return;
  if(e.key.length===1){var cc=e.key.charCodeAt(0);if(cc>=64&&cc<=95)s=String.fromCharCode(cc-64);else if(cc>=97&&cc<=122)s=String.fromCharCode(cc-96);}
  else if(e.key===' '||e.key==='Spacebar')s='\x00';
 }else if(!e.altKey&&!e.metaKey){
@@ -623,7 +626,7 @@ var actionHandlers={
  closeDlg:function(el){var id=el.getAttribute('data-dialog');if(id){var d=document.getElementById(id);if(d)d.close();}},
  dismissBanner:function(){var b=document.getElementById('connbanner');if(b)b.style.display='none';serverDown=false;setStatus('');},
  cancelMigrate:function(){cancelMigrate();},
- applyTheme:function(el){pendingTheme=el.value;},
+ applyTheme:function(el){pendingTheme=el.value;window.applyTheme(el.value);},
  toggleTheme:function(){cycleTheme();},
  filterList:function(){filterList();},
  onVnetSelect:function(){onVnetSelect();}
@@ -647,7 +650,7 @@ document.body.addEventListener('change',function(e){
  var el=e.target.closest('[data-action]');if(!el)return;
  var action=el.getAttribute('data-action');
  if(action==='onVnetSelect')onVnetSelect();
- else if(action==='applyTheme'){pendingTheme=el.value;}
+ else if(action==='applyTheme'){pendingTheme=el.value;window.applyTheme(el.value);}
 });
 document.body.addEventListener('keydown',function(e){
  if(e.key==='Enter'&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'&&e.target.tagName!=='SELECT'){

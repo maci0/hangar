@@ -10,21 +10,20 @@ const std = @import("std");
 const vm = @import("vm.zig");
 
 /// Parse a disk format label ("qcow2", "raw", "vmdk", "vdi") into a DiskFormat enum.
+/// Delegates to vm.DiskFormat.fromStr (case-insensitive).
 pub fn parseDiskFormat(s: []const u8) vm.DiskFormat {
-    if (std.ascii.eqlIgnoreCase(s, "raw")) return .raw;
-    if (std.ascii.eqlIgnoreCase(s, "vmdk")) return .vmdk;
-    if (std.ascii.eqlIgnoreCase(s, "vdi")) return .vdi;
-    return .qcow2;
+    return vm.DiskFormat.fromStr(s);
 }
 
 /// Map a file extension (without dot) to a DiskFormat enum.
-/// Used by importVm to detect disk format from the imported file.
+/// Delegates to vm.DiskFormat.fromExtension — kept for backward compatibility.
 pub fn diskFormatFromExtension(ext: []const u8) vm.DiskFormat {
-    if (std.ascii.eqlIgnoreCase(ext, "qcow2")) return .qcow2;
-    if (std.ascii.eqlIgnoreCase(ext, "vmdk")) return .vmdk;
-    if (std.ascii.eqlIgnoreCase(ext, "vdi")) return .vdi;
-    if (std.ascii.eqlIgnoreCase(ext, "raw") or std.ascii.eqlIgnoreCase(ext, "img")) return .raw;
-    return .qcow2;
+    // fromExtension expects a path containing a dot; prepend a dummy stem.
+    if (ext.len == 0) return vm.DiskFormat.fromExtension("");
+    // Use a stack buffer to prepend "x." so fromExtension can find the extension.
+    var buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrint(&buf, "x.{s}", .{ext}) catch return .qcow2;
+    return vm.DiskFormat.fromExtension(path);
 }
 
 /// Parse a NIC mode label ("bridged", "none") into a NetworkMode enum.
@@ -54,6 +53,10 @@ pub fn parseBootOrder(s: []const u8) vm.BootOrder {
 }
 
 /// Parse a display type label ("sdl", "spice", "vnc", "none", "headless") into a DisplayType enum.
+/// Uses substring matching rather than delegating to DisplayType.fromStr because the UI
+/// dropdown labels can be longer descriptive strings (e.g. "SPICE (recommended)"),
+/// whereas DisplayType.fromStr expects exact equality with DisplayType.toStr values.
+/// Defaults to .gtk for unrecognized input.
 pub fn parseDisplay(s: []const u8) vm.DisplayType {
     if (std.ascii.indexOfIgnoreCase(s, "sdl") != null) return .sdl;
     if (std.ascii.indexOfIgnoreCase(s, "spice") != null) return .spice;
@@ -63,24 +66,33 @@ pub fn parseDisplay(s: []const u8) vm.DisplayType {
 }
 
 /// Parse a display resolution string ("800x600", "1024x768", "1280x800", "1920x1080") into a DisplayResolution enum.
+/// Delegates to vm.DisplayResolution.fromStr (case-insensitive).
 pub fn parseDisplayResolution(s: []const u8) vm.DisplayResolution {
-    if (std.ascii.eqlIgnoreCase(s, "800x600")) return .res_800x600;
-    if (std.ascii.eqlIgnoreCase(s, "1024x768")) return .res_1024x768;
-    if (std.ascii.eqlIgnoreCase(s, "1280x800")) return .res_1280x800;
-    if (std.ascii.eqlIgnoreCase(s, "1920x1080")) return .res_1920x1080;
-    return .auto;
+    return vm.DisplayResolution.fromStr(s);
 }
 
 /// Parse a firmware label ("uefi") into a BootFirmware enum.
+/// Delegates to vm.BootFirmware.fromStr (case-insensitive).
 pub fn parseFirmware(s: []const u8) vm.BootFirmware {
-    if (std.ascii.eqlIgnoreCase(s, "uefi")) return .uefi;
-    return .bios;
+    return vm.BootFirmware.fromStr(s);
 }
 
-/// Parse a GPU device label ("vga") into a GpuDevice enum.
+/// Parse a GPU device label into a GpuDevice enum.
+/// Handles full label names ("Virtio-GPU (virgl 3D)", "QXL (SPICE)", "Standard VGA", etc.)
+/// Falls back to GpuDevice.fromStr for exact toStr matches.
 pub fn parseGpuDevice(s: []const u8) vm.GpuDevice {
-    if (std.ascii.indexOfIgnoreCase(s, "vga") != null) return .virtio_vga_gl;
-    return .virtio_gpu_gl;
+    if (std.ascii.indexOfIgnoreCase(s, "virtio-gpu") != null) {
+        if (std.ascii.indexOfIgnoreCase(s, "virgl") != null or std.ascii.indexOfIgnoreCase(s, "3d") != null) return .virtio_gpu_gl;
+        return .virtio_gpu;
+    }
+    if (std.ascii.indexOfIgnoreCase(s, "virtio-vga") != null) {
+        if (std.ascii.indexOfIgnoreCase(s, "virgl") != null or std.ascii.indexOfIgnoreCase(s, "3d") != null) return .virtio_vga_gl;
+        return .virtio_vga;
+    }
+    if (std.ascii.indexOfIgnoreCase(s, "qxl") != null) return .qxl;
+    if (std.ascii.indexOfIgnoreCase(s, "standard") != null and std.ascii.indexOfIgnoreCase(s, "vga") != null) return .std_vga;
+    // Fallback for exact toStr values and unknown inputs.
+    return vm.GpuDevice.fromStr(s);
 }
 
 /// Parse an audio device label ("hda", "ac97") into an AudioDevice enum.
@@ -214,12 +226,28 @@ test "parseFirmware: uefi vs bios" {
     try std.testing.expectEqual(vm.BootFirmware.bios, parseFirmware("anything"));
 }
 
-test "parseGpuDevice: vga vs virtio-gpu" {
-    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice("VGA"));
-    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice("virtio-vga"));
-    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, parseGpuDevice("virtio-gpu"));
-    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, parseGpuDevice(""));
-    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, parseGpuDevice("any"));
+test "parseGpuDevice: all six variants via labels" {
+    // Labels from GpuDevice.label():
+    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, parseGpuDevice("Virtio-GPU (virgl 3D)"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice("Virtio-VGA (virgl 3D)"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu, parseGpuDevice("Virtio-GPU"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga, parseGpuDevice("Virtio-VGA"));
+    try std.testing.expectEqual(vm.GpuDevice.qxl, parseGpuDevice("QXL (SPICE)"));
+    try std.testing.expectEqual(vm.GpuDevice.std_vga, parseGpuDevice("Standard VGA"));
+}
+
+test "parseGpuDevice: toStr values via fallback" {
+    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, parseGpuDevice("virtio_gpu_gl"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice("virtio_vga_gl"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu, parseGpuDevice("virtio_gpu"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga, parseGpuDevice("virtio_vga"));
+    try std.testing.expectEqual(vm.GpuDevice.qxl, parseGpuDevice("qxl"));
+    try std.testing.expectEqual(vm.GpuDevice.std_vga, parseGpuDevice("std_vga"));
+}
+
+test "parseGpuDevice: unknown defaults via fromStr" {
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice(""));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice("any"));
 }
 
 test "parseAudio: hda, ac97, none" {

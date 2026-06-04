@@ -91,7 +91,7 @@ pub const VncClient = struct {
         @atomicStore(bool, &self.connected, true, .seq_cst);
         @atomicStore(bool, &self.running, true, .seq_cst);
 
-        self.thread = std.Thread.spawn(.{}, pollThread, .{self}) catch {
+        self.thread = std.Thread.spawn(std.Thread.SpawnConfig{}, pollThread, .{self}) catch {
             c.rfbClientCleanup(cl);
             self.rfb = null;
             @atomicStore(bool, &self.connected, false, .seq_cst);
@@ -404,7 +404,7 @@ test "fuzz: VNC client against a minimal/fuzzed RFB server (connect/poll/onMallo
         // a real 65535² here would calloc ~17 GB under overcommit and stall).
         const dims = [_][2]u16{ .{ 64, 48 }, .{ 1024, 768 }, .{ 2048, 2048 }, .{ 1, 1 } };
         const d = dims[iter % dims.len];
-        var th = std.Thread.spawn(.{}, rfbFuzzServer, .{ srv, d[0], d[1], rnd.int(u64) }) catch continue;
+        var th = std.Thread.spawn(std.Thread.SpawnConfig{}, rfbFuzzServer, .{ srv, d[0], d[1], rnd.int(u64) }) catch continue;
         defer th.join();
 
         const client = VncClient.new() orelse continue;

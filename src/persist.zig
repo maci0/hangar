@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const appio = @import("appio.zig");
+const appstate = @import("appstate.zig");
 const vm = @import("vm.zig");
 
 /// Maximum number of VMs (single source in vm.zig).
@@ -43,6 +44,18 @@ const VmJson = struct {
     disk2_path: []const u8 = "",
     disk2_size_gb: u32 = 0,
     disk2_format: []const u8 = "qcow2",
+    extra_disk_0_path: []const u8 = "",
+    extra_disk_0_size_gb: u32 = 0,
+    extra_disk_0_format: []const u8 = "qcow2",
+    extra_disk_1_path: []const u8 = "",
+    extra_disk_1_size_gb: u32 = 0,
+    extra_disk_1_format: []const u8 = "qcow2",
+    extra_disk_2_path: []const u8 = "",
+    extra_disk_2_size_gb: u32 = 0,
+    extra_disk_2_format: []const u8 = "qcow2",
+    extra_disk_3_path: []const u8 = "",
+    extra_disk_3_size_gb: u32 = 0,
+    extra_disk_3_format: []const u8 = "qcow2",
     usb_device: []const u8 = "",
     usb_policy: []const u8 = "usb2",
     nic2_mode: []const u8 = "none",
@@ -85,18 +98,6 @@ const VmJson = struct {
     host_autostart: bool = false,
     num_displays: u32 = 1,
 };
-
-// ── Config path helpers ─────────────────────────────────────────────
-
-fn getConfigDir(buf: *[512]u8) ?[]const u8 {
-    const home = appio.getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/hangar", .{home}) catch null;
-}
-
-fn getConfigPath(buf: *[512]u8) ?[]const u8 {
-    const home = appio.getenv("HOME") orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/hangar/vms.json", .{home}) catch null;
-}
 
 // ── Enum string mappers (load direction) ────────────────────────────
 
@@ -170,6 +171,18 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.setDisk2Path(j.disk2_path);
     cfg.disk2_size_gb = j.disk2_size_gb;
     cfg.disk2_format = parseDiskFormat(j.disk2_format);
+    cfg.setExtraDiskPath(0, j.extra_disk_0_path);
+    cfg.extra_disks[0].size_gb = j.extra_disk_0_size_gb;
+    cfg.extra_disks[0].format = parseDiskFormat(j.extra_disk_0_format);
+    cfg.setExtraDiskPath(1, j.extra_disk_1_path);
+    cfg.extra_disks[1].size_gb = j.extra_disk_1_size_gb;
+    cfg.extra_disks[1].format = parseDiskFormat(j.extra_disk_1_format);
+    cfg.setExtraDiskPath(2, j.extra_disk_2_path);
+    cfg.extra_disks[2].size_gb = j.extra_disk_2_size_gb;
+    cfg.extra_disks[2].format = parseDiskFormat(j.extra_disk_2_format);
+    cfg.setExtraDiskPath(3, j.extra_disk_3_path);
+    cfg.extra_disks[3].size_gb = j.extra_disk_3_size_gb;
+    cfg.extra_disks[3].format = parseDiskFormat(j.extra_disk_3_format);
     cfg.setUsbDevice(j.usb_device);
     cfg.usb_policy = parseUsbPolicy(j.usb_policy);
     cfg.nics[1].mode = parseNetworkMode(j.nic2_mode);
@@ -338,6 +351,47 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"disk2_format\": ");
     try emitJsonStr(list, alloc, std.mem.span(cfg.disk2_format.toStr()));
+    try emit(list, alloc, ",\n");
+
+    // Extra disks
+    try emit(list, alloc, "      \"extra_disk_0_path\": ");
+    try emitJsonStr(list, alloc, cfg.getExtraDiskPathSlice(0));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"extra_disk_0_size_gb\": ");
+    try emitInt(list, alloc, cfg.extra_disks[0].size_gb);
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"extra_disk_0_format\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.extra_disks[0].format.toStr()));
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"extra_disk_1_path\": ");
+    try emitJsonStr(list, alloc, cfg.getExtraDiskPathSlice(1));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"extra_disk_1_size_gb\": ");
+    try emitInt(list, alloc, cfg.extra_disks[1].size_gb);
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"extra_disk_1_format\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.extra_disks[1].format.toStr()));
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"extra_disk_2_path\": ");
+    try emitJsonStr(list, alloc, cfg.getExtraDiskPathSlice(2));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"extra_disk_2_size_gb\": ");
+    try emitInt(list, alloc, cfg.extra_disks[2].size_gb);
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"extra_disk_2_format\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.extra_disks[2].format.toStr()));
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"extra_disk_3_path\": ");
+    try emitJsonStr(list, alloc, cfg.getExtraDiskPathSlice(3));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"extra_disk_3_size_gb\": ");
+    try emitInt(list, alloc, cfg.extra_disks[3].size_gb);
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"extra_disk_3_format\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.extra_disks[3].format.toStr()));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"usb_device\": ");
@@ -510,14 +564,14 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
 
     // Ensure config directory exists.
     var dir_buf: [512]u8 = undefined;
-    if (getConfigDir(&dir_buf)) |dir_path| {
+    if (appstate.configDir(&dir_buf)) |dir_path| {
         std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
             _ = std.c.write(2, "persist: createDirPath failed\n", 30);
         };
     }
 
     var path_buf: [512]u8 = undefined;
-    const file_path = getConfigPath(&path_buf) orelse return error.HomeNotFound;
+    const file_path = appstate.vmsPath(&path_buf) orelse return error.HomeNotFound;
 
     // Build JSON in memory.
     var list: List = .empty;
@@ -600,28 +654,22 @@ fn parseJsonString(s: []const u8, out_buf: []u8) ?struct { value: []const u8, re
             if (s[i + 1] == 'u' and i + 5 < s.len) {
                 // Decode \uXXXX into a proper UTF-8 sequence.
                 const hex = s[i + 2 .. i + 6];
-                if (std.fmt.parseInt(u16, hex, 16)) |codepoint| {
-                    if (codepoint < 0x80) {
-                        if (out_len < out_buf.len) {
-                            out_buf[out_len] = @intCast(codepoint);
-                            out_len += 1;
-                        }
-                    } else if (codepoint < 0x800) {
-                        if (out_len + 1 < out_buf.len) {
-                            out_buf[out_len] = @intCast(0xC0 | (codepoint >> 6));
-                            out_buf[out_len + 1] = @intCast(0x80 | (codepoint & 0x3F));
-                            out_len += 2;
-                        }
-                    } else {
-                        if (out_len + 2 < out_buf.len) {
-                            out_buf[out_len] = @intCast(0xE0 | (codepoint >> 12));
-                            out_buf[out_len + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
-                            out_buf[out_len + 2] = @intCast(0x80 | (codepoint & 0x3F));
-                            out_len += 3;
-                        }
-                    }
-                } else |_| {
-                    // Invalid hex, just skip it to avoid crashing
+                const codepoint = std.fmt.parseInt(u16, hex, 16) catch return null;
+                if (codepoint < 0x80) {
+                    if (out_len >= out_buf.len) return null;
+                    out_buf[out_len] = @intCast(codepoint);
+                    out_len += 1;
+                } else if (codepoint < 0x800) {
+                    if (out_len + 1 >= out_buf.len) return null;
+                    out_buf[out_len] = @intCast(0xC0 | (codepoint >> 6));
+                    out_buf[out_len + 1] = @intCast(0x80 | (codepoint & 0x3F));
+                    out_len += 2;
+                } else {
+                    if (out_len + 2 >= out_buf.len) return null;
+                    out_buf[out_len] = @intCast(0xE0 | (codepoint >> 12));
+                    out_buf[out_len + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+                    out_buf[out_len + 2] = @intCast(0x80 | (codepoint & 0x3F));
+                    out_len += 3;
                 }
                 i += 6;
                 continue;
@@ -635,16 +683,14 @@ fn parseJsonString(s: []const u8, out_buf: []u8) ?struct { value: []const u8, re
                 't' => '\t',
                 else => s[i + 1],
             };
-            if (out_len < out_buf.len) {
-                out_buf[out_len] = esc;
-                out_len += 1;
-            }
+            if (out_len >= out_buf.len) return null;
+            out_buf[out_len] = esc;
+            out_len += 1;
             i += 2;
         } else {
-            if (out_len < out_buf.len) {
-                out_buf[out_len] = s[i];
-                out_len += 1;
-            }
+            if (out_len >= out_buf.len) return null;
+            out_buf[out_len] = s[i];
+            out_len += 1;
             i += 1;
         }
     }
@@ -834,6 +880,66 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
         } else if (std.mem.eql(u8, key, "disk2_format")) {
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.disk2_format = parseDiskFormat(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_0_path")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setExtraDiskPath(0, r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_0_size_gb")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.extra_disks[0].size_gb = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_0_format")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.extra_disks[0].format = parseDiskFormat(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_1_path")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setExtraDiskPath(1, r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_1_size_gb")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.extra_disks[1].size_gb = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_1_format")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.extra_disks[1].format = parseDiskFormat(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_2_path")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setExtraDiskPath(2, r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_2_size_gb")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.extra_disks[2].size_gb = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_2_format")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.extra_disks[2].format = parseDiskFormat(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_3_path")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setExtraDiskPath(3, r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_3_size_gb")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.extra_disks[3].size_gb = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "extra_disk_3_format")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.extra_disks[3].format = parseDiskFormat(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "usb_device")) {
@@ -1173,7 +1279,7 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
     prefs_out.* = .{};
     prefs_out.theme = .light;
     var path_buf: [512]u8 = undefined;
-    const file_path = getConfigPath(&path_buf) orelse return 0;
+    const file_path = appstate.vmsPath(&path_buf) orelse return 0;
 
     const content = std.Io.Dir.cwd().readFileAlloc(
         appio.io(),
@@ -1274,6 +1380,18 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.setDisk2Path("/tmp/data.qcow2");
     original.disk2_size_gb = 50;
     original.disk2_format = .raw;
+    original.setExtraDiskPath(0, "/tmp/extra0.qcow2");
+    original.extra_disks[0].size_gb = 10;
+    original.extra_disks[0].format = .vmdk;
+    original.setExtraDiskPath(1, "/tmp/extra1.raw");
+    original.extra_disks[1].size_gb = 20;
+    original.extra_disks[1].format = .raw;
+    original.setExtraDiskPath(2, "/tmp/extra2.vdi");
+    original.extra_disks[2].size_gb = 30;
+    original.extra_disks[2].format = .vdi;
+    original.setExtraDiskPath(3, "/tmp/extra3.qcow2");
+    original.extra_disks[3].size_gb = 40;
+    original.extra_disks[3].format = .qcow2;
     original.setUsbDevice("046d:c52b");
     original.nics[1].mode = .none;
     original.setNic2Mac("02:11:22:33:44:55");
@@ -1335,6 +1453,18 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .disk2_path = original.getDisk2PathSlice(),
         .disk2_size_gb = original.disk2_size_gb,
         .disk2_format = std.mem.span(original.disk2_format.toStr()),
+        .extra_disk_0_path = original.getExtraDiskPathSlice(0),
+        .extra_disk_0_size_gb = original.extra_disks[0].size_gb,
+        .extra_disk_0_format = std.mem.span(original.extra_disks[0].format.toStr()),
+        .extra_disk_1_path = original.getExtraDiskPathSlice(1),
+        .extra_disk_1_size_gb = original.extra_disks[1].size_gb,
+        .extra_disk_1_format = std.mem.span(original.extra_disks[1].format.toStr()),
+        .extra_disk_2_path = original.getExtraDiskPathSlice(2),
+        .extra_disk_2_size_gb = original.extra_disks[2].size_gb,
+        .extra_disk_2_format = std.mem.span(original.extra_disks[2].format.toStr()),
+        .extra_disk_3_path = original.getExtraDiskPathSlice(3),
+        .extra_disk_3_size_gb = original.extra_disks[3].size_gb,
+        .extra_disk_3_format = std.mem.span(original.extra_disks[3].format.toStr()),
         .usb_device = original.getUsbDeviceSlice(),
         .usb_policy = std.mem.span(original.usb_policy.toStr()),
         .nic2_mode = std.mem.span(original.nics[1].mode.toStr()),
@@ -1398,6 +1528,18 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqualStrings("/tmp/data.qcow2", restored.getDisk2PathSlice());
     try std.testing.expectEqual(@as(u32, 50), restored.disk2_size_gb);
     try std.testing.expectEqual(vm.DiskFormat.raw, restored.disk2_format);
+    try std.testing.expectEqualStrings("/tmp/extra0.qcow2", restored.getExtraDiskPathSlice(0));
+    try std.testing.expectEqual(@as(u32, 10), restored.extra_disks[0].size_gb);
+    try std.testing.expectEqual(vm.DiskFormat.vmdk, restored.extra_disks[0].format);
+    try std.testing.expectEqualStrings("/tmp/extra1.raw", restored.getExtraDiskPathSlice(1));
+    try std.testing.expectEqual(@as(u32, 20), restored.extra_disks[1].size_gb);
+    try std.testing.expectEqual(vm.DiskFormat.raw, restored.extra_disks[1].format);
+    try std.testing.expectEqualStrings("/tmp/extra2.vdi", restored.getExtraDiskPathSlice(2));
+    try std.testing.expectEqual(@as(u32, 30), restored.extra_disks[2].size_gb);
+    try std.testing.expectEqual(vm.DiskFormat.vdi, restored.extra_disks[2].format);
+    try std.testing.expectEqualStrings("/tmp/extra3.qcow2", restored.getExtraDiskPathSlice(3));
+    try std.testing.expectEqual(@as(u32, 40), restored.extra_disks[3].size_gb);
+    try std.testing.expectEqual(vm.DiskFormat.qcow2, restored.extra_disks[3].format);
     try std.testing.expectEqualStrings("046d:c52b", restored.getUsbDeviceSlice());
     try std.testing.expectEqual(vm.UsbPolicy.usb3, restored.usb_policy);
     try std.testing.expectEqual(vm.NetworkMode.none, restored.nics[1].mode);
@@ -1534,6 +1676,15 @@ test "parseWatchdogAction: maps strings to enums" {
     try std.testing.expectEqual(vm.WatchdogAction.none, parseWatchdogAction(""));
 }
 
+test "parseUsbPolicy: maps strings to enums" {
+    for (0..vm.UsbPolicy.count) |i| {
+        const up = vm.UsbPolicy.fromIndex(i);
+        try std.testing.expectEqual(up, parseUsbPolicy(std.mem.span(up.toStr())));
+    }
+    try std.testing.expectEqual(vm.UsbPolicy.usb2, parseUsbPolicy("unknown"));
+    try std.testing.expectEqual(vm.UsbPolicy.usb2, parseUsbPolicy(""));
+}
+
 test "emit→parse JSON text round-trip preserves all fields" {
     const alloc = std.testing.allocator;
 
@@ -1581,6 +1732,18 @@ test "emit→parse JSON text round-trip preserves all fields" {
     original.setDisk2Path("/home/user/VMs/rt-data.qcow2");
     original.disk2_size_gb = 50;
     original.disk2_format = .raw;
+    original.setExtraDiskPath(0, "/home/user/VMs/rt-extra0.vmdk");
+    original.extra_disks[0].size_gb = 10;
+    original.extra_disks[0].format = .vmdk;
+    original.setExtraDiskPath(1, "/home/user/VMs/rt-extra1.raw");
+    original.extra_disks[1].size_gb = 20;
+    original.extra_disks[1].format = .raw;
+    original.setExtraDiskPath(2, "/home/user/VMs/rt-extra2.vdi");
+    original.extra_disks[2].size_gb = 30;
+    original.extra_disks[2].format = .vdi;
+    original.setExtraDiskPath(3, "/home/user/VMs/rt-extra3.qcow2");
+    original.extra_disks[3].size_gb = 40;
+    original.extra_disks[3].format = .qcow2;
     original.setUsbDevice("046d:c52b");
     original.usb_policy = .usb3;
     original.nics[1].mode = .bridge;
@@ -1651,6 +1814,18 @@ test "emit→parse JSON text round-trip preserves all fields" {
     try std.testing.expectEqualStrings("/home/user/VMs/rt-data.qcow2", restored.getDisk2PathSlice());
     try std.testing.expectEqual(@as(u32, 50), restored.disk2_size_gb);
     try std.testing.expectEqual(vm.DiskFormat.raw, restored.disk2_format);
+    try std.testing.expectEqualStrings("/home/user/VMs/rt-extra0.vmdk", restored.getExtraDiskPathSlice(0));
+    try std.testing.expectEqual(@as(u32, 10), restored.extra_disks[0].size_gb);
+    try std.testing.expectEqual(vm.DiskFormat.vmdk, restored.extra_disks[0].format);
+    try std.testing.expectEqualStrings("/home/user/VMs/rt-extra1.raw", restored.getExtraDiskPathSlice(1));
+    try std.testing.expectEqual(@as(u32, 20), restored.extra_disks[1].size_gb);
+    try std.testing.expectEqual(vm.DiskFormat.raw, restored.extra_disks[1].format);
+    try std.testing.expectEqualStrings("/home/user/VMs/rt-extra2.vdi", restored.getExtraDiskPathSlice(2));
+    try std.testing.expectEqual(@as(u32, 30), restored.extra_disks[2].size_gb);
+    try std.testing.expectEqual(vm.DiskFormat.vdi, restored.extra_disks[2].format);
+    try std.testing.expectEqualStrings("/home/user/VMs/rt-extra3.qcow2", restored.getExtraDiskPathSlice(3));
+    try std.testing.expectEqual(@as(u32, 40), restored.extra_disks[3].size_gb);
+    try std.testing.expectEqual(vm.DiskFormat.qcow2, restored.extra_disks[3].format);
     try std.testing.expectEqualStrings("046d:c52b", restored.getUsbDeviceSlice());
     try std.testing.expectEqual(vm.UsbPolicy.usb3, restored.usb_policy);
     try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[1].mode);
@@ -1898,6 +2073,10 @@ fn fuzzConfig(rnd: std.Random, sbuf: []u8) vm.VmConfig {
     c.memory_mb = rnd.int(u32);
     c.disk_size_gb = rnd.int(u32);
     c.disk2_size_gb = rnd.int(u32);
+    for (0..vm.MAX_EXTRA_DISKS) |i| {
+        c.extra_disks[i].size_gb = rnd.int(u32);
+        c.extra_disks[i].format = vm.DiskFormat.fromIndex(rnd.int(usize));
+    }
     c.vnc_port = rnd.int(u16);
     c.spice_port = rnd.int(u16);
     c.disk_format = vm.DiskFormat.fromIndex(rnd.int(usize));
@@ -1964,6 +2143,11 @@ test "fuzz: emit then parse random configs never crashes" {
         try std.testing.expectEqual(orig.memory_mb, restored.memory_mb);
         try std.testing.expectEqual(orig.disk_format, restored.disk_format);
         try std.testing.expectEqual(orig.guest_os, restored.guest_os);
+        // Extra disk fields must survive round-trip.
+        for (0..vm.MAX_EXTRA_DISKS) |i| {
+            try std.testing.expectEqual(orig.extra_disks[i].size_gb, restored.extra_disks[i].size_gb);
+            try std.testing.expectEqual(orig.extra_disks[i].format, restored.extra_disks[i].format);
+        }
     }
 }
 
@@ -2091,6 +2275,31 @@ test "parseJsonString: unescaped slashes pass through" {
     var out: [64]u8 = undefined;
     const r = parseJsonString("\"a/b/c\"", &out).?;
     try std.testing.expectEqualStrings("a/b/c", r.value);
+}
+
+test "parseJsonString: truncation returns null" {
+    var out: [3]u8 = undefined;
+    try std.testing.expect(parseJsonString("\"abcd\"", &out) == null);
+}
+
+test "parseJsonString: exact fit succeeds" {
+    var out: [3]u8 = undefined;
+    const r = parseJsonString("\"abc\"", &out).?;
+    try std.testing.expectEqualStrings("abc", r.value);
+}
+
+test "parseJsonString: escape truncation returns null" {
+    var out: [4]u8 = undefined;
+    // \n is one char, so "abc\n" is 4 chars output → needs 4 bytes → exact fit
+    try std.testing.expect(parseJsonString("\"abc\\n\"", &out) != null);
+    // "abc\n+" = 5 chars output → needs 5 bytes → overflow
+    var out2: [4]u8 = undefined;
+    try std.testing.expect(parseJsonString("\"abc\\nd\"", &out2) == null);
+}
+
+test "parseJsonString: invalid \\u hex returns null" {
+    var out: [64]u8 = undefined;
+    try std.testing.expect(parseJsonString("\"\\uGGGG\"", &out) == null);
 }
 
 test "parseJsonInt: max u32 value" {

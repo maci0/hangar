@@ -82,7 +82,7 @@ test "usock: connect/write/read/close round-trip over a real listener" {
             if (n > 0) _ = c.write(conn, &b, @intCast(n));
         }
     };
-    var th = try std.Thread.spawn(.{}, Echo.run, .{srv});
+    var th = try std.Thread.spawn(std.Thread.SpawnConfig{}, Echo.run, .{srv});
     defer th.join();
 
     const stream = try UnixStream.connect(path);

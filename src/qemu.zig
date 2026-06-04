@@ -237,6 +237,7 @@ const ArgBuffers = struct {
     incoming_buf: [vm.MAX_PATH + 64]u8 = undefined,
     shared_buf: [vm.MAX_PATH + 128]u8 = undefined,
     disk2_buf: [vm.MAX_PATH + 64]u8 = undefined,
+    extra_disk_bufs: [vm.MAX_EXTRA_DISKS][vm.MAX_PATH + 64]u8 = [_][vm.MAX_PATH + 64]u8{[_]u8{0} ** (vm.MAX_PATH + 64)} ** vm.MAX_EXTRA_DISKS,
     usb_buf: [128]u8 = undefined,
     nic_dev_buf: [vm.MAX_NICS][128]u8 = [_][128]u8{[_]u8{0} ** 128} ** vm.MAX_NICS,
     floppy_buf: [vm.MAX_PATH + 64]u8 = undefined,
@@ -352,6 +353,19 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         });
         try args.append(alloc, "-drive");
         try args.append(alloc, disk2_str);
+    }
+
+    // Extra disks (up to MAX_EXTRA_DISKS), attached as additional virtio drives.
+    for (&bufs.extra_disk_bufs, config.extra_disks, 0..) |*ed_buf, ed, i| {
+        if (config.hasExtraDisk(i)) {
+            const ed_str = try std.fmt.bufPrint(ed_buf, "file={s},format={s},if=virtio,cache={s}", .{
+                config.getExtraDiskPathSlice(i),
+                std.mem.span(ed.format.toStr()),
+                std.mem.span(config.disk_cache.toStr()),
+            });
+            try args.append(alloc, "-drive");
+            try args.append(alloc, ed_str);
+        }
     }
 
     // Optional floppy drive (drive A:), raw image.
@@ -1047,6 +1061,10 @@ test "fuzz: buildScriptStr never crashes on random configs" {
         c.memory_mb = rnd.int(u32);
         c.disk_size_gb = rnd.int(u32);
         c.disk2_size_gb = rnd.int(u32);
+        for (0..vm.MAX_EXTRA_DISKS) |i| {
+            c.extra_disks[i].size_gb = rnd.int(u32);
+            c.extra_disks[i].format = vm.DiskFormat.fromIndex(rnd.int(usize));
+        }
         c.vnc_port = rnd.int(u16);
         c.spice_port = rnd.int(u16);
         c.disk_format = vm.DiskFormat.fromIndex(rnd.int(usize));
@@ -1093,6 +1111,9 @@ test "fuzz: buildScriptStr never crashes on random configs" {
         c.setName(rstr.get(rnd, &sbuf));
         c.setDiskPath(rstr.get(rnd, &sbuf));
         c.setDisk2Path(rstr.get(rnd, &sbuf));
+        for (0..vm.MAX_EXTRA_DISKS) |i| {
+            c.setExtraDiskPath(i, rstr.get(rnd, &sbuf));
+        }
         c.setIsoPath(rstr.get(rnd, &sbuf));
         c.setFloppyPath(rstr.get(rnd, &sbuf));
         c.setSharedFolder(rstr.get(rnd, &sbuf));

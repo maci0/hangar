@@ -22,6 +22,7 @@ const uimath = @import("uimath.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
 const web_server = @import("web_server.zig");
 const snapparse = @import("snapparse.zig");
+const path_helpers = @import("path_helpers.zig");
 const cfltk = @import("cfltk_import.zig").c;
 
 extern fn time(t: ?*c_long) c_long;
@@ -182,7 +183,7 @@ fn startWebServer() void {
     }
     app.web_running = true;
     // Run web_server.main() in its own thread since it blocks on accept().
-    app.web_thread = std.Thread.spawn(.{}, webServerThreadMain, .{}) catch {
+    app.web_thread = std.Thread.spawn(std.Thread.SpawnConfig{}, webServerThreadMain, .{}) catch {
         app.web_running = false;
         app.setStatusErr("Failed to start web server thread");
         return;
@@ -361,27 +362,10 @@ fn importVm() void {
 
     // Derive VM name from the file name (strip extension)
     var name_buf: [vm.MAX_NAME]u8 = undefined;
-    const name = blk: {
-        // Find the last path separator
-        const sep = std.mem.lastIndexOfScalar(u8, disk_path, '/');
-        const basename = if (sep) |s| disk_path[s + 1 ..] else disk_path;
-        // Strip extension
-        const dot = std.mem.lastIndexOfScalar(u8, basename, '.');
-        const name_slice = if (dot) |d| basename[0..d] else basename;
-        if (name_slice.len > name_buf.len) break :blk name_buf[0..];
-        @memcpy(name_buf[0..name_slice.len], name_slice);
-        break :blk name_buf[0..name_slice.len];
-    };
+    const name = path_helpers.basenameWithoutExt(disk_path, &name_buf);
 
     // Detect disk format from extension
-    const fmt = blk: {
-        const ext = if (std.mem.lastIndexOfScalar(u8, disk_path, '.')) |d| disk_path[d + 1 ..] else "";
-        if (std.ascii.eqlIgnoreCase(ext, "qcow2")) break :blk vm.DiskFormat.qcow2;
-        if (std.ascii.eqlIgnoreCase(ext, "vmdk")) break :blk vm.DiskFormat.vmdk;
-        if (std.ascii.eqlIgnoreCase(ext, "vdi")) break :blk vm.DiskFormat.vdi;
-        if (std.ascii.eqlIgnoreCase(ext, "raw") or std.ascii.eqlIgnoreCase(ext, "img")) break :blk vm.DiskFormat.raw;
-        break :blk vm.DiskFormat.qcow2;
-    };
+    const fmt = vm.DiskFormat.fromExtension(disk_path);
 
     var cfg = vm.VmConfig{};
     cfg.setName(name);
