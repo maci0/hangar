@@ -650,7 +650,6 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
     // Connect to the VM's VNC server.
     const vnc_fd = c.socket(AF_INET, SOCK_STREAM, 0);
     if (vnc_fd < 0) return;
-    defer _ = c.close(vnc_fd);
 
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
@@ -658,6 +657,7 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
     addr.addr = std.mem.nativeToBig(u32, @bitCast([4]u8{ 127, 0, 0, 1 }));
 
     if (c.connect(vnc_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) < 0) {
+        _ = c.close(vnc_fd);
         try ws.writeClose(conn);
         return;
     }
@@ -670,7 +670,7 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
     var ctx = RelayCtx{ .ws_fd = conn, .vnc_fd = vnc_fd };
 
     // Thread: VNC → WebSocket
-    const vnc2ws = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+    const vnc2ws = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
         fn run(ctx_ptr: *RelayCtx) void {
             var buf: [65536]u8 = undefined;
             while (true) {
@@ -682,10 +682,14 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
         }
-    }.run, .{&ctx});
+    }.run, .{&ctx}) catch {
+        _ = c.close(vnc_fd);
+        try ws.writeClose(conn);
+        return;
+    };
 
     // Thread: WebSocket → VNC
-    const ws2vnc = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+    const ws2vnc = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
         fn run(ctx_ptr: *RelayCtx) void {
             var buf: [65536]u8 = undefined;
             while (true) {
@@ -703,10 +707,19 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.vnc_fd, SHUT_RDWR);
         }
-    }.run, .{&ctx});
+    }.run, .{&ctx}) catch {
+        // First thread is running; shut down both FDs to unblock it.
+        _ = c.shutdown(vnc_fd, SHUT_RDWR);
+        _ = c.shutdown(conn, SHUT_RDWR);
+        vnc2ws.join();
+        _ = c.close(vnc_fd);
+        try ws.writeClose(conn);
+        return;
+    };
 
     vnc2ws.join();
     ws2vnc.join();
+    _ = c.close(vnc_fd);
 }
 
 /// Handle WebSocket SPICE proxy request.
@@ -728,7 +741,6 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
     // Connect to the VM's SPICE server.
     const spice_fd = c.socket(AF_INET, SOCK_STREAM, 0);
     if (spice_fd < 0) return;
-    defer _ = c.close(spice_fd);
 
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
@@ -736,6 +748,7 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
     addr.addr = std.mem.nativeToBig(u32, @bitCast([4]u8{ 127, 0, 0, 1 }));
 
     if (c.connect(spice_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) < 0) {
+        _ = c.close(spice_fd);
         try ws.writeClose(conn);
         return;
     }
@@ -748,7 +761,7 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
     var ctx = RelayCtx{ .ws_fd = conn, .spice_fd = spice_fd };
 
     // Thread: SPICE → WebSocket
-    const spice2ws = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+    const spice2ws = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
         fn run(ctx_ptr: *RelayCtx) void {
             var buf: [65536]u8 = undefined;
             while (true) {
@@ -759,10 +772,14 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
         }
-    }.run, .{&ctx});
+    }.run, .{&ctx}) catch {
+        _ = c.close(spice_fd);
+        try ws.writeClose(conn);
+        return;
+    };
 
     // Thread: WebSocket → SPICE
-    const ws2spice = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+    const ws2spice = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
         fn run(ctx_ptr: *RelayCtx) void {
             var buf: [65536]u8 = undefined;
             while (true) {
@@ -780,10 +797,19 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.spice_fd, SHUT_RDWR);
         }
-    }.run, .{&ctx});
+    }.run, .{&ctx}) catch {
+        // First thread is running; shut down both FDs to unblock it.
+        _ = c.shutdown(spice_fd, SHUT_RDWR);
+        _ = c.shutdown(conn, SHUT_RDWR);
+        spice2ws.join();
+        _ = c.close(spice_fd);
+        try ws.writeClose(conn);
+        return;
+    };
 
     spice2ws.join();
     ws2spice.join();
+    _ = c.close(spice_fd);
 }
 
 /// Handle WebSocket Serial Console proxy request.
@@ -811,7 +837,6 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     ) catch return;
 
     const serial = usock.UnixStream.connect(sock_path) catch return;
-    defer serial.close();
 
     // Spawn threads for bidirectional relay.
     const RelayCtx = struct {
@@ -821,7 +846,7 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     var ctx = RelayCtx{ .ws_fd = conn, .serial_fd = serial.fd };
 
     // Thread: serial → WebSocket
-    const ser2ws = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+    const ser2ws = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
         fn run(ctx_ptr: *RelayCtx) void {
             var buf: [65536]u8 = undefined;
             while (true) {
@@ -832,10 +857,14 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
         }
-    }.run, .{&ctx});
+    }.run, .{&ctx}) catch {
+        serial.close();
+        try ws.writeClose(conn);
+        return;
+    };
 
     // Thread: WebSocket → serial
-    const ws2ser = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+    const ws2ser = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
         fn run(ctx_ptr: *RelayCtx) void {
             var buf: [65536]u8 = undefined;
             while (true) {
@@ -853,10 +882,19 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.serial_fd, SHUT_RDWR);
         }
-    }.run, .{&ctx});
+    }.run, .{&ctx}) catch {
+        // First thread is running; shut down both FDs to unblock it.
+        _ = c.shutdown(serial.fd, SHUT_RDWR);
+        _ = c.shutdown(conn, SHUT_RDWR);
+        ser2ws.join();
+        serial.close();
+        try ws.writeClose(conn);
+        return;
+    };
 
     ser2ws.join();
     ws2ser.join();
+    serial.close();
 }
 
 fn renderFramebuffer(req: []const u8) ![]const u8 {
@@ -1218,35 +1256,55 @@ fn renderJson(buf: []u8) usize {
 var start_err_buf: [640]u8 = undefined;
 
 fn handlePower(req: []const u8) ![]const u8 {
+    // Lock only to validate, copy the VM name, and determine the power action.
+    // QEMU start/stop (fork+exec / forceStop+reap) can take seconds — release
+    // the mutex before doing the heavy I/O so other API calls aren't blocked.
     appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-
-    // Extract idx from /api/power/N
-    const idx = parseIdx(req, "POST /api/power/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
+    const idx = parseIdx(req, "POST /api/power/") orelse {
+        appstate.vms_mutex.unlock();
+        return "invalid";
+    };
+    if (idx >= appstate.vm_count) {
+        appstate.vms_mutex.unlock();
+        return "invalid idx";
+    }
     const v = &appstate.vms[idx];
-    if (v.isAlive()) {
-        if (appstate.getVmmHandle(idx)) |h| {
+    const was_alive = v.isAlive();
+    // Copy the VM name — another thread could rename/delete the VM while the
+    // lock is released.
+    var vm_name_buf: [vm.MAX_NAME]u8 = undefined;
+    const vm_name = v.getNameSlice();
+    @memcpy(vm_name_buf[0..vm_name.len], vm_name);
+    vm_name_buf[vm_name.len] = 0;
+    // Capture the VMM handle (if any) before unlocking.
+    const vmm_handle = appstate.getVmmHandle(idx);
+    appstate.vms_mutex.unlock();
+
+    if (was_alive) {
+        // Force-stop the running VM outside the lock.
+        if (vmm_handle) |h| {
             appstate.g_vmm.forceStopFn(h);
             appstate.g_vmm.reapFn(h);
         } else {
+            // qemu.forceStopVm / reapVm need the VmConfig — use the copy
+            // captured above. Note: qemu.forceStopVm only reads .name and .pid.
             qemu.forceStopVm(v);
             qemu.reapVm(v);
         }
-        appstate.destroyVmmHandle(idx);
-        appstate.vm_started[idx] = 0;
     } else {
-        if (appstate.getVmmHandle(idx)) |h| {
+        // Start the VM outside the lock.
+        if (vmm_handle) |h| {
             appstate.g_vmm.startFn(h, @ptrCast(v)) catch {
+                appstate.vms_mutex.lock();
+                defer appstate.vms_mutex.unlock();
                 appstate.destroyVmmHandle(idx);
                 return "start err";
             };
         } else {
             qemu.startVm(v, std.heap.page_allocator) catch {
-                // Try to include QEMU stderr in the error response for diagnostics.
                 var log_path_buf: [320]u8 = [_]u8{0} ** 320;
                 var log_content_buf: [512]u8 = undefined;
-                const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/hangar-vm-{s}.log", .{v.getNameSlice()}) catch null;
+                const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/hangar-vm-{s}.log", .{vm_name_buf[0..vm_name.len]}) catch null;
                 const err_detail = if (log_path) |lp| readStartupLog(lp, &log_content_buf) else "";
                 if (err_detail.len > 0) {
                     return std.fmt.bufPrint(&start_err_buf, "start err: {s}", .{err_detail}) catch "start err";
@@ -1254,6 +1312,18 @@ fn handlePower(req: []const u8) ![]const u8 {
                 return "start err";
             };
         }
+    }
+
+    // Re-acquire the lock for the state mutation. Re-validate idx in case the
+    // VM was deleted or the array shifted during the slow I/O.
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx >= appstate.vm_count) return "invalid idx";
+    if (!std.mem.eql(u8, appstate.vms[idx].getNameSlice(), vm_name_buf[0..vm_name.len])) return "invalid idx";
+    if (was_alive) {
+        appstate.destroyVmmHandle(idx);
+        appstate.vm_started[idx] = 0;
+    } else {
         appstate.vm_started[idx] = time(null);
     }
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
@@ -1563,15 +1633,24 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
 }
 
 fn handleClone(req: []const u8) ![]const u8 {
+    // Build the clone config under the lock (fast). If this is a linked clone,
+    // release the lock for the qemu-img disk creation which can take seconds.
     appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-
-    const idx = parseIdx(req, "POST /api/clone/") orelse return "invalid";
-    if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
+    const idx = parseIdx(req, "POST /api/clone/") orelse {
+        appstate.vms_mutex.unlock();
+        return "invalid";
+    };
+    if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) {
+        appstate.vms_mutex.unlock();
+        return "full";
+    }
     var clone = appstate.vms[idx];
     const src = &appstate.vms[idx];
     var name_buf: [320]u8 = undefined;
-    const cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{clone.getNameSlice()}) catch return "nameerr";
+    const cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{clone.getNameSlice()}) catch {
+        appstate.vms_mutex.unlock();
+        return "nameerr";
+    };
     clone.setName(cn);
     clone.status = .stopped;
     clone.pid = null;
@@ -1589,19 +1668,41 @@ fn handleClone(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, bodyVal(body, "linked"), "1")) linked = true;
     }
 
-    if (linked and src.hasDisk()) {
+    var disk_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var disk_path_z: [*:0]const u8 = undefined;
+    const do_linked = linked and src.hasDisk();
+    if (do_linked) {
         const home = appio.getenv("HOME") orelse "/tmp";
-        var disk_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
-        const disk_path = std.fmt.bufPrintZ(&disk_path_buf, "{s}/VMs/{s}.qcow2", .{ home, clone.getNameSlice() }) catch return "nameerr";
-        if (appstate.getVmmHandle(idx)) |h| {
-            appstate.g_vmm.createLinkedCloneFn(h, disk_path, src.getDiskPathSlice(), @intFromEnum(src.disk_format), std.heap.page_allocator) catch return "linkerr";
+        disk_path_z = std.fmt.bufPrintZ(&disk_path_buf, "{s}/VMs/{s}.qcow2", .{ home, clone.getNameSlice() }) catch {
+            appstate.vms_mutex.unlock();
+            return "nameerr";
+        };
+    }
+    // Capture the VMM handle and src disk info before unlocking.
+    const vmm_handle = appstate.getVmmHandle(idx);
+    const src_disk = src.getDiskPathSlice();
+    const src_fmt: vm.DiskFormat = src.disk_format;
+    appstate.vms_mutex.unlock();
+
+    if (do_linked) {
+        const disk_path: []const u8 = std.mem.span(disk_path_z);
+        if (vmm_handle) |h| {
+            appstate.g_vmm.createLinkedCloneFn(h, disk_path, src_disk, @intFromEnum(src_fmt), std.heap.page_allocator) catch return "linkerr";
         } else {
-            qemu.createLinkedClone(disk_path, src.getDiskPathSlice(), src.disk_format, std.heap.page_allocator) catch return "linkerr";
+            qemu.createLinkedClone(disk_path, src_disk, src_fmt, std.heap.page_allocator) catch return "linkerr";
         }
         clone.setDiskPath(disk_path);
         clone.disk_format = .qcow2;
     }
 
+    // Re-acquire the lock to add the clone. Re-validate in case another thread
+    // deleted the source or filled the array.
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
+    // Refresh ports — another VM may have been added while unlocked.
+    clone.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
+    clone.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
     appstate.vms[appstate.vm_count] = clone;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
@@ -1925,30 +2026,57 @@ fn parseVmIdxSuffix(req: []const u8, prefix: []const u8, suffix: []const u8) ?us
 }
 
 fn handleSuspend(req: []const u8) ![]const u8 {
+    // Lock only long enough to validate idx, copy the VM name, and check liveness.
+    // The QMP migration I/O below can take many seconds — we must not hold the
+    // mutex across it or every other API call blocks.
     appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/suspend/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
+    const idx = parseIdx(req, "POST /api/suspend/") orelse {
+        appstate.vms_mutex.unlock();
+        return "invalid";
+    };
+    if (idx >= appstate.vm_count) {
+        appstate.vms_mutex.unlock();
+        return "invalid idx";
+    }
     const v = &appstate.vms[idx];
-    if (!v.isAlive()) return "not running";
+    if (!v.isAlive()) {
+        appstate.vms_mutex.unlock();
+        return "not running";
+    }
+    // Copy the VM name before releasing the lock — another thread could rename
+    // or delete the VM while we do the migration I/O.
+    var vm_name_buf: [vm.MAX_NAME]u8 = undefined;
+    const vm_name = v.getNameSlice();
+    @memcpy(vm_name_buf[0..vm_name.len], vm_name);
+    vm_name_buf[vm_name.len] = 0;
+    appstate.vms_mutex.unlock();
 
     var state_path: [256]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&state_path, "/tmp/hangar-state-{s}.bin", .{v.getNameSlice()}) catch return "path err";
+    const path = std.fmt.bufPrintZ(&state_path, "/tmp/hangar-state-{s}.bin", .{vm_name_buf[0..vm_name.len]}) catch return "path err";
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
-    const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
+    const sock = qmp.socketPath(vm_name_buf[0..vm_name.len], &sock_buf) orelse return "sock err";
     client.connect(sock) catch return "qmp err";
     defer client.disconnect();
     client.suspendToFile(path) catch return "migrate err";
     client.waitMigrateComplete() catch return "timeout";
-    v.status = .suspended;
-    v.setSavedStatePath(path[0..]);
+
+    // Re-acquire the lock for the state mutation. Re-validate idx in case the
+    // VM was deleted or the array shifted during the migration I/O.
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx >= appstate.vm_count) return "invalid idx";
+    // Verify the VM at idx still has the same name (hasn't been replaced).
+    if (!std.mem.eql(u8, appstate.vms[idx].getNameSlice(), vm_name_buf[0..vm_name.len])) return "invalid idx";
+    const v2 = &appstate.vms[idx];
+    v2.status = .suspended;
+    v2.setSavedStatePath(path[0..]);
     if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.forceStopFn(h);
         appstate.g_vmm.reapFn(h);
     } else {
-        qemu.forceStopVm(v);
-        qemu.reapVm(v);
+        qemu.forceStopVm(v2);
+        qemu.reapVm(v2);
     }
     appstate.destroyVmmHandle(idx);
     appstate.vm_started[idx] = 0;
@@ -2073,8 +2201,10 @@ const MAX_SNAPSHOT_TAG_LEN = 255;
 fn validateSnapshotTag(tag: []const u8) bool {
     if (tag.len == 0 or tag.len > MAX_SNAPSHOT_TAG_LEN) return false;
     for (tag) |b| {
+        if (b == 0) return false; // reject null bytes
         if (b < 0x20) return false; // reject control characters
     }
+    if (std.mem.indexOf(u8, tag, "..") != null) return false;
     return true;
 }
 
@@ -2511,6 +2641,27 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     if (idx >= appstate.vm_count) return;
     const v = &appstate.vms[idx];
 
+    // Parse optional name field from the request body.
+    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return;
+    const body = req[body_start + 4 ..];
+    var raw_name: []const u8 = "";
+    var pairs = std.mem.splitScalar(u8, body, '&');
+    while (pairs.next()) |pair| {
+        var kv = std.mem.splitScalar(u8, pair, '=');
+        const key = kv.next() orelse continue;
+        const val = kv.next() orelse continue;
+        if (std.mem.eql(u8, key, "name")) {
+            raw_name = val;
+        }
+    }
+    var name_decode_buf: [vm.MAX_NAME]u8 = undefined;
+    const export_name: []const u8 = if (raw_name.len > 0) blk: {
+        const decoded = urlencode.urlDecode(&name_decode_buf, raw_name);
+        if (!vm.isValidVmName(decoded)) return;
+        if (std.mem.indexOf(u8, decoded, "..") != null) return;
+        break :blk decoded;
+    } else v.getNameSlice();
+
     // Per-export unique directory to avoid races with concurrent exports.
     var ts: std.c.timespec = undefined;
     _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
@@ -2578,7 +2729,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     // Build OVF descriptor after all conversions
     const disk_cap = @as(u64, v.disk_size_gb) * 1024 * 1024 * 1024;
     const spec = ovf.Spec{
-        .name = v.getNameSlice(),
+        .name = export_name,
         .cpu_cores = v.cpu_cores,
         .memory_mb = v.memory_mb,
         .disk_capacity_bytes = disk_cap,
@@ -2595,7 +2746,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         return;
     };
 
-    const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, v.getNameSlice() });
+    const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, export_name });
     defer std.heap.page_allocator.free(ovf_path);
     std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch {
         logErr("export: failed to write OVF file");
@@ -2622,7 +2773,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     const file_size: u64 = @intCast(seek_end);
     if (c.lseek(tar_fd, 0, 0) < 0) return;
 
-    const raw_filename = std.fmt.bufPrint(&path_buf, "{s}.ova", .{v.getNameSlice()}) catch "export.ova";
+    const raw_filename = std.fmt.bufPrint(&path_buf, "{s}.ova", .{export_name}) catch "export.ova";
     var fname_buf2: [256]u8 = undefined;
     const filename = sanitizeHeaderValue(&fname_buf2, raw_filename);
     var cd_header: [512]u8 = undefined;

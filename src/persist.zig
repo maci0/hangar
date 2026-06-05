@@ -1098,8 +1098,10 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "autoprotect_last_epoch")) {
             if (parseJsonInt64(cur)) |r| {
-                cfg.autoprotect_last_epoch = @intCast(r.value);
-                cur = r.rest;
+                if (std.math.cast(i64, r.value)) |v| {
+                    cfg.autoprotect_last_epoch = v;
+                    cur = r.rest;
+                } else cur = skipJsonValue(cur);
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "autoprotect_last_seq")) {
             if (parseJsonInt(cur)) |r| {
@@ -1380,23 +1382,31 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
                 } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_x")) {
                 if (parseJsonInt(cur)) |r| {
-                    prefs_out.win_x = @intCast(r.value);
-                    cur = r.rest;
+                    if (std.math.cast(i32, r.value)) |v| {
+                        prefs_out.win_x = v;
+                        cur = r.rest;
+                    } else cur = cur[1..];
                 } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_y")) {
                 if (parseJsonInt(cur)) |r| {
-                    prefs_out.win_y = @intCast(r.value);
-                    cur = r.rest;
+                    if (std.math.cast(i32, r.value)) |v| {
+                        prefs_out.win_y = v;
+                        cur = r.rest;
+                    } else cur = cur[1..];
                 } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_w")) {
                 if (parseJsonInt(cur)) |r| {
-                    prefs_out.win_w = @intCast(r.value);
-                    cur = r.rest;
+                    if (std.math.cast(i32, r.value)) |v| {
+                        prefs_out.win_w = v;
+                        cur = r.rest;
+                    } else cur = cur[1..];
                 } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_h")) {
                 if (parseJsonInt(cur)) |r| {
-                    prefs_out.win_h = @intCast(r.value);
-                    cur = r.rest;
+                    if (std.math.cast(i32, r.value)) |v| {
+                        prefs_out.win_h = v;
+                        cur = r.rest;
+                    } else cur = cur[1..];
                 } else cur = cur[1..];
             } else {
                 cur = skipJsonValue(cur);

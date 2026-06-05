@@ -223,10 +223,11 @@ pub const QmpClient = struct {
 
     /// Suspend VM state to a file.
     pub fn suspendToFile(self: *QmpClient, path: []const u8) !void {
-        var hmp_buf: [vm.MAX_PATH + 64]u8 = undefined;
-        // The proper way in QEMU to save state to a file and be able to resume is "migrate \"exec:cat > file\""
-        // HMP has `migrate` command.
-        const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "migrate \"exec:cat > {s}\"", .{path}) catch
+        var hmp_buf: [vm.MAX_PATH + 128]u8 = undefined;
+        // Escape double-quotes in the path to prevent shell injection via `exec:`.
+        var esc_buf: [vm.MAX_PATH + 64]u8 = undefined;
+        const escaped = escapeHmpArg(path, &esc_buf);
+        const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "migrate \"exec:cat > {s}\"", .{escaped}) catch
             return error.BufferTooSmall;
 
         var out: [1024]u8 = undefined;
