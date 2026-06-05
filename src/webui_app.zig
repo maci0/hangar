@@ -90,7 +90,7 @@ fn spawnBackend() !void {
         }
         defer _ = std.c.close(sock);
 
-        const bind_ip: u32 = (@as(u32, 0) << 24) | (@as(u32, 0) << 16) | (@as(u32, 0) << 8) | @as(u32, 127);
+        const bind_ip: u32 = 0x7F_00_00_01; // 127.0.0.1 in host byte order
         var addr: std.c.sockaddr.in = .{
             .family = std.c.AF.INET,
             .port = std.mem.nativeToBig(u16, WEB_PORT),

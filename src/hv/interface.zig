@@ -209,8 +209,12 @@ test "resolveAccel: whpx succeeds when check passes" {
     try std.testing.expect(accel.hardware);
 }
 
-fn alwaysOk_hv(_: Accelerator) bool { return true; }
-fn alwaysNo_hv(_: Accelerator) bool { return false; }
+fn alwaysOk_hv(_: Accelerator) bool {
+    return true;
+}
+fn alwaysNo_hv(_: Accelerator) bool {
+    return false;
+}
 
 test "Backend enum has qemu as default" {
     try std.testing.expectEqual(Backend.qemu, @as(Backend, @enumFromInt(0)));
@@ -248,5 +252,3 @@ test "hv fuzz: bestAccelerator and tcgAccelerator consistency" {
     const resolved = resolveAccel(.tcg, &alwaysOk_hv);
     try std.testing.expectEqualStrings(std.mem.span(tcg.flag), std.mem.span(resolved.flag));
 }
-
-

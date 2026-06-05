@@ -64,12 +64,10 @@ pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
 
     // DiskSection
     try w(&list, a, "  <DiskSection>\n    <Info>Virtual disks</Info>\n");
-    try list.print(a,
-        "    <Disk ovf:capacity=\"{d}\" ovf:capacityAllocationUnits=\"byte\" ovf:diskId=\"vmdisk1\"" ++
+    try list.print(a, "    <Disk ovf:capacity=\"{d}\" ovf:capacityAllocationUnits=\"byte\" ovf:diskId=\"vmdisk1\"" ++
         " ovf:fileRef=\"file1\" ovf:format=\"http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized\"/>", .{spec.disk_capacity_bytes});
     if (spec.disk2_href.len > 0) {
-        try list.print(a,
-            "\n    <Disk ovf:capacity=\"{d}\" ovf:capacityAllocationUnits=\"byte\" ovf:diskId=\"vmdisk2\"" ++
+        try list.print(a, "\n    <Disk ovf:capacity=\"{d}\" ovf:capacityAllocationUnits=\"byte\" ovf:diskId=\"vmdisk2\"" ++
             " ovf:fileRef=\"file2\" ovf:format=\"http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized\"/>", .{spec.disk2_capacity_bytes});
     }
     try w(&list, a, "\n  </DiskSection>\n");
@@ -89,39 +87,34 @@ pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
     try w(&list, a, "</Name>\n    <VirtualHardwareSection>\n      <Info>Virtual hardware</Info>\n");
 
     // CPU item
-    try list.print(a,
-        "      <Item><rasd:Description>Number of Virtual CPUs</rasd:Description>" ++
+    try list.print(a, "      <Item><rasd:Description>Number of Virtual CPUs</rasd:Description>" ++
         "<rasd:ElementName>{d} virtual CPU(s)</rasd:ElementName>" ++
         "<rasd:InstanceID>1</rasd:InstanceID><rasd:ResourceType>3</rasd:ResourceType>" ++
         "<rasd:VirtualQuantity>{d}</rasd:VirtualQuantity></Item>\n", .{ spec.cpu_cores, spec.cpu_cores });
 
     // Memory item (MB)
-    try list.print(a,
-        "      <Item><rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>" ++
+    try list.print(a, "      <Item><rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>" ++
         "<rasd:Description>Memory Size</rasd:Description>" ++
         "<rasd:ElementName>{d} MB of memory</rasd:ElementName>" ++
         "<rasd:InstanceID>2</rasd:InstanceID><rasd:ResourceType>4</rasd:ResourceType>" ++
         "<rasd:VirtualQuantity>{d}</rasd:VirtualQuantity></Item>\n", .{ spec.memory_mb, spec.memory_mb });
 
     // SCSI controller + disk(s)
-    try w(&list, a,
-        "      <Item><rasd:Address>0</rasd:Address><rasd:ElementName>SCSI Controller</rasd:ElementName>" ++
+    try w(&list, a, "      <Item><rasd:Address>0</rasd:Address><rasd:ElementName>SCSI Controller</rasd:ElementName>" ++
         "<rasd:InstanceID>3</rasd:InstanceID><rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>" ++
         "<rasd:ResourceType>6</rasd:ResourceType></Item>\n" ++
         "      <Item><rasd:ElementName>Hard Disk 1</rasd:ElementName>" ++
         "<rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource><rasd:InstanceID>4</rasd:InstanceID>" ++
         "<rasd:Parent>3</rasd:Parent><rasd:ResourceType>17</rasd:ResourceType></Item>\n");
     if (spec.disk2_href.len > 0) {
-        try w(&list, a,
-            "      <Item><rasd:ElementName>Hard Disk 2</rasd:ElementName>" ++
+        try w(&list, a, "      <Item><rasd:ElementName>Hard Disk 2</rasd:ElementName>" ++
             "<rasd:HostResource>ovf:/disk/vmdisk2</rasd:HostResource><rasd:InstanceID>5</rasd:InstanceID>" ++
             "<rasd:Parent>3</rasd:Parent><rasd:ResourceType>17</rasd:ResourceType></Item>\n");
     }
 
     if (spec.has_network) {
         const net_id: u8 = if (spec.disk2_href.len > 0) 6 else 5;
-        try list.print(a,
-            "      <Item><rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>" ++
+        try list.print(a, "      <Item><rasd:AutomaticAllocation>true</rasd:AutomaticAllocation>" ++
             "<rasd:Connection>VM Network</rasd:Connection><rasd:ElementName>Ethernet 1</rasd:ElementName>" ++
             "<rasd:InstanceID>{d}</rasd:InstanceID><rasd:ResourceSubType>E1000</rasd:ResourceSubType>" ++
             "<rasd:ResourceType>10</rasd:ResourceType></Item>\n", .{net_id});

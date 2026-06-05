@@ -2,7 +2,7 @@
 //! URL-encoded body builder for HTTP POST requests.
 //!
 //! Pure string-formatting logic extracted from buildSaveBody so it can be
-//! unit-tested without FLTK dependencies. Callers extract widget values and
+//! unit-tested without UI dependencies. Callers extract form values and
 //! pass (key, value) pairs; this module assembles the `key=val&...` string.
 
 const std = @import("std");

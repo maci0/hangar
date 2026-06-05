@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Pure path-manipulation helpers extracted from main.zig and dialogs.zig.
+//! Pure path-manipulation helpers.
 //!
 //! Functions for deriving filenames, clone disk paths, and VMDK hrefs.
-//! All pure: no FLTK, no I/O, no global state.
+//! All pure: no I/O, no global state.
 
 const std = @import("std");
 

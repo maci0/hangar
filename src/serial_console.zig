@@ -103,7 +103,10 @@ test "serial: reader loop reads data from socketpair into ringbuf" {
 
     // Tear down — but don't call serialDisconnect since we already shut down the writer side.
     // The reader should have exited (fd got EOF). Just join and close.
-    if (app.serial_thread) |t| { t.join(); app.serial_thread = null; }
+    if (app.serial_thread) |t| {
+        t.join();
+        app.serial_thread = null;
+    }
     _ = std.c.close(fds[1]);
     app.serial_fd = null;
 }
@@ -154,6 +157,43 @@ test "fuzz: serialReader handles random data bursts and disconnect racing" {
     }
 }
 
+test "serial: serialDisconnect when no connection active is a no-op" {
+    // Ensure clean state.
+    app.serial_running = false;
+    app.serial_fd = null;
+    app.serial_thread = null;
+
+    // Should not crash.
+    serialDisconnect();
+
+    try std.testing.expect(app.serial_fd == null);
+    try std.testing.expect(app.serial_thread == null);
+}
+
+test "serial: serialConnect returns early when already connected" {
+    // Simulate an already-active connection.
+    app.serial_fd = 999; // fake fd
+    defer app.serial_fd = null;
+
+    // Call connect — should return immediately via the first guard.
+    serialConnect("any-vm");
+    // fd should still be the fake value (unchanged).
+    try std.testing.expectEqual(@as(?std.c.fd_t, 999), app.serial_fd);
+}
+
+test "serial: serialConnect with non-existent socket fails gracefully" {
+    // Ensure clean state.
+    app.serial_fd = null;
+    app.serial_thread = null;
+
+    // Call with a VM name that has no serial socket.
+    serialConnect("no-such-vm-12345");
+
+    // Should not have set up any connection.
+    try std.testing.expect(app.serial_fd == null);
+    try std.testing.expect(app.serial_thread == null);
+}
+
 /// Stop the serial reader thread and close the socket.
 /// Uses shutdown() to unblock the reader's read() call without closing
 /// the fd prematurely — avoids a double-close race where the OS recycles
@@ -163,8 +203,14 @@ pub fn serialDisconnect() void {
     // Shutdown the socket to unblock any in-flight read() in the reader
     // thread, so the thread can observe running==false and exit.
     if (app.serial_fd) |fd| _ = std.c.shutdown(fd, std.c.SHUT.RDWR);
-    if (app.serial_thread) |t| { t.join(); app.serial_thread = null; }
+    if (app.serial_thread) |t| {
+        t.join();
+        app.serial_thread = null;
+    }
     // Now safe to close: the thread is joined and has either already
     // closed the fd via its cleanup path or skipped it (Rmw returned false).
-    if (app.serial_fd) |fd| { _ = std.c.close(fd); app.serial_fd = null; }
+    if (app.serial_fd) |fd| {
+        _ = std.c.close(fd);
+        app.serial_fd = null;
+    }
 }

@@ -192,11 +192,15 @@ const virtio_win_search_paths = [_][]const u8{
 };
 
 /// Locate the virtio-win ISO, also checking `$HOME/Downloads`.
-/// The returned slice is valid only until the next call; for concurrent
-/// callers use `findVirtioWinIsoInto` which writes into a caller-owned buffer.
-fn findVirtioWinIso() ?[]const u8 {
+/// Copies the result into `dest` and returns a slice of `dest`, or `null`.
+/// Thread-safe: each caller provides its own buffer.
+fn findVirtioWinIsoInto(dest: []u8) ?[]const u8 {
     for (virtio_win_search_paths) |path| {
-        if (std.Io.Dir.cwd().access(appio.io(), path, .{})) return path else |_| {}
+        if (std.Io.Dir.cwd().access(appio.io(), path, .{})) {
+            const len = @min(dest.len, path.len);
+            @memcpy(dest[0..len], path[0..len]);
+            return dest[0..len];
+        } else |_| {}
     }
     // Static buffer for the $HOME/Downloads path — guarded by SpinMutex
     // because buildArgs can be called from concurrent web_server handlers.
@@ -205,7 +209,11 @@ fn findVirtioWinIso() ?[]const u8 {
         defer virtio_mutex.unlock();
         if (appio.getenv("HOME")) |home| {
             const p = std.fmt.bufPrint(&virtio_buf, "{s}/Downloads/virtio-win.iso", .{home}) catch return null;
-            if (std.Io.Dir.cwd().access(appio.io(), p, .{})) return p else |_| {}
+            if (std.Io.Dir.cwd().access(appio.io(), p, .{})) {
+                const len = @min(dest.len, p.len);
+                @memcpy(dest[0..len], p[0..len]);
+                return dest[0..len];
+            } else |_| {}
         }
     }
     return null;
@@ -226,9 +234,11 @@ const ArgBuffers = struct {
     disk_buf: [vm.MAX_PATH + 64]u8 = undefined,
     cdrom_buf: [vm.MAX_PATH + 64]u8 = undefined,
     tools_buf: [vm.MAX_PATH + 64]u8 = undefined,
+    tools_iso_buf: [vm.MAX_PATH]u8 = undefined,
     vnc_buf: [64]u8 = undefined,
     spice_buf: [128]u8 = undefined,
     serial_buf: [vm.MAX_PATH + 64]u8 = undefined,
+    ga_buf: [vm.MAX_PATH + 64]u8 = undefined,
     qmp_buf: [vm.MAX_PATH + 64]u8 = undefined,
     vga_buf: [64]u8 = undefined,
     net_mac_buf: [128]u8 = undefined,
@@ -391,7 +401,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     // Auto-mount the virtio-win guest tools ISO as a second CD (ide2-cd1) so
     // Windows guests can install virtio drivers + qemu-guest-agent.
     if (config.guest_tools) {
-        if (findVirtioWinIso()) |iso| {
+        if (findVirtioWinIsoInto(&bufs.tools_iso_buf)) |iso| {
             try args.append(alloc, "-device");
             try args.append(alloc, "ide-cd,drive=tools0,id=ide2-cd1");
             const tools_str = try std.fmt.bufPrint(&bufs.tools_buf, "file={s},if=none,id=tools0,media=cdrom,readonly=on", .{iso});
@@ -503,7 +513,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 
     if (config.guest_agent and config.hasName()) {
         try args.append(alloc, "-chardev");
-        const ga_str = try std.fmt.bufPrint(&bufs.serial_buf, "socket,path=/tmp/hangar-ga-{s}.sock,server=on,wait=off,id=ga0", .{config.getNameSlice()});
+        const ga_str = try std.fmt.bufPrint(&bufs.ga_buf, "socket,path=/tmp/hangar-ga-{s}.sock,server=on,wait=off,id=ga0", .{config.getNameSlice()});
         try args.append(alloc, ga_str);
         try args.append(alloc, "-device");
         try args.append(alloc, "virtserialport,chardev=ga0,name=org.qemu.guest_agent.0");
@@ -852,20 +862,18 @@ pub fn convertDiskImage(src_path: []const u8, src_format: vm.DiskFormat, dest_pa
     if (dest_format == .vmdk) {
         const args = [_][]const u8{
             "qemu-img", "convert",
-            "-f", std.mem.span(src_format.toStr()),
-            "-O", dest_str,
-            "-o", "subformat=streamOptimized",
-            src_path,
-            dest_path,
+            "-f",       std.mem.span(src_format.toStr()),
+            "-O",       dest_str,
+            "-o",       "subformat=streamOptimized",
+            src_path,   dest_path,
         };
         runWait(&args, allocator, null) catch return QemuError.DiskImageCreationFailed;
     } else {
         const args = [_][]const u8{
             "qemu-img", "convert",
-            "-f", std.mem.span(src_format.toStr()),
-            "-O", dest_str,
-            src_path,
-            dest_path,
+            "-f",       std.mem.span(src_format.toStr()),
+            "-O",       dest_str,
+            src_path,   dest_path,
         };
         runWait(&args, allocator, null) catch return QemuError.DiskImageCreationFailed;
     }
@@ -890,10 +898,10 @@ pub fn convertDiskImageNoWait(src_path: []const u8, src_format: vm.DiskFormat, d
 pub fn tryReapChild(pid: std.c.pid_t) ?bool {
     var status: c_int = 0;
     const r = std.c.waitpid(pid, &status, std.c.W.NOHANG);
-    if (r == 0) return null;                   // still running
-    if (r < 0) return false;                   // error / already reaped
+    if (r == 0) return null; // still running
+    if (r < 0) return false; // error / already reaped
     const ustatus: u32 = @bitCast(status);
-    if ((ustatus & 0x7f) != 0) return false;   // signalled or stopped
+    if ((ustatus & 0x7f) != 0) return false; // signalled or stopped
     return (ustatus >> 8) & 0xff == 0;
 }
 
@@ -920,7 +928,30 @@ fn isSafeShellPath(path: []const u8) bool {
     if (path.len == 0) return false;
     for (path) |c| {
         switch (c) {
-            ';', '|', '&', '$', '`', '(', ')', '<', '>', '\'', '"', '\\', '\n', '\r', '\t', 0 => return false,
+            // Shell metacharacters and control characters
+            ' ',
+            ';',
+            '|',
+            '&',
+            '$',
+            '`',
+            '(',
+            ')',
+            '<',
+            '>',
+            '\'',
+            '"',
+            '\\',
+            '~',
+            '#',
+            '!',
+            '*',
+            '?',
+            '\n',
+            '\r',
+            '\t',
+            0,
+            => return false,
             else => {},
         }
     }
@@ -982,7 +1013,7 @@ pub fn buildLinkedCloneArgs(
 
 test "isSafeShellPath: safe and unsafe paths" {
     try std.testing.expect(isSafeShellPath("/tmp/vm_state.bin"));
-    try std.testing.expect(isSafeShellPath("/home/user/VM Data/state.bin"));
+    try std.testing.expect(!isSafeShellPath("/home/user/VM Data/state.bin"));
     try std.testing.expect(!isSafeShellPath("bad; rm -rf /"));
     try std.testing.expect(!isSafeShellPath("bad$(id)"));
     try std.testing.expect(!isSafeShellPath("bad`id`"));
@@ -1216,7 +1247,8 @@ test "qemu: firmware/iso discovery probes never crash" {
     // Filesystem probes — return null or a real path depending on host; the
     // contract under test is "never panics / returns a valid optional".
     _ = findOvmfPath();
-    _ = findVirtioWinIso();
+    var buf: [vm.MAX_PATH]u8 = undefined;
+    _ = findVirtioWinIsoInto(&buf);
 }
 
 test "fuzz: buildCArgv over random argv shapes" {
@@ -1618,6 +1650,127 @@ test "qemu: buildScriptStr handles multi-socket topology" {
     defer talloc.free(s);
     try expect(has(s, "sockets=2"));
     try expect(has(s, "cores=4"));
+}
+
+test "qemu: buildScriptStr with disk_bps_throttle emits throttling flag" {
+    var cfg = vm.VmConfig{};
+    cfg.setDiskPath("/tmp/disk.qcow2");
+    cfg.disk_bps_throttle = 104857600; // 100 MB/s
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "throttling.bps-total=104857600"));
+}
+
+test "qemu: buildScriptStr with disk_iops_throttle emits throttling flag" {
+    var cfg = vm.VmConfig{};
+    cfg.setDiskPath("/tmp/disk.qcow2");
+    cfg.disk_iops_throttle = 5000;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "throttling.iops-total=5000"));
+}
+
+test "qemu: buildScriptStr with both throttles emits combined flags" {
+    var cfg = vm.VmConfig{};
+    cfg.setDiskPath("/tmp/disk.qcow2");
+    cfg.disk_bps_throttle = 104857600;
+    cfg.disk_iops_throttle = 5000;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "throttling.bps-total=104857600"));
+    try expect(has(s, "throttling.iops-total=5000"));
+}
+
+test "qemu: buildScriptStr with hyperv_enlightenments emits hv flags" {
+    var cfg = vm.VmConfig{};
+    cfg.hyperv_enlightenments = true;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "hv_relaxed"));
+    try expect(has(s, "hv_spinlocks=0x1fff"));
+    try expect(has(s, "hv_vapic"));
+}
+
+test "qemu: buildScriptStr with watchdog emits watchdog args" {
+    var cfg = vm.VmConfig{};
+    cfg.watchdog = .reset;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-watchdog"));
+    try expect(has(s, "i6300esb"));
+    try expect(has(s, "-watchdog-action"));
+    try expect(has(s, "reset"));
+}
+
+test "qemu: buildScriptStr with watchdog none omits watchdog args" {
+    var cfg = vm.VmConfig{};
+    cfg.watchdog = .none;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(!has(s, "-watchdog"));
+}
+
+test "qemu: buildScriptStr with tpm emits tpmdev args" {
+    var cfg = vm.VmConfig{};
+    cfg.tpm = true;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-tpmdev"));
+    try expect(has(s, "tpm-tis"));
+}
+
+test "qemu: buildScriptStr with secure_boot enables SMM" {
+    var cfg = vm.VmConfig{};
+    cfg.secure_boot = true;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "smm=on"));
+}
+
+test "qemu: buildScriptStr with hugepages emits mem-prealloc" {
+    var cfg = vm.VmConfig{};
+    cfg.hugepages = true;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-mem-prealloc"));
+    try expect(has(s, "-mem-path"));
+    try expect(has(s, "/dev/hugepages"));
+}
+
+test "qemu: buildScriptStr with io_threads emits iothread object" {
+    var cfg = vm.VmConfig{};
+    cfg.io_threads = 1;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "iothread,id=iothread0"));
+}
+
+test "qemu: buildScriptStr with ballooning emits balloon virtio" {
+    var cfg = vm.VmConfig{};
+    cfg.ballooning = true;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-balloon"));
+    try expect(has(s, "virtio"));
+}
+
+test "qemu: buildScriptStr with virtio_rng emits rng device" {
+    var cfg = vm.VmConfig{};
+    cfg.virtio_rng = true;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "rng-random"));
+    try expect(has(s, "virtio-rng-pci"));
+}
+
+test "qemu: buildScriptStr with guest_agent emits chardev and device" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("TestGA");
+    cfg.guest_agent = true;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "virtserialport"));
+    try expect(has(s, "org.qemu.guest_agent.0"));
 }
 
 test "qemu: convertDiskImageNoWait builds correct args" {

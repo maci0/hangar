@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Pure terminal-output sanitizer for the serial console. The guest emits
 //! arbitrary bytes over the serial socket (binary, ANSI escapes, control
-//! chars); before they reach the IUP text widget they are filtered to a safe
-//! printable + whitespace subset. Extracted from serial.zig (which is IUP +
-//! socket + thread coupled) so this untrusted-input surface can be fuzzed
-//! without a display. No IO; deterministic; operates in place.
+//! chars); they are filtered to a safe printable + whitespace subset.
+//! No IO; deterministic; operates in place.
 
 const std = @import("std");
 

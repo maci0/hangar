@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 (function(){
+const DEBUG=false;
+const logDebug=DEBUG?function(t,a){console.warn(t,a);}:function(){};
 const saved=localStorage.getItem('hangar-theme')||'system';
 window.hangarTheme=saved;
 window.applyTheme=function(t){
@@ -7,6 +9,7 @@ window.applyTheme=function(t){
  localStorage.setItem('hangar-theme',t);
  const light=t==='light'||(t==='system'&&window.matchMedia('(prefers-color-scheme:light)').matches);
  document.documentElement.classList.toggle('light',light);
+ document.documentElement.classList.toggle('dark',t==='dark');
 };
 window.applyTheme(saved);
 window.matchMedia('(prefers-color-scheme:light)').addEventListener('change',function(){
@@ -19,8 +22,8 @@ function cycleTheme(){
  var next=themes[(idx+1)%themes.length];
  window.applyTheme(next);
  var icons={system:'🌓',light:'☀️',dark:'🌙'};
- var btn=document.querySelector('.theme-toggle-btn');
- if(btn)btn.textContent=icons[next]||'🌓';
+ var btns=document.querySelectorAll('.theme-toggle-btn');
+ for(var i=0;i<btns.length;i++)btns[i].textContent=icons[next]||'🌓';
  showToast('Theme: '+next.charAt(0).toUpperCase()+next.slice(1),'info',{duration:2000});
 }
 })();
@@ -34,13 +37,17 @@ if(opts&&opts.action&&opts.onAction){t.querySelector('.toast-action').addEventLi
 var reducedMotion=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
 setTimeout(function(){if(reducedMotion){if(t.parentNode)c.removeChild(t);}else{t.classList.add('exit');setTimeout(function(){if(t.parentNode)c.removeChild(t);},280);}},opts&&opts.duration?opts.duration:3500);}
 function toastUndo(msg,onUndo){showToast(msg,'info',{action:'undo',onAction:onUndo,duration:5000});}
+// ── Confirm dialog (replaces native confirm() with custom modal) ──
+function showConfirmDialog(msg){return new Promise(function(resolve){var dlg=document.getElementById('confirmdlg');var msgEl=document.getElementById('confirmmsg');var okBtn=document.getElementById('confirmOkBtn');var cancelBtn=document.getElementById('confirmCancelBtn');if(!dlg||!msgEl||!okBtn||!cancelBtn){resolve(confirm(msg));return;}msgEl.textContent=msg;function cleanup(){okBtn.removeEventListener('click',onOk);cancelBtn.removeEventListener('click',onCancel);dlg.removeEventListener('close',onCancel);dlg.close();}function onOk(){cleanup();resolve(true);}function onCancel(){cleanup();resolve(false);}okBtn.addEventListener('click',onOk);cancelBtn.addEventListener('click',onCancel);dlg.addEventListener('close',onCancel);trapFocus(dlg);dlg.showModal();});}
+// ── Prompt dialog (replaces native prompt() with custom modal) ──
+function showPromptDialog(label,defaultValue){return new Promise(function(resolve){var dlg=document.getElementById('promptdlg');var labelEl=document.getElementById('promptLabel');var input=document.getElementById('promptInput');var okBtn=document.getElementById('promptOkBtn');var cancelBtn=document.getElementById('promptCancelBtn');if(!dlg||!labelEl||!input||!okBtn||!cancelBtn){resolve(prompt(label,defaultValue||''));return;}labelEl.textContent=label;input.value=defaultValue||'';function cleanup(){okBtn.removeEventListener('click',onOk);cancelBtn.removeEventListener('click',onCancel);dlg.removeEventListener('close',onCancel);dlg.close();}function onOk(){cleanup();resolve(input.value);}function onCancel(){cleanup();resolve(null);}okBtn.addEventListener('click',onOk);cancelBtn.addEventListener('click',onCancel);dlg.addEventListener('close',onCancel);trapFocus(dlg);dlg.showModal();input.focus();input.select();});}
 var apiPostPending=0;
 var loadBar=null;
 function initLoadBar(){loadBar=document.createElement('div');loadBar.id='loadbar';var mn=document.querySelector('main');if(mn)mn.appendChild(loadBar);else document.body.appendChild(loadBar);}
 function setLoadBar(on){if(!loadBar)initLoadBar();if(on)loadBar.classList.add('active');else{loadBar.classList.remove('active');}}
 var busy=false,busyGen=0; // guard against double-submit
-function setBusy(){if(busy)return false;busy=true;var gen=++busyGen;setTimeout(function(){if(busyGen===gen){busy=false;console.warn('busy guard auto-cleared after 30s — request may be hung');}},30000);return true;} // fallback auto-clear after 30s
-async function apiPost(url,body){if(!setBusy()){showToast('Another operation is in progress — please wait.','warn');return null;}var sb=document.getElementById('statusbar');var wasIdle=apiPostPending<=0;var prev=sb?sb.textContent:'Ready';if(wasIdle){setStatusLoading('Working...');setLoadBar(true);}apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':'hangar'}};var r=await fetch(url,opts);if(!r.ok){var msg=await r.text().catch(function(){return '';});throw new Error(msg||'HTTP '+r.status);}apiPostPending--;if(apiPostPending<=0){setStatus(prev);setLoadBar(false);}busy=false;busyGen++;return r;}catch(e){apiPostPending--;if(apiPostPending<=0){setStatus('Error: '+e.message);setLoadBar(false);}busy=false;busyGen++;showToast(e.message||'Request failed','error');return null;}}
+function setBusy(){if(busy)return false;busy=true;var gen=++busyGen;setTimeout(function(){if(busyGen===gen){busy=false;apiPostPending=0;setLoadBar(false);setStatus('');logDebug('busy guard auto-cleared after 30s — request may be hung');}},30000);return true;} // fallback auto-clear after 30s
+async function apiPost(url,body){if(!setBusy()){showToast('Another operation is in progress — please wait.','warn');return null;}var sb=document.getElementById('statusbar');var wasIdle=apiPostPending<=0;var prev=sb?sb.textContent:'Ready';if(wasIdle){setStatusLoading('Working...');setLoadBar(true);}apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':'hangar'}};var r=await fetch(url,opts);if(!r.ok){var msg=await r.text().catch(function(){return '';});try{var j=JSON.parse(msg);if(j.error)msg=j.error;}catch(e){}throw new Error(msg||'HTTP '+r.status);}apiPostPending--;if(apiPostPending<=0){setStatus(prev);setLoadBar(false);}busy=false;busyGen++;return r;}catch(e){apiPostPending--;if(apiPostPending<=0){setStatus('Error: '+e.message);setLoadBar(false);}busy=false;busyGen++;showToast(e.message||'Request failed','error');return null;}}
 var sidebarOpen=false;
 function toggleSidebar(){sidebarOpen=!sidebarOpen;const aside=document.querySelector('aside');const btn=document.querySelector('.hamburger');if(aside){if(sidebarOpen){aside.classList.add('open');document.body.classList.add('sidebar-overlay');}else{aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}}
 if(btn)btn.setAttribute('aria-expanded',sidebarOpen?'true':'false');}
@@ -51,27 +58,27 @@ if(tb){if(toolbarMoreOpen){tb.classList.add('open-more');}else{tb.classList.remo
 if(btn)btn.setAttribute('aria-expanded',toolbarMoreOpen?'true':'false');
 if(popover){if(toolbarMoreOpen){populateToolbarMore(popover);positionToolbarMore(popover,btn);popover.classList.add('open');}else{popover.classList.remove('open');}}
 }
-function populateToolbarMore(popover){popover.innerHTML='';const tb=document.querySelector('.toolbar');if(!tb)return;const hidden=tb.querySelectorAll('.btn:not(.keep-mobile):not(.toolbar-more):not(.theme-toggle-btn)');hidden.forEach(function(b){if(!b.matches('.btn:not(.keep-mobile)'))return;const clone=document.createElement('button');clone.className='btn';clone.textContent=b.textContent||b.getAttribute('title')||b.getAttribute('aria-label')||'';clone.setAttribute('data-action',b.getAttribute('data-action')||'');popover.appendChild(clone);});}
+function populateToolbarMore(popover){popover.innerHTML='';const tb=document.querySelector('.toolbar');if(!tb)return;const children=tb.querySelectorAll('.btn:not(.keep-mobile):not(.toolbar-more):not(.theme-toggle-btn), .sep');children.forEach(function(el){if(el.classList.contains('sep')){const clone=document.createElement('span');clone.className='sep';popover.appendChild(clone);return;}if(!el.matches('.btn:not(.keep-mobile)'))return;const clone=document.createElement('button');clone.className='btn';clone.textContent=el.textContent||el.getAttribute('title')||el.getAttribute('aria-label')||'';clone.setAttribute('data-action',el.getAttribute('data-action')||'');popover.appendChild(clone);});}
 function positionToolbarMore(popover,btn){if(!btn)return;var r=btn.getBoundingClientRect();popover.style.top=(r.bottom+4)+'px';popover.style.right=(window.innerWidth-r.right)+'px';popover.style.left='auto';popover.style.bottom='auto';}
 function closeToolbarMore(){if(!toolbarMoreOpen)return;toolbarMoreOpen=false;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');if(tb)tb.classList.remove('open-more');if(btn)btn.setAttribute('aria-expanded','false');if(popover)popover.classList.remove('open');}
 function clearSearch(){var s=document.getElementById('search');if(!s)return;s.value='';filterList();}
 var settingsDirty=false;
-function switchTab(tab){if(activeTab===tab)return;
-if(activeTab==='settings'&&tab==='summary'&&settingsDirty){if(!confirm('You have unsaved changes. Discard them?'))return;}
+async function switchTab(tab){if(activeTab===tab)return;
+if(activeTab==='settings'&&tab==='summary'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;}
 var oldEl=document.getElementById(activeTab==='summary'?'tabSummary':'tabSettings');
 activeTab=tab;
 var s=document.getElementById('tabSummary');var st=document.getElementById('tabSettings');
 const btns=document.querySelectorAll('.tab-btn');btns.forEach(b=>{b.classList.remove('active');b.setAttribute('aria-selected','false');});
 var newEl=tab==='summary'?s:st;
 if(tab==='summary'){btns[0].classList.add('active');btns[0].setAttribute('aria-selected','true');}else{btns[1].classList.add('active');btns[1].setAttribute('aria-selected','true');}
-if(oldEl){oldEl.classList.add('exiting');setTimeout(function(){oldEl.classList.remove('exiting');oldEl.style.display='none';oldEl.setAttribute('aria-hidden','true');newEl.style.display='block';newEl.setAttribute('aria-hidden','false');},140);}
+if(oldEl){oldEl.style.display='none';oldEl.setAttribute('aria-hidden','true');newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
 else{newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
 if(tab==='settings'&&sel!==null)editVm();}
 var serverDown=false;
 var saveInFlight=false;
 function setServerDown(s){serverDown=s;var b=document.getElementById('connbanner');if(b)b.style.display=s?'flex':'none';if(s)setStatus('Server unreachable — retrying...');}
-async function refresh(){if(refreshBusy)return;if(transitioningIdx!==null||saveInFlight)return;refreshBusy=true;try{var listEl=document.getElementById('vmlist');if(!vms.length&&listEl){var skHtml='';for(var i=0;i<6;i++){skHtml+='<div class="skeleton sk-item" aria-hidden="true"></div>';}listEl.innerHTML=skHtml;listEl.setAttribute('aria-busy','true');}const r=await fetch('/api/vms');if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
-setServerDown(false);vms=await r.json();renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){if(!serverDown){setServerDown(true);}}finally{refreshBusy=false;}}
+async function refresh(){if(refreshBusy)return;if(transitioningIdx!==null||saveInFlight)return;refreshBusy=true;try{var listEl=document.getElementById('vmlist');const prevStatus=(sel!==null&&sel<vms.length)?vms[sel].status:null;const ctl=new AbortController();const t=setTimeout(function(){ctl.abort();},15000);try{const r=await fetch('/api/vms',{signal:ctl.signal});clearTimeout(t);if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
+setServerDown(false);vms=await r.json();if(sel!==null&&sel<vms.length){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);}else{stopFb();stopSerial(true);}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
 function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
@@ -80,12 +87,12 @@ function vmBars(v){var barMem=v.mem||1024;var memPct=Math.min(100,Math.round(bar
 for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
 const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
-h+=`<div class="vm-item${sel===x.i?' active':''}${transitioningIdx===x.i?' transitioning':''}" role="option" aria-selected="${sel===x.i?'true':'false'}" data-vm-index="${x.i}" tabindex="0" data-action="select" draggable="true"><span class="dot ${dotCls}" aria-label="${dotLabel}"></span> ${escHtml(x.v.name)}<span class="star fav" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite" aria-label="Remove from favorites">★</span>${vmBars(x.v)}</div>`;}}
+h+=`<div class="vm-item${sel===x.i?' active':''}${transitioningIdx===x.i?' transitioning':''}" role="option" aria-selected="${sel===x.i?'true':'false'}" data-vm-index="${x.i}" tabindex="0" data-action="select" draggable="true"><span class="dot ${dotCls}" aria-label="${dotLabel}"></span> ${escHtml(x.v.name)}<span class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-label="Remove from favorites">★</span>${vmBars(x.v)}</div>`;}}
 if(hasFavs&&hasNon)h+='<div style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
 if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
 const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
-h+=`<div class="vm-item${sel===x.i?' active':''}${transitioningIdx===x.i?' transitioning':''}" role="option" aria-selected="${sel===x.i?'true':'false'}" data-vm-index="${x.i}" tabindex="0" data-action="select" draggable="true"><span class="dot ${dotCls}" aria-label="${dotLabel}"></span> ${escHtml(x.v.name)}<span class="star" style="margin-left:auto;cursor:pointer" data-action="toggleFavorite" aria-label="Add to favorites">★</span>${vmBars(x.v)}</div>`;}}}
+h+=`<div class="vm-item${sel===x.i?' active':''}${transitioningIdx===x.i?' transitioning':''}" role="option" aria-selected="${sel===x.i?'true':'false'}" data-vm-index="${x.i}" tabindex="0" data-action="select" draggable="true"><span class="dot ${dotCls}" aria-label="${dotLabel}"></span> ${escHtml(x.v.name)}<span class="star" style="margin-left:auto" data-action="toggleFavorite" aria-label="Add to favorites">★</span>${vmBars(x.v)}</div>`;}}}
 e.innerHTML=h||'<div style="color:var(--text-dim);font-size:12px">No VMs</div>';
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+' virtual machine(s)';if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
@@ -93,8 +100,8 @@ if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+' — '+v.status;i
 else{var sb2=document.getElementById('statusbar');if(sb2)sb2.textContent=parts;}}
 async function toggleFavorite(i){if(i>=vms.length)return;const fav=vms[i].favorite==='true'?'0':'1';
 const r=await apiPost('/api/save/'+i,'favorite='+fav);if(r){if(i<vms.length){vms[i].favorite=fav==='1'?'true':'false';}renderList();if(sel===i)renderDetails();}}
-function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!confirm('You have unsaved changes. Discard them?'))return;settingsDirty=false;}stopFb();sel=i;renderList();closeSidebar();closeToolbarMore();if(sel!==null){if(activeTab==='summary')renderDetails();else editVm();if(vms[sel]&&vms[sel].status==='running')startFb();}else{showEmptyState();}updatePowerBtn();}
-function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!confirm('You have unsaved changes. Discard them?'))return;}stopFb();sel=null;renderList();showEmptyState();updatePowerBtn();}
+async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;settingsDirty=false;}stopFb();stopSerial(true);sel=i;renderList();closeSidebar();closeToolbarMore();if(sel!==null){if(activeTab==='summary')renderDetails();else editVm();if(vms[sel]&&vms[sel].status==='running'){startFb();startSerial(sel);}}else{showEmptyState();}updatePowerBtn();}
+async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;}stopFb();sel=null;renderList();showEmptyState();updatePowerBtn();}
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
 const nm=document.getElementById('vmname');const tb=document.getElementById('tabBar');
 if(!t||!s||!nm||!tb)return;
@@ -119,37 +126,52 @@ h+=`<div class="summary-card"><div class="card-label">Network</div><div class="c
 if(v.mac)h+=`<div class="summary-card"><div class="card-label">MAC</div><div class="card-value">${escHtml(v.mac)}</div></div>`;
 if(v.nic2_mode&&v.nic2_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 2</div><div class="card-value">${escHtml(v.nic2_mode)}</div></div>`;
 if(v.nic3_mode&&v.nic3_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 3</div><div class="card-value">${escHtml(v.nic3_mode)}</div></div>`;
+if(v.nic4_mode&&v.nic4_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 4</div><div class="card-value">${escHtml(v.nic4_mode)}</div></div>`;
+if(v.nic5_mode&&v.nic5_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 5</div><div class="card-value">${escHtml(v.nic5_mode)}</div></div>`;
+if(v.nic6_mode&&v.nic6_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 6</div><div class="card-value">${escHtml(v.nic6_mode)}</div></div>`;
+if(v.nic7_mode&&v.nic7_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 7</div><div class="card-value">${escHtml(v.nic7_mode)}</div></div>`;
+if(v.nic8_mode&&v.nic8_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 8</div><div class="card-value">${escHtml(v.nic8_mode)}</div></div>`;
 if(v.shared_folder)h+=`<div class="summary-card"><div class="card-label">Shared Folder</div><div class="card-value">${escHtml(v.shared_folder)}</div></div>`;
 if(v.usb_device)h+=`<div class="summary-card"><div class="card-label">USB Device</div><div class="card-value">${escHtml(v.usb_device)}</div></div>`;
 if(v.guest_tools==='true')h+=`<div class="summary-card"><div class="card-label">Guest Tools</div><div class="card-value">✓ installed</div></div>`;
 if(v.autoprotect==='true')h+=`<div class="summary-card"><div class="card-label">AutoProtect</div><div class="card-value">every ${escHtml(v.autoprotect_interval)} min, keep ${escHtml(v.autoprotect_max)}</div></div>`;
 if(v.hasDisk2==='true')h+=`<div class="summary-card"><div class="card-label">Disk 2</div><div class="card-value">${escHtml(v.disk2_size)} GB</div></div>`;
+if(v.extra0_path&&v.extra0_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 1</div><div class="card-value">${escHtml(v.extra0_size)} GB</div></div>`;
+if(v.extra1_path&&v.extra1_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 2</div><div class="card-value">${escHtml(v.extra1_size)} GB</div></div>`;
+if(v.extra2_path&&v.extra2_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 3</div><div class="card-value">${escHtml(v.extra2_size)} GB</div></div>`;
+if(v.extra3_path&&v.extra3_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 4</div><div class="card-value">${escHtml(v.extra3_size)} GB</div></div>`;
 if(v.hasFloppy==='true')h+=`<div class="summary-card"><div class="card-label">Floppy</div><div class="card-value">attached</div></div>`;
 if(v.port_forwards)h+=`<div class="summary-card"><div class="card-label">Port Forwards</div><div class="card-value">${escHtml(v.port_forwards)}</div></div>`;
 if(v.notes)h+=`<div class="summary-card"><div class="card-label">Notes</div><div class="card-value">${escHtml(v.notes)}</div></div>`;
 h+='</div>';
 ts.innerHTML=h;
 updatePowerBtn();}
-async function powerToggle(){const idx=sel;if(idx===null)return;const v=vms[idx];if(v&&(v.status==='running'||v.status==='paused')){if(!confirm('Power off VM "'+v.name+'"?\nUnsaved data may be lost.'))return;}
+async function powerToggle(){const idx=sel;if(idx===null)return;const v=vms[idx];if(v&&(v.status==='running'||v.status==='paused')){if(!(await showConfirmDialog('Power off VM "'+v.name+'"?\nUnsaved data may be lost.')))return;}
 var btn=document.getElementById('powerbtn');if(btn){btn.disabled=true;btn.textContent='...';}
 transitioningIdx=idx;renderList();
 try{const r=await apiPost('/api/power/'+idx);transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);renderList();}finally{if(btn){updatePowerBtn();btn.disabled=false;}}}else{if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}catch(e){transitioningIdx=null;if(btn){updatePowerBtn();btn.disabled=false;}renderList();setStatus('Power toggle failed: '+e.message);}}
-async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!confirm('Send ACPI shutdown to "'+v.name+'"?'))return;const r=await apiPost('/api/shutdown/'+sel);if(r)setStatus('Shut down guest — ACPI power button sent.');}
-async function resetGuest(){if(sel===null)return;const v=vms[sel];if(!confirm('Reset guest "'+v.name+'"?\nUnsaved data in the guest may be lost.'))return;const r=await apiPost('/api/reset/'+sel);if(r)setStatus('Reset guest — system_reset sent.');}
+async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Send ACPI shutdown to "'+v.name+'"?')))return;const r=await apiPost('/api/shutdown/'+sel);if(r)setStatus('Shut down guest — ACPI power button sent.');}
+async function resetGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Reset guest "'+v.name+'"?\nUnsaved data in the guest may be lost.')))return;const r=await apiPost('/api/reset/'+sel);if(r)setStatus('Reset guest — system_reset sent.');}
 async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/pause/'+sel);if(r){await refresh();setStatus('Paused guest — execution frozen.');}}
 async function resumeGuest(){if(sel===null)return;const r=await apiPost('/api/resume/'+sel);if(r){await refresh();setStatus('Resumed guest — execution continued.');}}
-async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=prompt('Rename VM:',v.name);if(n===null)return;const trimmed=n.trim();if(!trimmed){showToast('Name cannot be empty or whitespace','error');return;}if(trimmed===v.name)return;const r=await apiPost('/api/rename/'+sel,'name='+encodeURIComponent(trimmed));if(r)await refresh();}
-async function suspendGuest(){if(sel===null)return;const v=vms[sel];if(!confirm('Suspend VM "'+v.name+'" to disk?\\nThe VM state will be saved and the VM will be paused.'))return;const r=await apiPost('/api/suspend/'+sel);if(r){await refresh();setStatus('Suspended VM to disk.');}}
+async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=await showPromptDialog('Rename VM:',v.name);if(n===null)return;const trimmed=n.trim();if(!trimmed){showToast('Name cannot be empty or whitespace','error');return;}if(trimmed===v.name)return;const r=await apiPost('/api/rename/'+sel,'name='+encodeURIComponent(trimmed));if(r)await refresh();}
+async function suspendGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Suspend VM "'+v.name+'" to disk?\\nThe VM state will be saved and the VM will be paused.')))return;const r=await apiPost('/api/suspend/'+sel);if(r){await refresh();setStatus('Suspended VM to disk.');}}
 async function cloneGuest(){if(sel===null)return;var cn=document.getElementById('clone_name');var cd=document.getElementById('clonedlg');if(cn)cn.textContent=vms[sel].name;if(cd)cd.showModal();}
 async function doClone(linked){if(sel===null)return;const body=linked?'linked=1':'';const r=await apiPost('/api/clone/'+sel,body);if(r){var cd=document.getElementById('clonedlg');if(cd)cd.close();await refresh();setStatus(linked?'Linked clone created.':'VM cloned.');}}
-async function importGuest(){const p=prompt('Path to VM disk image (.qcow2):');const trimmed=p?p.trim():'';if(!trimmed){showToast('A file path is required','error');return;}if(trimmed.includes('..')){showToast('Invalid path: parent directory traversal not allowed','error');return;}if(!/\.(qcow2|qcow|vmdk|vdi|vhdx|raw|img)$/i.test(trimmed)){showToast('Path should end with a disk image extension (.qcow2, .vmdk, etc.)','warn');}const r=await apiPost('/api/import','path='+encodeURIComponent(trimmed));if(r){await refresh();setStatus('VM imported.');}}
-async function batchStart(){const snap=vms.slice();var started=0,failed=0,total=0;for(let i=0;i<snap.length;i++){if(snap[i].status==='stopped')total++;}
-for(let i=0;i<snap.length;i++){if(snap[i].status==='stopped'){setStatus('Batch start: VM '+(started+failed+1)+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r){started++;}else{failed++;setStatus('Batch start: VM '+(started+failed)+' of '+total+' failed, continuing...');}}}await refresh();setStatus('Batch start complete: '+started+' started'+(failed>0?', '+failed+' failed':''));}
-async function batchStop(){const snap=vms.slice();var stopped=0,failed=0,total=0;for(let i=0;i<snap.length;i++){if(snap[i].status==='running'||snap[i].status==='paused')total++;}
-if(!confirm('Power off ALL running VMs?\nUnsaved data may be lost.'))return;
-for(let i=0;i<snap.length;i++){if(snap[i].status==='running'||snap[i].status==='paused'){setStatus('Batch stop: VM '+(stopped+failed+1)+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r){stopped++;}else{failed++;setStatus('Batch stop: VM '+(stopped+failed)+' of '+total+' failed, continuing...');}}}await refresh();setStatus('Batch stop complete: '+stopped+' stopped'+(failed>0?', '+failed+' failed':''));}
+async function importGuest(){const p=await showPromptDialog('Path to VM disk image (.qcow2):');const trimmed=p?p.trim():'';if(!trimmed){showToast('A file path is required','error');return;}if(trimmed.includes('..')){showToast('Invalid path: parent directory traversal not allowed','error');return;}if(!/\.(qcow2|qcow|vmdk|vdi|vhdx|raw|img)$/i.test(trimmed)){showToast('Path should end with a disk image extension (.qcow2, .vmdk, etc.)','warn');}const r=await apiPost('/api/import','path='+encodeURIComponent(trimmed));if(r){await refresh();setStatus('VM imported.');}}
+async function batchStart(){var btns=document.querySelectorAll('[data-action="batchStart"]');for(var b=0;b<btns.length;b++){btns[b].disabled=true;btns[b].textContent='...';}
+var started=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped')total++;}
+for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){setStatus('Batch start: VM '+(started+failed+1)+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r){started++;}else{failed++;setStatus('Batch start: VM '+(started+failed)+' of '+total+' failed, continuing...');}}}
+await refresh();setStatus('Batch start complete: '+started+' started'+(failed>0?', '+failed+' failed':''));
+for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent='▶▶ All';}}
+async function batchStop(){if(!(await showConfirmDialog('Power off ALL running VMs?\nUnsaved data may be lost.')))return;
+var btns=document.querySelectorAll('[data-action="batchStop"]');for(var b=0;b<btns.length;b++){btns[b].disabled=true;btns[b].textContent='...';}
+var stopped=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status==='running'||vms[i].status==='paused')total++;}
+for(let i=vms.length-1;i>=0;i--){if(vms[i].status==='running'||vms[i].status==='paused'){setStatus('Batch stop: VM '+(stopped+failed+1)+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r){stopped++;}else{failed++;setStatus('Batch stop: VM '+(stopped+failed)+' of '+total+' failed, continuing...');}}}
+await refresh();setStatus('Batch stop complete: '+stopped+' stopped'+(failed>0?', '+failed+' failed':''));
+for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent='⏹⏹ All';}}
 async function takeSnapshot(){if(sel===null)return;openSnapshots();}
-async function takeSnapshotFromDlg(){if(sel===null)return;const st=document.getElementById('s_tag');if(!st)return;const t=st.value;if(!t){alert('Enter a tag name');return;}
+async function takeSnapshotFromDlg(){if(sel===null){showToast('No VM selected','warn');return;}const st=document.getElementById('s_tag');if(!st)return;const t=st.value;if(!t){showToast('Enter a tag name','warn');return;}
 var takeBtn=document.querySelector('[data-action="takeSnapshotFromDlg"]');if(takeBtn){takeBtn.disabled=true;takeBtn.textContent='Taking...';}
 const r=await apiPost('/api/snapshot/take/'+sel,'tag='+encodeURIComponent(t));if(r){st.value='';loadSnapshots();setStatus('Snapshot taken: '+t);}
 if(takeBtn){takeBtn.disabled=false;takeBtn.textContent='Take';}}
@@ -160,21 +182,22 @@ if(!t||t==='(none)'){el.innerHTML='<div style="color:var(--text-dim)">No snapsho
 const lines=t.split('\n');let h='';for(const ln of lines){const tag=ln.trim();if(!tag)continue;
 h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"><span>${escHtml(tag)}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}">Del</button></span></div>`;}
 el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
-async function revertSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Revert to snapshot "'+tag+'"? This will discard current state.'))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
+async function revertSnapshot(tag){if(sel===null||!tag)return;if(!(await showConfirmDialog('Revert to snapshot "'+tag+'"? This will discard current state.')))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
 const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);var sd=document.getElementById('snapdlg');if(sd)sd.close();}else{loadSnapshots();}}
-async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!confirm('Delete snapshot "'+tag+'"?'))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
+async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!(await showConfirmDialog('Delete snapshot "'+tag+'"?')))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
 const r=await apiPost('/api/snapshot/delete/'+sel,'tag='+encodeURIComponent(tag));if(r){loadSnapshots();setStatus('Deleted snapshot: '+tag);}}
 async function sendCad(){if(sel===null)return;const r=await apiPost('/api/cad/'+sel);if(r)setStatus('Ctrl+Alt+Del sent to guest.');}
 async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/export/'+sel,{method:'POST',headers:{'X-API-Key':'hangar'}});if(!r.ok){setStatus('Export failed: '+r.status);return;}const blob=await r.blob();const a=document.createElement('a');const url=URL.createObjectURL(blob);a.href=url;a.download=vms[sel].name+'.ova';a.click();setTimeout(function(){URL.revokeObjectURL(url);},60000);setStatus('Export downloaded.');}catch(e){setStatus('Export error: '+e);}}
 async function migrateGuest(){if(sel===null)return;var vm=vms[sel];var mv=document.getElementById('migrate_vmname');if(mv)mv.textContent='Migrating: '+vm.name;var md=document.getElementById('migratedlg');if(md){updateMigUri();md.showModal();}}
 function updateMigUri(){var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');var uri=document.getElementById('mig_uri');if(host&&port&&uri){uri.value='tcp:'+host.value+':'+port.value;}}
 var migrating=false;
-async function doMigrate(){if(sel===null||migrating)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;migrating=true;var r=await apiPost('/api/migrate/'+sel,'dest='+encodeURIComponent(dest));if(!r){migrating=false;return;}try{var j=JSON.parse(r);if(j.status!=='started'){showToast('Migration failed to start','error');migrating=false;return;}}catch(e){}var md=document.getElementById('migratedlg');if(md)md.close();showMigProgress();pollMigStatus();}
+async function doMigrate(){if(sel===null||migrating)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value,10)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;migrating=true;migIdx=sel;var resp=await apiPost('/api/migrate/'+sel,'dest='+encodeURIComponent(dest));if(!resp){migrating=false;migIdx=null;return;}var j=await resp.json();if(!j||j.status!=='started'){showToast('Migration failed to start','error');migrating=false;migIdx=null;return;}var md=document.getElementById('migratedlg');if(md)md.close();showMigProgress();pollMigStatus();}
 var migPollTimer=null;
+var migIdx=null;
 function showMigProgress(){var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar&&info){bar.style.display='block';info.style.display='inline';info.textContent='Migration in progress...';var fill=bar.firstElementChild;if(fill)fill.style.width='0%';}if(cancel)cancel.style.display='inline';}
-function hideMigProgress(){migrating=false;if(migPollTimer){clearTimeout(migPollTimer);migPollTimer=null;}var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar)bar.style.display='none';if(info)info.style.display='none';if(cancel)cancel.style.display='none';}
-async function pollMigStatus(){if(sel===null){hideMigProgress();return;}
-var t='';try{var resp=await fetch('/api/migrate/status/'+sel);t=await resp.text();}catch(e){}
+function hideMigProgress(){migrating=false;migIdx=null;if(migPollTimer){clearTimeout(migPollTimer);migPollTimer=null;}var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar)bar.style.display='none';if(info)info.style.display='none';if(cancel)cancel.style.display='none';}
+async function pollMigStatus(){if(migIdx===null){hideMigProgress();return;}
+var t='';try{var ctl=new AbortController();var tid=setTimeout(function(){ctl.abort();},10000);var resp=await fetch('/api/migrate/status/'+migIdx,{signal:ctl.signal});clearTimeout(tid);t=await resp.text();}catch(e){}
 var info=document.getElementById('mig_pct');var bar=document.getElementById('mig_progress');
 if(!info||!bar)return;
 var fill=bar.firstElementChild;
@@ -183,28 +206,50 @@ try{
 var s=JSON.parse(t);
 if(s.status==='completed'){info.textContent='Migration completed.';if(fill){fill.style.width='100%';fill.style.background='var(--success)';}setStatus('Migration completed');setTimeout(hideMigProgress,3000);return;}
 if(s.status==='failed'||s.status==='error'){info.textContent='Migration failed.';if(fill)fill.style.background='var(--danger)';setStatus('Migration failed');setTimeout(hideMigProgress,3000);return;}
-if(s.status==='cancelled'){info.textContent='Migration cancelled.';if(fill)fill.style.background='var(--amber)';setStatus('Migration cancelled');setTimeout(hideMigProgress,3000);return;}
+if(s.status==='cancelled'){info.textContent='Migration cancelled.';if(fill)fill.style.background='var(--warn)';setStatus('Migration cancelled');setTimeout(hideMigProgress,3000);return;}
 // Update progress bar if server provides percentage
 if(typeof s.pct==='number'&&fill){fill.style.width=Math.min(100,Math.max(0,s.pct))+'%';}
 info.textContent='Migration '+s.status+'...';
 }catch(e){info.textContent='Migration polling error';}
 migPollTimer=setTimeout(pollMigStatus,500);}
-async function cancelMigrate(){var r=await apiPost('/api/migrate/cancel/'+sel,'');if(r){var info=document.getElementById('mig_pct');if(info)info.textContent='Cancelling...';setStatus('Migration cancel requested');}}
+async function cancelMigrate(){if(migIdx===null)return;var r=await apiPost('/api/migrate/cancel/'+migIdx,'');if(r){var info=document.getElementById('mig_pct');if(info)info.textContent='Cancelling...';setStatus('Migration cancel requested');}}
 function updatePowerBtn(){const b=document.getElementById('powerbtn');if(!b)return;if(sel===null||sel>=vms.length){b.textContent='▶ Power On';b.className='btn primary';return;}
 const v=vms[sel];if(v.status==='running'||v.status==='paused'){b.textContent='⏹ Power Off';b.className='btn danger';}else{b.textContent='▶ Power On';b.className='btn primary';}}
 function newVm(){var d=document.getElementById('newdlg');if(d)d.showModal();}
 async function createVm(){const nn=document.getElementById('n_name');const nm=document.getElementById('n_mem');const nc=document.getElementById('n_cpu');const nd=document.getElementById('n_disk');
 if(!nn||!nm||!nc||!nd)return;
-const n=nn.value.trim();const m=parseInt(nm.value)||0;
-const c=parseInt(nc.value)||0;const d=parseInt(nd.value)||0;
+const n=nn.value.trim();const m=parseInt(nm.value,10)||0;
+const c=parseInt(nc.value,10)||0;const d=parseInt(nd.value,10)||0;
 if(!n){showToast('VM name is required','error');return;}
 if(m<128||m>65536){showToast('Memory must be 128–65536 MB','error');return;}
 if(c<1||c>256){showToast('CPU cores must be 1–256','error');return;}
 if(d<1||d>65536){showToast('Disk size must be 1–65536 GB','error');return;}
 const r=await apiPost('/api/new','name='+encodeURIComponent(n)+'&mem='+m+'&cpu='+c+'&disk='+d);if(r){var ndlg=document.getElementById('newdlg');if(ndlg)ndlg.close();await refresh();}}
-async function deleteVm(){if(sel===null)return;if(!confirm('Delete this VM?'))return;var deleted=vms[sel];var r=await apiPost('/api/delete/'+sel);if(r){sel=null;var delName=deleted.name;await refresh();toastUndo('Deleted "'+escHtml(delName)+'"',async function(){await apiPost('/api/undo');await refresh();});}}
-function reorderVm(from,to){var oldFrom=from,oldTo=to,oldSel=sel;apiPost('/api/reorder','from='+from+'&to='+to).then(async function(r){if(r){sel=to;await refresh();toastUndo('Moved "'+escHtml(vms[to]?vms[to].name:'VM')+'"',function(){apiPost('/api/reorder','from='+oldTo+'&to='+oldFrom).then(async function(r2){if(r2){sel=oldSel;await refresh();}});});}});}
-function editVm(){if(sel===null)return;if(activeTab==='settings'&&settingsDirty){if(!confirm('You have unsaved changes. Discard them?'))return;}switchTab('settings');if(sel===null||sel>=vms.length)return;
+async function deleteVm(){if(sel===null)return;if(!(await showConfirmDialog('Delete this VM?')))return;var deleted=vms[sel];var r=await apiPost('/api/delete/'+sel);if(r){sel=null;var delName=deleted.name;await refresh();toastUndo('Deleted "'+escHtml(delName)+'"',async function(){await apiPost('/api/undo');await refresh();});}}
+function reorderVm(from,to){var oldFrom=from,oldTo=to,oldSel=sel;
+if(saveInFlight)return;
+// Block concurrent refresh during the reorder operation
+saveInFlight=true;
+// Optimistic: reorder the local array immediately so the UI feels responsive.
+var moved=vms.splice(from,1)[0];vms.splice(to,0,moved);
+sel=to;renderList();if(sel!==null)renderDetails();
+apiPost('/api/reorder','from='+from+'&to='+to).then(async function(r){
+ saveInFlight=false;
+ if(r){await refresh();
+  toastUndo('Moved "'+escHtml(moved.name)+'"',function(){
+   apiPost('/api/reorder','from='+oldTo+'&to='+oldFrom).then(async function(r2){if(r2){sel=oldSel;await refresh();}});
+  });
+ }else{
+  // Revert the optimistic reorder on failure.
+  // Use the captured VM ref to avoid races with refresh() updating vms[].
+  for(var i=0;i<vms.length;i++){if(vms[i]===moved){vms.splice(i,1);break;}}
+  vms.splice(from,0,moved);
+  // Only restore oldSel if the user hasn't changed selection during the call
+  if(sel===to)sel=oldSel;
+  renderList();if(sel!==null)renderDetails();
+ }
+}).catch(function(){saveInFlight=false;});}
+async function editVm(){if(sel===null)return;if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;}switchTab('settings');if(sel===null||sel>=vms.length)return;
 const v=vms[sel];
 var tb=document.getElementById('tabBar');var nm=document.getElementById('vmname');if(tb)tb.style.display='flex';if(nm)nm.textContent=v.name;
 const fields=[
@@ -216,9 +261,14 @@ const fields=[
 ['Disk Cache','e_disk_cache','select',v.disk_cache||0],
 ['ISO Path','e_iso_path','text',v.iso_path||''],['Firmware','e_firmware','select',v.fw||'bios'],
 ['Boot Order','e_boot_order','select',v.boot_order||0],
-{s:'Network &amp; Boot'},['Network','e_network','select',v.net||'user'],['MAC Address','e_mac_address','text',v.mac_address||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
+{s:'Network &amp; Boot'},['Network','e_network','select',v.net||'user'],['MAC Address','e_mac_address','text',v.mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
 ['NIC 2','e_nic2','select',v.nic2_mode||'none'],['NIC 2 MAC','e_nic2_mac','text',v.nic2_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
 ['NIC 3','e_nic3','select',v.nic3_mode||'none'],['NIC 3 MAC','e_nic3_mac','text',v.nic3_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
+['NIC 4','e_nic4','select',v.nic4_mode||'none'],['NIC 4 MAC','e_nic4_mac','text',v.nic4_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
+['NIC 5','e_nic5','select',v.nic5_mode||'none'],['NIC 5 MAC','e_nic5_mac','text',v.nic5_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
+['NIC 6','e_nic6','select',v.nic6_mode||'none'],['NIC 6 MAC','e_nic6_mac','text',v.nic6_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
+['NIC 7','e_nic7','select',v.nic7_mode||'none'],['NIC 7 MAC','e_nic7_mac','text',v.nic7_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
+['NIC 8','e_nic8','select',v.nic8_mode||'none'],['NIC 8 MAC','e_nic8_mac','text',v.nic8_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
 ['Port Forwards','e_portfw','text',v.port_forwards||''],
 {s:'Sharing'},['Shared Folder','e_shared_folder','text',v.shared_folder||''],['USB Device','e_usb','text',v.usb_device||''],
 ['USB Policy','e_usb_policy','select',v.usb_policy||0],
@@ -228,12 +278,22 @@ const fields=[
 ['AP Max','e_ap_max','number',v.autoprotect_max||10,'min="1" max="100" step="1"'],
 {s:'Display &amp; Video'},['Display','e_display','select',v.display||0],['Display Res','e_display_resolution','select',v.display_resolution||0],
 ['3D Accel','e_enable_3d','select',v.enable_3d==='true'?'1':'0'],['GPU Device','e_gpu_device','select',v.gpu_device||0],
-['Embed Display','e_embed_display','select',v.embed_display==='true'?'1':'0'],['Serial','e_enable_serial','select',v.enable_serial==='true'?'1':'0'],
+['Embed Display','e_embed_display','select',v.embed_display==='true'?'1':'0'],['Serial','e_enable_serial','select',v.hasSerial==='true'?'1':'0'],
 ['Num Displays','e_num_displays','number',v.num_displays||1,'min="1" max="16" step="1"'],
 ['VNC Port','e_vnc_port','number',v.vnc_port||5900,'min="1" max="65535" step="1"'],['SPICE Port','e_spice_port','number',v.spice_port||5901,'min="1" max="65535" step="1"'],
 ['Accelerator','e_accel','select',v.accel||'auto'],['Audio','e_audio','select',v.audio||0],
-{s:'Storage &amp; Notes'},['Disk 2 Path','e_disk2_path','text',v.disk2_path||''],['Disk 2 Size','e_disk2_size','number',v.disk2_size||0,'min="0" max="65536" step="1"'],
-['Disk 2 Format','e_disk2_format','select',v.disk2_format||0],['Floppy','e_floppy','text',v.floppy_path||''],
+{s:'Storage &amp; Notes'},['Disk 2 Path','e_disk2_path','text',v.disk2_path||''],['','','disk2actions',''],['Disk 2 Size','e_disk2_size','number',v.disk2_size||0,'min="0" max="65536" step="1"'],
+['Disk 2 Format','e_disk2_format','select',v.disk2_format||0],
+{s:'Extra Disks'},
+['Extra 0 Path','e_extra0_path','text',v.extra0_path||''],['Extra 0 Size','e_extra0_size','number',v.extra0_size||0,'min="0" max="65536" step="1"'],
+['Extra 0 Format','e_extra0_format','select',v.extra0_format||0],
+['Extra 1 Path','e_extra1_path','text',v.extra1_path||''],['Extra 1 Size','e_extra1_size','number',v.extra1_size||0,'min="0" max="65536" step="1"'],
+['Extra 1 Format','e_extra1_format','select',v.extra1_format||0],
+['Extra 2 Path','e_extra2_path','text',v.extra2_path||''],['Extra 2 Size','e_extra2_size','number',v.extra2_size||0,'min="0" max="65536" step="1"'],
+['Extra 2 Format','e_extra2_format','select',v.extra2_format||0],
+['Extra 3 Path','e_extra3_path','text',v.extra3_path||''],['Extra 3 Size','e_extra3_size','number',v.extra3_size||0,'min="0" max="65536" step="1"'],
+['Extra 3 Format','e_extra3_format','select',v.extra3_format||0],
+['Floppy','e_floppy','text',v.floppy_path||''],
 ['Favorite','e_favorite','select',v.favorite==='true'?'1':'0'],['Notes','e_notes','text',v.notes||''],
 {s:'QEMU Capabilities'},
 ['Guest Agent','e_guest_agent','select',v.guest_agent==='true'?'1':'0'],
@@ -246,11 +306,15 @@ const fields=[
 ['Ballooning','e_ballooning','select',v.ballooning==='true'?'1':'0'],
 ['Host Autostart','e_host_autostart','select',v.host_autostart==='true'?'1':'0'],
 ['I/O Threads','e_io_threads','number',v.io_threads||0,'min="0" max="64" step="1"'],
-['Disk BPS Throttle','e_disk_bps_throttle','number',v.disk_bps_throttle||0,'min="0" step="1"'],
-['Disk IOPS Throttle','e_disk_iops_throttle','number',v.disk_iops_throttle||0,'min="0" step="1"']];
+['Disk BPS Throttle','e_disk_bps_throttle','number',v.disk_bps_throttle||0,'min="0" max="1099511627776" step="1"'],
+['Disk IOPS Throttle','e_disk_iops_throttle','number',v.disk_iops_throttle||0,'min="0" max="100000000" step="1"']];
 const selects={e_network:[['user','NAT (User)'],['bridge','Bridged'],['none','None']],
 e_firmware:[['bios','BIOS'],['uefi','UEFI']],e_disk_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
 e_disk2_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
+e_extra0_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
+e_extra1_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
+e_extra2_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
+e_extra3_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
 e_disk_cache:[['0','Writeback'],['1','Writethrough'],['2','None'],['3','Direct Sync'],['4','Unsafe']],
 e_cpu_model:[['host','Host'],['host-passthrough','Host Passthrough'],['max','Max'],['qemu64','QEMU64'],['kvm64','KVM64'],['EPYC','EPYC'],['EPYC-Rome','EPYC-Rome'],['EPYC-Milan','EPYC-Milan'],['Skylake-Server','Skylake-Server'],['Skylake-Client','Skylake-Client'],['Cascadelake-Server','Cascadelake-Server'],['Icelake-Server','Icelake-Server'],['Nehalem','Nehalem'],['Westmere','Westmere'],['SandyBridge','SandyBridge'],['IvyBridge','IvyBridge'],['Haswell','Haswell'],['Broadwell','Broadwell'],['Opteron_G5','Opteron G5'],['Cooperlake','Cooperlake'],['SapphireRapids','SapphireRapids'],['GraniteRapids','GraniteRapids'],['Neoverse-N1','Neoverse-N1'],['Neoverse-N2','Neoverse-N2'],['Neoverse-V1','Neoverse-V1'],['aarch64','AArch64']],
 e_enable_3d:[['0','No'],['1','Yes']],e_gpu_device:[['0','Virtio-GPU (3D)'],['1','Virtio-VGA (3D)'],['2','Virtio-GPU'],['3','Virtio-VGA'],['4','QXL'],['5','Standard VGA']],
@@ -263,6 +327,11 @@ e_enable_serial:[['0','No'],['1','Yes']],e_favorite:[['0','No'],['1','Yes']],
 e_guest_tools:[['0','No'],['1','Yes']],e_autoprotect:[['0','Off'],['1','On']],
 e_nic2:[['none','None'],['user','NAT'],['bridge','Bridged']],
 e_nic3:[['none','None'],['user','NAT'],['bridge','Bridged']],
+e_nic4:[['none','None'],['user','NAT'],['bridge','Bridged']],
+e_nic5:[['none','None'],['user','NAT'],['bridge','Bridged']],
+e_nic6:[['none','None'],['user','NAT'],['bridge','Bridged']],
+e_nic7:[['none','None'],['user','NAT'],['bridge','Bridged']],
+e_nic8:[['none','None'],['user','NAT'],['bridge','Bridged']],
 e_guest_agent:[['0','No'],['1','Yes']],e_virtio_rng:[['0','No'],['1','Yes']],
 e_tpm:[['0','No'],['1','Yes']],e_secure_boot:[['0','No'],['1','Yes']],
 e_hyperv_enlightenments:[['0','No'],['1','Yes']],e_hugepages:[['0','No'],['1','Yes']],
@@ -274,7 +343,8 @@ for(const f of fields){
 if(f.s!==undefined){h+=`<h4 class="form-section-header">${f.s}</h4>`;continue;}
 const[lbl,id,type,val]=f;const attrs=f.length>4?f[4]:'';h+='<div class="field-group">';
 h+=`<label for="${id}">${lbl}</label>`;
-if(type==='select'&&selects[id]){h+=`<select id="${id}">`;
+if(type==='disk2actions'){h+='<span style="display:flex;gap:6px"><button type="button" class="btn" data-action="disk2upload" style="font-size:11px;padding:3px 10px">📤 Upload Disk 2</button><button type="button" class="btn" data-action="disk2download" style="font-size:11px;padding:3px 10px">📥 Download Disk 2</button></span>';}
+else if(type==='select'&&selects[id]){h+=`<select id="${id}">`;
 for(const[ov,ol]of selects[id])h+=`<option value="${ov}"${ov===String(val)?' selected':''}>${ol}</option>`;
 h+='</select>';}else{h+=`<input id="${id}" type="${type}" value="${escHtml(String(val))}" ${attrs}>`;}
 h+='</div>';}
@@ -284,7 +354,7 @@ async function saveVm(){const idx=sel;if(idx===null)return;const btn=document.ge
 saveInFlight=true;
 const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
 const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
-'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','nic2','nic2_mac','nic3','nic3_mac','portfw','notes',
+'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','extra0_path','extra0_size','extra0_format','extra1_path','extra1_size','extra1_format','extra2_path','extra2_size','extra2_format','extra3_path','extra3_size','extra3_format','floppy','nic2','nic2_mac','nic3','nic3_mac','nic4','nic4_mac','nic5','nic5_mac','nic6','nic6_mac','nic7','nic7_mac','nic8','nic8_mac','portfw','notes',
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order',
 'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
 'guest_agent','virtio_rng','tpm','secure_boot','hyperv_enlightenments','hugepages','watchdog','ballooning','host_autostart',
@@ -294,15 +364,17 @@ try{const r=await apiPost('/api/save/'+idx,body);if(r){settingsDirty=false;await
 else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}
 saveInFlight=false;
 for(let i=0;i<formEls.length;i++)formEls[i].disabled=false;}}
+async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=document.createElement('input');inp.type='file';inp.accept='.qcow2,.qcow,.vmdk,.vdi,.vhdx,.raw,.img';inp.onchange=async function(){const file=inp.files&&inp.files[0];if(!file)return;const fd=new FormData();fd.append('disk2',file);setStatus('Uploading Disk 2 for "'+vms[idx].name+'"...');try{const r=await fetch('/api/vm/'+idx+'/upload-disk',{method:'POST',body:fd,headers:{'X-API-Key':'hangar'}});if(!r.ok){var em=await r.text().catch(function(){return'';});try{var j=JSON.parse(em);if(j.error)em=j.error;}catch(e){}throw new Error(em||'HTTP '+r.status);}await refresh();setStatus('Disk 2 uploaded successfully.');if(sel===idx)editVm();}catch(e){setStatus('Upload failed: '+e.message);showToast('Disk 2 upload failed: '+e.message,'error');}};inp.click();}
+function downloadDisk2(){if(sel===null)return;const a=document.createElement('a');a.href='/api/vm/'+sel+'/disk2/download';a.download=vms[sel].name+'_disk2.qcow2';document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);},1000);}
 // ── VNet Editor ──
 let vnetsData=[],vnetIdx=-1;
 async function openVnets(){await loadVnets();var vd=document.getElementById('vnetdlg');if(vd)vd.showModal();}
-async function loadVnets(){try{const r=await fetch('/api/vnets');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};console.error('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};console.error('Failed to load VNets:',e);}renderVnetList();}
+async function loadVnets(){try{const r=await fetch('/api/vnets');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};logDebug('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};logDebug('Failed to load VNets:',e);}renderVnetList();}
 function renderVnetList(){const sel=document.getElementById('vnet_sel');if(!sel)return;let h='';if(!vnetsData.networks)vnetsData={networks:[]};
 for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const line=escHtml(n.name)+' — '+escHtml(n.type);h+=`<option value="${i}"${i===vnetIdx?' selected':''}>${line}</option>`;}
 sel.innerHTML=h;if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length){showVnetFields(vnetIdx);}else{clearVnetFields();}}
 function clearVnetFields(){['vn_name','vn_type','vn_subnet','vn_mask','vn_dhcp','vn_dstart','vn_dend','vn_iface','vn_gw','vn_pf'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});var vt=document.getElementById('vn_type');if(vt)vt.value='nat';var vd=document.getElementById('vn_dhcp');if(vd)vd.value='0';}
-function onVnetSelect(){const s=document.getElementById('vnet_sel');if(!s)return;vnetIdx=parseInt(s.value);if(vnetIdx>=0)showVnetFields(vnetIdx);}
+function onVnetSelect(){const s=document.getElementById('vnet_sel');if(!s)return;vnetIdx=parseInt(s.value,10);if(vnetIdx>=0)showVnetFields(vnetIdx);}
 function showVnetFields(i){const n=vnetsData.networks[i];if(!n)return;
 var vn=document.getElementById('vn_name');if(!vn)return;vn.value=n.name||'';
 var vt=document.getElementById('vn_type');if(vt)vt.value=n.type||'nat';
@@ -344,7 +416,7 @@ vnetsData={networks:def};vnetIdx=0;renderVnetList();}
 async function vnetSaveAll(){const r=await apiPost('/api/vnets/save',JSON.stringify(vnetsData));if(r){var vd=document.getElementById('vnetdlg');if(vd)vd.close();setStatus('VNet settings saved.');}}
 // ── Preferences ──
 var pendingTheme=null;
-async function openPrefs(){var pd=document.getElementById('prefsdlg');if(!pd)return;pendingTheme=null;let cfg={};try{const r=await fetch('/api/config');if(r.ok)cfg=await r.json();}catch(e){console.error('Failed to load config:',e);}
+async function openPrefs(){var pd=document.getElementById('prefsdlg');if(!pd)return;pendingTheme=null;let cfg={};try{const r=await fetch('/api/config');if(r.ok)cfg=await r.json();}catch(e){logDebug('Failed to load config:',e);}
 var pt=document.getElementById('p_theme');if(pt)pt.value=cfg.theme||window.hangarTheme||'system';
 var pdv=document.getElementById('p_default_vm_dir');if(pdv)pdv.value=cfg.default_vm_dir||'';
 var pdm=document.getElementById('p_default_memory_mb');if(pdm)pdm.value=cfg.default_memory_mb||2048;
@@ -354,6 +426,8 @@ var pai=document.getElementById('p_autoprotect_interval');if(pai)pai.value=cfg.a
 var pam=document.getElementById('p_autoprotect_max');if(pam)pam.value=cfg.autoprotect_max_default||10;
 pd.showModal();}
 function openAbout(){var ad=document.getElementById('aboutdlg');if(ad)ad.showModal();}
+async function openCatalog(){var cd=document.getElementById('catalogdlg');if(!cd)return;var list=document.getElementById('catalogList');if(list)list.innerHTML='<div class="spinner" style="padding:20px;text-align:center">Loading catalog…</div>';cd.showModal();try{var r=await fetch('/api/catalog');if(!r.ok){if(list)list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';return;}var entries=await r.json();if(!list)return;if(!entries||!entries.length){list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">No templates available.</p>';return;}var guestOsLabels=['Linux','Windows','FreeBSD','macOS','Other'];var h='';for(var i=0;i<entries.length;i++){var e=entries[i];var osLabel=guestOsLabels[e.guest_os]||'Other';h+='<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)"'+'><div><strong>'+escHtml(e.name)+'</strong><br><small style="color:var(--text-muted)">'+escHtml(e.description||'')+'</small><br><small>'+escHtml(osLabel)+' · '+e.memory_mb+' MB · '+e.cpu_cores+' vCPU · '+e.disk_size_gb+' GB disk</small></div>'+'<button class="btn primary" data-action="quickstartVm" data-catalog-id="'+escHtml(e.id)+'" style="white-space:nowrap;margin-left:12px">Create VM</button></div>';}list.innerHTML=h;}catch(ex){if(list)list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';}}
+async function quickstartVm(slug){if(!slug)return;var r=await apiPost('/api/quickstart/'+slug);if(r){var cd=document.getElementById('catalogdlg');if(cd)cd.close();await refresh();setStatus('VM created from template.');}}
 async function savePrefs(){const body=['theme','default_vm_dir','default_memory_mb','default_cpu_cores','autoprotect_enabled','autoprotect_interval','autoprotect_max']
 .map(id=>{const el=document.getElementById('p_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
 const r=await apiPost('/api/config',body);if(r){if(pendingTheme!==null){window.applyTheme(pendingTheme);pendingTheme=null;}var pd=document.getElementById('prefsdlg');if(pd)pd.close();setStatus('Preferences saved.');}}
@@ -362,9 +436,11 @@ var dialogFocusStack=[];
 var FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 function trapFocus(dlg){if(dlg._trapFocusHandler)return;var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}};dlg._trapFocusHandler=onKey;dlg.addEventListener('keydown',onKey);first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
 function releaseFocus(dlg){var handler=dlg._trapFocusHandler;if(handler){dlg.removeEventListener('keydown',handler);delete dlg._trapFocusHandler;}dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
-['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','migratedlg','shortcutsdlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};var origClose=dlg.close;dlg.close=function(){if(dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
+['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','catalogdlg','migratedlg','shortcutsdlg','confirmdlg','promptdlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};var origClose=dlg.close;dlg.close=function(){if(dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
 // ── Sidebar Overlay Click-to-Close ──
 document.body.addEventListener('click',function(e){if(document.body.classList.contains('sidebar-overlay')&&!e.target.closest('aside')){closeSidebar();}});
+// ── Migrate dialog close cleanup ──
+(function(){var md=document.getElementById('migratedlg');if(md)md.addEventListener('close',function(){if(migrating){hideMigProgress();}});})();
 // ── Toolbar More Click-Outside ──
 document.body.addEventListener('click',function(e){if(toolbarMoreOpen&&!e.target.closest('.toolbar')){closeToolbarMore();}});
 // ── Right-Click Context Menu ──
@@ -373,7 +449,7 @@ function hideCtxMenu(){if(ctxMenu){ctxMenu.remove();ctxMenu=null;ctxVmIdx=-1;}}
 document.addEventListener('click',function(e){if(ctxMenu&&!ctxMenu.contains(e.target))hideCtxMenu();});
 var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventListener('contextmenu',function(e){
   var item=e.target.closest('.vm-item');if(!item){hideCtxMenu();return;}
-  var idx=parseInt(item.getAttribute('data-vm-index'));if(isNaN(idx)||idx>=vms.length){hideCtxMenu();return;}
+  var idx=parseInt(item.getAttribute('data-vm-index'),10);if(isNaN(idx)||idx>=vms.length){hideCtxMenu();return;}
   ctxVmIdx=idx;hideCtxMenu();
   e.preventDefault();
   ctxMenu=document.createElement('div');ctxMenu.className='ctx-menu';ctxMenu.setAttribute('role','menu');
@@ -400,22 +476,22 @@ var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventList
     ['⧉ Clone',function(){if(ctxVmIdx>=0){select(ctxVmIdx);cloneGuest();}}],
     ['⌨ Send Ctrl+Alt+Del',function(){if(ctxVmIdx>=0){select(ctxVmIdx);sendCad();}}],
     ['★ Toggle Favorite',function(){if(ctxVmIdx>=0){select(ctxVmIdx);toggleFavorite(ctxVmIdx);}}],
-    ['✕ Delete',function(){if(ctxVmIdx>=0){select(ctxVmIdx);if(confirm('Delete this VM?'))deleteVm();}}]
+    ['✕ Delete',function(){if(ctxVmIdx>=0){select(ctxVmIdx);deleteVm();}}]
   ];
   items.forEach(function(pair){var lbl=pair[0],fn=pair[1];var mi=document.createElement('div');mi.className='ctx-item';mi.setAttribute('role','menuitem');mi.setAttribute('tabindex','-1');
     mi.textContent=lbl;
-    mi.addEventListener('click',function(){hideCtxMenu();fn();});
+    mi.addEventListener('click',function(){fn();hideCtxMenu();});
     ctxMenu.appendChild(mi);});
 });
 // ── Keyboard Shortcuts ──
-document.addEventListener('keydown',function(e){var shift=e.shiftKey;
+document.addEventListener('keydown',async function(e){var shift=e.shiftKey;
 if((e.ctrlKey||e.metaKey)&&e.key==='s'&&activeTab==='settings'&&sel!==null){e.preventDefault();saveVm();return;}
 if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
 if(e.key==='ArrowUp'||e.key==='ArrowDown'){var listEl=document.getElementById('vmlist');if(listEl&&listEl.contains(e.target)){e.preventDefault();var dir=e.key==='ArrowUp'?-1:1;var idx=sel===null?(dir<0?vms.length-1:0):Math.max(0,Math.min(vms.length-1,sel+dir));select(idx);return;}}
 if(e.key==='Escape'){
   var anyOpen=false;['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','shortcutsdlg'].forEach(function(id){var d=document.getElementById(id);if(!d)return;if(d.hasAttribute('open')){d.close();anyOpen=true;}});
   if(!anyOpen&&document.body.classList.contains('displayonly')){exitDisplayOnly();return;}
-  if(!anyOpen&&sel!==null){if(activeTab==='settings'&&settingsDirty){if(!confirm('You have unsaved changes. Discard them?'))return;}sel=null;renderList();showEmptyState();}
+  if(!anyOpen&&sel!==null){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;}sel=null;renderList();showEmptyState();}
   return;
 }
 if(e.key==='?'&&!e.ctrlKey&&!e.metaKey){e.preventDefault();showShortcutsModal();return;}
@@ -470,12 +546,15 @@ function startFb() {
   if (!displayEl) return;
   displayEl.style.display = 'block';
   displayEl.classList.add('loading');
+  displayEl.classList.remove('connected');
 
   // Dispatch based on display type: 2 = SPICE, 3 = VNC
   var dt = Number(v.display);
   if (dt === 2) {
+    updateDisplayBadge('connecting', 'spice');
     startSpice(idx, displayEl, v);
   } else if (dt === 3) {
+    updateDisplayBadge('connecting', 'vnc');
     startVnc(idx, displayEl);
   }
   // Other display types (GTK, SDL, None) have no remote framebuffer; skip.
@@ -490,9 +569,12 @@ function startVnc(idx, displayEl) {
   const url = proto + '//' + location.host + '/ws/vnc/' + idx;
 
   try {
+    if (typeof noVNC === 'undefined') { showToast('VNC client failed to load','error'); return; }
     rfb = new noVNC.RFB(displayEl, url, {});
     rfb.addEventListener('connect', function() {
       displayEl.classList.remove('loading');
+      displayEl.classList.add('connected');
+      updateDisplayBadge('connected', 'vnc');
     });
     rfb.addEventListener('disconnect', function(e) {
       stopFb();
@@ -516,16 +598,19 @@ function startSpice(idx, displayEl, v) {
   const url = proto + '//' + location.host + '/ws/spice/' + idx;
 
   try {
+    if (typeof SpiceHtml5 === 'undefined') { showToast('SPICE client failed to load','error'); return; }
     spice = new SpiceHtml5.SpiceMainConn({
       uri: url,
       password: '',
       screen_id: 'display',
       onerror: function(e) {
-        console.warn('SPICE error:', e);
+        logDebug('SPICE error:', e);
         stopFb();
       },
       onsuccess: function() {
         displayEl.classList.remove('loading');
+        displayEl.classList.add('connected');
+        updateDisplayBadge('connected', 'spice');
       }
     });
   } catch (e) {
@@ -548,11 +633,30 @@ function stopFb() {
     for (var ci = 0; ci < canvases.length; ci++) { if (canvases[ci].parentNode === displayEl) displayEl.removeChild(canvases[ci]); }
     displayEl.style.display = 'none';
     displayEl.classList.remove('loading');
+    displayEl.classList.remove('connected');
+    updateDisplayBadge('disconnected');
   }
 }
+function updateDisplayBadge(state, proto) {
+  var badge = document.getElementById('displayBadge');
+  if (!badge) return;
+  badge.classList.remove('vnc', 'spice');
+  if (state === 'connecting') {
+    badge.textContent = 'Connecting\u2026';
+  } else if (state === 'connected') {
+    badge.textContent = 'Connected';
+  } else {
+    badge.textContent = 'Disconnected';
+  }
+  if (proto) badge.classList.add(proto);
+}
 // Serial console
-let serialWs=null,serialIdx=null,serialManualOff=false,serialManualOffVmIdx=-1,serialReconnectTimer=null;
+let serialWs=null,serialIdx=null,serialManualOff=false,serialManualOffVmIdx=-1;
+let serialReconnectDelay=1000,serialReconnectTimeoutId=null;
+function scheduleSerialReconnect(){if(serialReconnectTimeoutId)return;serialReconnectTimeoutId=setTimeout(function(){serialReconnectTimeoutId=null;if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&sel===serialManualOffVmIdx){serialReconnectDelay=1000;return;}if(v.status==='running'&&v.hasSerial==='true'){startSerial(sel);serialReconnectDelay=Math.min(serialReconnectDelay*2,30000);}else{serialReconnectDelay=1000;}}},serialReconnectDelay);}
+function clearSerialReconnect(){if(serialReconnectTimeoutId){clearTimeout(serialReconnectTimeoutId);serialReconnectTimeoutId=null;}serialReconnectDelay=1000;}
 function startSerial(idx){if(serialManualOff&&serialManualOffVmIdx===idx)return;
+clearSerialReconnect();
 if(serialWs){if(serialIdx===idx&&(serialWs.readyState===WebSocket.OPEN||serialWs.readyState===WebSocket.CONNECTING))return;
 serialWs.close();serialWs=null;} /* close stale CONNECTING socket before reconnect */
 const sameVm=(serialIdx===idx);
@@ -562,12 +666,12 @@ serialIdx=idx;const term=document.getElementById('serialterm');const sp=document
 const proto=location.protocol==='https:'?'wss:':'ws:';const ws=new WebSocket(proto+'//'+location.host+'/ws/serial/'+idx);
 serialWs=ws; // reassign before old onclose fires to avoid closing the new socket
 ws.onmessage=e=>{term.value+=e.data;term.scrollTop=term.scrollHeight;};
-ws.onopen=()=>{sp.classList.add('connected');};
-ws.onclose=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}}};
-ws.onerror=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}}};
+ws.onopen=()=>{serialReconnectDelay=1000;sp.classList.add('connected');};
+ws.onclose=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
+ws.onerror=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
 }
-function stopSerial(clearTerm){if(clearTerm===void 0)clearTerm=true;if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;if(clearTerm){const term=document.getElementById('serialterm');if(term)term.value='';}const sp=document.getElementById('serialpanel');if(sp){sp.style.display='none';sp.classList.remove('connected');}}
-function manualDisconnectSerial(){serialManualOff=true;serialManualOffVmIdx=sel!==null?sel:-1;stopSerial(true);}
+function stopSerial(clearTerm){if(clearTerm===void 0)clearTerm=true;clearSerialReconnect();if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;if(clearTerm){const term=document.getElementById('serialterm');if(term)term.value='';}const sp=document.getElementById('serialpanel');if(sp){sp.style.display='none';sp.classList.remove('connected');}}
+function manualDisconnectSerial(){serialManualOff=true;serialManualOffVmIdx=sel!==null?sel:-1;clearSerialReconnect();stopSerial(true);}
 var serialTermEl=document.getElementById('serialterm');if(serialTermEl){serialTermEl.addEventListener('keydown',function(e){if(!serialWs||serialWs.readyState!==WebSocket.OPEN)return;
 var s=null;
 if(e.ctrlKey&&!e.altKey&&!e.metaKey){
@@ -592,8 +696,35 @@ if(e.ctrlKey&&!e.altKey&&!e.metaKey){
  }
 }
 if(s){e.preventDefault();e.stopPropagation();serialWs.send(s);}});}
-if(serialReconnectTimer){clearInterval(serialReconnectTimer);}
-serialReconnectTimer=setInterval(()=>{if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&sel!==serialManualOffVmIdx){serialManualOff=false;serialManualOffVmIdx=-1;}if(v.status==='running'&&v.hasSerial==='true')startSerial(sel);else stopSerial();if(v.status==='running')startFb();else stopFb();}},3000);
+// Serial panel resize handle
+(function() {
+  var handle = document.getElementById('serialResize');
+  var term = document.getElementById('serialterm');
+  if (!handle || !term) return;
+  var startY = 0, startH = 0, dragging = false;
+  handle.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY;
+    startH = term.offsetHeight;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+  });
+  window.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    var dy = e.clientY - startY;
+    var newH = Math.max(60, Math.min(600, startH + dy));
+    term.style.height = newH + 'px';
+    term.setAttribute('rows', Math.floor(newH / 20));
+  });
+  window.addEventListener('mouseup', function() {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+})();
+var filterTimer=null;
 // ── Event Delegation (CSP-safe: no inline handlers) ──
 var actionHandlers={
  toggleSidebar:function(){toggleSidebar();},deselectVm:function(){deselectVm();},
@@ -605,7 +736,8 @@ var actionHandlers={
  renameGuest:function(){renameGuest();},cloneGuest:function(){cloneGuest();},
  importGuest:function(){importGuest();},takeSnapshot:function(){takeSnapshot();},
  exportOvf:function(){exportOvf();},migrateGuest:function(){migrateGuest();},doMigrate:function(){doMigrate();},openVnets:function(){openVnets();},
- openPrefs:function(){openPrefs();},openAbout:function(){openAbout();},
+ openPrefs:function(){openPrefs();},openAbout:function(){openAbout();},openCatalog:function(){openCatalog();},
+ quickstartVm:function(el){var slug=el.getAttribute('data-catalog-id');if(slug)quickstartVm(slug);},
  batchStart:function(){batchStart();},batchStop:function(){batchStop();},
  deleteVm:function(){deleteVm();},clearSearch:function(){clearSearch();},
  newVm:function(){newVm();},createVm:function(){createVm();},
@@ -617,11 +749,11 @@ var actionHandlers={
  vnetAdd:function(){vnetAdd();},vnetRemove:function(){vnetRemove();},
  vnetDefaults:function(){vnetDefaults();},vnetSaveCurrent:function(){vnetSaveCurrent();},
  vnetSaveAll:function(){vnetSaveAll();},
- select:function(el){var i=parseInt(el.getAttribute('data-vm-index'));if(!isNaN(i))select(i);},
- toggleFavorite:function(el){var parent=el.closest('.vm-item');if(!parent)return;var i=parseInt(parent.getAttribute('data-vm-index'));if(!isNaN(i))toggleFavorite(i);},
+ select:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);},
+ toggleFavorite:function(el){var parent=el.closest('.vm-item');if(!parent)return;var i=parseInt(parent.getAttribute('data-vm-index'),10);if(!isNaN(i))toggleFavorite(i);},
  revertSnapshot:function(el){revertSnapshot(el.getAttribute('data-snap-tag')||'');},
  deleteSnapshot:function(el){deleteSnapshot(el.getAttribute('data-snap-tag')||'');},
- doClone:function(el){doClone(parseInt(el.getAttribute('data-clone-linked')));},
+ doClone:function(el){doClone(parseInt(el.getAttribute('data-clone-linked'),10));},
  switchTab:function(el){switchTab(el.getAttribute('data-tab')||'summary');},
  closeDlg:function(el){var id=el.getAttribute('data-dialog');if(id){var d=document.getElementById(id);if(d)d.close();}},
  dismissBanner:function(){var b=document.getElementById('connbanner');if(b)b.style.display='none';serverDown=false;setStatus('');},
@@ -629,9 +761,10 @@ var actionHandlers={
  applyTheme:function(el){pendingTheme=el.value;window.applyTheme(el.value);},
  toggleTheme:function(){cycleTheme();},
  filterList:function(){filterList();},
- onVnetSelect:function(){onVnetSelect();}
+ onVnetSelect:function(){onVnetSelect();},
+ disk2upload:function(){uploadDisk2();},
+ disk2download:function(){downloadDisk2();}
 };
-var filterTimer=null;
 document.body.addEventListener('click',function(e){
  var el=e.target.closest('[data-action]');if(!el)return;
  var action=el.getAttribute('data-action');var h=actionHandlers[action];if(h)h(el);
@@ -654,10 +787,10 @@ document.body.addEventListener('change',function(e){
 });
 document.body.addEventListener('keydown',function(e){
  if(e.key==='Enter'&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'&&e.target.tagName!=='SELECT'){
-  var el=e.target.closest('[data-action="select"]');if(el){var i=parseInt(el.getAttribute('data-vm-index'));if(!isNaN(i))select(i);}
+  var el=e.target.closest('[data-action="select"]');if(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);}
  }
 });
-window.addEventListener('beforeunload',function(){stopFb();stopSerial(true);if(serialReconnectTimer){clearInterval(serialReconnectTimer);serialReconnectTimer=null;}});
+window.addEventListener('beforeunload',function(){stopFb();stopSerial(true);clearSerialReconnect();});
 window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=document.querySelector('.toolbar-more-popover');var btn=document.querySelector('.toolbar-more');if(popover&&btn)positionToolbarMore(popover,btn);}});
 // ── Drag-to-reorder VM list ──
 (function initDragReorder(){
@@ -665,7 +798,7 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
   var vml=document.getElementById('vmlist');if(!vml)return;
   vml.addEventListener('dragstart',function(e){
     var item=e.target.closest('.vm-item');if(!item)return;
-    dragIdx=parseInt(item.getAttribute('data-vm-index'));
+    dragIdx=parseInt(item.getAttribute('data-vm-index'),10);
     if(isNaN(dragIdx)){dragIdx=null;return;}
     e.dataTransfer.effectAllowed='move';
     e.dataTransfer.setData('text/plain',''); // required for Firefox
@@ -680,8 +813,8 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
   vml.addEventListener('dragover',function(e){
     e.preventDefault();
     e.dataTransfer.dropEffect='move';
-    var item=e.target.closest('.vm-item');if(!item||!dragIdx)return;
-    var idx=parseInt(item.getAttribute('data-vm-index'));
+    var item=e.target.closest('.vm-item');if(!item||dragIdx===null)return;
+    var idx=parseInt(item.getAttribute('data-vm-index'),10);
     if(isNaN(idx)||idx===dragIdx)return;
     vml.querySelectorAll('.drag-over').forEach(function(el){el.classList.remove('drag-over');});
     item.classList.add('drag-over');
@@ -693,7 +826,7 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
     e.preventDefault();
     var item=e.target.closest('.vm-item');if(!item||dragIdx===null)return;
     item.classList.remove('drag-over');
-    var toIdx=parseInt(item.getAttribute('data-vm-index'));
+    var toIdx=parseInt(item.getAttribute('data-vm-index'),10);
     if(isNaN(toIdx)||toIdx===dragIdx)return;
     var from=dragIdx,to=toIdx;
     dragIdx=null;
@@ -708,7 +841,7 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
 (function initTouchReorder(){
   var touchDrag=null,vml=document.getElementById('vmlist');if(!vml)return;
   function getItem(e){return e.target.closest('.vm-item');}
-  function itemIdx(item){return parseInt(item.getAttribute('data-vm-index'));}
+  function itemIdx(item){return parseInt(item.getAttribute('data-vm-index'),10);}
   function findTarget(y){var items=vml.querySelectorAll('.vm-item');for(var i=0;i<items.length;i++){var r=items[i].getBoundingClientRect();if(y<r.top+r.height/2){return items[i];}}return items.length?items[items.length-1]:null;}
   vml.addEventListener('pointerdown',function(e){
     if(e.pointerType==='mouse')return; // let HTML5 DnD handle mouse
@@ -740,7 +873,7 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
     vml.querySelectorAll('.drag-over').forEach(function(el){el.classList.remove('drag-over');});
     if(touchDrag.active){
       var target=findTarget(e.clientY);
-      if(target){var toIdx=itemIdx(target);if(!isNaN(toIdx)&&toIdx!==touchDrag.idx){reorderVm(touchDrag.idx,toIdx);}}
+      if(target){var toIdx=itemIdx(target);if(!isNaN(toIdx)&&toIdx!==touchDrag.idx&&!saveInFlight){reorderVm(touchDrag.idx,toIdx);}}
     }
     touchDrag=null;
   });

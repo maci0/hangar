@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Unit tests for VM array delete/undo logic and status-bar text formatting.
 //!
-//! Tests the core operations from `appstate.zig` and `main.zig` without
-//! requiring FLTK widgets. All VM manipultion logic is exercised against
-//! local arrays so the tests are pure logic checks.
+//! Tests the core delete/undo algorithms shared by web_server.zig.
+//! All VM manipulation logic is exercised
+//! against local arrays so the tests are pure logic checks.
 
 const std = @import("std");
 const testing = std.testing;
@@ -108,8 +108,16 @@ test "delete: middle VM — selected stays at same index, count decremented" {
     _ = vms[2].setName("vm-C");
     _ = vms[3].setName("vm-D");
     _ = vms[4].setName("vm-E");
-    handles[0] = 10; handles[1] = 20; handles[2] = 30; handles[3] = 40; handles[4] = 50;
-    started[0] = 100; started[1] = 200; started[2] = 300; started[3] = 400; started[4] = 500;
+    handles[0] = 10;
+    handles[1] = 20;
+    handles[2] = 30;
+    handles[3] = 40;
+    handles[4] = 50;
+    started[0] = 100;
+    started[1] = 200;
+    started[2] = 300;
+    started[3] = 400;
+    started[4] = 500;
 
     // Delete index 2 (vm-C). vm-D should shift to index 2, vm-E to index 3.
     const new_idx = simulateDelete(&vms, &vm_count, &handles, &started, 2);
@@ -178,7 +186,7 @@ test "delete: first VM — index 0 stays 0, later VMs shift left" {
 }
 
 test "delete: out-of-range index is validated by caller, not tested here" {
-    // The caller (main.zig) guards: `if (idx >= vm_count) return;`
+    // The caller (web_server.zig handleDelete) guards: `if (idx >= vm_count) return;`
     // simulateDelete assumes a valid idx.
 }
 
@@ -191,7 +199,9 @@ test "undo: restore VM at original index, count incremented" {
     _ = vms[0].setName("vm-0");
     _ = vms[1].setName("vm-1");
     _ = vms[2].setName("vm-2");
-    started[0] = 111; started[1] = 222; started[2] = 333;
+    started[0] = 111;
+    started[1] = 222;
+    started[2] = 333;
 
     // Simulate deleting index 1 (vm-1), saving undo state.
     const saved_vm = vms[1];
@@ -381,8 +391,10 @@ test "status bar: empty count matches vm_count after each operation" {
     var started = [_]i64{0} ** MAX_VMS;
     var vm_count: usize = 4;
 
-    _ = vms[0].setName("a"); _ = vms[1].setName("b");
-    _ = vms[2].setName("c"); _ = vms[3].setName("d");
+    _ = vms[0].setName("a");
+    _ = vms[1].setName("b");
+    _ = vms[2].setName("c");
+    _ = vms[3].setName("d");
 
     var buf: [128]u8 = undefined;
 
@@ -412,7 +424,9 @@ test "delete + undo: status bar count invariant holds" {
     var started = [_]i64{0} ** MAX_VMS;
     var vm_count: usize = 3;
 
-    _ = vms[0].setName("x"); _ = vms[1].setName("y"); _ = vms[2].setName("z");
+    _ = vms[0].setName("x");
+    _ = vms[1].setName("y");
+    _ = vms[2].setName("z");
 
     var buf: [128]u8 = undefined;
     try testing.expectEqualStrings("3 virtual machine(s)", formatStatusBarEmpty(&buf, vm_count));

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Pure ring-buffer append for the serial console.
 //!
-//! Split out of `serial.zig` (which `@cImport`s IUP) so the index math can be
-//! fuzzed standalone. The serial reader thread feeds this guest-controlled
-//! byte chunks of arbitrary size; it must never write out of bounds and must
-//! always keep the most recent bytes when the buffer overflows.
+//! The serial reader thread feeds this guest-controlled byte chunks of
+//! arbitrary size; it must never write out of bounds and must always keep
+//! the most recent bytes when the buffer overflows.
 
 const std = @import("std");
 

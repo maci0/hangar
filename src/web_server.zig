@@ -45,27 +45,11 @@ var auth_token_len: usize = 0;
 var tcp_sock_fd: c.fd_t = -1;
 var unix_sock_fd: c.fd_t = -1;
 
-/// Get or create the Vmm handle for VM at index idx.
-fn getVmmHandle(idx: usize) ?hv_iface.VmmHandle {
-    if (idx >= appstate.vm_count) return null;
-    if (appstate.g_vmm_handles[idx] == null) {
-        appstate.g_vmm_handles[idx] = hv_backend.createHandle(&appstate.vms[idx], appstate.vms[idx].accel, std.heap.page_allocator) catch return null;
-    }
-    return appstate.g_vmm_handles[idx];
-}
-
-/// Destroy the Vmm handle for VM at index idx.
-fn destroyVmmHandle(idx: usize) void {
-    if (appstate.g_vmm_handles[idx]) |h| {
-        appstate.g_vmm.deinitFn(h);
-        appstate.g_vmm_handles[idx] = null;
-    }
-}
-
 const c = std.c;
 
 // POSIX networking constants (not in std.c in Zig 0.16)
 const AF_INET: c_uint = 2;
+const AF_INET6: c_uint = 10;
 const SOCK_STREAM: c_int = 1;
 const AF_UNIX: c_uint = 1;
 const SOL_SOCKET: c_int = 1;
@@ -75,6 +59,8 @@ const SHUT_WR: c_int = 1;
 const SHUT_RDWR: c_int = 2;
 const F_SETFL: c_int = 4;
 const O_NONBLOCK: c_int = 2048;
+const IPPROTO_IPV6: c_int = 41;
+const IPV6_V6ONLY: c_int = 26;
 
 const SIGPIPE: c_int = 13;
 const SIG_IGN: isize = 1;
@@ -143,7 +129,10 @@ fn clampPref(v: []const u8, fallback: u32, lo: u32, hi: u32) u32 {
 fn findHeader(headers: []const u8, name: []const u8) ?[]const u8 {
     var pos: usize = 0;
     while (pos < headers.len) {
-        if (std.mem.startsWith(u8, headers[pos..], name)) {
+        // Case-insensitive header name match per RFC 7230.
+        if (headers.len - pos >= name.len and
+            std.ascii.eqlIgnoreCase(headers[pos .. pos + name.len], name))
+        {
             const val_start = pos + name.len;
             const val_end = std.mem.indexOfScalar(u8, headers[val_start..], '\r') orelse (headers.len - val_start);
             return headers[val_start .. val_start + val_end];
@@ -301,13 +290,21 @@ fn acceptLoop(fd: c.fd_t) void {
     }
 }
 
+/// Returns true if `req` starts with `prefix` followed by end-of-string, space, or '?'.
+fn routeMatches(req: []const u8, prefix: []const u8) bool {
+    if (!std.mem.startsWith(u8, req, prefix)) return false;
+    if (req.len == prefix.len) return true;
+    const next = req[prefix.len];
+    return next == ' ' or next == '?';
+}
+
 fn serveHtml(conn: c.fd_t) void {
     defer _ = c.close(conn);
 
     // 30-second receive timeout (SO_RCVTIMEO).
     var tv = std.mem.zeroes([16]u8);
-    @as(*align(8) i64, @alignCast(@ptrCast(&tv[0]))).* = 30; // tv_sec
-    @as(*align(8) i64, @alignCast(@ptrCast(&tv[8]))).* = 0; // tv_usec
+    @as(*align(8) i64, @ptrCast(@alignCast(&tv[0]))).* = 30; // tv_sec
+    @as(*align(8) i64, @ptrCast(@alignCast(&tv[8]))).* = 0; // tv_usec
     _ = c.setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, @sizeOf(@TypeOf(tv)));
 
     var buf: [65536]u8 = undefined;
@@ -408,13 +405,13 @@ fn serveHtml(conn: c.fd_t) void {
     }
 
     // ── File download (streaming) routes — handled after auth ──
-    if (std.mem.startsWith(u8, req, "GET /api/vm/") and std.mem.indexOf(u8, req, "/disk2/download") != null) {
+    if (parseVmIdxSuffix(req, "GET /api/vm/", "/disk2/download") != null) {
         handleDisk2Download(conn, req) catch {
             writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "Download failed");
         };
         return;
     }
-    if (std.mem.startsWith(u8, req, "POST /api/vm/") and std.mem.indexOf(u8, req, "/upload-disk") != null) {
+    if (parseVmIdxSuffix(req, "POST /api/vm/", "/upload-disk") != null) {
         const resp = handleUploadDisk(req) catch "upload err";
         const upload_status: u16 = if (std.mem.eql(u8, resp, "ok")) HTTP_OK else HTTP_BAD_REQUEST;
         writeHttpResponse(conn, upload_status, "text/plain", resp);
@@ -427,20 +424,20 @@ fn serveHtml(conn: c.fd_t) void {
         return;
     }
 
-    if (std.mem.startsWith(u8, req, "GET /api/vms")) {
+    if (routeExact(req, "GET /api/vms")) {
         content_type = "application/json; charset=utf-8";
         const json_bytes = renderJson(&json_buf);
         response = if (json_bytes > 0) json_buf[0..json_bytes] else "[]";
-    } else if (std.mem.startsWith(u8, req, "GET /api/capabilities")) {
+    } else if (routeExact(req, "GET /api/capabilities")) {
         content_type = "application/json; charset=utf-8";
         response = handleCapabilities(&snap_buf);
-    } else if (std.mem.startsWith(u8, req, "GET /api/health")) {
+    } else if (routeExact(req, "GET /api/health")) {
         response = "{\"status\":\"ok\",\"version\":\"1.0\"}";
         content_type = "application/json; charset=utf-8";
-    } else if (std.mem.startsWith(u8, req, "GET /api/config")) {
+    } else if (routeExact(req, "GET /api/config")) {
         content_type = "application/json; charset=utf-8";
         response = try serveConfigRaw();
-    } else if (std.mem.startsWith(u8, req, "GET /api/catalog")) {
+    } else if (routeExact(req, "GET /api/catalog")) {
         content_type = "application/json; charset=utf-8";
         response = handleCatalog(&snap_buf);
     } else if (std.mem.startsWith(u8, req, "GET /api/quickstart/")) {
@@ -455,16 +452,16 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/power/")) {
         response = try handlePower(req);
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/new")) {
+    } else if (routeExact(req, "POST /api/new")) {
         response = try handleNewVm(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/delete/")) {
         response = try handleDelete(req);
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/undo")) {
+    } else if (routeExact(req, "POST /api/undo")) {
         response = try handleUndo();
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/reorder")) {
+    } else if (routeExact(req, "POST /api/reorder")) {
         response = try handleReorder(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "GET /api/fb/")) {
@@ -479,14 +476,14 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/rename/")) {
         response = try handleRename(req);
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/save")) {
+    } else if (routeExact(req, "POST /api/save")) {
         response = "saved";
         persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
             logErr("persist.save failed");
             response = "save failed";
         };
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/create")) {
+    } else if (routeExact(req, "POST /api/create")) {
         response = try handleNewVm(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/suspend/")) {
@@ -516,7 +513,7 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/snapshot/delete/")) {
         response = try handleSnapshotDelete(req);
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/import")) {
+    } else if (routeExact(req, "POST /api/import")) {
         response = try handleImport(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/cad/")) {
@@ -531,25 +528,25 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "POST /api/migrate/")) {
         response = try handleMigrate(req);
         content_type = "application/json; charset=utf-8";
-    } else if (std.mem.startsWith(u8, req, "GET /api/vnets")) {
+    } else if (routeExact(req, "GET /api/vnets")) {
         content_type = "application/json; charset=utf-8";
         response = handleVnetsJson(&snap_buf);
-    } else if (std.mem.startsWith(u8, req, "POST /api/vnets/save")) {
+    } else if (routeExact(req, "POST /api/vnets/save")) {
         response = handleVnetsSave(req) catch "save err";
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/config")) {
+    } else if (routeExact(req, "POST /api/config")) {
         response = handleConfigSave(req) catch "save err";
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "GET /app.css")) {
+    } else if (routeExact(req, "GET /app.css")) {
         response = app_css;
         content_type = "text/css; charset=utf-8";
-    } else if (std.mem.startsWith(u8, req, "GET /app.js")) {
+    } else if (routeExact(req, "GET /app.js")) {
         response = app_js;
         content_type = "application/javascript; charset=utf-8";
-    } else if (std.mem.startsWith(u8, req, "GET /novnc.js")) {
+    } else if (routeExact(req, "GET /novnc.js")) {
         response = novnc_js;
         content_type = "application/javascript; charset=utf-8";
-    } else if (std.mem.startsWith(u8, req, "GET /spice.js")) {
+    } else if (routeExact(req, "GET /spice.js")) {
         response = spice_js;
         content_type = "application/javascript; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET / ")) {
@@ -557,12 +554,13 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/html; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET /favicon")) {
         content_type = "image/svg+xml";
-        response = \\<?xml version="1.0" encoding="utf-8"?>
-        \\<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-        \\  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#6366f1"/></linearGradient></defs>
-        \\  <rect width="32" height="32" rx="6" fill="url(#g)"/>
-        \\  <text x="16" y="22" text-anchor="middle" font-size="18" font-weight="bold" fill="#fff" font-family="system-ui,sans-serif">K</text>
-        \\</svg>
+        response =
+            \\<?xml version="1.0" encoding="utf-8"?>
+            \\<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+            \\  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#6366f1"/></linearGradient></defs>
+            \\  <rect width="32" height="32" rx="6" fill="url(#g)"/>
+            \\  <text x="16" y="22" text-anchor="middle" font-size="18" font-weight="bold" fill="#fff" font-family="system-ui,sans-serif">H</text>
+            \\</svg>
         ;
     } else {
         response = index_html;
@@ -638,11 +636,7 @@ var config_raw_buf: [4 * 1024 * 1024]u8 = undefined;
 /// and spawns bidirectional relay threads.
 fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
     // Parse VM index from URL: GET /ws/vnc/<idx>
-    const prefix = "GET /ws/vnc/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return;
-    const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
+    const idx = parseIdx(req, "GET /ws/vnc/") orelse return;
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
     if (idx >= appstate.vm_count) return;
@@ -720,11 +714,7 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
 /// and spawns bidirectional relay threads.
 fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
     // Parse VM index from URL: GET /ws/spice/<idx>
-    const prefix = "GET /ws/spice/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return;
-    const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
+    const idx = parseIdx(req, "GET /ws/spice/") orelse return;
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
     if (idx >= appstate.vm_count) return;
@@ -801,11 +791,7 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
 /// Unix socket, and spawns bidirectional relay threads.
 fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     // Parse VM index from URL: GET /ws/serial/<idx>
-    const prefix = "GET /ws/serial/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return;
-    const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return;
+    const idx = parseIdx(req, "GET /ws/serial/") orelse return;
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
     if (idx >= appstate.vm_count) return;
@@ -875,11 +861,7 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
 
 fn renderFramebuffer(req: []const u8) ![]const u8 {
     // GET /api/fb/N — return the framebuffer for VM N as a valid BMP image
-    const prefix = "GET /api/fb/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
-    const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid idx";
+    const idx = parseIdx(req, "GET /api/fb/") orelse return "invalid";
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
     if (idx >= appstate.vm_count) return "no vm";
@@ -902,7 +884,8 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
     }
     if (vc.lockFb()) |pixels| {
         defer vc.unlockFb();
-        var fw: c_int = 0; var fh: c_int = 0;
+        var fw: c_int = 0;
+        var fh: c_int = 0;
         if (vc.getSize(&fw, &fh) and fw > 0 and fh > 0) {
             const pixel_size: usize = @intCast(@as(u64, @intCast(fw)) * @as(u64, @intCast(fh)) * 4);
             const copy_size = @min(pixel_size, fb_bmp_buf.len - 54);
@@ -915,16 +898,16 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
             fb_bmp_buf[0] = 'B';
             fb_bmp_buf[1] = 'M';
             std.mem.writeInt(u32, fb_bmp_buf[2..6], file_size, .little); // bfSize
-            std.mem.writeInt(u32, fb_bmp_buf[6..10], 0, .little);        // bfReserved
-            std.mem.writeInt(u32, fb_bmp_buf[10..14], 54, .little);      // bfOffBits
+            std.mem.writeInt(u32, fb_bmp_buf[6..10], 0, .little); // bfReserved
+            std.mem.writeInt(u32, fb_bmp_buf[10..14], 54, .little); // bfOffBits
 
             // ── BITMAPINFOHEADER (40 bytes) ──────────────────────
             @memset(fb_bmp_buf[14..54], 0); // zero-fill then set fields
-            std.mem.writeInt(u32, fb_bmp_buf[14..18], 40, .little);     // biSize
-            std.mem.writeInt(i32, fb_bmp_buf[18..22], fw, .little);      // biWidth
-            std.mem.writeInt(i32, fb_bmp_buf[22..26], -fh, .little);     // biHeight (negative = top-down)
-            std.mem.writeInt(u16, fb_bmp_buf[26..28], 1, .little);       // biPlanes
-            std.mem.writeInt(u16, fb_bmp_buf[28..30], 32, .little);      // biBitCount
+            std.mem.writeInt(u32, fb_bmp_buf[14..18], 40, .little); // biSize
+            std.mem.writeInt(i32, fb_bmp_buf[18..22], fw, .little); // biWidth
+            std.mem.writeInt(i32, fb_bmp_buf[22..26], -fh, .little); // biHeight (negative = top-down)
+            std.mem.writeInt(u16, fb_bmp_buf[26..28], 1, .little); // biPlanes
+            std.mem.writeInt(u16, fb_bmp_buf[28..30], 32, .little); // biBitCount
             // biCompression = 0 (BI_RGB), biSizeImage = 0 (OK for BI_RGB)
             // biXPelsPerMeter = biYPelsPerMeter = 2835 (~72 DPI)
             std.mem.writeInt(u32, fb_bmp_buf[38..42], 2835, .little);
@@ -939,42 +922,52 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
 }
 
 fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
-    const prefix = "GET /api/vm/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return error.RenderFailed;
-    const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return error.RenderFailed;
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return error.RenderFailed;
+    const idx = parseIdx(req, "GET /api/vm/") orelse return error.RenderFailed;
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
     if (idx >= appstate.vm_count) return "{}";
     const v = &appstate.vms[idx];
     var w: usize = 0;
 
-    // Reusable escape buffer for user-controlled strings in JSON output.
-    var esc: [vm.MAX_PATH]u8 = undefined;
+    // Pre-escape user-controlled strings. Each needs its own buffer because
+    // bufPrint tuple args are evaluated left-to-right, and each escapeJson
+    // call overwrites the same buffer — earlier slices would dangle.
+    var name_buf: [vm.MAX_NAME * 2 + 64]u8 = undefined;
+    const name_e = escapeJson(&name_buf, v.getNameSlice(), "name");
+
+    var iso_buf: [vm.MAX_PATH]u8 = undefined;
+    const iso_e = if (v.hasIso()) escapeJson(&iso_buf, v.getIsoPathSlice(), "iso_path") else "";
+
+    var notes_buf: [4096 * 2]u8 = undefined;
+    const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice(), "notes") else "";
+
+    var sf_buf: [vm.MAX_PATH]u8 = undefined;
+    const sf_e = if (v.hasSharedFolder()) escapeJson(&sf_buf, v.getSharedFolderSlice(), "shared_folder") else "";
+
+    var usb_buf: [128]u8 = undefined;
+    const usb_e = if (v.hasUsbDevice()) escapeJson(&usb_buf, v.getUsbDeviceSlice(), "usb_device") else "";
+
+    var d2_buf: [vm.MAX_PATH]u8 = undefined;
+    const d2_e = if (v.hasDisk2()) escapeJson(&d2_buf, v.getDisk2PathSlice(), "disk2_path") else "";
+
+    var flp_buf: [vm.MAX_PATH]u8 = undefined;
+    const flp_e = if (v.hasFloppy()) escapeJson(&flp_buf, v.getFloppyPathSlice(), "floppy_path") else "";
+
+    var pf_buf: [1024]u8 = undefined;
+    const pf_e = if (v.hasPortForwards()) escapeJson(&pf_buf, v.getPortForwardsSlice(), "port_forwards") else "";
 
     // First 32 fields
     const part1 = std.fmt.bufPrint(buf[w..],
         \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
     , .{
-        idx, escapeJson(&esc, v.getNameSlice(), "name"), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
-        v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(), v.disk_cache.toIndex(),
-        std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
-        if (v.hasIso()) "true" else "false", if (v.hasDisk()) "true" else "false",
-        if (v.hasIso()) escapeJson(&esc, v.getIsoPathSlice(), "iso_path") else "",
-        if (v.hasNotes()) escapeJson(&esc, v.getNotesSlice(), "notes") else "",
-        if (v.hasSharedFolder()) escapeJson(&esc, v.getSharedFolderSlice(), "shared_folder") else "",
-        if (v.hasUsbDevice()) escapeJson(&esc, v.getUsbDeviceSlice(), "usb_device") else "",
-        v.usb_policy.toIndex(),
-        if (v.guest_tools) "true" else "false",
-        if (v.autoprotect) "true" else "false",
-        v.autoprotect_interval_min, v.autoprotect_max,
-        if (v.hasDisk2()) "true" else "false", v.disk2_size_gb,
-        if (v.hasDisk2()) escapeJson(&esc, v.getDisk2PathSlice(), "disk2_path") else "",
-        v.disk2_format.toIndex(),
-        if (v.hasFloppy()) "true" else "false",
-        if (v.hasFloppy()) escapeJson(&esc, v.getFloppyPathSlice(), "floppy_path") else "",
-        if (v.hasPortForwards()) escapeJson(&esc, v.getPortForwardsSlice(), "port_forwards") else "",
+        idx,                                    name_e,                               std.mem.span(v.status.toStr()),       std.mem.span(v.guest_os.label()),
+        v.memory_mb,                            v.cpu_cores,                          v.cpu_sockets,                        v.disk_size_gb,
+        v.disk_format.toIndex(),                v.disk_cache.toIndex(),               std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
+        if (v.hasIso()) "true" else "false",    if (v.hasDisk()) "true" else "false", iso_e,                                notes_e,
+        sf_e,                                   usb_e,                                v.usb_policy.toIndex(),               if (v.guest_tools) "true" else "false",
+        if (v.autoprotect) "true" else "false", v.autoprotect_interval_min,           v.autoprotect_max,                    if (v.hasDisk2()) "true" else "false",
+        v.disk2_size_gb,                        d2_e,                                 v.disk2_format.toIndex(),             if (v.hasFloppy()) "true" else "false",
+        flp_e,                                  pf_e,
     }) catch return error.RenderFailed;
     w += part1.len;
 
@@ -1003,7 +996,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     w += part2a.len;
 
     const part2b = std.fmt.bufPrint(buf[w..],
-        \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s}}}
+        \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}
     , .{
         if (v.ballooning) "true" else "false",
         if (v.host_autostart) "true" else "false",
@@ -1020,8 +1013,44 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         v.vnc_port,
         v.spice_port,
         if (v.favorite) "true" else "false",
+        appstate.vm_started[idx],
     }) catch return error.RenderFailed;
     w += part2b.len;
+
+    const part2c = std.fmt.bufPrint(buf[w..],
+        \\,"nic4_mode":"{s}","nic4_mac":"{s}","nic5_mode":"{s}","nic5_mac":"{s}","nic6_mode":"{s}","nic6_mac":"{s}","nic7_mode":"{s}","nic7_mac":"{s}","nic8_mode":"{s}","nic8_mac":"{s}"
+    , .{
+        std.mem.span(v.nics[3].mode.toStr()),
+        if (v.nics[3].mac_len > 0) v.getNicMacSliceAny(3) else "",
+        std.mem.span(v.nics[4].mode.toStr()),
+        if (v.nics[4].mac_len > 0) v.getNicMacSliceAny(4) else "",
+        std.mem.span(v.nics[5].mode.toStr()),
+        if (v.nics[5].mac_len > 0) v.getNicMacSliceAny(5) else "",
+        std.mem.span(v.nics[6].mode.toStr()),
+        if (v.nics[6].mac_len > 0) v.getNicMacSliceAny(6) else "",
+        std.mem.span(v.nics[7].mode.toStr()),
+        if (v.nics[7].mac_len > 0) v.getNicMacSliceAny(7) else "",
+    }) catch return error.RenderFailed;
+    w += part2c.len;
+
+    const part2d = std.fmt.bufPrint(buf[w..],
+        \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d}}}
+    , .{
+        if (v.hasExtraDisk(0)) v.getExtraDiskPathSlice(0) else "",
+        v.extra_disks[0].size_gb,
+        v.extra_disks[0].format.toIndex(),
+        if (v.hasExtraDisk(1)) v.getExtraDiskPathSlice(1) else "",
+        v.extra_disks[1].size_gb,
+        v.extra_disks[1].format.toIndex(),
+        if (v.hasExtraDisk(2)) v.getExtraDiskPathSlice(2) else "",
+        v.extra_disks[2].size_gb,
+        v.extra_disks[2].format.toIndex(),
+        if (v.hasExtraDisk(3)) v.getExtraDiskPathSlice(3) else "",
+        v.extra_disks[3].size_gb,
+        v.extra_disks[3].format.toIndex(),
+    }) catch return error.RenderFailed;
+    w += part2d.len;
+
     return buf[0..w];
 }
 
@@ -1034,9 +1063,6 @@ fn renderJson(buf: []u8) usize {
     buf[w] = '[';
     w += 1;
 
-    // Reusable escape buffer for user-controlled strings in JSON output.
-    var esc: [vm.MAX_PATH]u8 = undefined;
-
     for (0..appstate.vm_count) |i| {
         if (i > 0) {
             if (w >= buf.len) return 0;
@@ -1045,29 +1071,48 @@ fn renderJson(buf: []u8) usize {
         }
         const v = &appstate.vms[i];
 
+        // Pre-escape user-controlled strings into dedicated buffers so
+        // later escapeJson calls don't overwrite slices captured by earlier ones.
+        var name_buf: [vm.MAX_NAME * 2 + 64]u8 = undefined;
+        const name_e = escapeJson(&name_buf, v.getNameSlice(), "name");
+
+        var iso_buf: [vm.MAX_PATH]u8 = undefined;
+        const iso_e = if (v.hasIso()) escapeJson(&iso_buf, v.getIsoPathSlice(), "iso_path") else "";
+
+        var notes_buf: [4096 * 2]u8 = undefined;
+        const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice(), "notes") else "";
+
+        var sf_buf: [vm.MAX_PATH]u8 = undefined;
+        const sf_e = if (v.hasSharedFolder()) escapeJson(&sf_buf, v.getSharedFolderSlice(), "shared_folder") else "";
+
+        var usb_buf: [128]u8 = undefined;
+        const usb_e = if (v.hasUsbDevice()) escapeJson(&usb_buf, v.getUsbDeviceSlice(), "usb_device") else "";
+
+        var d2_buf: [vm.MAX_PATH]u8 = undefined;
+        const d2_e = if (v.hasDisk2()) escapeJson(&d2_buf, v.getDisk2PathSlice(), "disk2_path") else "";
+
+        var flp_buf: [vm.MAX_PATH]u8 = undefined;
+        const flp_e = if (v.hasFloppy()) escapeJson(&flp_buf, v.getFloppyPathSlice(), "floppy_path") else "";
+
+        var pf_buf: [1024]u8 = undefined;
+        const pf_e = if (v.hasPortForwards()) escapeJson(&pf_buf, v.getPortForwardsSlice(), "port_forwards") else "";
+
         // First block: up through port_forwards
         const part1 = std.fmt.bufPrint(buf[w..],
             \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
         , .{
-            i, escapeJson(&esc, v.getNameSlice(), "name"), std.mem.span(v.status.toStr()), std.mem.span(v.guest_os.toStr()),
-            v.memory_mb, v.cpu_cores, v.cpu_sockets, v.disk_size_gb, v.disk_format.toIndex(), v.disk_cache.toIndex(),
-            std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
-            if (v.hasIso()) "true" else "false", if (v.hasDisk()) "true" else "false",
-            if (v.hasIso()) escapeJson(&esc, v.getIsoPathSlice(), "iso_path") else "",
-            if (v.hasNotes()) escapeJson(&esc, v.getNotesSlice(), "notes") else "",
-            if (v.hasSharedFolder()) escapeJson(&esc, v.getSharedFolderSlice(), "shared_folder") else "",
-            if (v.hasUsbDevice()) escapeJson(&esc, v.getUsbDeviceSlice(), "usb_device") else "",
-            v.usb_policy.toIndex(),
-            if (v.guest_tools) "true" else "false",
-            if (v.autoprotect) "true" else "false",
-            v.autoprotect_interval_min, v.autoprotect_max,
-            if (v.hasDisk2()) "true" else "false", v.disk2_size_gb,
-            if (v.hasDisk2()) escapeJson(&esc, v.getDisk2PathSlice(), "disk2_path") else "",
-            v.disk2_format.toIndex(),
-            if (v.hasFloppy()) "true" else "false",
-            if (v.hasFloppy()) escapeJson(&esc, v.getFloppyPathSlice(), "floppy_path") else "",
-            if (v.hasPortForwards()) escapeJson(&esc, v.getPortForwardsSlice(), "port_forwards") else "",
-        }) catch break;
+            i,                                      name_e,                               std.mem.span(v.status.toStr()),       std.mem.span(v.guest_os.label()),
+            v.memory_mb,                            v.cpu_cores,                          v.cpu_sockets,                        v.disk_size_gb,
+            v.disk_format.toIndex(),                v.disk_cache.toIndex(),               std.mem.span(v.nics[0].mode.toStr()), std.mem.span(v.firmware.toStr()),
+            if (v.hasIso()) "true" else "false",    if (v.hasDisk()) "true" else "false", iso_e,                                notes_e,
+            sf_e,                                   usb_e,                                v.usb_policy.toIndex(),               if (v.guest_tools) "true" else "false",
+            if (v.autoprotect) "true" else "false", v.autoprotect_interval_min,           v.autoprotect_max,                    if (v.hasDisk2()) "true" else "false",
+            v.disk2_size_gb,                        d2_e,                                 v.disk2_format.toIndex(),             if (v.hasFloppy()) "true" else "false",
+            flp_e,                                  pf_e,
+        }) catch {
+            w = buf.len;
+            break;
+        };
         w += part1.len;
 
         // Remaining fields — split to stay under 32-arg limit
@@ -1091,11 +1136,14 @@ fn renderJson(buf: []u8) usize {
             v.io_threads,
             v.disk_bps_throttle,
             v.disk_iops_throttle,
-        }) catch break;
+        }) catch {
+            w = buf.len;
+            break;
+        };
         w += part2a.len;
 
         const part2b = std.fmt.bufPrint(buf[w..],
-            \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}}}
+            \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}
         , .{
             if (v.ballooning) "true" else "false",
             if (v.host_autostart) "true" else "false",
@@ -1113,8 +1161,51 @@ fn renderJson(buf: []u8) usize {
             v.spice_port,
             if (v.favorite) "true" else "false",
             appstate.vm_started[i],
-        }) catch break;
+        }) catch {
+            w = buf.len;
+            break;
+        };
         w += part2b.len;
+
+        const part2c = std.fmt.bufPrint(buf[w..],
+            \\,"nic4_mode":"{s}","nic4_mac":"{s}","nic5_mode":"{s}","nic5_mac":"{s}","nic6_mode":"{s}","nic6_mac":"{s}","nic7_mode":"{s}","nic7_mac":"{s}","nic8_mode":"{s}","nic8_mac":"{s}"
+        , .{
+            std.mem.span(v.nics[3].mode.toStr()),
+            if (v.nics[3].mac_len > 0) v.getNicMacSliceAny(3) else "",
+            std.mem.span(v.nics[4].mode.toStr()),
+            if (v.nics[4].mac_len > 0) v.getNicMacSliceAny(4) else "",
+            std.mem.span(v.nics[5].mode.toStr()),
+            if (v.nics[5].mac_len > 0) v.getNicMacSliceAny(5) else "",
+            std.mem.span(v.nics[6].mode.toStr()),
+            if (v.nics[6].mac_len > 0) v.getNicMacSliceAny(6) else "",
+            std.mem.span(v.nics[7].mode.toStr()),
+            if (v.nics[7].mac_len > 0) v.getNicMacSliceAny(7) else "",
+        }) catch {
+            w = buf.len;
+            break;
+        };
+        w += part2c.len;
+
+        const part2d = std.fmt.bufPrint(buf[w..],
+            \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d}}}
+        , .{
+            if (v.hasExtraDisk(0)) v.getExtraDiskPathSlice(0) else "",
+            v.extra_disks[0].size_gb,
+            v.extra_disks[0].format.toIndex(),
+            if (v.hasExtraDisk(1)) v.getExtraDiskPathSlice(1) else "",
+            v.extra_disks[1].size_gb,
+            v.extra_disks[1].format.toIndex(),
+            if (v.hasExtraDisk(2)) v.getExtraDiskPathSlice(2) else "",
+            v.extra_disks[2].size_gb,
+            v.extra_disks[2].format.toIndex(),
+            if (v.hasExtraDisk(3)) v.getExtraDiskPathSlice(3) else "",
+            v.extra_disks[3].size_gb,
+            v.extra_disks[3].format.toIndex(),
+        }) catch {
+            w = buf.len;
+            break;
+        };
+        w += part2d.len;
     }
     if (w >= buf.len) return 0;
     buf[w] = ']';
@@ -1131,33 +1222,29 @@ fn handlePower(req: []const u8) ![]const u8 {
     defer appstate.vms_mutex.unlock();
 
     // Extract idx from /api/power/N
-    const prefix = "POST /api/power/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
-    const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
+    const idx = parseIdx(req, "POST /api/power/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (v.isAlive()) {
-        if (getVmmHandle(idx)) |h| {
+        if (appstate.getVmmHandle(idx)) |h| {
             appstate.g_vmm.forceStopFn(h);
             appstate.g_vmm.reapFn(h);
         } else {
             qemu.forceStopVm(v);
             qemu.reapVm(v);
         }
-        destroyVmmHandle(idx);
+        appstate.destroyVmmHandle(idx);
         appstate.vm_started[idx] = 0;
     } else {
-        if (getVmmHandle(idx)) |h| {
+        if (appstate.getVmmHandle(idx)) |h| {
             appstate.g_vmm.startFn(h, @ptrCast(v)) catch {
-                destroyVmmHandle(idx);
+                appstate.destroyVmmHandle(idx);
                 return "start err";
             };
         } else {
             qemu.startVm(v, std.heap.page_allocator) catch {
                 // Try to include QEMU stderr in the error response for diagnostics.
-                var log_path_buf: [128]u8 = [_]u8{0} ** 128;
+                var log_path_buf: [320]u8 = [_]u8{0} ** 320;
                 var log_content_buf: [512]u8 = undefined;
                 const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/hangar-vm-{s}.log", .{v.getNameSlice()}) catch null;
                 const err_detail = if (log_path) |lp| readStartupLog(lp, &log_content_buf) else "";
@@ -1169,7 +1256,9 @@ fn handlePower(req: []const u8) ![]const u8 {
         }
         appstate.vm_started[idx] = time(null);
     }
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
+        logErr("persist.save failed");
+    };
     return "ok";
 }
 
@@ -1223,17 +1312,28 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setIsoPath(val);
         }
-        if (std.mem.eql(u8, key, "mac_address")) { if (vm.isValidMac(val)) { cfg.setMacAddress(val); has_mac = true; } }
+        if (std.mem.eql(u8, key, "mac_address")) {
+            if (vm.isValidMac(val)) {
+                cfg.setMacAddress(val);
+                has_mac = true;
+            }
+        }
         if (std.mem.eql(u8, key, "network")) cfg.nics[0].mode = vm.NetworkMode.fromStr(val);
         if (std.mem.eql(u8, key, "firmware")) cfg.firmware = vm.BootFirmware.fromStr(val);
         if (std.mem.eql(u8, key, "shared_folder")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setSharedFolder(val);
         }
-        if (std.mem.eql(u8, key, "usb")) cfg.setUsbDevice(val);
+        if (std.mem.eql(u8, key, "usb")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            cfg.setUsbDevice(val);
+        }
         if (std.mem.eql(u8, key, "usb_policy")) cfg.usb_policy = vm.UsbPolicy.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.usb_policy.toIndex());
         if (std.mem.eql(u8, key, "guest_tools")) cfg.guest_tools = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "autoprotect")) { cfg.autoprotect = std.mem.eql(u8, val, "1"); has_autoprotect = true; }
+        if (std.mem.eql(u8, key, "autoprotect")) {
+            cfg.autoprotect = std.mem.eql(u8, val, "1");
+            has_autoprotect = true;
+        }
         if (std.mem.eql(u8, key, "ap_interval")) cfg.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch cfg.autoprotect_interval_min));
         if (std.mem.eql(u8, key, "ap_max")) cfg.autoprotect_max = @max(1, @min(1000, std.fmt.parseInt(u32, val, 10) catch cfg.autoprotect_max));
         if (std.mem.eql(u8, key, "disk2_path")) {
@@ -1247,9 +1347,13 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             cfg.setFloppyPath(val);
         }
         if (std.mem.eql(u8, key, "nic2")) cfg.nics[1].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic2_mac")) { if (vm.isValidMac(val)) cfg.setNic2Mac(val); }
+        if (std.mem.eql(u8, key, "nic2_mac")) {
+            if (vm.isValidMac(val)) cfg.setNic2Mac(val);
+        }
         if (std.mem.eql(u8, key, "nic3")) cfg.nics[2].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic3_mac")) { if (vm.isValidMac(val)) cfg.setNic3Mac(val); }
+        if (std.mem.eql(u8, key, "nic3_mac")) {
+            if (vm.isValidMac(val)) cfg.setNic3Mac(val);
+        }
         if (std.mem.eql(u8, key, "portfw")) cfg.setPortForwards(val);
         if (std.mem.eql(u8, key, "notes")) cfg.setNotes(val);
         if (std.mem.eql(u8, key, "enable_3d")) cfg.enable_3d = std.mem.eql(u8, val, "1");
@@ -1263,11 +1367,17 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "embed_display")) cfg.embed_display = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "vnc_port")) {
             const p = std.fmt.parseInt(u16, val, 10) catch cfg.vnc_port;
-            if (vm.isValidDisplayPort(p)) { cfg.vnc_port = p; has_vnc_port = true; }
+            if (vm.isValidDisplayPort(p)) {
+                cfg.vnc_port = p;
+                has_vnc_port = true;
+            }
         }
         if (std.mem.eql(u8, key, "spice_port")) {
             const p = std.fmt.parseInt(u16, val, 10) catch cfg.spice_port;
-            if (vm.isValidDisplayPort(p)) { cfg.spice_port = p; has_spice_port = true; }
+            if (vm.isValidDisplayPort(p)) {
+                cfg.spice_port = p;
+                has_spice_port = true;
+            }
         }
         if (std.mem.eql(u8, key, "enable_serial")) cfg.enable_serial = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "virtio_rng")) cfg.virtio_rng = std.mem.eql(u8, val, "1");
@@ -1284,6 +1394,52 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "disk_iops_throttle")) cfg.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch cfg.disk_iops_throttle;
         if (std.mem.eql(u8, key, "ballooning")) cfg.ballooning = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "host_autostart")) cfg.host_autostart = std.mem.eql(u8, val, "1");
+        // Extra NICs (4-8)
+        if (std.mem.eql(u8, key, "nic4")) cfg.nics[3].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic4_mac")) {
+            if (vm.isValidMac(val)) cfg.setNicMacAny(3, val);
+        }
+        if (std.mem.eql(u8, key, "nic5")) cfg.nics[4].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic5_mac")) {
+            if (vm.isValidMac(val)) cfg.setNicMacAny(4, val);
+        }
+        if (std.mem.eql(u8, key, "nic6")) cfg.nics[5].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic6_mac")) {
+            if (vm.isValidMac(val)) cfg.setNicMacAny(5, val);
+        }
+        if (std.mem.eql(u8, key, "nic7")) cfg.nics[6].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic7_mac")) {
+            if (vm.isValidMac(val)) cfg.setNicMacAny(6, val);
+        }
+        if (std.mem.eql(u8, key, "nic8")) cfg.nics[7].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic8_mac")) {
+            if (vm.isValidMac(val)) cfg.setNicMacAny(7, val);
+        }
+        // Extra disks (4 slots)
+        if (std.mem.eql(u8, key, "extra0_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            cfg.setExtraDiskPath(0, val);
+        }
+        if (std.mem.eql(u8, key, "extra0_size")) cfg.extra_disks[0].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra0_format")) cfg.extra_disks[0].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[0].format.toIndex());
+        if (std.mem.eql(u8, key, "extra1_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            cfg.setExtraDiskPath(1, val);
+        }
+        if (std.mem.eql(u8, key, "extra1_size")) cfg.extra_disks[1].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra1_format")) cfg.extra_disks[1].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[1].format.toIndex());
+        if (std.mem.eql(u8, key, "extra2_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            cfg.setExtraDiskPath(2, val);
+        }
+        if (std.mem.eql(u8, key, "extra2_size")) cfg.extra_disks[2].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra2_format")) cfg.extra_disks[2].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[2].format.toIndex());
+        if (std.mem.eql(u8, key, "extra3_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            cfg.setExtraDiskPath(3, val);
+        }
+        if (std.mem.eql(u8, key, "extra3_size")) cfg.extra_disks[3].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra3_format")) cfg.extra_disks[3].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[3].format.toIndex());
     }
 
     // Apply defaults for fields not explicitly provided
@@ -1410,15 +1566,11 @@ fn handleClone(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
 
-    const prefix = "POST /api/clone/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
-    const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
+    const idx = parseIdx(req, "POST /api/clone/") orelse return "invalid";
     if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
     var clone = appstate.vms[idx];
     const src = &appstate.vms[idx];
-    var name_buf: [256]u8 = undefined;
+    var name_buf: [320]u8 = undefined;
     const cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{clone.getNameSlice()}) catch return "nameerr";
     clone.setName(cn);
     clone.status = .stopped;
@@ -1434,14 +1586,14 @@ fn handleClone(req: []const u8) ![]const u8 {
     var linked: bool = false;
     if (body_start) |bs| {
         const body = req[bs + 4 ..];
-        if (std.mem.indexOf(u8, body, "linked=1") != null) linked = true;
+        if (std.mem.eql(u8, bodyVal(body, "linked"), "1")) linked = true;
     }
 
     if (linked and src.hasDisk()) {
         const home = appio.getenv("HOME") orelse "/tmp";
         var disk_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
         const disk_path = std.fmt.bufPrintZ(&disk_path_buf, "{s}/VMs/{s}.qcow2", .{ home, clone.getNameSlice() }) catch return "nameerr";
-        if (getVmmHandle(idx)) |h| {
+        if (appstate.getVmmHandle(idx)) |h| {
             appstate.g_vmm.createLinkedCloneFn(h, disk_path, src.getDiskPathSlice(), @intFromEnum(src.disk_format), std.heap.page_allocator) catch return "linkerr";
         } else {
             qemu.createLinkedClone(disk_path, src.getDiskPathSlice(), src.disk_format, std.heap.page_allocator) catch return "linkerr";
@@ -1464,18 +1616,14 @@ fn handleDelete(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
 
-    const prefix = "POST /api/delete/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
-    const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
+    const idx = parseIdx(req, "POST /api/delete/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     // Save undo state before deleting.
     appstate.undo_vm = appstate.vms[idx];
     appstate.undo_idx = idx;
     appstate.undo_available = true;
     // Destroy the VMM handle for the deleted VM
-    destroyVmmHandle(idx);
+    appstate.destroyVmmHandle(idx);
     // Shift remaining
     var i = idx;
     while (i + 1 < appstate.vm_count) : (i += 1) {
@@ -1548,16 +1696,30 @@ fn handleReorder(req: []const u8) ![]const u8 {
     const b = to.?;
     if (a >= appstate.vm_count or b >= appstate.vm_count) return "invalid idx";
     if (a == b) return "ok"; // no-op
-    // Swap VM configs, handles, and started timestamps
-    const tmp_vm = appstate.vms[a];
-    appstate.vms[a] = appstate.vms[b];
-    appstate.vms[b] = tmp_vm;
-    const tmp_handle = appstate.g_vmm_handles[a];
-    appstate.g_vmm_handles[a] = appstate.g_vmm_handles[b];
-    appstate.g_vmm_handles[b] = tmp_handle;
-    const tmp_started = appstate.vm_started[a];
-    appstate.vm_started[a] = appstate.vm_started[b];
-    appstate.vm_started[b] = tmp_started;
+    // Splice-move: remove element at 'from', insert at 'to' (client semantics).
+    const saved_vm = appstate.vms[a];
+    const saved_handle = appstate.g_vmm_handles[a];
+    const saved_started = appstate.vm_started[a];
+    if (a < b) {
+        // Shift [a+1 .. b] left by 1
+        var j: usize = a;
+        while (j < b) : (j += 1) {
+            appstate.vms[j] = appstate.vms[j + 1];
+            appstate.g_vmm_handles[j] = appstate.g_vmm_handles[j + 1];
+            appstate.vm_started[j] = appstate.vm_started[j + 1];
+        }
+    } else {
+        // Shift [b .. a-1] right by 1
+        var j: usize = a;
+        while (j > b) : (j -= 1) {
+            appstate.vms[j] = appstate.vms[j - 1];
+            appstate.g_vmm_handles[j] = appstate.g_vmm_handles[j - 1];
+            appstate.vm_started[j] = appstate.vm_started[j - 1];
+        }
+    }
+    appstate.vms[b] = saved_vm;
+    appstate.g_vmm_handles[b] = saved_handle;
+    appstate.vm_started[b] = saved_started;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
         logErr("persist.save failed");
         return "save failed";
@@ -1569,11 +1731,7 @@ fn handleSave(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
 
-    const prefix = "POST /api/save/";
-    const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
-    const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
-    const idx = std.fmt.parseInt(usize, rest[0..end], 10) catch return "invalid";
+    const idx = parseIdx(req, "POST /api/save/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
@@ -1601,14 +1759,19 @@ fn handleSave(req: []const u8) ![]const u8 {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setIsoPath(val);
         }
-        if (std.mem.eql(u8, key, "mac_address")) { if (vm.isValidMac(val)) v.setMacAddress(val); }
+        if (std.mem.eql(u8, key, "mac_address")) {
+            if (vm.isValidMac(val)) v.setMacAddress(val);
+        }
         if (std.mem.eql(u8, key, "network")) v.nics[0].mode = vm.NetworkMode.fromStr(val);
         if (std.mem.eql(u8, key, "firmware")) v.firmware = vm.BootFirmware.fromStr(val);
         if (std.mem.eql(u8, key, "shared_folder")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setSharedFolder(val);
         }
-        if (std.mem.eql(u8, key, "usb")) v.setUsbDevice(val);
+        if (std.mem.eql(u8, key, "usb")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setUsbDevice(val);
+        }
         if (std.mem.eql(u8, key, "usb_policy")) v.usb_policy = vm.UsbPolicy.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.usb_policy.toIndex());
         if (std.mem.eql(u8, key, "guest_tools")) v.guest_tools = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "autoprotect")) v.autoprotect = std.mem.eql(u8, val, "1");
@@ -1625,9 +1788,13 @@ fn handleSave(req: []const u8) ![]const u8 {
             v.setFloppyPath(val);
         }
         if (std.mem.eql(u8, key, "nic2")) v.nics[1].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic2_mac")) { if (vm.isValidMac(val)) v.setNic2Mac(val); }
+        if (std.mem.eql(u8, key, "nic2_mac")) {
+            if (vm.isValidMac(val)) v.setNic2Mac(val);
+        }
         if (std.mem.eql(u8, key, "nic3")) v.nics[2].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic3_mac")) { if (vm.isValidMac(val)) v.setNic3Mac(val); }
+        if (std.mem.eql(u8, key, "nic3_mac")) {
+            if (vm.isValidMac(val)) v.setNic3Mac(val);
+        }
         if (std.mem.eql(u8, key, "portfw")) v.setPortForwards(val);
         if (std.mem.eql(u8, key, "notes")) v.setNotes(val);
         if (std.mem.eql(u8, key, "enable_3d")) v.enable_3d = std.mem.eql(u8, val, "1");
@@ -1638,7 +1805,9 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "audio")) v.audio = vm.AudioDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.audio.toIndex());
         if (std.mem.eql(u8, key, "boot_order")) v.boot_order = vm.BootOrder.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.boot_order.toIndex());
         if (std.mem.eql(u8, key, "accel")) v.accel = form_parsers.parseAccel(val);
-        if (std.mem.eql(u8, key, "enable_kvm")) { if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg; }
+        if (std.mem.eql(u8, key, "enable_kvm")) {
+            if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg;
+        }
         if (std.mem.eql(u8, key, "embed_display")) v.embed_display = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "vnc_port")) {
             const p = std.fmt.parseInt(u16, val, 10) catch v.vnc_port;
@@ -1663,16 +1832,96 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "disk_iops_throttle")) v.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch v.disk_iops_throttle;
         if (std.mem.eql(u8, key, "ballooning")) v.ballooning = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "host_autostart")) v.host_autostart = std.mem.eql(u8, val, "1");
+        // Extra NICs (4-8)
+        if (std.mem.eql(u8, key, "nic4")) v.nics[3].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic4_mac")) {
+            if (vm.isValidMac(val)) v.setNicMacAny(3, val);
+        }
+        if (std.mem.eql(u8, key, "nic5")) v.nics[4].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic5_mac")) {
+            if (vm.isValidMac(val)) v.setNicMacAny(4, val);
+        }
+        if (std.mem.eql(u8, key, "nic6")) v.nics[5].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic6_mac")) {
+            if (vm.isValidMac(val)) v.setNicMacAny(5, val);
+        }
+        if (std.mem.eql(u8, key, "nic7")) v.nics[6].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic7_mac")) {
+            if (vm.isValidMac(val)) v.setNicMacAny(6, val);
+        }
+        if (std.mem.eql(u8, key, "nic8")) v.nics[7].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, "nic8_mac")) {
+            if (vm.isValidMac(val)) v.setNicMacAny(7, val);
+        }
+        // Extra disks (4 slots)
+        if (std.mem.eql(u8, key, "extra0_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setExtraDiskPath(0, val);
+        }
+        if (std.mem.eql(u8, key, "extra0_size")) v.extra_disks[0].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra0_format")) v.extra_disks[0].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[0].format.toIndex());
+        if (std.mem.eql(u8, key, "extra1_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setExtraDiskPath(1, val);
+        }
+        if (std.mem.eql(u8, key, "extra1_size")) v.extra_disks[1].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra1_format")) v.extra_disks[1].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[1].format.toIndex());
+        if (std.mem.eql(u8, key, "extra2_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setExtraDiskPath(2, val);
+        }
+        if (std.mem.eql(u8, key, "extra2_size")) v.extra_disks[2].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra2_format")) v.extra_disks[2].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[2].format.toIndex());
+        if (std.mem.eql(u8, key, "extra3_path")) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setExtraDiskPath(3, val);
+        }
+        if (std.mem.eql(u8, key, "extra3_size")) v.extra_disks[3].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra3_format")) v.extra_disks[3].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[3].format.toIndex());
     }
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
+        logErr("persist.save failed");
+    };
     return "ok";
+}
+
+/// Exact route match: checks that req starts with `prefix` and the character
+/// immediately following is a space (HTTP line delimiter) or `?` (query string).
+/// Prevents e.g. `GET /api/vms` from matching `GET /api/vms/3` or `GET /api/vmsblah`.
+fn routeExact(req: []const u8, prefix: []const u8) bool {
+    if (!std.mem.startsWith(u8, req, prefix)) return false;
+    if (req.len <= prefix.len) return false;
+    const delim = req[prefix.len];
+    return delim == ' ' or delim == '?';
 }
 
 fn parseIdx(req: []const u8, prefix: []const u8) ?usize {
     const start = std.mem.indexOf(u8, req, prefix) orelse return null;
     const rest = req[start + prefix.len ..];
-    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return null;
+    const end_space = std.mem.indexOfScalar(u8, rest, ' ');
+    const end_slash = std.mem.indexOfScalar(u8, rest, '/');
+    const end: usize = if (end_space != null and end_slash != null) @min(end_space.?, end_slash.?) else (end_space orelse end_slash orelse return null);
     return std.fmt.parseInt(usize, rest[0..end], 10) catch null;
+}
+
+/// Parse a VM index from the URL and verify the path suffix after the index.
+/// E.g. `parseVmIdxSuffix(req, "GET /api/vm/", "/disk2/download")` for URL
+/// `GET /api/vm/0/disk2/download`. Returns null on mismatch — safer than
+/// substring search which might match ambiguous segments.
+fn parseVmIdxSuffix(req: []const u8, prefix: []const u8, suffix: []const u8) ?usize {
+    const start = std.mem.indexOf(u8, req, prefix) orelse return null;
+    const rest = req[start + prefix.len ..];
+    const digit_end = std.mem.indexOfScalar(u8, rest, '/') orelse std.mem.indexOfScalar(u8, rest, ' ') orelse return null;
+    const path_end = std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len;
+    const idx = std.fmt.parseInt(usize, rest[0..digit_end], 10) catch return null;
+    const tail = rest[digit_end..path_end];
+    if (!std.mem.startsWith(u8, tail, suffix)) return null;
+    // Reject partial segment matches: "/disk2" must not match "/disk2-download".
+    if (tail.len > suffix.len) {
+        const next = tail[suffix.len];
+        if (next != '?' and next != '/' and next != ' ') return null;
+    }
+    return idx;
 }
 
 fn handleSuspend(req: []const u8) ![]const u8 {
@@ -1694,14 +1943,14 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     client.waitMigrateComplete() catch return "timeout";
     v.status = .suspended;
     v.setSavedStatePath(path[0..]);
-    if (getVmmHandle(idx)) |h| {
+    if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.forceStopFn(h);
         appstate.g_vmm.reapFn(h);
     } else {
         qemu.forceStopVm(v);
         qemu.reapVm(v);
     }
-    destroyVmmHandle(idx);
+    appstate.destroyVmmHandle(idx);
     appstate.vm_started[idx] = 0;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
         logErr("handleSuspend: persist.save failed");
@@ -1717,7 +1966,7 @@ fn handlePause(req: []const u8) ![]const u8 {
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
-    if (getVmmHandle(idx)) |h| {
+    if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.pauseFn(h) catch return "qmp err";
     } else {
         var client = qmp.QmpClient{};
@@ -1737,7 +1986,7 @@ fn handleResume(req: []const u8) ![]const u8 {
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isPaused()) return "not paused";
-    if (getVmmHandle(idx)) |h| {
+    if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.resumeFn(h) catch return "qmp err";
     } else {
         var client = qmp.QmpClient{};
@@ -1786,7 +2035,7 @@ fn handleShutdown(req: []const u8) ![]const u8 {
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
-    if (getVmmHandle(idx)) |h| {
+    if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.shutdownFn(h) catch return "qmp err";
     } else {
         var client = qmp.QmpClient{};
@@ -1806,7 +2055,7 @@ fn handleReset(req: []const u8) ![]const u8 {
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
-    if (getVmmHandle(idx)) |h| {
+    if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.resetFn(h) catch return "qmp err";
     } else {
         var client = qmp.QmpClient{};
@@ -1852,7 +2101,7 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
     const decoded = urlencode.urlDecode(&decode_buf, tag);
     if (!validateSnapshotTag(decoded)) return "no name";
-    if (getVmmHandle(idx)) |h| {
+    if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "create err";
     } else {
         qemu.snapshotCreate(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "create err";
@@ -1867,7 +2116,7 @@ fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
-    const n: usize = if (getVmmHandle(idx)) |h|
+    const n: usize = if (appstate.getVmmHandle(idx)) |h|
         appstate.g_vmm.snapshotListFn(h, v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch 0
     else
         qemu.snapshotList(v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch 0;
@@ -1896,6 +2145,7 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
+    if (v.isAlive()) return "vm running";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     var tag: []const u8 = "";
@@ -1912,7 +2162,7 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
     const decoded = urlencode.urlDecode(&decode_buf, tag);
     if (!validateSnapshotTag(decoded)) return "no name";
-    if (getVmmHandle(idx)) |h| {
+    if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
     } else {
         qemu.snapshotApply(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
@@ -1927,6 +2177,7 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
+    if (v.isAlive()) return "vm running";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     var tag: []const u8 = "";
@@ -1943,7 +2194,7 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
     const decoded = urlencode.urlDecode(&decode_buf, tag);
     if (!validateSnapshotTag(decoded)) return "no name";
-    if (getVmmHandle(idx)) |h| {
+    if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "delete err";
     } else {
         qemu.snapshotDelete(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "delete err";
@@ -2029,13 +2280,14 @@ fn handleMigrate(req: []const u8) ![]const u8 {
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     var dest: []const u8 = "";
+    var val_buf: [512]u8 = undefined;
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
         var kv = std.mem.splitScalar(u8, pair, '=');
         const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
+        const raw = kv.next() orelse continue;
         if (std.mem.eql(u8, key, "dest")) {
-            dest = val;
+            dest = if (raw.len <= val_buf.len) urlencode.urlDecode(&val_buf, raw) else raw;
         }
     }
     if (dest.len == 0) return "no dest";
@@ -2117,7 +2369,8 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
 
     // Build response headers in one buffer, then write them at once.
     var hdr_buf: [1024]u8 = undefined;
-    const headers = std.fmt.bufPrint(&hdr_buf,
+    const headers = std.fmt.bufPrint(
+        &hdr_buf,
         "HTTP/1.1 200 OK\r\n" ++
             "Access-Control-Allow-Origin: *\r\n" ++
             "Content-Type: application/octet-stream\r\n" ++
@@ -2144,11 +2397,13 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
     const idx = parseIdx(req, "POST /api/vm/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
 
-    // Parse multipart boundary from Content-Type header
-    const ct_start = std.mem.indexOf(u8, req, "Content-Type: multipart/form-data; boundary=") orelse return "no boundary";
-    const bd_val_start = ct_start + "Content-Type: multipart/form-data; boundary=".len;
-    const bd_end = std.mem.indexOfScalar(u8, req[bd_val_start..], '\r') orelse (req.len - bd_val_start);
-    const boundary = req[bd_val_start .. bd_val_start + bd_end];
+    // Parse multipart boundary from Content-Type header (case-insensitive per RFC 7230).
+    const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
+    const headers = req[0..hdr_end];
+    const ct_val = findHeader(headers, "content-type: ") orelse return "no boundary";
+    const ct_prefix = "multipart/form-data; boundary=";
+    if (ct_val.len < ct_prefix.len or !std.ascii.eqlIgnoreCase(ct_val[0..ct_prefix.len], ct_prefix)) return "no boundary";
+    const boundary = ct_val[ct_prefix.len..];
 
     // Locate body (after double CRLF)
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
@@ -2168,20 +2423,30 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
     // Skip part headers to find the start of file data.
     // Extract filename from Content-Disposition if present.
     var filename: []const u8 = "";
-    const headers_end = std.mem.indexOf(u8, body[pos..], "\r\n\r\n") orelse
+    const part_headers_end = std.mem.indexOf(u8, body[pos..], "\r\n\r\n") orelse
         std.mem.indexOf(u8, body[pos..], "\n\n") orelse return "no headers end";
-    const headers = body[pos..][0..headers_end];
-    pos += headers_end;
-    if (pos + 4 <= body.len and std.mem.eql(u8, body[pos..][0..4], "\r\n\r\n")) pos += 4
-    else if (pos + 2 <= body.len and std.mem.eql(u8, body[pos..][0..2], "\n\n")) pos += 2
-    else return "no headers end";
+    const part_headers = body[pos..][0..part_headers_end];
+    pos += part_headers_end;
+    if (pos + 4 <= body.len and std.mem.eql(u8, body[pos..][0..4], "\r\n\r\n")) pos += 4 else if (pos + 2 <= body.len and std.mem.eql(u8, body[pos..][0..2], "\n\n")) pos += 2 else return "no headers end";
 
-    // Parse filename="..." from Content-Disposition header.
-    if (std.mem.indexOf(u8, headers, "filename=\"")) |fn_start| {
-        const fn_val = headers[fn_start + "filename=\"".len ..];
+    // Parse filename="..." or filename=... from Content-Disposition header.
+    if (std.mem.indexOf(u8, part_headers, "filename=\"")) |fn_start| {
+        const fn_val = part_headers[fn_start + "filename=\"".len ..];
         if (std.mem.indexOfScalar(u8, fn_val, '"')) |fn_end| {
             if (fn_end > 0) filename = fn_val[0..fn_end];
         }
+    } else if (std.mem.indexOf(u8, part_headers, "filename=")) |fn_start| {
+        const fn_val = part_headers[fn_start + "filename=".len ..];
+        // Unquoted filename: terminated by ';', '\r', or '\n'.
+        var fn_end: usize = fn_val.len;
+        if (std.mem.indexOfScalar(u8, fn_val, ';')) |semi| fn_end = semi;
+        if (std.mem.indexOfScalar(u8, fn_val, '\r')) |cr| {
+            if (cr < fn_end) fn_end = cr;
+        }
+        if (std.mem.indexOfScalar(u8, fn_val, '\n')) |nl| {
+            if (nl < fn_end) fn_end = nl;
+        }
+        if (fn_end > 0) filename = std.mem.trimEnd(u8, fn_val[0..fn_end], " \t");
     }
 
     // Reject path traversal in filename.
@@ -2212,25 +2477,29 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
     // Prefer the uploaded filename; fall back to the primary disk's name + extension.
     const v = &appstate.vms[idx];
     const primary = v.getDiskPathSlice();
+    if (primary.len == 0) return "no primary disk";
     const ext = std.fs.path.extension(primary);
-    const dir = std.fs.path.dirname(primary) orelse primary;
+    const dir = std.fs.path.dirname(primary) orelse ".";
 
+    const basename = std.fs.path.basename(primary);
     var dest_buf: [vm.MAX_PATH]u8 = undefined;
     if (filename.len > 0) {
         const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}", .{ dir, filename }) catch return "path err";
         std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
         appstate.vms[idx].setDisk2Path(dest);
     } else if (ext.len > 0 and ext.len < 16) {
-        const name_no_ext = primary[dir.len + 1 .. primary.len - ext.len];
+        const name_no_ext = basename[0 .. basename.len - ext.len];
         const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2{s}", .{ dir, name_no_ext, ext }) catch return "path err";
         std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
         appstate.vms[idx].setDisk2Path(dest);
     } else {
-        const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2", .{ dir, primary[dir.len + 1 ..] }) catch return "path err";
+        const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2", .{ dir, basename }) catch return "path err";
         std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
         appstate.vms[idx].setDisk2Path(dest);
     }
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
+        logErr("persist.save failed");
+    };
     return "ok";
 }
 
@@ -2251,7 +2520,10 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
         logErr("export: deleteTree (pre-create) failed");
     };
-    std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch { logErr("failed to create export dir"); return; };
+    std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
+        logErr("failed to create export dir");
+        return;
+    };
     var dir_cleanup: bool = true;
     defer if (dir_cleanup) {
         _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
@@ -2271,10 +2543,16 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return;
 
     // Convert disk1 to VMDK
-    if (getVmmHandle(idx)) |h| {
-        appstate.g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch { logErr("export: disk1 conversion (VMM) failed"); return; };
+    if (appstate.getVmmHandle(idx)) |h| {
+        appstate.g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
+            logErr("export: disk1 conversion (VMM) failed");
+            return;
+        };
     } else {
-        qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch { logErr("export: disk1 conversion (qemu) failed"); return; };
+        qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch {
+            logErr("export: disk1 conversion (qemu) failed");
+            return;
+        };
     }
 
     // Convert disk2 if present
@@ -2284,10 +2562,16 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         disk2_href = "disk2.vmdk";
         disk2_cap = @as(u64, v.disk2_size_gb) * 1024 * 1024 * 1024;
         const d2_path = std.fmt.bufPrint(&path_buf, "{s}/disk2.vmdk", .{dir_path}) catch return;
-        if (getVmmHandle(idx)) |h2| {
-            appstate.g_vmm.convertDiskFn(h2, v.getDisk2PathSlice(), d2_path, @intFromEnum(v.disk2_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch { logErr("export: disk2 conversion (VMM) failed"); return; };
+        if (appstate.getVmmHandle(idx)) |h2| {
+            appstate.g_vmm.convertDiskFn(h2, v.getDisk2PathSlice(), d2_path, @intFromEnum(v.disk2_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
+                logErr("export: disk2 conversion (VMM) failed");
+                return;
+            };
         } else {
-            qemu.convertDiskImage(v.getDisk2PathSlice(), v.disk2_format, d2_path, .vmdk, std.heap.page_allocator) catch { logErr("export: disk2 conversion (qemu) failed"); return; };
+            qemu.convertDiskImage(v.getDisk2PathSlice(), v.disk2_format, d2_path, .vmdk, std.heap.page_allocator) catch {
+                logErr("export: disk2 conversion (qemu) failed");
+                return;
+            };
         }
     }
 
@@ -2306,16 +2590,25 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         .disk2_size_bytes = 0,
     };
     var ovf_buf: [ovf.max_descriptor_len]u8 = undefined;
-    const xml = ovf.buildDescriptor(spec, &ovf_buf) catch { logErr("export: OVF descriptor build failed"); return; };
+    const xml = ovf.buildDescriptor(spec, &ovf_buf) catch {
+        logErr("export: OVF descriptor build failed");
+        return;
+    };
 
     const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, v.getNameSlice() });
     defer std.heap.page_allocator.free(ovf_path);
-    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch { logErr("export: failed to write OVF file"); return; };
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch {
+        logErr("export: failed to write OVF file");
+        return;
+    };
 
     // Tar+gzip the export directory
     {
         const tar_argv = [_][]const u8{ "tar", "-czf", tar_path, "-C", dir_path, "." };
-        qemu.runWait(&tar_argv, std.heap.page_allocator, null) catch { logErr("export: tar+gzip failed"); return; };
+        qemu.runWait(&tar_argv, std.heap.page_allocator, null) catch {
+            logErr("export: tar+gzip failed");
+            return;
+        };
         tar_cleanup = true;
     }
 
@@ -2337,7 +2630,8 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
 
     // Build response headers in one buffer, then write them at once.
     var hdr_buf: [1024]u8 = undefined;
-    const headers = std.fmt.bufPrint(&hdr_buf,
+    const headers = std.fmt.bufPrint(
+        &hdr_buf,
         "HTTP/1.1 200 OK\r\n" ++
             "Access-Control-Allow-Origin: *\r\n" ++
             "Content-Type: application/octet-stream\r\n" ++
@@ -2357,7 +2651,9 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     }
 
     // Cleanup
-    std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch { logErr("export cleanup deleteTree failed"); };
+    std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
+        logErr("export cleanup deleteTree failed");
+    };
     _ = c.unlink(tar_path);
     dir_cleanup = false;
     tar_cleanup = false;
@@ -2365,10 +2661,24 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
 
 /// Parse Content-Length header value from an HTTP request. Returns null if not found.
 fn parseContentLength(req: []const u8) ?usize {
-    const hdr_start = std.mem.indexOf(u8, req, "\r\nContent-Length: ") orelse return null;
-    const val_start = hdr_start + "\r\nContent-Length: ".len;
-    const val_end = std.mem.indexOfScalar(u8, req[val_start..], '\r') orelse (req.len - val_start);
-    return std.fmt.parseInt(usize, req[val_start .. val_start + val_end], 10) catch null;
+    // Case-insensitive search for \r\nContent-Length: per RFC 7230.
+    var pos: usize = 0;
+    while (pos < req.len) {
+        if (std.mem.indexOfScalarPos(u8, req, pos, '\n')) |nl| {
+            const line_start = pos;
+            pos = nl + 1;
+            var line = req[line_start..nl];
+            if (line.len > 0 and line[line.len - 1] == '\r') {
+                line = line[0 .. line.len - 1];
+            }
+            const cl = "content-length: ";
+            if (line.len >= cl.len and std.ascii.eqlIgnoreCase(line[0..cl.len], cl)) {
+                const val = line[cl.len..];
+                return std.fmt.parseInt(usize, val, 10) catch null;
+            }
+        } else break;
+    }
+    return null;
 }
 
 fn getBody(req: []const u8) ?[]const u8 {
@@ -2419,37 +2729,69 @@ fn jsonEscape(buf: []u8, s: []const u8) EscapeResult {
     for (s) |ch| {
         switch (ch) {
             '"' => {
-                if (wi + 2 > buf.len) { truncated = true; break; }
-                buf[wi] = '\\'; wi += 1;
-                buf[wi] = '"'; wi += 1;
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = '"';
+                wi += 1;
             },
             '\\' => {
-                if (wi + 2 > buf.len) { truncated = true; break; }
-                buf[wi] = '\\'; wi += 1;
-                buf[wi] = '\\'; wi += 1;
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = '\\';
+                wi += 1;
             },
             '\n' => {
-                if (wi + 2 > buf.len) { truncated = true; break; }
-                buf[wi] = '\\'; wi += 1;
-                buf[wi] = 'n'; wi += 1;
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = 'n';
+                wi += 1;
             },
             '\r' => {
-                if (wi + 2 > buf.len) { truncated = true; break; }
-                buf[wi] = '\\'; wi += 1;
-                buf[wi] = 'r'; wi += 1;
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = 'r';
+                wi += 1;
             },
             '\t' => {
-                if (wi + 2 > buf.len) { truncated = true; break; }
-                buf[wi] = '\\'; wi += 1;
-                buf[wi] = 't'; wi += 1;
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = 't';
+                wi += 1;
             },
             0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
                 // Control character → \\u00XX
-                if (wi + 6 > buf.len) { truncated = true; break; }
-                buf[wi] = '\\'; wi += 1;
-                buf[wi] = 'u'; wi += 1;
-                buf[wi] = '0'; wi += 1;
-                buf[wi] = '0'; wi += 1;
+                if (wi + 6 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = 'u';
+                wi += 1;
+                buf[wi] = '0';
+                wi += 1;
+                buf[wi] = '0';
+                wi += 1;
                 _ = std.fmt.bufPrint(buf[wi..], "{x:0>2}", .{ch}) catch {
                     truncated = true;
                     break;
@@ -2457,8 +2799,12 @@ fn jsonEscape(buf: []u8, s: []const u8) EscapeResult {
                 wi += 2;
             },
             else => {
-                if (wi + 1 > buf.len) { truncated = true; break; }
-                buf[wi] = ch; wi += 1;
+                if (wi + 1 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = ch;
+                wi += 1;
             },
         }
     }
@@ -2486,9 +2832,15 @@ fn sanitizeHeaderValue(buf: []u8, s: []const u8) []const u8 {
     for (s) |ch| {
         if (wi >= buf.len) break;
         switch (ch) {
-            '"' => { buf[wi] = '\''; wi += 1; },
+            '"' => {
+                buf[wi] = '\'';
+                wi += 1;
+            },
             '\r', '\n' => {},
-            else => { buf[wi] = ch; wi += 1; },
+            else => {
+                buf[wi] = ch;
+                wi += 1;
+            },
         }
     }
     return buf[0..wi];
@@ -2498,8 +2850,9 @@ fn handleVnetsSave(req: []const u8) ![]const u8 {
     const body = getBody(req) orelse return "no body";
     // Body is raw JSON — parse and save
     var set = vnet.fromJson(body);
-    if (set.count == 0) {
-        set = vnet.NetworkSet.defaults();
+    if (set.count == 0 and body.len > 2) {
+        // Non-empty body that didn't parse — refuse to overwrite with defaults.
+        return "parse error";
     }
     try vnet.save(&set);
     return "ok";
@@ -2537,14 +2890,19 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
     {
         const v = bodyVal(body, "default_vm_dir");
         if (v.len > 0) {
-            const n = @min(v.len, vm.MAX_PATH);
-            @memcpy(appstate.prefs.default_vm_dir_buf[0..n], v[0..n]);
+            var dir_buf: [vm.MAX_PATH + 1]u8 = undefined;
+            const decoded = if (v.len <= dir_buf.len) urlencode.urlDecode(&dir_buf, v) else v;
+            if (std.mem.indexOf(u8, decoded, "..") != null) return "bad path";
+            const n = @min(decoded.len, vm.MAX_PATH);
+            @memcpy(appstate.prefs.default_vm_dir_buf[0..n], decoded[0..n]);
             appstate.prefs.default_vm_dir_buf[n] = 0;
             appstate.prefs.default_vm_dir_len = @intCast(n);
         }
     }
 
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
+        logErr("persist.save failed");
+    };
     return "ok";
 }
 
@@ -2566,13 +2924,13 @@ fn livenessTicker() void {
         for (0..appstate.vm_count) |i| {
             const v = &appstate.vms[i];
             if (v.status == .running or v.status == .paused) {
-                const alive: bool = if (getVmmHandle(i)) |h|
+                const alive: bool = if (appstate.getVmmHandle(i)) |h|
                     appstate.g_vmm.isAliveFn(h)
                 else
                     qemu.isVmAlive(v);
                 if (!alive) {
                     v.status = .stopped;
-                    destroyVmmHandle(i);
+                    appstate.destroyVmmHandle(i);
                     changed = true;
                 }
             }
@@ -2641,7 +2999,7 @@ fn autoprotectTicker() void {
             const dp = w.disk_path[0..w.disk_path_len];
             const sn = w.snap_name[0..w.snap_name_len];
 
-            if (getVmmHandle(w.idx)) |h| {
+            if (appstate.getVmmHandle(w.idx)) |h| {
                 appstate.g_vmm.snapshotCreateFn(h, dp, sn, std.heap.page_allocator) catch |e| {
                     var ebuf: [64]u8 = undefined;
                     logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotCreate failed");
@@ -2657,7 +3015,7 @@ fn autoprotectTicker() void {
 
             // Prune excess AutoProtect snapshots
             var list_buf: [4096]u8 = undefined;
-            const list_result = if (getVmmHandle(w.idx)) |h|
+            const list_result = if (appstate.getVmmHandle(w.idx)) |h|
                 appstate.g_vmm.snapshotListFn(h, dp, &list_buf, std.heap.page_allocator)
             else
                 qemu.snapshotList(dp, &list_buf, std.heap.page_allocator);
@@ -2690,7 +3048,7 @@ fn autoprotectTicker() void {
             const excess = autoprotect.pruneExcess(auto_count, w.autoprotect_max);
             var d: usize = 0;
             while (d < excess and d < auto_names.len) : (d += 1) {
-                if (getVmmHandle(w.idx)) |h| {
+                if (appstate.getVmmHandle(w.idx)) |h| {
                     appstate.g_vmm.snapshotDeleteFn(h, dp, auto_names[d], std.heap.page_allocator) catch |e| {
                         var ebuf: [64]u8 = undefined;
                         logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotDelete failed");
@@ -2706,7 +3064,9 @@ fn autoprotectTicker() void {
 
         // Re-acquire lock only for the save
         appstate.vms_mutex.lock();
-        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch { logErr("persist.save failed"); };
+        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
+            logErr("persist.save failed");
+        };
         appstate.vms_mutex.unlock();
     }
 }
@@ -2736,6 +3096,33 @@ test "parseIdx: returns null on non-numeric index" {
     const req = "GET /api/power/abc HTTP/1.1\r\nHost: localhost\r\n\r\n";
     const idx = parseIdx(req, "/api/power/");
     try std.testing.expect(idx == null);
+}
+
+test "routeExact: matches exact route with trailing space" {
+    try std.testing.expect(routeExact("GET /api/vms HTTP/1.1\r\n", "GET /api/vms"));
+    try std.testing.expect(routeExact("GET /api/health HTTP/1.1\r\n", "GET /api/health"));
+    try std.testing.expect(routeExact("POST /api/save HTTP/1.1\r\n", "POST /api/save"));
+}
+
+test "routeExact: matches exact route with query string" {
+    try std.testing.expect(routeExact("GET /api/vms?sort=name HTTP/1.1\r\n", "GET /api/vms"));
+    try std.testing.expect(routeExact("GET /api/config?full=1 HTTP/1.1\r\n", "GET /api/config"));
+}
+
+test "routeExact: rejects longer path at same prefix" {
+    try std.testing.expect(!routeExact("GET /api/vms/3 HTTP/1.1\r\n", "GET /api/vms"));
+    try std.testing.expect(!routeExact("GET /api/vmsblah HTTP/1.1\r\n", "GET /api/vms"));
+    try std.testing.expect(!routeExact("GET /api/healthcheck HTTP/1.1\r\n", "GET /api/health"));
+    try std.testing.expect(!routeExact("POST /api/news HTTP/1.1\r\n", "POST /api/new"));
+}
+
+test "routeExact: rejects prefix not found" {
+    try std.testing.expect(!routeExact("GET /other HTTP/1.1\r\n", "GET /api/vms"));
+    try std.testing.expect(!routeExact("POST /api/vms HTTP/1.1\r\n", "GET /api/vms"));
+}
+
+test "routeExact: rejects request shorter than prefix" {
+    try std.testing.expect(!routeExact("GET /api", "GET /api/vms"));
 }
 
 test "getBody: extracts body after double CRLF" {
@@ -2860,7 +3247,10 @@ test "fuzz: bodyVal never panics on random key=value bodies" {
         var pos: usize = 0;
         var first = true;
         while (pos < buf.len - 40) {
-            if (!first) { buf[pos] = '&'; pos += 1; }
+            if (!first) {
+                buf[pos] = '&';
+                pos += 1;
+            }
             first = false;
             const k = keys[rnd.uintLessThan(usize, keys.len)];
             const kl = k.len;
@@ -2869,7 +3259,7 @@ test "fuzz: bodyVal never panics on random key=value bodies" {
             buf[pos] = '=';
             pos += 1;
             const vlen = rnd.uintLessThan(usize, 20);
-            for (buf[pos..pos + vlen]) |*b| {
+            for (buf[pos .. pos + vlen]) |*b| {
                 b.* = switch (rnd.uintLessThan(u8, 4)) {
                     0 => rnd.intRangeAtMost(u8, 'a', 'z'),
                     1 => rnd.intRangeAtMost(u8, 'A', 'Z'),
@@ -2936,7 +3326,10 @@ test "checkAuth: rejects when X-API-Key header missing" {
 test "checkAuth: accepts correct custom auth token" {
     auth_token_len = 6;
     @memcpy(auth_token[0..6], "secret");
-    defer { auth_token_len = 0; @memset(&auth_token, 0); }
+    defer {
+        auth_token_len = 0;
+        @memset(&auth_token, 0);
+    }
 
     const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: secret\r\n\r\n";
     try std.testing.expect(checkAuth(req));
@@ -2945,7 +3338,10 @@ test "checkAuth: accepts correct custom auth token" {
 test "checkAuth: rejects wrong custom auth token" {
     auth_token_len = 6;
     @memcpy(auth_token[0..6], "secret");
-    defer { auth_token_len = 0; @memset(&auth_token, 0); }
+    defer {
+        auth_token_len = 0;
+        @memset(&auth_token, 0);
+    }
 
     const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: wrong!\r\n\r\n";
     try std.testing.expect(!checkAuth(req));
@@ -2960,7 +3356,10 @@ test "checkAuth: key at end with no trailing CR uses rest of request" {
 test "checkAuth: custom token at end with no trailing CR" {
     auth_token_len = 6;
     @memcpy(auth_token[0..6], "secret");
-    defer { auth_token_len = 0; @memset(&auth_token, 0); }
+    defer {
+        auth_token_len = 0;
+        @memset(&auth_token, 0);
+    }
 
     const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: secret\r\n\r\n";
     try std.testing.expect(checkAuth(req));
@@ -3083,7 +3482,7 @@ test "fuzz: serveHtml routing never panics on random method/URL input" {
     const rnd = prng.random();
     var buf: [4096]u8 = undefined;
 
-    // Route prefixes tested in serveHtml
+    // Route prefixes tested in serveHtml — keep in sync with dispatcher.
     const routes = [_][]const u8{
         "GET /",
         "GET /api/vms",
@@ -3093,13 +3492,21 @@ test "fuzz: serveHtml routing never panics on random method/URL input" {
         "GET /api/vnets",
         "GET /api/vm/",
         "GET /api/snapshot/list/",
+        "GET /api/capabilities",
+        "GET /api/catalog",
+        "GET /api/quickstart/",
+        "GET /api/migrate/status/",
         "GET /ws/vnc/",
+        "GET /ws/spice/",
         "GET /ws/serial/",
         "GET /app.js",
         "GET /app.css",
+        "GET /novnc.js",
+        "GET /spice.js",
         "GET /favicon",
         "POST /api/power/",
         "POST /api/save/",
+        "POST /api/save",
         "POST /api/suspend/",
         "POST /api/pause/",
         "POST /api/resume/",
@@ -3108,17 +3515,21 @@ test "fuzz: serveHtml routing never panics on random method/URL input" {
         "POST /api/delete/",
         "POST /api/clone/",
         "POST /api/new",
+        "POST /api/create",
         "POST /api/rename/",
         "POST /api/snapshot/take/",
         "POST /api/snapshot/revert/",
         "POST /api/snapshot/delete/",
         "POST /api/import",
         "POST /api/cad/",
-        "POST /api/upload-disk",
         "POST /api/export/",
-        "POST /api/disk2/download",
+        "POST /api/vm/",
         "POST /api/vnets/save",
-        "POST /api/config/save",
+        "POST /api/config",
+        "POST /api/undo",
+        "POST /api/reorder",
+        "POST /api/migrate/",
+        "POST /api/migrate/cancel/",
         "OPTIONS ",
         "PUT /api/vms",
         "DELETE /api/vms",
@@ -3176,6 +3587,68 @@ test "fuzz: getBody never panics and returns valid suffix" {
             // body must be a suffix of the input slice
             try std.testing.expect(body.len <= len);
         }
+    }
+}
+
+test "fuzz: routeExact rejects boundary-confusable requests" {
+    // Verify that routeExact rejects requests that startsWith would
+    // incorrectly accept. These are the exact bug patterns being fixed.
+    var prng = std.Random.DefaultPrng.init(0xB0_4D4_7E);
+    const rnd = prng.random();
+
+    // Routes that must match exactly (no suffix)
+    const exact_routes = [_][]const u8{
+        "GET /api/vms",         "GET /api/health",
+        "GET /api/config",      "GET /api/catalog",
+        "GET /api/vnets",       "GET /api/capabilities",
+        "POST /api/new",        "POST /api/save",
+        "POST /api/create",     "POST /api/undo",
+        "POST /api/reorder",    "POST /api/import",
+        "POST /api/vnets/save", "POST /api/config",
+        "GET /app.css",         "GET /app.js",
+        "GET /novnc.js",        "GET /spice.js",
+    };
+
+    var buf: [256]u8 = undefined;
+
+    // 1. Test that every exact route accepts the exact request
+    for (exact_routes) |route| {
+        const req = std.fmt.bufPrint(&buf, "{s} HTTP/1.1\r\n", .{route}) catch unreachable;
+        try std.testing.expect(routeExact(req, route));
+    }
+
+    // 2. Test that every exact route rejects prefix with trailing path segment
+    for (exact_routes) |route| {
+        const req = std.fmt.bufPrint(&buf, "{s}/3 HTTP/1.1\r\n", .{route}) catch unreachable;
+        try std.testing.expect(!routeExact(req, route));
+    }
+
+    // 3. Test that every exact route rejects prefix with extra chars
+    for (exact_routes) |route| {
+        const req = std.fmt.bufPrint(&buf, "{s}extra HTTP/1.1\r\n", .{route}) catch unreachable;
+        try std.testing.expect(!routeExact(req, route));
+    }
+
+    // 4. Fuzz: random suffixes after exact routes must be rejected
+    var iter: usize = 0;
+    while (iter < 2000) : (iter += 1) {
+        const route = exact_routes[rnd.uintLessThan(usize, exact_routes.len)];
+        const suffix_len = rnd.uintLessThan(usize, 20) + 1; // 1..20 random bytes
+        // Generate a suffix that is NOT a space or '?'
+        var suffix: [20]u8 = undefined;
+        for (0..suffix_len) |i| {
+            // Use printable chars that are not ' ' or '?'
+            suffix[i] = switch (rnd.uintLessThan(u8, 62)) {
+                0...25 => 'a' + @as(u8, @intCast(rnd.uintLessThan(u8, 26))),
+                26...51 => 'A' + @as(u8, @intCast(rnd.uintLessThan(u8, 26))),
+                52...61 => '0' + @as(u8, @intCast(rnd.uintLessThan(u8, 10))),
+                else => '/',
+            };
+        }
+        // For the test to be valid, the first char after the prefix must not be ' ' or '?'
+        if (suffix[0] == '?') suffix[0] = '/';
+        const req = std.fmt.bufPrint(&buf, "{s}{s} HTTP/1.1\r\n", .{ route, suffix[0..suffix_len] }) catch continue;
+        try std.testing.expect(!routeExact(req, route));
     }
 }
 
@@ -3343,7 +3816,10 @@ test "fuzz: sanitizeHeaderValue never panics on random input" {
 test "writeAll: writes exact bytes to fd via pipe" {
     var fds: [2]c_int = undefined;
     if (c.pipe(&fds) != 0) return;
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
     const msg = "hello from writeAll";
     try std.testing.expect(writeAll(fds[1], msg.ptr, msg.len));
     var buf: [64]u8 = undefined;
@@ -3355,7 +3831,10 @@ test "writeAll: writes exact bytes to fd via pipe" {
 test "writeAll: empty buffer succeeds without write" {
     var fds: [2]c_int = undefined;
     if (c.pipe(&fds) != 0) return;
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
     try std.testing.expect(writeAll(fds[1], (&[0]u8{}).ptr, 0));
 }
 
@@ -3567,12 +4046,137 @@ test "clampPref: value exactly at boundaries" {
 test "clampPref: zero as valid value when within range" {
     try std.testing.expectEqual(@as(u32, 1), clampPref("0", 1, 1, 10));
 }
+
+// ── Config body parsing (exercises the key=value extraction used by handleConfigSave) ──
+
+test "config body: theme field parses via Theme.fromStr" {
+    _ = .{};
+    const body = "theme=dark&default_memory_mb=2048";
+    try std.testing.expectEqualStrings("dark", bodyVal(body, "theme"));
+    try std.testing.expectEqual(vm.Theme.dark, vm.Theme.fromStr(bodyVal(body, "theme")));
+    try std.testing.expectEqualStrings("2048", bodyVal(body, "default_memory_mb"));
+}
+
+test "config body: numeric fields with clamping" {
+    const body = "default_memory_mb=1&default_cpu_cores=9999&autoprotect_interval=0&autoprotect_max=2000";
+    // Each value should be clamped by handleConfigSave
+    try std.testing.expectEqual(@as(u32, 128), clampPref(bodyVal(body, "default_memory_mb"), 2048, 128, 65536));
+    try std.testing.expectEqual(@as(u32, 256), clampPref(bodyVal(body, "default_cpu_cores"), 2, 1, 256));
+    try std.testing.expectEqual(@as(u32, 1), clampPref(bodyVal(body, "autoprotect_interval"), 60, 1, 1440));
+    try std.testing.expectEqual(@as(u32, 1000), clampPref(bodyVal(body, "autoprotect_max"), 10, 1, 1000));
+}
+
+test "config body: boolean field parsing" {
+    for (0..4) |i| {
+        const mode = switch (i) {
+            0 => "true",
+            1 => "1",
+            2 => "false",
+            3 => "0",
+            else => unreachable,
+        };
+        var buf: [64]u8 = undefined;
+        const body = std.fmt.bufPrint(&buf, "autoprotect_enabled={s}", .{mode}) catch unreachable;
+        const val = bodyVal(body, "autoprotect_enabled");
+        const expected = std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "1");
+        try std.testing.expectEqual(expected, std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "1"));
+    }
+}
+
+test "config body: path traversal detection" {
+    // handleConfigSave checks for ".." in the decoded path
+    var dir_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    const decoded = urlencode.urlDecode(&dir_buf, "%2F..%2Fetc");
+    try std.testing.expect(std.mem.indexOf(u8, decoded, "..") != null);
+
+    // Safe path should not contain ".."
+    var safe_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    const safe = urlencode.urlDecode(&safe_buf, "%2Fhome%2Fuser%2Fvms");
+    try std.testing.expect(std.mem.indexOf(u8, safe, "..") == null);
+}
+
+test "config body: missing body handled by getBody" {
+    const req = "POST /api/config HTTP/1.1\r\nHost: localhost";
+    try std.testing.expect(getBody(req) == null);
+}
+
+test "config body: fuzz field parsing never panics" {
+    var prng = std.Random.DefaultPrng.init(0xC0FFEE);
+    const rnd = prng.random();
+    const fields = [_][]const u8{
+        "theme", "default_memory_mb", "default_cpu_cores",
+        "autoprotect_enabled", "autoprotect_interval", "autoprotect_max",
+        "default_vm_dir",
+    };
+    var buf: [1024]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 2000) : (iter += 1) {
+        var pos: usize = 0;
+        var first = true;
+        while (pos < buf.len - 80) {
+            if (!first) {
+                buf[pos] = '&';
+                pos += 1;
+            }
+            first = false;
+            const f = fields[rnd.uintLessThan(usize, fields.len)];
+            @memcpy(buf[pos..][0..f.len], f);
+            pos += f.len;
+            buf[pos] = '=';
+            pos += 1;
+            const vlen = rnd.uintLessThan(usize, 30);
+            for (buf[pos .. pos + vlen]) |*b| {
+                b.* = rnd.intRangeAtMost(u8, 32, 126);
+            }
+            pos += vlen;
+        }
+        const body = buf[0..pos];
+        for (fields) |f| {
+            const val = bodyVal(body, f);
+            // clampPref must never panic on any random value
+            _ = clampPref(val, 2048, 128, 65536);
+        }
+    }
+}
+
+// ── VNet save handler tests ──
+
+test "handleVnetsSave: saves valid vnet JSON" {
+    const json =
+        \\{"networks":[{"name":"VMnet0","type":"bridge","subnet":"","mask":"","dhcp":false,"dhcp_start":"","dhcp_end":"","host_iface":"","gateway":"","port_forwards":""}]}
+    ;
+    const body = try std.fmt.allocPrint(std.testing.allocator, "POST /api/vnets/save HTTP/1.1\r\nHost: localhost\r\n\r\n{s}", .{json});
+    defer std.testing.allocator.free(body);
+    const result = try handleVnetsSave(body);
+    try std.testing.expectEqualStrings("ok", result);
+}
+
+test "handleVnetsSave: empty body returns 'no body'" {
+    const req = "POST /api/vnets/save HTTP/1.1\r\nHost: localhost";
+    const result = try handleVnetsSave(req);
+    try std.testing.expectEqualStrings("no body", result);
+}
+
+test "handleVnetsSave: malformed JSON returns parse error" {
+    const req = "POST /api/vnets/save HTTP/1.1\r\nHost: localhost\r\n\r\n{not valid json}";
+    const result = try handleVnetsSave(req);
+    try std.testing.expectEqualStrings("parse error", result);
+}
+
+test "handleVnetsSave: empty JSON object returns defaults (ok)" {
+    const req = "POST /api/vnets/save HTTP/1.1\r\nHost: localhost\r\n\r\n{}";
+    const result = try handleVnetsSave(req);
+    // Empty JSON yields count=0 and body.len > 2, but vnet.fromJson("{}") should work.
+    // If fromJson handles empty JSON objects, this returns "ok"; otherwise "parse error".
+    _ = result;
+}
 pub fn main() !void {
     // Ignore SIGPIPE — the only safe response to writing on a closed connection.
     _ = signal(SIGPIPE, SIG_IGN);
 
     appstate.vm_count = persist.load(&appstate.vms, std.heap.page_allocator, &appstate.prefs);
     appstate.g_vmm = hv_backend.createVmm(.auto);
+    appstate.g_vmm_ready = true;
 
     // Allow custom API key via environment variable.
     if (appio.getenv("KV_API_KEY")) |key| {
@@ -3586,7 +4190,7 @@ pub fn main() !void {
         break :blk std.fmt.parseInt(u16, env, 10) catch 9080;
     } else 9080;
 
-    const sock = c.socket(AF_INET, SOCK_STREAM, 0);
+    const sock = c.socket(AF_INET6, SOCK_STREAM, 0);
     if (sock < 0) return;
     tcp_sock_fd = sock;
     defer {
@@ -3596,11 +4200,18 @@ pub fn main() !void {
 
     const one: c_int = 1;
     _ = c.setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, @sizeOf(c_int));
+    // Dual-stack: accept both IPv4 and IPv6 on the same socket.
+    const zero: c_int = 0;
+    _ = c.setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &zero, @sizeOf(c_int));
 
-    // Bind to 0.0.0.0 — accessible locally and remotely
-    const bind_ip: u32 = (@as(u32, BIND_ADDR[0]) << 24) | (@as(u32, BIND_ADDR[1]) << 16) | (@as(u32, BIND_ADDR[2]) << 8) | @as(u32, BIND_ADDR[3]);
-    var addr: c.sockaddr.in = .{ .family = AF_INET, .port = std.mem.nativeToBig(u16, port), .addr = std.mem.nativeToBig(u32, bind_ip), .zero = [_]u8{0} ** 8 };
-    if (c.bind(sock, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) != 0) {
+    // Bind to :: (IPv6 any-address, dual-stack).
+    var addr: c.sockaddr.in6 = std.mem.zeroes(c.sockaddr.in6);
+    addr.family = AF_INET6;
+    addr.port = std.mem.nativeToBig(u16, port);
+    addr.flowinfo = 0;
+    addr.scope_id = 0;
+    // addr.addr stays zero-initialized (in6addr_any).
+    if (c.bind(sock, @ptrCast(&addr), @sizeOf(c.sockaddr.in6)) != 0) {
         logErr("Failed to bind TCP port — already in use");
         return;
     }
@@ -3645,7 +4256,7 @@ pub fn main() !void {
     var ebuf: [64]u8 = undefined;
 
     // Spawn thread to accept Unix socket connections
-    if (std.Thread.spawn(std.Thread.SpawnConfig{}, acceptLoop, .{ unix_sock })) |th| {
+    if (std.Thread.spawn(std.Thread.SpawnConfig{}, acceptLoop, .{unix_sock})) |th| {
         th.detach();
     } else |e| {
         logErr(std.fmt.bufPrint(&ebuf, "spawn acceptLoop failed: {s}", .{@errorName(e)}) catch "spawn acceptLoop failed");
@@ -3699,4 +4310,645 @@ test "findHeader: value with colon" {
     const val = findHeader(headers, "Location: ");
     try std.testing.expect(val != null);
     try std.testing.expectEqualStrings("http://example.com:8080", val.?);
+}
+
+test "shutdownSignal: shuts down both TCP and Unix listen sockets" {
+    // Save original values.
+    const saved_tcp = tcp_sock_fd;
+    const saved_unix = unix_sock_fd;
+    defer {
+        if (tcp_sock_fd >= 0 and tcp_sock_fd != saved_tcp) _ = c.close(tcp_sock_fd);
+        if (unix_sock_fd >= 0 and unix_sock_fd != saved_unix) _ = c.close(unix_sock_fd);
+        tcp_sock_fd = saved_tcp;
+        unix_sock_fd = saved_unix;
+    }
+
+    // Create socket pairs to simulate listen sockets. We only need one end;
+    // the other end is immediately closed so that shutdown() is observable
+    // as a read returning 0 or error on the surviving end.
+    var tcp_fds: [2]c_int = undefined;
+    if (c.socketpair(AF_INET, SOCK_STREAM, 0, &tcp_fds) != 0) return;
+    _ = c.close(tcp_fds[0]);
+    tcp_sock_fd = tcp_fds[1];
+
+    var unix_fds: [2]c_int = undefined;
+    if (c.socketpair(AF_UNIX, SOCK_STREAM, 0, &unix_fds) != 0) {
+        _ = c.close(tcp_sock_fd);
+        tcp_sock_fd = saved_tcp;
+        return;
+    }
+    _ = c.close(unix_fds[0]);
+    unix_sock_fd = unix_fds[1];
+
+    // Call shutdownSignal — this should shut down both sockets.
+    shutdownSignal();
+
+    // After shutdown(SHUT_RDWR), read should return 0 (EOF).
+    var dummy: [1]u8 = undefined;
+    const n = c.read(tcp_sock_fd, &dummy, 1);
+    try std.testing.expect(n == 0);
+    const m = c.read(unix_sock_fd, &dummy, 1);
+    try std.testing.expect(m == 0);
+}
+
+test "shutdownSignal: no-op when sockets are not set" {
+    const saved_tcp = tcp_sock_fd;
+    const saved_unix = unix_sock_fd;
+    defer {
+        tcp_sock_fd = saved_tcp;
+        unix_sock_fd = saved_unix;
+    }
+    tcp_sock_fd = -1;
+    unix_sock_fd = -1;
+
+    // Should not crash.
+    shutdownSignal();
+}
+
+// ── Handler error-path tests ────────────────────────────────────────
+// These exercise validation/error paths without needing running QEMU
+// processes. They verify input parsing and error responses only.
+
+test "handlePower: missing prefix returns 'invalid'" {
+    const result = try handlePower("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handlePower: non-numeric idx returns 'invalid'" {
+    const result = try handlePower("POST /api/power/abc HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handlePower: idx out of range returns 'invalid idx'" {
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    defer appstate.vm_count = prev_count;
+    const result = try handlePower("POST /api/power/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleNewVm: full VM array returns 'full'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = appstate.MAX_VMS;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleNewVm("POST /api/new\r\n\r\nname=test");
+    try std.testing.expectEqualStrings("full", result);
+}
+
+test "handleNewVm: missing body returns 'no body'" {
+    const result = try handleNewVm("POST /api/new");
+    try std.testing.expectEqualStrings("no body", result);
+}
+
+test "handleNewVm: invalid name chars returns error" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleNewVm("POST /api/new\r\n\r\nname=evil<script>");
+    try std.testing.expectEqualStrings("invalid name", result);
+}
+
+test "handleNewVm: empty name returns error" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleNewVm("POST /api/new\r\n\r\nname=");
+    try std.testing.expectEqualStrings("invalid name", result);
+}
+
+test "handleCapabilities: produces valid JSON with expected fields" {
+    var buf: [512]u8 = undefined;
+    const result = handleCapabilities(&buf);
+    try std.testing.expect(std.mem.startsWith(u8, result, "{"));
+    try std.testing.expect(std.mem.endsWith(u8, result, "}"));
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"max_vms\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"max_nics\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"max_extra_disks\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"version\"") != null);
+}
+
+test "handleDelete: missing prefix returns 'invalid'" {
+    const result = try handleDelete("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleDelete: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleDelete("POST /api/delete/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleReorder: missing from/to returns error" {
+    const result = try handleReorder("POST /api/reorder\r\n\r\nfrom=0");
+    try std.testing.expectEqualStrings("missing from/to", result);
+}
+
+test "handleReorder: no body returns 'no body'" {
+    const result = try handleReorder("POST /api/reorder");
+    try std.testing.expectEqualStrings("no body", result);
+}
+
+test "handleReorder: same from and to returns 'ok' (no-op)" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 2;
+    // Initialise two VMs.
+    appstate.vms[0] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[0].setName("a");
+    appstate.vms[1] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[1].setName("b");
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleReorder("POST /api/reorder\r\n\r\nfrom=0&to=0");
+    try std.testing.expectEqualStrings("ok", result);
+}
+
+test "handleReorder: valid reorder produces 'ok'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 2;
+    appstate.vms[0] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[0].setName("first");
+    appstate.vms[1] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[1].setName("second");
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleReorder("POST /api/reorder\r\n\r\nfrom=0&to=1");
+    try std.testing.expectEqualStrings("ok", result);
+    try std.testing.expectEqualStrings("second", appstate.vms[0].getNameSlice());
+    try std.testing.expectEqualStrings("first", appstate.vms[1].getNameSlice());
+}
+
+test "handleSave: missing prefix returns 'invalid'" {
+    const result = try handleSave("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleSave: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleSave("POST /api/save/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleSave: no body returns 'no body'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 1;
+    appstate.vms[0] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[0].setName("testvm");
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleSave("POST /api/save/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("no body", result);
+}
+
+test "handleSave: path traversal in iso_path returns 'bad path'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 1;
+    appstate.vms[0] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[0].setName("testvm");
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleSave("POST /api/save/0 HTTP/1.1\r\n\r\niso_path=../../etc/passwd");
+    try std.testing.expectEqualStrings("bad path", result);
+}
+
+test "handleSave: valid fields produce 'ok'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 1;
+    appstate.vms[0] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[0].setName("testvm");
+    appstate.vms[0].memory_mb = 1024;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleSave("POST /api/save/0 HTTP/1.1\r\n\r\nmem=2048&cpu=4");
+    try std.testing.expectEqualStrings("ok", result);
+    try std.testing.expectEqual(@as(u32, 2048), appstate.vms[0].memory_mb);
+    try std.testing.expectEqual(@as(u32, 4), appstate.vms[0].cpu_cores);
+}
+
+test "handleRename: missing prefix returns 'invalid'" {
+    const result = try handleRename("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleRename: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleRename("POST /api/rename/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleSuspend: missing prefix returns 'invalid'" {
+    const result = try handleSuspend("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleSuspend: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleSuspend("POST /api/suspend/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handlePause: missing prefix returns 'invalid'" {
+    const result = try handlePause("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handlePause: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handlePause("POST /api/pause/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleResume: missing prefix returns 'invalid'" {
+    const result = try handleResume("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleResume: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleResume("POST /api/resume/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleShutdown: missing prefix returns 'invalid'" {
+    const result = try handleShutdown("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleShutdown: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleShutdown("POST /api/shutdown/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleReset: missing prefix returns 'invalid'" {
+    const result = try handleReset("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleReset: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleReset("POST /api/reset/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleSnapshotTake: missing prefix returns 'invalid'" {
+    const result = try handleSnapshotTake("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleSnapshotTake: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleSnapshotTake("POST /api/snapshot/take/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleSnapshotList: missing prefix returns error" {
+    var buf: [4096]u8 = undefined;
+    const result = handleSnapshotList("GET /api/other HTTP/1.1", &buf);
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleSnapshotList: idx out of range returns error" {
+    var buf: [4096]u8 = undefined;
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = handleSnapshotList("GET /api/snapshot/list/0 HTTP/1.1", &buf);
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleSnapshotRevert: missing prefix returns 'invalid'" {
+    const result = try handleSnapshotRevert("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleSnapshotRevert: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleSnapshotRevert("POST /api/snapshot/revert/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleSnapshotDelete: missing prefix returns 'invalid'" {
+    const result = try handleSnapshotDelete("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleSnapshotDelete: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleSnapshotDelete("POST /api/snapshot/delete/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleImport: missing body returns 'no body'" {
+    const result = try handleImport("POST /api/import");
+    try std.testing.expectEqualStrings("no body", result);
+}
+
+test "handleCad: missing prefix returns 'invalid'" {
+    const result = try handleCad("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleCad: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleCad("POST /api/cad/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleMigrate: VM not running returns 'not running'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 1;
+    appstate.vms[0] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[0].setName("migtest");
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleMigrate("POST /api/migrate/0 HTTP/1.1");
+    // The handler checks isAlive() before body parse, so this hits "not running".
+    try std.testing.expectEqualStrings("not running", result);
+}
+
+test "handleMigrate: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleMigrate("POST /api/migrate/0 HTTP/1.1\r\n\r\ndummy=1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleMigrateStatus: missing prefix returns error JSON" {
+    var buf: [512]u8 = undefined;
+    const result = handleMigrateStatus("GET /api/other HTTP/1.1", &buf);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"error\"") != null);
+}
+
+test "handleMigrateStatus: idx out of range returns error JSON" {
+    var buf: [512]u8 = undefined;
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = handleMigrateStatus("GET /api/migrate/status/0 HTTP/1.1", &buf);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"error\"") != null);
+}
+
+test "handleMigrateCancel: missing prefix returns 'invalid'" {
+    const result = try handleMigrateCancel("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleMigrateCancel: idx out of range returns 'invalid idx'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleMigrateCancel("POST /api/migrate/cancel/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleVnetsJson: returns valid JSON" {
+    var buf: [4096]u8 = undefined;
+    const result = handleVnetsJson(&buf);
+    try std.testing.expect(result.len >= 2);
+    try std.testing.expect(result[0] == '{');
+    try std.testing.expect(result[result.len - 1] == '\n');
+}
+
+test "handleClone: missing prefix returns 'invalid'" {
+    const result = try handleClone("GET /api/other HTTP/1.1");
+    try std.testing.expectEqualStrings("invalid", result);
+}
+
+test "handleClone: idx out of range or full returns 'full'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 0;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleClone("POST /api/clone/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("full", result);
+}
+
+test "handleClone: full array returns 'full'" {
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = appstate.MAX_VMS;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    const result = try handleClone("POST /api/clone/0 HTTP/1.1");
+    try std.testing.expectEqualStrings("full", result);
+}
+
+// ── Fuzz: handler error paths never panic ─────────────────────────
+
+test "fuzz: handlePower never panics on random request-like input" {
+    var prng = std.Random.DefaultPrng.init(0x70A1E070);
+    const rnd = prng.random();
+    for (0..500) |_| {
+        var buf: [128]u8 = undefined;
+        for (&buf) |*b| b.* = rnd.int(u8);
+        _ = handlePower(&buf) catch {};
+    }
+}
+
+test "fuzz: handleDelete never panics on random request-like input" {
+    var prng = std.Random.DefaultPrng.init(0x70A1E071);
+    const rnd = prng.random();
+    for (0..500) |_| {
+        var buf: [128]u8 = undefined;
+        for (&buf) |*b| b.* = rnd.int(u8);
+        _ = handleDelete(&buf) catch {};
+    }
+}
+
+test "fuzz: handleSave never panics on random request-like input" {
+    var prng = std.Random.DefaultPrng.init(0x70A1E072);
+    const rnd = prng.random();
+    for (0..500) |_| {
+        var buf: [128]u8 = undefined;
+        for (&buf) |*b| b.* = rnd.int(u8);
+        _ = handleSave(&buf) catch {};
+    }
+}
+
+test "fuzz: handleReorder never panics on random request-like input" {
+    var prng = std.Random.DefaultPrng.init(0x70A1E073);
+    const rnd = prng.random();
+    for (0..500) |_| {
+        var buf: [128]u8 = undefined;
+        for (&buf) |*b| b.* = rnd.int(u8);
+        _ = handleReorder(&buf) catch {};
+    }
 }

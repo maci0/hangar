@@ -2,8 +2,8 @@
 //! Pure VM list indexing helpers.
 //!
 //! Extracted from `appstate.zig` so the browser line→VM-index mapping
-//! can be unit-tested without FLTK dependencies. Handles the favorites /
-//! separator / non-favorites layout used by `refreshBrowser`.
+//! can be unit-tested without UI dependencies. Handles the favorites /
+//! separator / non-favorites layout used by the VM list renderer.
 
 const std = @import("std");
 const vm = @import("vm.zig");
@@ -98,7 +98,7 @@ test "lineToVmIndex: mixed fav+non-fav (separator present)" {
     // Layout: fav1(0), fav2(2), sep(→null), non1(1), non2(3)
     try std.testing.expectEqual(@as(?usize, 0), lineToVmIndex(0, &vms, "")); // fav1
     try std.testing.expectEqual(@as(?usize, 2), lineToVmIndex(1, &vms, "")); // fav2
-    try std.testing.expect(lineToVmIndex(2, &vms, "") == null);              // separator
+    try std.testing.expect(lineToVmIndex(2, &vms, "") == null); // separator
     try std.testing.expectEqual(@as(?usize, 1), lineToVmIndex(3, &vms, "")); // non1
     try std.testing.expectEqual(@as(?usize, 3), lineToVmIndex(4, &vms, "")); // non2
     try std.testing.expect(lineToVmIndex(5, &vms, "") == null);

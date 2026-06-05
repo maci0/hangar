@@ -6,6 +6,6 @@
 //! wrapper at src/ makes the module root src/, so `../vm.zig` from hv/
 //! resolves to src/vm.zig correctly.
 
-test {
+comptime {
     _ = @import("hv/interface.zig");
 }

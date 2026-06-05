@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Virtual network label formatter extracted from dialogs.zig vnetDialog.
+//! Virtual network label formatter.
 //!
 //! Formats a human-readable label for a VirtualNetwork switch (bridged, host-only, NAT).
-//! Pure function: no FLTK, no I/O, no global state.
+//! Pure function: no I/O, no global state.
 
 const std = @import("std");
 const vnet = @import("vnet.zig");

@@ -2,7 +2,7 @@
 //! Case-insensitive VM name filter helper.
 //!
 //! Pure logic extracted from appstate.zig so it can be unit-tested without
-//! FLTK dependencies. Used by the VM browser search/filter UI.
+//! UI dependencies. Used by the VM list search/filter feature.
 
 const std = @import("std");
 const vm = @import("vm.zig");

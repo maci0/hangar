@@ -1,18 +1,14 @@
 # AGENTS.md — Hangar
 
-Lightweight QEMU VM manager with a VMware Workstation-style GUI.
-Zig 0.16.0 + FLTK 1.4 (via cfltk C bindings). No libvirt dependency.
+Lightweight QEMU VM manager with a web UI and optional native WebView wrapper.
+Zig 0.16.0. No libvirt dependency.
 
 ## Build / Run / Test Commands
 
 ```bash
-zig build              # Compile FLTK frontend -> zig-out/bin/hangar
-zig build run          # Build + launch the FLTK GUI
 zig build web          # Build + launch web backend (HTTP on :9080)
-zig build test         # Run ALL unit + fuzz tests (29 modules + HV)
-zig build smoke        # Xvfb GUI smoke test (create + settings + about)
-zig build fuzzgui      # Xvfb random event-storm fuzz
-zig build fuzzmodals   # Xvfb direct-fuzz modal callbacks
+zig build webui        # Build + launch native WebView desktop wrapper
+zig build test         # Run ALL unit + fuzz tests (34 modules + HV)
 ```
 
 ### Running a single test file
@@ -29,21 +25,12 @@ zig test src/persist.zig -lc -fllvm -flld
 zig test src/transport.zig -lc -fllvm -flld
 ```
 
-### Running the FLTK GUI under Xvfb (headless)
-
-The FLTK GUI requires a running X server:
-
-```bash
-Xvfb :99 -screen 0 1280x800x24 -ac &
-DISPLAY=:99 ./zig-out/bin/hangar &
-```
-
 ## Architecture Overview
 
 ```
 src/
-  main.zig          FLTK frontend — all GUI, callbacks, dialogs (monolith)
   web_server.zig    Standalone HTTP daemon with embedded HTML/CSS/JS UI (port 9080)
+  webui_app.zig     Native WebView desktop wrapper (zig-webui) that spawns hangar-web
   vm.zig            VM config model, enums (DiskFormat, GuestOs, VmStatus, ...)
   vnet.zig          Virtual switch model (VMnet0..N: type/subnet/DHCP) + own JSON store
   qemu.zig          QEMU/qemu-img process spawn (fork+execvp), disk image create
@@ -64,52 +51,46 @@ src/
   autoprotect.zig   AutoProtect snapshot scheduling logic
   transport.zig     Transport abstraction (Unix/TCP/SHM) for client↔daemon
   vmrun.zig         CLI tool for remote VM management (vmrun list/start/stop/...)
-  dialogs.zig       Modal dialogs: prefs, VNet editor, about, OVF export, remote connect
-  display.zig       VNC/SPICE framebuffer rendering onto FLTK Fl_RGB_Image (Display tab)
   hv/
     interface.zig   Hypervisor abstraction interface (Vmm dispatch table)
     qemu_backend.zig  QEMU backend implementing the Vmm interface
+  web/
+    index.html      Single-page web UI (embedded in web_server.zig)
+    app.js          Web frontend logic (VM management, theme, display, console)
+    app.css         Web UI stylesheet (light + dark theme CSS variables)
 
-GUI toolkit: FLTK 1.4 via cfltk C bindings (@cImport of 12 cfltk headers).
-build.zig       Links cfltk static lib + libfltk.a via system c++.
-deps/cfltk/     Vendored cfltk C wrapper + prebuilt libcfltk.a.
+Shared state: appstate.zig (VM arrays, mutex, serial state, remote mode).
 ```
 
-### GUI toolkit: FLTK (not IUP)
+### Frontend: Web UI (port 9080)
 
-- Widgets imported via `@cImport` of `cfltk/cfl.h` and 11 other cfltk headers.
-- **Layout**: absolute pixel positioning — every widget has `(x, y, w, h)`.
-- **Callbacks**: `callconv(.c) void` — FLTK callbacks are void, not `c_int`.
-- **Dialogs**: stack-allocated anonymous structs with a static `go` method;
-  closed via `Fl_Window_hide`, not destroyed. No dual-open guard needed.
-- **No theming system**: single `Fl_set_scheme("gtk+")` call instead of
-  IUP palettes / GTK CSS providers / `ta()` helper.
-- **No icon system**: `icons.zig` does not exist in the FLTK version.
-- **Display**: `Fl_RGB_Image` with BGRA→RGBA pixel swap (not `IupDrawImage`).
-- **Tabs**: `Fl_Tabs` + `Fl_Group` for Summary / Display / Console tabs.
-- **VM list**: `Fl_Browser` with favorites sorted first (star prefix).
-- **Status bar**: `Fl_Box` at window bottom.
+- Single-page HTML app with CSS custom properties for light/dark theming.
+- All VM operations via REST API + WebSocket (framebuffer streaming).
+- The `webui_app.zig` native wrapper uses zig-webui to open a desktop window
+  showing the same web UI — no frontend changes needed.
 
 ### Global state (no App struct)
 
-State is stored as flat module-level globals in `main.zig`:
+State is stored as flat module-level globals in `appstate.zig`:
 - `vms: [MAX_VMS]vm.VmConfig` — fixed array of 64 VM configs
-- `vm_count`, `selected_idx`, `prefs` — session state
-- `browser`, `status_bar`, `detail_labels[12]`, `win_handle` — widget handles
+- `vm_count`, `prefs` — session state
 - `g_vmm: hv_iface.Vmm`, `g_vmm_handles` — hypervisor dispatch table
-- `remote_mode`, `remote_url_buf`, `remote_auth_buf` — remote client mode
+- `remote_mode`, `remote_url`, `remote_url_len` — remote client mode
+- `serial_*` — serial console ring buffer and reader thread state
+- `undo_vm`, `undo_idx`, `undo_available` — delete undo support
+- `vms_mutex` — protects the VM array
 
-There is no `App` struct. The old IUP architecture used a ~600KB `App` struct
-passed by pointer to avoid stack overflow; the FLTK port uses flat globals.
+There is no `App` struct. State lives in `appstate.zig` globals, shared
+by `web_server.zig`, `persist.zig`, `serial_console.zig`, `remote.zig`,
+and `vnet.zig`.
 
 ### Remote client/daemon mode
 
-`main.zig` supports connecting to a remote `web_server.zig` instance:
+`web_server.zig` serves as both local backend and remote daemon:
 - `transport.zig`: URL parsing, TCP/Unix/SHM connection, HTTP request helpers
-- Many operations (`togglePower`, `suspendVm`, `newVmDialog`, `editVmDialog`,
-  `cloneVm`, `importVm`) check `remote_mode` and dispatch HTTP API calls
-  instead of local QEMU operations
-- `apiGet()` / `apiPost()` helpers use `transport.Connection`
+- `remote.zig`: remote client mode that fetches VM state via HTTP from a
+  remote `web_server.zig` instance
+- `vmrun.zig`: CLI wrapper for remote operations
 
 ### HV abstraction layer
 
@@ -128,11 +109,10 @@ system `cc` link step. All JSON parsing/emitting is hand-rolled in
 `persist.zig`. Never import or use `std.json`.
 
 ### Build link step
-- **FLTK binary** (`hangar`): final linking uses system `c++` to work around
-  GCC 15+ `.sframe` section incompatibility.
 - **Test artifacts** (`zig build test`): use `use_llvm = true` + `use_lld = true`
   because the self-hosted backend/linker can't relocate `.sframe` in GCC's crt1.o.
 - **Web backend** (`hangar-web`): also uses `use_llvm = true, use_lld = true`.
+- **WebUI app** (`hangar-webui`): uses `use_llvm = true, use_lld = true`.
 
 ### Zig 0.16 `std.Io` migration
 0.16 routed filesystem, process, networking, and threading through the
@@ -161,31 +141,8 @@ GLib/SPICE symbols it needs by hand (`extern fn` + opaque types) instead of
 - Functions use `///` doc comments. Keep them concise (1-3 lines).
 
 ### Imports
-- `std` first, then cfltk `@cImport`, then local files.
+- `std` first, then local files.
 - Local imports use string literal paths: `@import("vm.zig")`.
-- cfltk is reached via `@cImport` (no Zig module wrapper):
-
-```zig
-const std = @import("std");
-
-const cfltk = @cImport({
-    @cInclude("cfltk/cfl.h");
-    @cInclude("cfltk/cfl_window.h");
-    @cInclude("cfltk/cfl_button.h");
-    @cInclude("cfltk/cfl_box.h");
-    @cInclude("cfltk/cfl_group.h");
-    @cInclude("cfltk/cfl_input.h");
-    @cInclude("cfltk/cfl_menu.h");
-    @cInclude("cfltk/cfl_browser.h");
-    @cInclude("cfltk/cfl_tree.h");
-    @cInclude("cfltk/cfl_text.h");
-    @cInclude("cfltk/cfl_misc.h");
-    @cInclude("cfltk/cfl_valuator.h");
-});
-
-const vm = @import("vm.zig");
-const qmp = @import("qmp.zig");
-```
 
 ### Naming
 - Types/structs: `PascalCase` (`VmConfig`, `QmpClient`, `DiskFormat`)
@@ -228,24 +185,8 @@ pub const MyEnum = enum(u8) {
 
 ### Error handling
 - Functions return `!void` or `!T` for operations that can fail.
-- GUI-facing errors: call `setStatus(msg)` to show in the status bar.
-  Do NOT propagate errors to the user via panics or crashes.
-- Use `catch return` for non-critical failures in UI callbacks.
+- Use `catch return` for non-critical failures.
 - Use `catch {}` only for persistence saves where failure is acceptable.
-
-### FLTK callbacks
-- FLTK callbacks use C calling convention and return `void`:
-  `fn onBtn(_: ?*cfltk.Fl_Widget, data: ?*anyopaque) callconv(.c) void`.
-- Pass context via `data` pointer — use a stack-allocated anonymous struct
-  with a static `go` method as the callback.
-- Use `Fl_Widget_set_callback(widget, callback, ctx_ptr)` to wire callbacks.
-
-### Dialog pattern (FLTK)
-1. Allocate a stack struct holding every input widget pointer + VM config.
-2. Create a modal window via `Fl_Window_new_wh(x, y, "Title")`.
-3. Build form fields inside the window with absolute positioning.
-4. Wire OK/Cancel buttons: OK reads values back, Cancel just hides.
-5. Close with `Fl_Window_hide(win)`, not destroy.
 
 ### Testing
 - Tests live at the bottom of each module (not in separate files).

@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! SPICE display client — pure-Zig wrapper around spice-client-glib-2.0.
 //!
-//! Runs on the GLib main loop (which IUP/GTK already provides), so all
-//! callbacks fire on the main thread.  No additional threading or mutexes
-//! are needed for framebuffer access.
+//! Runs on the GLib main loop, so all callbacks fire on the main thread.
+//! No additional threading or mutexes are needed for framebuffer access.
 //!
 //! GObject macros (`SPICE_IS_DISPLAY_CHANNEL`, `G_CALLBACK`, `g_signal_connect`)
 //! are replaced with their underlying C functions: `g_type_check_instance_is_a`,
@@ -145,6 +144,10 @@ pub const SpiceClient = struct {
     }
 
     /// Disconnect from the SPICE server.
+    ///
+    /// Nulls `inputs` and clears `connected` inside the mutex so that
+    /// `sendKey` / `sendPointer` (which check them under the mutex)
+    /// see a consistent state — preventing a TOCTOU use-after-free.
     pub fn disconnect(self: *SpiceClient) void {
         if (!self.connected) return;
 
@@ -153,9 +156,9 @@ pub const SpiceClient = struct {
             c.g_object_unref(@as(c.gpointer, @ptrCast(s)));
         }
         self.session = null;
-        self.inputs = null;
 
         self.mutex.lock();
+        self.inputs = null;
         self.fb_data = null;
         self.width = 0;
         self.height = 0;
@@ -215,8 +218,14 @@ pub const SpiceClient = struct {
     }
 
     /// Send a key press/release.  `scancode` is a PC AT scancode.
+    ///
+    /// Protected by the mutex so that a concurrent `disconnect` cannot
+    /// null `inputs` between the null-check and the channel call.
     pub fn sendKey(self: *SpiceClient, scancode: u32, down: bool) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const inp = self.inputs orelse return;
+        if (!self.connected) return;
         if (down) {
             c.spice_inputs_channel_key_press(inp, scancode);
         } else {
@@ -226,7 +235,10 @@ pub const SpiceClient = struct {
 
     /// Send a pointer position + button state.
     pub fn sendPointer(self: *SpiceClient, x: c_int, y: c_int, button_state: c_int) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const inp = self.inputs orelse return;
+        if (!self.connected) return;
         c.spice_inputs_channel_position(inp, x, y, 0, button_state);
     }
 

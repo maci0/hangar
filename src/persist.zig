@@ -62,6 +62,16 @@ const VmJson = struct {
     nic2_mac: []const u8 = "",
     nic3_mode: []const u8 = "none",
     nic3_mac: []const u8 = "",
+    nic4_mode: []const u8 = "none",
+    nic4_mac: []const u8 = "",
+    nic5_mode: []const u8 = "none",
+    nic5_mac: []const u8 = "",
+    nic6_mode: []const u8 = "none",
+    nic6_mac: []const u8 = "",
+    nic7_mode: []const u8 = "none",
+    nic7_mac: []const u8 = "",
+    nic8_mode: []const u8 = "none",
+    nic8_mac: []const u8 = "",
     enable_3d: bool = false,
     gpu_device: []const u8 = "virtio_vga_gl",
     guest_tools: bool = false,
@@ -99,55 +109,7 @@ const VmJson = struct {
     num_displays: u32 = 1,
 };
 
-// ── Enum string mappers (load direction) ────────────────────────────
-
-fn parseDiskFormat(s: []const u8) vm.DiskFormat {
-    return vm.DiskFormat.fromStr(s);
-}
-
-fn parseDiskCache(s: []const u8) vm.DiskCache {
-    return vm.DiskCache.fromStr(s);
-}
-
-fn parseDisplayType(s: []const u8) vm.DisplayType {
-    return vm.DisplayType.fromStr(s);
-}
-
-fn parseNetworkMode(s: []const u8) vm.NetworkMode {
-    return vm.NetworkMode.fromStr(s);
-}
-
-fn parseFirmware(s: []const u8) vm.BootFirmware {
-    return vm.BootFirmware.fromStr(s);
-}
-
-fn parseGuestOs(s: []const u8) vm.GuestOs {
-    return vm.GuestOs.fromStr(s);
-}
-
-fn parseAudioDevice(s: []const u8) vm.AudioDevice {
-    return vm.AudioDevice.fromStr(s);
-}
-
-fn parseGpuDevice(s: []const u8) vm.GpuDevice {
-    return vm.GpuDevice.fromStr(s);
-}
-
-fn parseUsbPolicy(s: []const u8) vm.UsbPolicy {
-    return vm.UsbPolicy.fromStr(s);
-}
-
-fn parseWatchdogAction(s: []const u8) vm.WatchdogAction {
-    return vm.WatchdogAction.fromStr(s);
-}
-
-fn parseBootOrder(s: []const u8) vm.BootOrder {
-    return vm.BootOrder.fromStr(s);
-}
-
-pub fn parseAccel(s: []const u8) vm.VmAccel {
-    return vm.VmAccel.fromStr(s);
-}
+// Enum deserialisation delegates to enum fromStr methods.
 
 // ── Conversion: VmJson → VmConfig ───────────────────────────────────
 
@@ -159,8 +121,8 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.cpu_model = vm.CpuModel.fromStr(j.cpu_model);
     cfg.memory_mb = j.memory_mb;
     cfg.disk_size_gb = j.disk_size_gb;
-    cfg.disk_format = parseDiskFormat(j.disk_format);
-    cfg.disk_cache = parseDiskCache(j.disk_cache);
+    cfg.disk_format = vm.DiskFormat.fromStr(j.disk_format);
+    cfg.disk_cache = vm.DiskCache.fromStr(j.disk_cache);
     cfg.setDiskPath(j.disk_path);
     cfg.setIsoPath(j.iso_path);
     cfg.setMacAddress(j.mac_address);
@@ -170,27 +132,37 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.setSharedFolder(j.shared_folder);
     cfg.setDisk2Path(j.disk2_path);
     cfg.disk2_size_gb = j.disk2_size_gb;
-    cfg.disk2_format = parseDiskFormat(j.disk2_format);
+    cfg.disk2_format = vm.DiskFormat.fromStr(j.disk2_format);
     cfg.setExtraDiskPath(0, j.extra_disk_0_path);
     cfg.extra_disks[0].size_gb = j.extra_disk_0_size_gb;
-    cfg.extra_disks[0].format = parseDiskFormat(j.extra_disk_0_format);
+    cfg.extra_disks[0].format = vm.DiskFormat.fromStr(j.extra_disk_0_format);
     cfg.setExtraDiskPath(1, j.extra_disk_1_path);
     cfg.extra_disks[1].size_gb = j.extra_disk_1_size_gb;
-    cfg.extra_disks[1].format = parseDiskFormat(j.extra_disk_1_format);
+    cfg.extra_disks[1].format = vm.DiskFormat.fromStr(j.extra_disk_1_format);
     cfg.setExtraDiskPath(2, j.extra_disk_2_path);
     cfg.extra_disks[2].size_gb = j.extra_disk_2_size_gb;
-    cfg.extra_disks[2].format = parseDiskFormat(j.extra_disk_2_format);
+    cfg.extra_disks[2].format = vm.DiskFormat.fromStr(j.extra_disk_2_format);
     cfg.setExtraDiskPath(3, j.extra_disk_3_path);
     cfg.extra_disks[3].size_gb = j.extra_disk_3_size_gb;
-    cfg.extra_disks[3].format = parseDiskFormat(j.extra_disk_3_format);
+    cfg.extra_disks[3].format = vm.DiskFormat.fromStr(j.extra_disk_3_format);
     cfg.setUsbDevice(j.usb_device);
-    cfg.usb_policy = parseUsbPolicy(j.usb_policy);
-    cfg.nics[1].mode = parseNetworkMode(j.nic2_mode);
+    cfg.usb_policy = vm.UsbPolicy.fromStr(j.usb_policy);
+    cfg.nics[1].mode = vm.NetworkMode.fromStr(j.nic2_mode);
     cfg.setNic2Mac(j.nic2_mac);
-    cfg.nics[2].mode = parseNetworkMode(j.nic3_mode);
+    cfg.nics[2].mode = vm.NetworkMode.fromStr(j.nic3_mode);
     cfg.setNic3Mac(j.nic3_mac);
+    cfg.nics[3].mode = vm.NetworkMode.fromStr(j.nic4_mode);
+    cfg.setNicMacAny(3, j.nic4_mac);
+    cfg.nics[4].mode = vm.NetworkMode.fromStr(j.nic5_mode);
+    cfg.setNicMacAny(4, j.nic5_mac);
+    cfg.nics[5].mode = vm.NetworkMode.fromStr(j.nic6_mode);
+    cfg.setNicMacAny(5, j.nic6_mac);
+    cfg.nics[6].mode = vm.NetworkMode.fromStr(j.nic7_mode);
+    cfg.setNicMacAny(6, j.nic7_mac);
+    cfg.nics[7].mode = vm.NetworkMode.fromStr(j.nic8_mode);
+    cfg.setNicMacAny(7, j.nic8_mac);
     cfg.enable_3d = j.enable_3d;
-    cfg.gpu_device = parseGpuDevice(j.gpu_device);
+    cfg.gpu_device = vm.GpuDevice.fromStr(j.gpu_device);
     cfg.guest_tools = j.guest_tools;
     cfg.favorite = j.favorite;
     cfg.autoprotect = j.autoprotect;
@@ -199,21 +171,21 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.autoprotect_last_epoch = j.autoprotect_last_epoch;
     cfg.autoprotect_last_seq = j.autoprotect_last_seq;
     cfg.setFloppyPath(j.floppy_path);
-    cfg.display = parseDisplayType(j.display);
+    cfg.display = vm.DisplayType.fromStr(j.display);
     cfg.display_resolution = vm.DisplayResolution.fromIndex(j.display_resolution);
-    cfg.nics[0].mode = parseNetworkMode(j.network);
-    cfg.firmware = parseFirmware(j.firmware);
-    cfg.guest_os = parseGuestOs(j.guest_os);
-    cfg.audio = parseAudioDevice(j.audio);
-    cfg.boot_order = parseBootOrder(j.boot_order);
-    cfg.accel = parseAccel(j.accel);
+    cfg.nics[0].mode = vm.NetworkMode.fromStr(j.network);
+    cfg.firmware = vm.BootFirmware.fromStr(j.firmware);
+    cfg.guest_os = vm.GuestOs.fromStr(j.guest_os);
+    cfg.audio = vm.AudioDevice.fromStr(j.audio);
+    cfg.boot_order = vm.BootOrder.fromStr(j.boot_order);
+    cfg.accel = vm.VmAccel.fromStr(j.accel);
     cfg.embed_display = j.embed_display;
     cfg.vnc_port = j.vnc_port;
     cfg.spice_port = j.spice_port;
     cfg.enable_serial = j.enable_serial;
     cfg.virtio_rng = j.virtio_rng;
     cfg.guest_agent = j.guest_agent;
-    cfg.watchdog = parseWatchdogAction(j.watchdog);
+    cfg.watchdog = vm.WatchdogAction.fromStr(j.watchdog);
     cfg.tpm = j.tpm;
     cfg.secure_boot = j.secure_boot;
     cfg.hyperv_enlightenments = j.hyperv_enlightenments;
@@ -416,6 +388,41 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"nic3_mac\": ");
     try emitJsonStr(list, alloc, cfg.getNic3MacSlice());
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"nic4_mode\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[3].mode.toStr()));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"nic4_mac\": ");
+    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(3));
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"nic5_mode\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[4].mode.toStr()));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"nic5_mac\": ");
+    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(4));
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"nic6_mode\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[5].mode.toStr()));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"nic6_mac\": ");
+    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(5));
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"nic7_mode\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[6].mode.toStr()));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"nic7_mac\": ");
+    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(6));
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"nic8_mode\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[7].mode.toStr()));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"nic8_mac\": ");
+    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(7));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"enable_3d\": ");
@@ -654,24 +661,54 @@ fn parseJsonString(s: []const u8, out_buf: []u8) ?struct { value: []const u8, re
             if (s[i + 1] == 'u' and i + 5 < s.len) {
                 // Decode \uXXXX into a proper UTF-8 sequence.
                 const hex = s[i + 2 .. i + 6];
-                const codepoint = std.fmt.parseInt(u16, hex, 16) catch return null;
-                if (codepoint < 0x80) {
-                    if (out_len >= out_buf.len) return null;
-                    out_buf[out_len] = @intCast(codepoint);
-                    out_len += 1;
-                } else if (codepoint < 0x800) {
-                    if (out_len + 1 >= out_buf.len) return null;
-                    out_buf[out_len] = @intCast(0xC0 | (codepoint >> 6));
-                    out_buf[out_len + 1] = @intCast(0x80 | (codepoint & 0x3F));
-                    out_len += 2;
-                } else {
-                    if (out_len + 2 >= out_buf.len) return null;
-                    out_buf[out_len] = @intCast(0xE0 | (codepoint >> 12));
-                    out_buf[out_len + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
-                    out_buf[out_len + 2] = @intCast(0x80 | (codepoint & 0x3F));
-                    out_len += 3;
-                }
+                var cp21: u21 = std.fmt.parseInt(u16, hex, 16) catch return null;
                 i += 6;
+
+                // Surrogate pair: high surrogate U+D800..U+DBFF followed by
+                // low surrogate U+DC00..U+DFFF.
+                if (cp21 >= 0xD800 and cp21 <= 0xDBFF) {
+                    if (i + 6 <= s.len and s[i] == '\\' and s[i + 1] == 'u') {
+                        const lo_hex = s[i + 2 .. i + 6];
+                        const lo = std.fmt.parseInt(u16, lo_hex, 16) catch return null;
+                        if (lo >= 0xDC00 and lo <= 0xDFFF) {
+                            cp21 = 0x10000 + (@as(u21, cp21) - 0xD800) * 0x400 + (@as(u21, lo) - 0xDC00);
+                            i += 6;
+                        } else {
+                            // Lone high surrogate — invalid JSON.
+                            return null;
+                        }
+                    } else {
+                        // Lone high surrogate at end of escape sequence.
+                        return null;
+                    }
+                } else if (cp21 >= 0xDC00 and cp21 <= 0xDFFF) {
+                    // Lone low surrogate — invalid JSON.
+                    return null;
+                }
+
+                if (cp21 < 0x80) {
+                    if (out_len >= out_buf.len) return null;
+                    out_buf[out_len] = @intCast(cp21);
+                    out_len += 1;
+                } else if (cp21 < 0x800) {
+                    if (out_len + 1 >= out_buf.len) return null;
+                    out_buf[out_len] = @intCast(0xC0 | (cp21 >> 6));
+                    out_buf[out_len + 1] = @intCast(0x80 | (cp21 & 0x3F));
+                    out_len += 2;
+                } else if (cp21 < 0x10000) {
+                    if (out_len + 2 >= out_buf.len) return null;
+                    out_buf[out_len] = @intCast(0xE0 | (cp21 >> 12));
+                    out_buf[out_len + 1] = @intCast(0x80 | ((cp21 >> 6) & 0x3F));
+                    out_buf[out_len + 2] = @intCast(0x80 | (cp21 & 0x3F));
+                    out_len += 3;
+                } else {
+                    if (out_len + 3 >= out_buf.len) return null;
+                    out_buf[out_len] = @intCast(0xF0 | (cp21 >> 18));
+                    out_buf[out_len + 1] = @intCast(0x80 | ((cp21 >> 12) & 0x3F));
+                    out_buf[out_len + 2] = @intCast(0x80 | ((cp21 >> 6) & 0x3F));
+                    out_buf[out_len + 3] = @intCast(0x80 | (cp21 & 0x3F));
+                    out_len += 4;
+                }
                 continue;
             }
 
@@ -709,9 +746,11 @@ fn parseJsonInt64(s: []const u8) ?struct { value: u64, rest: []const u8 } {
     return .{ .value = r.value, .rest = r.rest };
 }
 
-/// Generic JSON integer parser. Returns null on overflow, no digits, or parse failure.
+/// Generic JSON integer parser. Returns null on overflow, no digits,
+/// negative literals (e.g. "-1"), or parse failure.
 fn parseJsonIntGeneric(comptime T: type, s: []const u8) ?struct { value: T, rest: []const u8 } {
     var i: usize = 0;
+    if (s.len > 0 and s[0] == '-') return null;
     while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
     if (i == 0) return null;
     const val = std.fmt.parseInt(T, s[0..i], 10) catch return null;
@@ -879,7 +918,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "disk2_format")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.disk2_format = parseDiskFormat(r.value);
+                cfg.disk2_format = vm.DiskFormat.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "extra_disk_0_path")) {
@@ -894,7 +933,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "extra_disk_0_format")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.extra_disks[0].format = parseDiskFormat(r.value);
+                cfg.extra_disks[0].format = vm.DiskFormat.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "extra_disk_1_path")) {
@@ -909,7 +948,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "extra_disk_1_format")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.extra_disks[1].format = parseDiskFormat(r.value);
+                cfg.extra_disks[1].format = vm.DiskFormat.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "extra_disk_2_path")) {
@@ -924,7 +963,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "extra_disk_2_format")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.extra_disks[2].format = parseDiskFormat(r.value);
+                cfg.extra_disks[2].format = vm.DiskFormat.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "extra_disk_3_path")) {
@@ -939,7 +978,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "extra_disk_3_format")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.extra_disks[3].format = parseDiskFormat(r.value);
+                cfg.extra_disks[3].format = vm.DiskFormat.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "usb_device")) {
@@ -949,12 +988,12 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "usb_policy")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.usb_policy = parseUsbPolicy(r.value);
+                cfg.usb_policy = vm.UsbPolicy.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic2_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[1].mode = parseNetworkMode(r.value);
+                cfg.nics[1].mode = vm.NetworkMode.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic2_mac")) {
@@ -964,12 +1003,62 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic3_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[2].mode = parseNetworkMode(r.value);
+                cfg.nics[2].mode = vm.NetworkMode.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic3_mac")) {
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.setNic3Mac(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic4_mode")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.nics[3].mode = vm.NetworkMode.fromStr(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic4_mac")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setNicMacAny(3, r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic5_mode")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.nics[4].mode = vm.NetworkMode.fromStr(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic5_mac")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setNicMacAny(4, r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic6_mode")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.nics[5].mode = vm.NetworkMode.fromStr(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic6_mac")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setNicMacAny(5, r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic7_mode")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.nics[6].mode = vm.NetworkMode.fromStr(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic7_mac")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setNicMacAny(6, r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic8_mode")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.nics[7].mode = vm.NetworkMode.fromStr(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "nic8_mac")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setNicMacAny(7, r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "enable_3d")) {
@@ -979,7 +1068,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "gpu_device")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.gpu_device = parseGpuDevice(r.value);
+                cfg.gpu_device = vm.GpuDevice.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "guest_tools")) {
@@ -1024,17 +1113,17 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "disk_format")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.disk_format = parseDiskFormat(r.value);
+                cfg.disk_format = vm.DiskFormat.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "disk_cache")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.disk_cache = parseDiskCache(r.value);
+                cfg.disk_cache = vm.DiskCache.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "display")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.display = parseDisplayType(r.value);
+                cfg.display = vm.DisplayType.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "display_resolution")) {
@@ -1044,27 +1133,27 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "network")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[0].mode = parseNetworkMode(r.value);
+                cfg.nics[0].mode = vm.NetworkMode.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "firmware")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.firmware = parseFirmware(r.value);
+                cfg.firmware = vm.BootFirmware.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "guest_os")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.guest_os = parseGuestOs(r.value);
+                cfg.guest_os = vm.GuestOs.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "audio")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.audio = parseAudioDevice(r.value);
+                cfg.audio = vm.AudioDevice.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "boot_order")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.boot_order = parseBootOrder(r.value);
+                cfg.boot_order = vm.BootOrder.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "cpu_sockets")) {
@@ -1104,7 +1193,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "accel")) {
             if (parseJsonString(cur, &key_buf)) |r| {
-                cfg.accel = parseAccel(r.value);
+                cfg.accel = vm.VmAccel.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "enable_kvm")) {
@@ -1136,7 +1225,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "watchdog")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.watchdog = parseWatchdogAction(r.value);
+                cfg.watchdog = vm.WatchdogAction.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "tpm")) {
@@ -1210,6 +1299,25 @@ fn parseThemeKey(content: []const u8) vm.Theme {
     return .light;
 }
 
+/// Extract the top-level `"version"` value from raw config bytes. Defaults to
+/// 1 when absent. If the version is higher than the current format (2), writes
+/// a warning to stderr so the user knows the config was saved by a newer Hangar.
+fn parseVersion(content: []const u8) u32 {
+    if (std.mem.indexOf(u8, content, "\"version\"")) |vidx| {
+        const vcur = skipWs(content[vidx + 9 ..]);
+        if (vcur.len > 0 and vcur[0] == ':') {
+            if (parseJsonInt(skipWs(vcur[1..]))) |r| {
+                if (r.value > 2 and !@import("builtin").is_test) {
+                    const msg = "hangar: config file version newer than supported (max 2); some settings may be ignored\n";
+                    _ = std.c.write(2, msg, msg.len);
+                }
+                return r.value;
+            }
+        }
+    }
+    return 1;
+}
+
 /// Parse the top-level "prefs" object from config bytes into `prefs_out`.
 fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
     prefs_out.* = .{};
@@ -1225,8 +1333,14 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
             cur = skipWs(cur);
             if (cur.len == 0) break;
             if (cur[0] == '}') break;
-            if (cur[0] == ',') { cur = cur[1..]; continue; }
-            const kr = parseJsonString(cur, &key_buf) orelse { cur = cur[1..]; continue; };
+            if (cur[0] == ',') {
+                cur = cur[1..];
+                continue;
+            }
+            const kr = parseJsonString(cur, &key_buf) orelse {
+                cur = cur[1..];
+                continue;
+            };
             const key = kr.value;
             cur = skipWs(kr.rest);
             if (cur.len == 0 or cur[0] != ':') break;
@@ -1240,32 +1354,50 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
                     cur = r.rest;
                 } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "default_memory_mb")) {
-                if (parseJsonInt(cur)) |r| { prefs_out.default_memory_mb = r.value; cur = r.rest; }
-                else cur = cur[1..];
+                if (parseJsonInt(cur)) |r| {
+                    prefs_out.default_memory_mb = r.value;
+                    cur = r.rest;
+                } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "default_cpu_cores")) {
-                if (parseJsonInt(cur)) |r| { prefs_out.default_cpu_cores = r.value; cur = r.rest; }
-                else cur = cur[1..];
+                if (parseJsonInt(cur)) |r| {
+                    prefs_out.default_cpu_cores = r.value;
+                    cur = r.rest;
+                } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "autoprotect_enabled_default")) {
-                if (parseJsonBool(cur)) |r| { prefs_out.autoprotect_enabled_default = r.value; cur = r.rest; }
-                else cur = cur[1..];
+                if (parseJsonBool(cur)) |r| {
+                    prefs_out.autoprotect_enabled_default = r.value;
+                    cur = r.rest;
+                } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "autoprotect_interval_min_default")) {
-                if (parseJsonInt(cur)) |r| { prefs_out.autoprotect_interval_min_default = r.value; cur = r.rest; }
-                else cur = cur[1..];
+                if (parseJsonInt(cur)) |r| {
+                    prefs_out.autoprotect_interval_min_default = r.value;
+                    cur = r.rest;
+                } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "autoprotect_max_default")) {
-                if (parseJsonInt(cur)) |r| { prefs_out.autoprotect_max_default = r.value; cur = r.rest; }
-                else cur = cur[1..];
+                if (parseJsonInt(cur)) |r| {
+                    prefs_out.autoprotect_max_default = r.value;
+                    cur = r.rest;
+                } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_x")) {
-                if (parseJsonInt(cur)) |r| { prefs_out.win_x = @intCast(r.value); cur = r.rest; }
-                else cur = cur[1..];
+                if (parseJsonInt(cur)) |r| {
+                    prefs_out.win_x = @intCast(r.value);
+                    cur = r.rest;
+                } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_y")) {
-                if (parseJsonInt(cur)) |r| { prefs_out.win_y = @intCast(r.value); cur = r.rest; }
-                else cur = cur[1..];
+                if (parseJsonInt(cur)) |r| {
+                    prefs_out.win_y = @intCast(r.value);
+                    cur = r.rest;
+                } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_w")) {
-                if (parseJsonInt(cur)) |r| { prefs_out.win_w = @intCast(r.value); cur = r.rest; }
-                else cur = cur[1..];
+                if (parseJsonInt(cur)) |r| {
+                    prefs_out.win_w = @intCast(r.value);
+                    cur = r.rest;
+                } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_h")) {
-                if (parseJsonInt(cur)) |r| { prefs_out.win_h = @intCast(r.value); cur = r.rest; }
-                else cur = cur[1..];
+                if (parseJsonInt(cur)) |r| {
+                    prefs_out.win_h = @intCast(r.value);
+                    cur = r.rest;
+                } else cur = cur[1..];
             } else {
                 cur = skipJsonValue(cur);
             }
@@ -1297,6 +1429,9 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
 /// Returns the number of VMs loaded (0 if buffer is empty or invalid).
 pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out: *vm.Prefs) usize {
     if (content.len == 0) return 0;
+
+    // Parse version field (forward compat: warn if > current version 2).
+    _ = parseVersion(content);
 
     // Top-level "theme" + "prefs" keys (optional).
     // parsePrefs resets prefs_out, so save/restore the theme.
@@ -1397,6 +1532,16 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.setNic2Mac("02:11:22:33:44:55");
     original.nics[2].mode = .user;
     original.setNic3Mac("02:66:77:88:99:AA");
+    original.nics[3].mode = .bridge;
+    original.setNicMacAny(3, "02:aa:bb:cc:dd:01");
+    original.nics[4].mode = .none;
+    original.setNicMacAny(4, "02:aa:bb:cc:dd:02");
+    original.nics[5].mode = .bridge;
+    original.setNicMacAny(5, "02:aa:bb:cc:dd:03");
+    original.nics[6].mode = .user;
+    original.setNicMacAny(6, "02:aa:bb:cc:dd:04");
+    original.nics[7].mode = .none;
+    original.setNicMacAny(7, "");
     original.enable_3d = true;
     original.gpu_device = .virtio_gpu_gl;
     original.guest_tools = true;
@@ -1471,6 +1616,16 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .nic2_mac = original.getNic2MacSlice(),
         .nic3_mode = std.mem.span(original.nics[2].mode.toStr()),
         .nic3_mac = original.getNic3MacSlice(),
+        .nic4_mode = std.mem.span(original.nics[3].mode.toStr()),
+        .nic4_mac = original.getNicMacSliceAny(3),
+        .nic5_mode = std.mem.span(original.nics[4].mode.toStr()),
+        .nic5_mac = original.getNicMacSliceAny(4),
+        .nic6_mode = std.mem.span(original.nics[5].mode.toStr()),
+        .nic6_mac = original.getNicMacSliceAny(5),
+        .nic7_mode = std.mem.span(original.nics[6].mode.toStr()),
+        .nic7_mac = original.getNicMacSliceAny(6),
+        .nic8_mode = std.mem.span(original.nics[7].mode.toStr()),
+        .nic8_mac = original.getNicMacSliceAny(7),
         .enable_3d = original.enable_3d,
         .gpu_device = std.mem.span(original.gpu_device.toStr()),
         .guest_tools = original.guest_tools,
@@ -1546,6 +1701,16 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqualStrings("02:11:22:33:44:55", restored.getNic2MacSlice());
     try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[2].mode);
     try std.testing.expectEqualStrings("02:66:77:88:99:AA", restored.getNic3MacSlice());
+    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[3].mode);
+    try std.testing.expectEqualStrings("02:aa:bb:cc:dd:01", restored.getNicMacSliceAny(3));
+    try std.testing.expectEqual(vm.NetworkMode.none, restored.nics[4].mode);
+    try std.testing.expectEqualStrings("02:aa:bb:cc:dd:02", restored.getNicMacSliceAny(4));
+    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[5].mode);
+    try std.testing.expectEqualStrings("02:aa:bb:cc:dd:03", restored.getNicMacSliceAny(5));
+    try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[6].mode);
+    try std.testing.expectEqualStrings("02:aa:bb:cc:dd:04", restored.getNicMacSliceAny(6));
+    try std.testing.expectEqual(vm.NetworkMode.none, restored.nics[7].mode);
+    try std.testing.expectEqualStrings("", restored.getNicMacSliceAny(7));
     try std.testing.expect(restored.enable_3d);
     try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, restored.gpu_device);
     try std.testing.expect(restored.guest_tools);
@@ -1584,105 +1749,105 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
 }
 
 test "parseDiskFormat: maps strings to enums" {
-    try std.testing.expectEqual(vm.DiskFormat.qcow2, parseDiskFormat("qcow2"));
-    try std.testing.expectEqual(vm.DiskFormat.raw, parseDiskFormat("raw"));
-    try std.testing.expectEqual(vm.DiskFormat.vmdk, parseDiskFormat("vmdk"));
-    try std.testing.expectEqual(vm.DiskFormat.vdi, parseDiskFormat("vdi"));
-    try std.testing.expectEqual(vm.DiskFormat.qcow2, parseDiskFormat("unknown"));
+    try std.testing.expectEqual(vm.DiskFormat.qcow2, vm.DiskFormat.fromStr("qcow2"));
+    try std.testing.expectEqual(vm.DiskFormat.raw, vm.DiskFormat.fromStr("raw"));
+    try std.testing.expectEqual(vm.DiskFormat.vmdk, vm.DiskFormat.fromStr("vmdk"));
+    try std.testing.expectEqual(vm.DiskFormat.vdi, vm.DiskFormat.fromStr("vdi"));
+    try std.testing.expectEqual(vm.DiskFormat.qcow2, vm.DiskFormat.fromStr("unknown"));
 }
 
 test "parseDisplayType: maps strings to enums" {
-    try std.testing.expectEqual(vm.DisplayType.gtk, parseDisplayType("gtk"));
-    try std.testing.expectEqual(vm.DisplayType.sdl, parseDisplayType("sdl"));
-    try std.testing.expectEqual(vm.DisplayType.spice, parseDisplayType("spice-app"));
-    try std.testing.expectEqual(vm.DisplayType.spice, parseDisplayType("spice"));
-    try std.testing.expectEqual(vm.DisplayType.vnc, parseDisplayType("vnc"));
-    try std.testing.expectEqual(vm.DisplayType.none, parseDisplayType("none"));
-    try std.testing.expectEqual(vm.DisplayType.gtk, parseDisplayType("unknown"));
+    try std.testing.expectEqual(vm.DisplayType.gtk, vm.DisplayType.fromStr("gtk"));
+    try std.testing.expectEqual(vm.DisplayType.sdl, vm.DisplayType.fromStr("sdl"));
+    try std.testing.expectEqual(vm.DisplayType.spice, vm.DisplayType.fromStr("spice-app"));
+    try std.testing.expectEqual(vm.DisplayType.spice, vm.DisplayType.fromStr("spice"));
+    try std.testing.expectEqual(vm.DisplayType.vnc, vm.DisplayType.fromStr("vnc"));
+    try std.testing.expectEqual(vm.DisplayType.none, vm.DisplayType.fromStr("none"));
+    try std.testing.expectEqual(vm.DisplayType.gtk, vm.DisplayType.fromStr("unknown"));
 }
 
 test "parseNetworkMode: maps strings to enums" {
-    try std.testing.expectEqual(vm.NetworkMode.user, parseNetworkMode("user"));
-    try std.testing.expectEqual(vm.NetworkMode.bridge, parseNetworkMode("bridge"));
-    try std.testing.expectEqual(vm.NetworkMode.none, parseNetworkMode("none"));
-    try std.testing.expectEqual(vm.NetworkMode.user, parseNetworkMode("unknown"));
+    try std.testing.expectEqual(vm.NetworkMode.user, vm.NetworkMode.fromStr("user"));
+    try std.testing.expectEqual(vm.NetworkMode.bridge, vm.NetworkMode.fromStr("bridge"));
+    try std.testing.expectEqual(vm.NetworkMode.none, vm.NetworkMode.fromStr("none"));
+    try std.testing.expectEqual(vm.NetworkMode.user, vm.NetworkMode.fromStr("unknown"));
 }
 
 test "parseFirmware: maps strings to enums" {
-    try std.testing.expectEqual(vm.BootFirmware.bios, parseFirmware("bios"));
-    try std.testing.expectEqual(vm.BootFirmware.uefi, parseFirmware("uefi"));
-    try std.testing.expectEqual(vm.BootFirmware.bios, parseFirmware("unknown"));
+    try std.testing.expectEqual(vm.BootFirmware.bios, vm.BootFirmware.fromStr("bios"));
+    try std.testing.expectEqual(vm.BootFirmware.uefi, vm.BootFirmware.fromStr("uefi"));
+    try std.testing.expectEqual(vm.BootFirmware.bios, vm.BootFirmware.fromStr("unknown"));
 }
 
 test "parseGuestOs: maps strings to enums" {
-    try std.testing.expectEqual(vm.GuestOs.linux, parseGuestOs("linux"));
-    try std.testing.expectEqual(vm.GuestOs.windows, parseGuestOs("windows"));
-    try std.testing.expectEqual(vm.GuestOs.freebsd, parseGuestOs("freebsd"));
-    try std.testing.expectEqual(vm.GuestOs.macos, parseGuestOs("macos"));
-    try std.testing.expectEqual(vm.GuestOs.other, parseGuestOs("other"));
-    try std.testing.expectEqual(vm.GuestOs.linux, parseGuestOs("unknown"));
+    try std.testing.expectEqual(vm.GuestOs.linux, vm.GuestOs.fromStr("linux"));
+    try std.testing.expectEqual(vm.GuestOs.windows, vm.GuestOs.fromStr("windows"));
+    try std.testing.expectEqual(vm.GuestOs.freebsd, vm.GuestOs.fromStr("freebsd"));
+    try std.testing.expectEqual(vm.GuestOs.macos, vm.GuestOs.fromStr("macos"));
+    try std.testing.expectEqual(vm.GuestOs.other, vm.GuestOs.fromStr("other"));
+    try std.testing.expectEqual(vm.GuestOs.linux, vm.GuestOs.fromStr("unknown"));
 }
 
 test "parseAudioDevice: maps strings to enums" {
-    try std.testing.expectEqual(vm.AudioDevice.none, parseAudioDevice("none"));
-    try std.testing.expectEqual(vm.AudioDevice.hda, parseAudioDevice("intel-hda"));
-    try std.testing.expectEqual(vm.AudioDevice.ac97, parseAudioDevice("AC97"));
-    try std.testing.expectEqual(vm.AudioDevice.none, parseAudioDevice("unknown"));
+    try std.testing.expectEqual(vm.AudioDevice.none, vm.AudioDevice.fromStr("none"));
+    try std.testing.expectEqual(vm.AudioDevice.hda, vm.AudioDevice.fromStr("intel-hda"));
+    try std.testing.expectEqual(vm.AudioDevice.ac97, vm.AudioDevice.fromStr("AC97"));
+    try std.testing.expectEqual(vm.AudioDevice.none, vm.AudioDevice.fromStr("unknown"));
 }
 
 test "parseBootOrder: maps strings to enums" {
-    try std.testing.expectEqual(vm.BootOrder.disk_first, parseBootOrder("cdn"));
-    try std.testing.expectEqual(vm.BootOrder.cdrom_first, parseBootOrder("dcn"));
-    try std.testing.expectEqual(vm.BootOrder.network_first, parseBootOrder("ncd"));
-    try std.testing.expectEqual(vm.BootOrder.disk_first, parseBootOrder("unknown"));
+    try std.testing.expectEqual(vm.BootOrder.disk_first, vm.BootOrder.fromStr("cdn"));
+    try std.testing.expectEqual(vm.BootOrder.cdrom_first, vm.BootOrder.fromStr("dcn"));
+    try std.testing.expectEqual(vm.BootOrder.network_first, vm.BootOrder.fromStr("ncd"));
+    try std.testing.expectEqual(vm.BootOrder.disk_first, vm.BootOrder.fromStr("unknown"));
 }
 
 test "parseAccel: maps strings to enums with safe defaults" {
-    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("auto"));
-    try std.testing.expectEqual(vm.VmAccel.tcg, parseAccel("tcg"));
-    try std.testing.expectEqual(vm.VmAccel.kvm, parseAccel("kvm"));
-    try std.testing.expectEqual(vm.VmAccel.hvf, parseAccel("hvf"));
-    try std.testing.expectEqual(vm.VmAccel.whpx, parseAccel("whpx"));
+    try std.testing.expectEqual(vm.VmAccel.auto, vm.VmAccel.fromStr("auto"));
+    try std.testing.expectEqual(vm.VmAccel.tcg, vm.VmAccel.fromStr("tcg"));
+    try std.testing.expectEqual(vm.VmAccel.kvm, vm.VmAccel.fromStr("kvm"));
+    try std.testing.expectEqual(vm.VmAccel.hvf, vm.VmAccel.fromStr("hvf"));
+    try std.testing.expectEqual(vm.VmAccel.whpx, vm.VmAccel.fromStr("whpx"));
     // Unknown / empty → safe default (auto)
-    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("unknown"));
-    try std.testing.expectEqual(vm.VmAccel.auto, parseAccel(""));
+    try std.testing.expectEqual(vm.VmAccel.auto, vm.VmAccel.fromStr("unknown"));
+    try std.testing.expectEqual(vm.VmAccel.auto, vm.VmAccel.fromStr(""));
     // Case-insensitive matching (delegates to VmAccel.fromStr)
-    try std.testing.expectEqual(vm.VmAccel.kvm, parseAccel("KVM"));
-    try std.testing.expectEqual(vm.VmAccel.hvf, parseAccel("Hvf"));
+    try std.testing.expectEqual(vm.VmAccel.kvm, vm.VmAccel.fromStr("KVM"));
+    try std.testing.expectEqual(vm.VmAccel.hvf, vm.VmAccel.fromStr("Hvf"));
 }
 
 test "parseGpuDevice: maps strings to enums" {
-    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, parseGpuDevice("virtio_gpu_gl"));
-    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice("virtio_vga_gl"));
-    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice("unknown"));
-    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, parseGpuDevice(""));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, vm.GpuDevice.fromStr("virtio_gpu_gl"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, vm.GpuDevice.fromStr("virtio_vga_gl"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, vm.GpuDevice.fromStr("unknown"));
+    try std.testing.expectEqual(vm.GpuDevice.virtio_vga_gl, vm.GpuDevice.fromStr(""));
 }
 
 test "parseDiskCache: maps strings to enums" {
     for (0..vm.DiskCache.count) |i| {
         const dc = vm.DiskCache.fromIndex(i);
-        try std.testing.expectEqual(dc, parseDiskCache(std.mem.span(dc.toStr())));
+        try std.testing.expectEqual(dc, vm.DiskCache.fromStr(std.mem.span(dc.toStr())));
     }
-    try std.testing.expectEqual(vm.DiskCache.writeback, parseDiskCache("unknown"));
-    try std.testing.expectEqual(vm.DiskCache.writeback, parseDiskCache(""));
+    try std.testing.expectEqual(vm.DiskCache.writeback, vm.DiskCache.fromStr("unknown"));
+    try std.testing.expectEqual(vm.DiskCache.writeback, vm.DiskCache.fromStr(""));
 }
 
 test "parseWatchdogAction: maps strings to enums" {
     for (0..vm.WatchdogAction.count) |i| {
         const wa = vm.WatchdogAction.fromIndex(i);
-        try std.testing.expectEqual(wa, parseWatchdogAction(std.mem.span(wa.toStr())));
+        try std.testing.expectEqual(wa, vm.WatchdogAction.fromStr(std.mem.span(wa.toStr())));
     }
-    try std.testing.expectEqual(vm.WatchdogAction.none, parseWatchdogAction("unknown"));
-    try std.testing.expectEqual(vm.WatchdogAction.none, parseWatchdogAction(""));
+    try std.testing.expectEqual(vm.WatchdogAction.none, vm.WatchdogAction.fromStr("unknown"));
+    try std.testing.expectEqual(vm.WatchdogAction.none, vm.WatchdogAction.fromStr(""));
 }
 
 test "parseUsbPolicy: maps strings to enums" {
     for (0..vm.UsbPolicy.count) |i| {
         const up = vm.UsbPolicy.fromIndex(i);
-        try std.testing.expectEqual(up, parseUsbPolicy(std.mem.span(up.toStr())));
+        try std.testing.expectEqual(up, vm.UsbPolicy.fromStr(std.mem.span(up.toStr())));
     }
-    try std.testing.expectEqual(vm.UsbPolicy.usb2, parseUsbPolicy("unknown"));
-    try std.testing.expectEqual(vm.UsbPolicy.usb2, parseUsbPolicy(""));
+    try std.testing.expectEqual(vm.UsbPolicy.usb2, vm.UsbPolicy.fromStr("unknown"));
+    try std.testing.expectEqual(vm.UsbPolicy.usb2, vm.UsbPolicy.fromStr(""));
 }
 
 test "emit→parse JSON text round-trip preserves all fields" {
@@ -1750,6 +1915,16 @@ test "emit→parse JSON text round-trip preserves all fields" {
     original.setNic2Mac("02:11:22:33:44:55");
     original.nics[2].mode = .user;
     original.setNic3Mac("02:66:77:88:99:AA");
+    original.nics[3].mode = .none;
+    original.setNicMacAny(3, "02:cc:dd:ee:ff:01");
+    original.nics[4].mode = .bridge;
+    original.setNicMacAny(4, "02:cc:dd:ee:ff:02");
+    original.nics[5].mode = .bridge;
+    original.setNicMacAny(5, "02:cc:dd:ee:ff:03");
+    original.nics[6].mode = .none;
+    original.setNicMacAny(6, "");
+    original.nics[7].mode = .none;
+    original.setNicMacAny(7, "");
     original.enable_3d = true;
     original.gpu_device = .virtio_gpu_gl;
     original.guest_tools = true;
@@ -1832,6 +2007,16 @@ test "emit→parse JSON text round-trip preserves all fields" {
     try std.testing.expectEqualStrings("02:11:22:33:44:55", restored.getNic2MacSlice());
     try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[2].mode);
     try std.testing.expectEqualStrings("02:66:77:88:99:AA", restored.getNic3MacSlice());
+    try std.testing.expectEqual(vm.NetworkMode.none, restored.nics[3].mode);
+    try std.testing.expectEqualStrings("02:cc:dd:ee:ff:01", restored.getNicMacSliceAny(3));
+    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[4].mode);
+    try std.testing.expectEqualStrings("02:cc:dd:ee:ff:02", restored.getNicMacSliceAny(4));
+    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[5].mode);
+    try std.testing.expectEqualStrings("02:cc:dd:ee:ff:03", restored.getNicMacSliceAny(5));
+    try std.testing.expectEqual(vm.NetworkMode.none, restored.nics[6].mode);
+    try std.testing.expectEqualStrings("", restored.getNicMacSliceAny(6));
+    try std.testing.expectEqual(vm.NetworkMode.none, restored.nics[7].mode);
+    try std.testing.expectEqualStrings("", restored.getNicMacSliceAny(7));
     try std.testing.expect(restored.enable_3d);
     try std.testing.expectEqual(vm.GpuDevice.virtio_gpu_gl, restored.gpu_device);
     try std.testing.expect(restored.guest_tools);
@@ -2332,6 +2517,17 @@ test "parseJsonInt64: value too large for u64 returns null" {
     try std.testing.expect(parseJsonInt64("18446744073709551616") == null); // > max u64
 }
 
+test "parseJsonInt: negative literals rejected" {
+    try std.testing.expect(parseJsonInt("-1") == null);
+    try std.testing.expect(parseJsonInt("-0") == null);
+    try std.testing.expect(parseJsonInt("-42,") == null);
+}
+
+test "parseJsonInt64: negative literals rejected" {
+    try std.testing.expect(parseJsonInt64("-1") == null);
+    try std.testing.expect(parseJsonInt64("-8589934592") == null);
+}
+
 test "parseJsonBool: with whitespace before" {
     const r = parseJsonBool("  true").?;
     try std.testing.expect(r.value == true);
@@ -2488,4 +2684,141 @@ test "loadFromSlice: direct" {
         try std.testing.expectEqual(@as(usize, 0), n);
         try std.testing.expectEqual(vm.Theme.light, prefs.theme);
     }
+}
+
+test "parseVersion: defaults to 1 when absent" {
+    try std.testing.expectEqual(@as(u32, 1), parseVersion("{}"));
+    try std.testing.expectEqual(@as(u32, 1), parseVersion("{\"theme\":\"dark\"}"));
+    try std.testing.expectEqual(@as(u32, 1), parseVersion(""));
+}
+
+test "parseVersion: reads version from JSON" {
+    try std.testing.expectEqual(@as(u32, 2), parseVersion("{\"version\":2}"));
+    try std.testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":1}"));
+    try std.testing.expectEqual(@as(u32, 7), parseVersion("{\"version\":7}")); // newer than supported — warns to stderr (suppressed in test)
+    try std.testing.expectEqual(@as(u32, 0), parseVersion("{\"version\":0}"));
+}
+
+test "parseVersion: survives malformed version" {
+    try std.testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":\"abc\"}"));
+    try std.testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":true}"));
+    try std.testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":}"));
+}
+
+test "loadFromSlice: version key parsed but does not affect VM loading" {
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs: vm.Prefs = .{};
+    {
+        const json =
+            \\{"version":2,"vms":[{"name":"v1","cpu_cores":4,"memory_mb":2048,"disk_size_gb":50}]}
+        ;
+        const n = loadFromSlice(&vms, json, &prefs);
+        try std.testing.expectEqual(@as(usize, 1), n);
+        try std.testing.expectEqualStrings("v1", std.mem.span(vms[0].getName()));
+    }
+}
+
+test "parseVmObject: enable_kvm backward compat (true → auto, false → tcg)" {
+    var cfg = vm.VmConfig{};
+    _ = parseVmObject("{\"enable_kvm\": true}", &cfg);
+    try std.testing.expectEqual(vm.VmAccel.auto, cfg.accel);
+
+    cfg = vm.VmConfig{};
+    _ = parseVmObject("{\"enable_kvm\": false}", &cfg);
+    try std.testing.expectEqual(vm.VmAccel.tcg, cfg.accel);
+
+    // modern "accel" key still takes precedence when both are present
+    // (last-one-wins behavior in parseVmObject).
+    cfg = vm.VmConfig{};
+    _ = parseVmObject("{\"enable_kvm\": true, \"accel\": \"tcg\"}", &cfg);
+    try std.testing.expectEqual(vm.VmAccel.tcg, cfg.accel);
+}
+
+test "save: full JSON build + loadFromSlice round-trip" {
+    const alloc = std.testing.allocator;
+
+    // Build the complete JSON the same way save() does.
+    var list: List = .empty;
+    defer list.deinit(alloc);
+
+    var prefs = vm.Prefs{};
+    prefs.default_memory_mb = 4096;
+    prefs.default_cpu_cores = 4;
+    prefs.autoprotect_enabled_default = true;
+    prefs.autoprotect_interval_min_default = 60;
+    prefs.autoprotect_max_default = 10;
+    prefs.win_x = 100;
+    prefs.win_y = 200;
+    prefs.win_w = 1280;
+    prefs.win_h = 800;
+    @memcpy(prefs.default_vm_dir_buf[0.."test".len], "test");
+    prefs.default_vm_dir_len = 4;
+
+    try emit(&list, alloc, "{\n  \"version\": 2,\n  \"theme\": ");
+    try emitJsonStr(&list, alloc, std.mem.span(prefs.theme.toStr()));
+    try emit(&list, alloc, ",\n  \"prefs\": {\n    \"default_vm_dir\": ");
+    try emitJsonStr(&list, alloc, prefs.default_vm_dir_buf[0..prefs.default_vm_dir_len]);
+    try emit(&list, alloc, ",\n    \"default_memory_mb\": ");
+    try emitInt(&list, alloc, prefs.default_memory_mb);
+    try emit(&list, alloc, ",\n    \"default_cpu_cores\": ");
+    try emitInt(&list, alloc, prefs.default_cpu_cores);
+    try emit(&list, alloc, ",\n    \"autoprotect_enabled_default\": ");
+    try emitBool(&list, alloc, prefs.autoprotect_enabled_default);
+    try emit(&list, alloc, ",\n    \"autoprotect_interval_min_default\": ");
+    try emitInt(&list, alloc, prefs.autoprotect_interval_min_default);
+    try emit(&list, alloc, ",\n    \"autoprotect_max_default\": ");
+    try emitInt(&list, alloc, prefs.autoprotect_max_default);
+    try emit(&list, alloc, ",\n    \"win_x\": ");
+    try emitInt(&list, alloc, prefs.win_x);
+    try emit(&list, alloc, ",\n    \"win_y\": ");
+    try emitInt(&list, alloc, prefs.win_y);
+    try emit(&list, alloc, ",\n    \"win_w\": ");
+    try emitInt(&list, alloc, prefs.win_w);
+    try emit(&list, alloc, ",\n    \"win_h\": ");
+    try emitInt(&list, alloc, prefs.win_h);
+    try emit(&list, alloc, "\n  }");
+    try emit(&list, alloc, ",\n  \"vms\": [");
+
+    var vm1 = vm.VmConfig{};
+    vm1.setName("save-test-vm");
+    vm1.memory_mb = 8192;
+    vm1.cpu_cores = 6;
+    vm1.setDiskPath("/tmp/save-test.qcow2");
+    try emitVmJson(&list, alloc, &vm1);
+
+    try emit(&list, alloc, ",");
+
+    var vm2 = vm.VmConfig{};
+    vm2.setName("save-test-vm2");
+    vm2.memory_mb = 2048;
+    vm2.cpu_cores = 2;
+    try emitVmJson(&list, alloc, &vm2);
+
+    try emit(&list, alloc, "\n  ]\n}\n");
+
+    // Parse the full JSON back via loadFromSlice.
+    var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
+    var parsed_prefs: vm.Prefs = .{};
+    const n = loadFromSlice(&vms, list.items, &parsed_prefs);
+
+    try std.testing.expectEqual(@as(usize, 2), n);
+
+    try std.testing.expectEqualStrings("save-test-vm", vms[0].getNameSlice());
+    try std.testing.expectEqual(@as(u32, 8192), vms[0].memory_mb);
+    try std.testing.expectEqual(@as(u32, 6), vms[0].cpu_cores);
+    try std.testing.expectEqualStrings("/tmp/save-test.qcow2", vms[0].getDiskPathSlice());
+
+    try std.testing.expectEqualStrings("save-test-vm2", vms[1].getNameSlice());
+    try std.testing.expectEqual(@as(u32, 2048), vms[1].memory_mb);
+
+    // Verify prefs survived the round-trip.
+    try std.testing.expectEqual(@as(u32, 4096), parsed_prefs.default_memory_mb);
+    try std.testing.expectEqual(@as(u32, 4), parsed_prefs.default_cpu_cores);
+    try std.testing.expect(parsed_prefs.autoprotect_enabled_default);
+    try std.testing.expectEqual(@as(u32, 60), parsed_prefs.autoprotect_interval_min_default);
+    try std.testing.expectEqual(@as(u32, 10), parsed_prefs.autoprotect_max_default);
+    try std.testing.expectEqual(@as(i32, 100), parsed_prefs.win_x);
+    try std.testing.expectEqual(@as(i32, 200), parsed_prefs.win_y);
+    try std.testing.expectEqual(@as(i32, 1280), parsed_prefs.win_w);
+    try std.testing.expectEqual(@as(i32, 800), parsed_prefs.win_h);
 }

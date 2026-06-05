@@ -941,7 +941,7 @@ fn isValidSnapshotTag(tag: []const u8) bool {
     if (tag.len == 0) return false;
     for (tag) |c| {
         if (!((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
-              (c >= '0' and c <= '9') or c == '-' or c == '_')) return false;
+            (c >= '0' and c <= '9') or c == '-' or c == '_')) return false;
     }
     return true;
 }

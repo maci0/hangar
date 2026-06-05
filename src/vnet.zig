@@ -55,8 +55,8 @@ pub const VNetType = enum(u8) {
 
     /// Inverse of `toStr`. Unknown strings default to `.nat`.
     pub fn fromStr(s: []const u8) VNetType {
-        if (std.mem.eql(u8, s, "bridged")) return .bridged;
-        if (std.mem.eql(u8, s, "host_only")) return .host_only;
+        if (std.ascii.eqlIgnoreCase(s, "bridged")) return .bridged;
+        if (std.ascii.eqlIgnoreCase(s, "host_only")) return .host_only;
         return .nat;
     }
 
@@ -849,7 +849,7 @@ test "vnet: toJson empty set produces valid JSON" {
 test "vnet: VNetType.fromStr unknown defaults to nat" {
     try testing.expectEqual(VNetType.nat, VNetType.fromStr(""));
     try testing.expectEqual(VNetType.nat, VNetType.fromStr("garbage"));
-    try testing.expectEqual(VNetType.nat, VNetType.fromStr("BRIDGED")); // case-sensitive
+    try testing.expectEqual(VNetType.nat, VNetType.fromStr("bogus"));
 }
 
 test "vnet: VirtualNetwork port_forwards + gateway setters" {

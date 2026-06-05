@@ -6,9 +6,9 @@ const c = std.c;
 
 /// Transport protocol variants.
 pub const Proto = enum {
-    unix,   // unix:///path/to/socket — AF_UNIX same-machine
-    tcp,    // http://host:port — HTTP over TCP (local or remote)
-    shm,    // shm:///name — POSIX shared memory (fastest same-machine)
+    unix, // unix:///path/to/socket — AF_UNIX same-machine
+    tcp, // http://host:port — HTTP over TCP (local or remote)
+    shm, // shm:///name — POSIX shared memory (fastest same-machine)
 };
 
 /// Parsed connection URL.
@@ -24,10 +24,18 @@ pub const Url = struct {
         var u = Url{ .proto = .tcp, .port = 9080 };
         var rest: []const u8 = s;
 
-        if (std.mem.startsWith(u8, s, "unix://")) { u.proto = .unix; rest = s["unix://".len..]; }
-        else if (std.mem.startsWith(u8, s, "shm://")) { u.proto = .shm; rest = s["shm://".len..]; }
-        else if (std.mem.startsWith(u8, s, "http://")) { u.proto = .tcp; rest = s["http://".len..]; }
-        else { u.proto = .tcp; }
+        if (std.mem.startsWith(u8, s, "unix://")) {
+            u.proto = .unix;
+            rest = s["unix://".len..];
+        } else if (std.mem.startsWith(u8, s, "shm://")) {
+            u.proto = .shm;
+            rest = s["shm://".len..];
+        } else if (std.mem.startsWith(u8, s, "http://")) {
+            u.proto = .tcp;
+            rest = s["http://".len..];
+        } else {
+            u.proto = .tcp;
+        }
 
         if (u.proto == .unix or u.proto == .shm) {
             u.path_len = @min(rest.len, u.path.len);
@@ -127,7 +135,10 @@ pub const Connection = struct {
             _ = c.munmap(@ptrCast(@alignCast(@volatileCast(shm))), @sizeOf(ShmChannel));
             self.shm = null;
         }
-        if (self.fd >= 0) { _ = c.close(self.fd); self.fd = -1; }
+        if (self.fd >= 0) {
+            _ = c.close(self.fd);
+            self.fd = -1;
+        }
     }
 };
 
@@ -139,26 +150,51 @@ fn connectUnixFd(url: *const Url) c.fd_t {
     @memcpy(addr.path[0..path_bytes.len], path_bytes);
     addr.path[path_bytes.len] = 0;
     const addrlen = @offsetOf(c.sockaddr.un, "path") + path_bytes.len + 1;
-    if (c.connect(sock, @ptrCast(&addr), @intCast(addrlen)) != 0) { _ = c.close(sock); return -1; }
+    if (c.connect(sock, @ptrCast(&addr), @intCast(addrlen)) != 0) {
+        _ = c.close(sock);
+        return -1;
+    }
     return sock;
 }
 
 fn connectTcpFd(url: *const Url) c.fd_t {
-    const sock = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
-    if (sock < 0) return -1;
     var hints: c.addrinfo = std.mem.zeroes(c.addrinfo);
-    hints.family = c.AF.INET;
+    hints.family = c.AF.UNSPEC;
     hints.socktype = c.SOCK.STREAM;
     var res: ?*c.addrinfo = null;
     var host_buf: [128]u8 = [_]u8{0} ** 128;
-    const host_z = std.fmt.bufPrintZ(&host_buf, "{s}", .{url.host[0..url.host_len]}) catch { _ = c.close(sock); return -1; };
-    if (@intFromEnum(c.getaddrinfo(host_z, null, &hints, &res)) != 0) { _ = c.close(sock); return -1; }
+    const host_z = std.fmt.bufPrintZ(&host_buf, "{s}", .{url.host[0..url.host_len]}) catch return -1;
+    if (@intFromEnum(c.getaddrinfo(host_z, null, &hints, &res)) != 0) return -1;
     defer if (res) |r| c.freeaddrinfo(r);
-    const ai = res orelse { _ = c.close(sock); return -1; };
-    const addr = ai.addr orelse { _ = c.close(sock); return -1; };
-    const in_addr: *c.sockaddr.in = @ptrCast(@alignCast(addr));
-    in_addr.port = std.mem.nativeToBig(u16, url.port);
-    if (c.connect(sock, addr, ai.addrlen) != 0) { _ = c.close(sock); return -1; }
+    const ai = res orelse return -1;
+    const ai_addr = ai.addr orelse return -1;
+
+    // Copy the resolved sockaddr into a local union so we can set the port.
+    // sockaddr_storage is large enough for any address family (≥128 bytes).
+    const SockAddrUnion = extern union {
+        in: c.sockaddr.in,
+        in6: c.sockaddr.in6,
+        raw: [128]u8,
+    };
+    var addr: SockAddrUnion = .{ .raw = [_]u8{0} ** 128 };
+    if (ai.addrlen > 128) return -1;
+    @memcpy(addr.raw[0..ai.addrlen], std.mem.asBytes(ai_addr)[0..ai.addrlen]);
+
+    // Set port on the copy.  Both sockaddr_in and sockaddr_in6 store the
+    // port as a big-endian u16 at the same offset (2).
+    if (ai.family == c.AF.INET) {
+        addr.in.port = std.mem.nativeToBig(u16, url.port);
+    } else if (ai.family == c.AF.INET6) {
+        addr.in6.port = std.mem.nativeToBig(u16, url.port);
+    } else return -1;
+
+    const sock = c.socket(@intCast(ai.family), c.SOCK.STREAM, 0);
+    if (sock < 0) return -1;
+
+    if (c.connect(sock, @ptrCast(&addr), ai.addrlen) != 0) {
+        _ = c.close(sock);
+        return -1;
+    }
     return sock;
 }
 
@@ -231,7 +267,9 @@ fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u
     const body_len = if (body) |b| b.len else 0;
     const req = std.fmt.bufPrintZ(&req_buf, "{s} {s} HTTP/1.0\r\nHost: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ method, path, host, body_len }) catch return 0;
     writeAll(fd, req.ptr[0..req.len]);
-    if (body) |b| { writeAll(fd, b); }
+    if (body) |b| {
+        writeAll(fd, b);
+    }
 
     var total: usize = 0;
     while (total < out.len) {
@@ -254,7 +292,10 @@ fn rawRequest(fd: c.fd_t, method: []const u8, path: []const u8, body: ?[]const u
     var req_buf: [512]u8 = undefined;
     const req = std.fmt.bufPrintZ(&req_buf, "{s} /{s}\r\n", .{ method, path }) catch return 0;
     writeAll(fd, req.ptr[0..req.len]);
-    if (body) |b| { writeAll(fd, b); writeAll(fd, "\r\n"); }
+    if (body) |b| {
+        writeAll(fd, b);
+        writeAll(fd, "\r\n");
+    }
 
     var total: usize = 0;
     while (total < out.len) {

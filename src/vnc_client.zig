@@ -59,7 +59,7 @@ pub const VncClient = struct {
         const cl: [*c]c.rfbClient = c.rfbGetClient(8, 3, 4);
         if (cl == null) return false;
 
-        // BGRA pixel format — matches IUP/Cairo CAIRO_FORMAT_RGB24.
+        // BGRA pixel format.
         cl.*.format.redShift = 16;
         cl.*.format.greenShift = 8;
         cl.*.format.blueShift = 0;
@@ -108,6 +108,10 @@ pub const VncClient = struct {
     /// its loop, then clear `connected` so no new input events are sent,
     /// then join the thread.  Only after the thread is dead do we call
     /// `rfbClientCleanup` (which frees the framebuffer).
+    ///
+    /// The `rfb` pointer is nulled inside the mutex so that `sendKey`
+    /// and `sendPointer` (which re-check it under the mutex) see a
+    /// consistent value — preventing a TOCTOU use-after-free.
     pub fn disconnect(self: *VncClient) void {
         if (!@atomicLoad(bool, &self.connected, .seq_cst)) return;
 
@@ -117,18 +121,20 @@ pub const VncClient = struct {
         if (self.thread) |t| t.join();
         self.thread = null;
 
-        if (self.rfb != null) {
-            c.rfbClientCleanup(self.rfb);
-            self.rfb = null;
-        }
-
         self.mutex.lock();
-        // rfbClientCleanup already freed the framebuffer — just clear our pointer.
+        const rfb_to_free = self.rfb;
+        self.rfb = null;
+        // rfbClientCleanup already freed the framebuffer via free() —
+        // just clear our pointer.
         self.framebuffer = null;
         self.width = 0;
         self.height = 0;
         @atomicStore(bool, &self.dirty, false, .seq_cst);
         self.mutex.unlock();
+
+        if (rfb_to_free != null) {
+            c.rfbClientCleanup(rfb_to_free);
+        }
     }
 
     /// Free all resources.  Disconnects first if still connected.
@@ -170,19 +176,23 @@ pub const VncClient = struct {
     }
 
     /// Send a key press/release event.  `keysym` is an X11 keysym.
+    ///
+    /// Guards against use-after-free: re-checks `connected` and `rfb`
+    /// under the mutex so that a concurrent `disconnect` cannot null
+    /// the `rfb` pointer between the check and the call.
     pub fn sendKey(self: *VncClient, keysym: u32, down: bool) void {
-        if (!@atomicLoad(bool, &self.connected, .seq_cst) or self.rfb == null) return;
         self.mutex.lock();
         defer self.mutex.unlock();
+        if (!@atomicLoad(bool, &self.connected, .seq_cst) or self.rfb == null) return;
         _ = c.SendKeyEvent(self.rfb, keysym, if (down) @as(c.rfbBool, 1) else 0);
     }
 
     /// Send a pointer (mouse) event.
     /// `button_mask`: bit 0 = left, bit 1 = middle, bit 2 = right.
     pub fn sendPointer(self: *VncClient, x: c_int, y: c_int, button_mask: c_int) void {
-        if (!@atomicLoad(bool, &self.connected, .seq_cst) or self.rfb == null) return;
         self.mutex.lock();
         defer self.mutex.unlock();
+        if (!@atomicLoad(bool, &self.connected, .seq_cst) or self.rfb == null) return;
         _ = c.SendPointerEvent(self.rfb, x, y, button_mask);
     }
 

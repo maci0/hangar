@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Pure framebuffer geometry math + pixel conversion helpers.
 //!
-//! Split out of `display.zig` so it can be fuzzed without pulling in IUP.
 //! Remote VNC/SPICE servers report the framebuffer width/height, so these are
 //! untrusted `c_int` values — `fw * fh` must not overflow `i32` before the
 //! size check (a forged/huge guest video mode otherwise crashes the UI).
@@ -68,13 +67,13 @@ test "fbFits: realistic framebuffer sizes" {
     // Test all common display resolutions with a generous 64MB buffer.
     const cap: usize = 64 * 1024 * 1024;
     const cases = [_]struct { w: c_int, h: c_int, expected: usize }{
-        .{ .w = 640,  .h = 480,  .expected = 640 * 480 },
-        .{ .w = 800,  .h = 600,  .expected = 800 * 600 },
-        .{ .w = 1024, .h = 768,  .expected = 1024 * 768 },
-        .{ .w = 1280, .h = 720,  .expected = 1280 * 720 },
-        .{ .w = 1280, .h = 800,  .expected = 1280 * 800 },
-        .{ .w = 1366, .h = 768,  .expected = 1366 * 768 },
-        .{ .w = 1440, .h = 900,  .expected = 1440 * 900 },
+        .{ .w = 640, .h = 480, .expected = 640 * 480 },
+        .{ .w = 800, .h = 600, .expected = 800 * 600 },
+        .{ .w = 1024, .h = 768, .expected = 1024 * 768 },
+        .{ .w = 1280, .h = 720, .expected = 1280 * 720 },
+        .{ .w = 1280, .h = 800, .expected = 1280 * 800 },
+        .{ .w = 1366, .h = 768, .expected = 1366 * 768 },
+        .{ .w = 1440, .h = 900, .expected = 1440 * 900 },
         .{ .w = 1680, .h = 1050, .expected = 1680 * 1050 },
         .{ .w = 1920, .h = 1080, .expected = 1920 * 1080 },
         .{ .w = 1920, .h = 1200, .expected = 1920 * 1200 },
@@ -140,24 +139,24 @@ test "bgraToRgba: single pixel conversion" {
 test "bgraToRgba: 2x2 pixel conversion with stride" {
     // 2x2 image, src_stride=12 (2 pixels + 4 padding bytes), dst_stride=8
     const src = [_]u8{
-        0x01, 0x02, 0x03, 0x04,  0x05, 0x06, 0x07, 0x08,  0, 0, 0, 0, // row 0
-        0x11, 0x12, 0x13, 0x14,  0x15, 0x16, 0x17, 0x18,  0, 0, 0, 0, // row 1
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0, 0, 0, 0, // row 0
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0, 0, 0, 0, // row 1
     };
     var dst = [_]u8{0} ** 16;
     bgraToRgba(&dst, &src, 2, 2, 12, 8);
     // Row 0, pixel 0: B=01,G=02,R=03,A=04 → R=03,G=02,B=01,A=04
-    try std.testing.expectEqual(@as(u8, 3), dst[0]);  // R ← B=1
-    try std.testing.expectEqual(@as(u8, 2), dst[1]);  // G ← G=2
-    try std.testing.expectEqual(@as(u8, 1), dst[2]);  // B ← R=3
-    try std.testing.expectEqual(@as(u8, 4), dst[3]);  // A ← A=4
+    try std.testing.expectEqual(@as(u8, 3), dst[0]); // R ← B=1
+    try std.testing.expectEqual(@as(u8, 2), dst[1]); // G ← G=2
+    try std.testing.expectEqual(@as(u8, 1), dst[2]); // B ← R=3
+    try std.testing.expectEqual(@as(u8, 4), dst[3]); // A ← A=4
     // Row 0, pixel 1: B=05,G=06,R=07,A=08 → R=07,G=06,B=05,A=08
-    try std.testing.expectEqual(@as(u8, 7), dst[4]);  // R ← B=5
-    try std.testing.expectEqual(@as(u8, 6), dst[5]);  // G ← G=6
-    try std.testing.expectEqual(@as(u8, 5), dst[6]);  // B ← R=7
-    try std.testing.expectEqual(@as(u8, 8), dst[7]);  // A ← A=8
+    try std.testing.expectEqual(@as(u8, 7), dst[4]); // R ← B=5
+    try std.testing.expectEqual(@as(u8, 6), dst[5]); // G ← G=6
+    try std.testing.expectEqual(@as(u8, 5), dst[6]); // B ← R=7
+    try std.testing.expectEqual(@as(u8, 8), dst[7]); // A ← A=8
     // Row 1, pixel 0
-    try std.testing.expectEqual(@as(u8, 0x13), dst[8]);  // R ← B=0x11
-    try std.testing.expectEqual(@as(u8, 0x12), dst[9]);  // G ← G=0x12
+    try std.testing.expectEqual(@as(u8, 0x13), dst[8]); // R ← B=0x11
+    try std.testing.expectEqual(@as(u8, 0x12), dst[9]); // G ← G=0x12
     try std.testing.expectEqual(@as(u8, 0x11), dst[10]); // B ← R=0x13
     try std.testing.expectEqual(@as(u8, 0x14), dst[11]); // A ← A=0x14
 }

@@ -2,7 +2,7 @@
 //! Serial Unix-socket path builder.
 //!
 //! Pure helper extracted from `serial_console.zig` so the path construction
-//! can be tested without filesystem or FLTK dependencies.
+//! can be tested without filesystem or UI dependencies.
 
 const std = @import("std");
 

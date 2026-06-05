@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Pure UI geometry / formatting helpers, extracted from the IUP-coupled
-//! modules (display.zig, dialogs.zig, serial.zig) so they can be unit-tested
-//! and fuzzed without IupOpen / a display / a socket. Same rationale as
-//! `fbmath.zig`. No imports beyond `std`; deterministic; no IO.
+//! Pure UI geometry / formatting helpers for the web frontend and
+//! display rendering. Deterministic; no IO.
 
 const std = @import("std");
 
@@ -57,7 +55,7 @@ pub fn mapCoords(w: c_int, h: c_int, fw: c_int, fh: c_int, x: c_int, y: c_int) ?
 
 // ── Memory guidance bar: MB → x pixel ────────────────────────────────
 
-/// Top of the memory-bar scale (MB). Shared with dialogs.zig.
+/// Top of the memory-bar scale (MB).
 pub const MEM_BAR_MAX_MB: i64 = 32768;
 
 /// Map a memory value (MB) to an x pixel on a bar `w` px wide. Clamps the
@@ -66,23 +64,6 @@ pub fn memToX(mb: i64, w: i32) i32 {
     const clamped = std.math.clamp(mb, 0, MEM_BAR_MAX_MB);
     const frac = @as(f64, @floatFromInt(clamped)) / @as(f64, @floatFromInt(MEM_BAR_MAX_MB));
     return @intFromFloat(frac * @as(f64, @floatFromInt(w)));
-}
-
-// ── Serial console socket path builder ───────────────────────────────
-
-/// Build `/tmp/hangar-serial-<vm_name>.sock` into `buf`, NUL-terminating it.
-/// Returns the byte length (excluding NUL), or null if it would not fit in
-/// `buf` (caller keeps its previous value). Pure: no filesystem access.
-pub fn serialSocketPath(buf: []u8, vm_name: []const u8) ?usize {
-    const prefix = "/tmp/hangar-serial-";
-    const suffix = ".sock";
-    const total = prefix.len + vm_name.len + suffix.len;
-    if (total + 1 > buf.len) return null; // +1 for NUL
-    @memcpy(buf[0..prefix.len], prefix);
-    @memcpy(buf[prefix.len..][0..vm_name.len], vm_name);
-    @memcpy(buf[prefix.len + vm_name.len ..][0..suffix.len], suffix);
-    buf[total] = 0;
-    return total;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -124,21 +105,6 @@ test "memToX: endpoints and clamping" {
     try t.expect(mid >= 99 and mid <= 101);
 }
 
-test "serialSocketPath: builds and NUL-terminates" {
-    var buf: [256]u8 = undefined;
-    const n = serialSocketPath(&buf, "myvm").?;
-    try t.expectEqualStrings("/tmp/hangar-serial-myvm.sock", buf[0..n]);
-    try t.expectEqual(@as(u8, 0), buf[n]);
-}
-
-test "serialSocketPath: rejects names that overflow the buffer" {
-    var small: [16]u8 = undefined;
-    try t.expect(serialSocketPath(&small, "anything") == null);
-    var buf: [256]u8 = undefined;
-    const huge = "x" ** 300;
-    try t.expect(serialSocketPath(&buf, huge) == null);
-}
-
 test "fuzz: mapCoords never panics, returns in-bounds or null" {
     var prng = std.Random.DefaultPrng.init(0xC0014A7E);
     const rnd = prng.random();
@@ -166,23 +132,6 @@ test "fuzz: memToX always within [0, w] for non-negative w" {
         const mb = rnd.intRangeAtMost(i64, -1_000_000, 1_000_000);
         const x = memToX(mb, w);
         try t.expect(x >= 0 and x <= w);
-    }
-}
-
-test "fuzz: serialSocketPath never overflows and round-trips length" {
-    var prng = std.Random.DefaultPrng.init(0x5E71A1FF);
-    const rnd = prng.random();
-    var name: [400]u8 = undefined;
-    var buf: [256]u8 = undefined;
-    var i: usize = 0;
-    while (i < 6000) : (i += 1) {
-        const len = rnd.uintLessThan(usize, name.len);
-        for (name[0..len]) |*c| c.* = rnd.intRangeAtMost(u8, 'a', 'z');
-        if (serialSocketPath(&buf, name[0..len])) |n| {
-            try t.expect(n < buf.len);
-            try t.expectEqual(@as(u8, 0), buf[n]);
-            try t.expectEqualStrings("/tmp/hangar-serial-", buf[0..19]);
-        }
     }
 }
 
@@ -221,7 +170,7 @@ test "scaleToolbarWidths: min width of 30 is enforced" {
 }
 
 test "scaleToolbarWidths: scale clamped to 2.0 max" {
-    const ref = [_]i32{ 55 };
+    const ref = [_]i32{55};
     const got = scaleToolbarWidths(1, ref, 10000);
     try t.expectEqual(@as(i32, 110), got[0]); // 55 * 2.0 = 110
 }

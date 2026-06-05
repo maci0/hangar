@@ -303,13 +303,23 @@ async function run() {
             return typeof window.renameGuest === 'function';
         });
         result(renameTriggered, 'renameGuest function exists');
-        // Trigger rename — dialog auto-accepts with default (VM name), which is fine
-        await invokeFn(page, 'renameGuest');
-        await new Promise(r => setTimeout(r, 600));
-        // VM name should still be visible (rename to same name is a no-op)
+        // Fire renameGuest without awaiting — it blocks on the custom prompt dialog
+        page.evaluate(() => { window.renameGuest(); });
+        await waitForDialogOpen(page, 'promptdlg');
+        const promptOpen = await isDialogOpen(page, 'promptdlg');
+        result(promptOpen, 'prompt dialog opens for rename');
+        // Fill in new name and click OK
+        await page.evaluate(() => {
+            const inp = document.getElementById('promptInput');
+            const okBtn = document.getElementById('promptOkBtn');
+            if (inp) inp.value = 'SmokeTest Renamed';
+            if (okBtn) okBtn.click();
+        });
+        await new Promise(r => setTimeout(r, 800));
+        // VM name should now reflect the rename
         const nameAfterRename = await page.evaluate(() => {
             const el = document.getElementById('vmname');
-            return el ? el.textContent.length > 0 : false;
+            return el && el.textContent.includes('SmokeTest');
         });
         result(nameAfterRename, 'VM still visible after rename attempt');
 
@@ -434,12 +444,19 @@ async function run() {
 
         // ── 24. Delete VM cleanup ──
         console.log('--- 24. Delete VM ---');
-        // Delete all VMs
+        // Delete all VMs — fire deleteVm without awaiting so the
+        // custom confirm dialog opens, then click OK to proceed.
         while (await vmCount(page) > 0) {
             await selectVm(page, 0);
-            await new Promise(r => setTimeout(r, 150));
-            await invokeFn(page, 'deleteVm');
-            await new Promise(r => setTimeout(r, 600));
+            await new Promise(r => setTimeout(r, 200));
+            const delDone = page.evaluate(() => { deleteVm(); }).catch(() => {});
+            await waitForDialogOpen(page, 'confirmdlg');
+            await page.evaluate(() => {
+                const btn = document.getElementById('confirmOkBtn');
+                if (btn) btn.click();
+            });
+            await new Promise(r => setTimeout(r, 800));
+            await delDone;
         }
         const countAfterDelete = await vmCount(page);
         result(countAfterDelete === 0, 'all VMs deleted');

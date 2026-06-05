@@ -68,6 +68,8 @@ const usage =
 ;
 
 pub fn main(init: std.process.Init) !void {
+    const allocator = std.heap.page_allocator;
+
     var args_iter = std.process.Args.Iterator.init(init.minimal.args);
 
     const prog = args_iter.next() orelse {
@@ -97,15 +99,15 @@ pub fn main(init: std.process.Init) !void {
     defer conn.close();
 
     if (std.mem.eql(u8, command, "list")) {
-        return cmdList(&conn, init.io);
+        return cmdList(allocator, &conn, init.io);
     } else if (std.mem.eql(u8, command, "status")) {
-        return cmdStatus(&conn, init.io);
+        return cmdStatus(allocator, &conn, init.io);
     } else if (std.mem.eql(u8, command, "import")) {
         const path = args_iter.next() orelse {
             _ = c.write(c.STDERR_FILENO, "Error: missing disk path\n", 25);
             std.process.exit(1);
         };
-        return cmdImport(&conn, path, init.io);
+        return cmdImport(allocator, &conn, path, init.io);
     } else if (std.mem.eql(u8, command, "snapshot")) {
         const sub = args_iter.next() orelse {
             _ = c.write(c.STDERR_FILENO, "Error: snapshot command requires subcommand: list|take|revert|delete\n", 69);
@@ -115,49 +117,49 @@ pub fn main(init: std.process.Init) !void {
             _ = c.write(c.STDERR_FILENO, "Error: missing VM name or index\n", 31);
             std.process.exit(1);
         };
-        const idx = resolveVm(&conn, target) orelse {
+        const idx = resolveVm(allocator, &conn, target) orelse {
             var buf: [128]u8 = undefined;
             const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
             _ = c.write(c.STDERR_FILENO, msg.ptr, msg.len);
             std.process.exit(1);
         };
         if (std.mem.eql(u8, sub, "list")) {
-            return cmdSnapshotList(&conn, idx, init.io);
+            return cmdSnapshotList(allocator, &conn, idx, init.io);
         } else if (std.mem.eql(u8, sub, "take")) {
             const tag = args_iter.next() orelse {
                 _ = c.write(c.STDERR_FILENO, "Error: missing snapshot tag\n", 28);
                 std.process.exit(1);
             };
-            return cmdSnapshotTake(&conn, idx, tag, init.io);
+            return cmdSnapshotTake(allocator, &conn, idx, tag, init.io);
         } else if (std.mem.eql(u8, sub, "revert")) {
             const tag = args_iter.next() orelse {
                 _ = c.write(c.STDERR_FILENO, "Error: missing snapshot tag\n", 28);
                 std.process.exit(1);
             };
-            return cmdSnapshotRevert(&conn, idx, tag, init.io);
+            return cmdSnapshotRevert(allocator, &conn, idx, tag, init.io);
         } else if (std.mem.eql(u8, sub, "delete")) {
             const tag = args_iter.next() orelse {
                 _ = c.write(c.STDERR_FILENO, "Error: missing snapshot tag\n", 28);
                 std.process.exit(1);
             };
-            return cmdSnapshotDelete(&conn, idx, tag, init.io);
+            return cmdSnapshotDelete(allocator, &conn, idx, tag, init.io);
         } else {
             _ = c.write(c.STDERR_FILENO, "Error: unknown snapshot subcommand (use: list|take|revert|delete)\n", 66);
             std.process.exit(1);
         }
     } else if (std.mem.eql(u8, command, "start") or
-               std.mem.eql(u8, command, "stop") or
-               std.mem.eql(u8, command, "restart") or
-               std.mem.eql(u8, command, "clone") or
-               std.mem.eql(u8, command, "linked-clone") or
-               std.mem.eql(u8, command, "delete") or
-               std.mem.eql(u8, command, "suspend") or
-               std.mem.eql(u8, command, "pause") or
-               std.mem.eql(u8, command, "resume") or
-               std.mem.eql(u8, command, "shutdown") or
-               std.mem.eql(u8, command, "reset") or
-               std.mem.eql(u8, command, "cad") or
-               std.mem.eql(u8, command, "export"))
+        std.mem.eql(u8, command, "stop") or
+        std.mem.eql(u8, command, "restart") or
+        std.mem.eql(u8, command, "clone") or
+        std.mem.eql(u8, command, "linked-clone") or
+        std.mem.eql(u8, command, "delete") or
+        std.mem.eql(u8, command, "suspend") or
+        std.mem.eql(u8, command, "pause") or
+        std.mem.eql(u8, command, "resume") or
+        std.mem.eql(u8, command, "shutdown") or
+        std.mem.eql(u8, command, "reset") or
+        std.mem.eql(u8, command, "cad") or
+        std.mem.eql(u8, command, "export"))
     {
         const target = args_iter.next() orelse {
             _ = c.write(c.STDERR_FILENO, "Error: missing VM name or index\n", 31);
@@ -165,7 +167,7 @@ pub fn main(init: std.process.Init) !void {
         };
 
         // Resolve name or index to VM index.
-        const idx = resolveVm(&conn, target) orelse {
+        const idx = resolveVm(allocator, &conn, target) orelse {
             var buf: [128]u8 = undefined;
             const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
             _ = c.write(c.STDERR_FILENO, msg.ptr, msg.len);
@@ -173,32 +175,32 @@ pub fn main(init: std.process.Init) !void {
         };
 
         if (std.mem.eql(u8, command, "start") or std.mem.eql(u8, command, "stop")) {
-            return cmdPower(&conn, idx, command, init.io);
+            return cmdPower(allocator, &conn, idx, command, init.io);
         } else if (std.mem.eql(u8, command, "restart")) {
-            try cmdPower(&conn, idx, "stop", init.io);
+            try cmdPower(allocator, &conn, idx, "stop", init.io);
             const ts: c.timespec = .{ .sec = 1, .nsec = 0 };
             _ = c.nanosleep(&ts, null);
-            return cmdPower(&conn, idx, "start", init.io);
+            return cmdPower(allocator, &conn, idx, "start", init.io);
         } else if (std.mem.eql(u8, command, "clone")) {
-            return cmdClone(&conn, idx, init.io);
+            return cmdClone(allocator, &conn, idx, init.io);
         } else if (std.mem.eql(u8, command, "linked-clone")) {
-            return cmdLinkedClone(&conn, idx, init.io);
+            return cmdLinkedClone(allocator, &conn, idx, init.io);
         } else if (std.mem.eql(u8, command, "delete")) {
-            return cmdDelete(&conn, idx, init.io);
+            return cmdDelete(allocator, &conn, idx, init.io);
         } else if (std.mem.eql(u8, command, "suspend")) {
-            return cmdSimple(&conn, idx, "/api/suspend/{d}", "suspend", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/suspend/{d}", "suspend", init.io);
         } else if (std.mem.eql(u8, command, "pause")) {
-            return cmdSimple(&conn, idx, "/api/pause/{d}", "pause", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/pause/{d}", "pause", init.io);
         } else if (std.mem.eql(u8, command, "resume")) {
-            return cmdSimple(&conn, idx, "/api/resume/{d}", "resume", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/resume/{d}", "resume", init.io);
         } else if (std.mem.eql(u8, command, "shutdown")) {
-            return cmdSimple(&conn, idx, "/api/shutdown/{d}", "shutdown", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/shutdown/{d}", "shutdown", init.io);
         } else if (std.mem.eql(u8, command, "reset")) {
-            return cmdSimple(&conn, idx, "/api/reset/{d}", "reset", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/reset/{d}", "reset", init.io);
         } else if (std.mem.eql(u8, command, "cad")) {
-            return cmdSimple(&conn, idx, "/api/cad/{d}", "cad", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/cad/{d}", "cad", init.io);
         } else if (std.mem.eql(u8, command, "export")) {
-            return cmdExport(&conn, idx, init.io);
+            return cmdExport(allocator, &conn, idx, init.io);
         }
     } else if (std.mem.eql(u8, command, "rename")) {
         const target = args_iter.next() orelse {
@@ -209,13 +211,13 @@ pub fn main(init: std.process.Init) !void {
             _ = c.write(c.STDERR_FILENO, "Error: missing new name\n", 23);
             std.process.exit(1);
         };
-        const idx = resolveVm(&conn, target) orelse {
+        const idx = resolveVm(allocator, &conn, target) orelse {
             var buf: [128]u8 = undefined;
             const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
             _ = c.write(c.STDERR_FILENO, msg.ptr, msg.len);
             std.process.exit(1);
         };
-        return cmdRename(&conn, idx, new_name, init.io);
+        return cmdRename(allocator, &conn, idx, new_name, init.io);
     } else {
         var buf: [64]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: unknown command '{s}'\n", .{command}) catch "Error: unknown command\n";
@@ -224,13 +226,11 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-fn sendRequest(conn: *transport.Connection, method: []const u8, path: []const u8, body: ?[]const u8) ![]u8 {
+fn sendRequest(allocator: std.mem.Allocator, conn: *transport.Connection, method: []const u8, path: []const u8, body: ?[]const u8) ![]u8 {
     var buf: [4096]u8 = undefined;
     const n = conn.request(method, path, body, &buf);
     if (n == 0) return error.RequestFailed;
-    // Allocate response string from page allocator (caller handles lifetime via Arena).
-    const resp = try std.heap.page_allocator.dupe(u8, buf[0..n]);
-    return resp;
+    return try allocator.dupe(u8, buf[0..n]);
 }
 
 /// Pure helper: given VM-list JSON and a VM name, find its "idx" field value.
@@ -247,27 +247,28 @@ fn findVmIdxInJson(json: []const u8, target: []const u8) ?usize {
         if (std.mem.startsWith(u8, before[i..], idx_pat)) {
             const num_start = i + idx_pat.len;
             const num_end = std.mem.indexOfScalar(u8, before[num_start..], ',') orelse
-                            std.mem.indexOfScalar(u8, before[num_start..], '}') orelse (before.len - num_start);
+                std.mem.indexOfScalar(u8, before[num_start..], '}') orelse (before.len - num_start);
             return std.fmt.parseInt(usize, before[num_start..][0..num_end], 10) catch return null;
         }
     }
     return null;
 }
 
-fn resolveVm(conn: *transport.Connection, target: []const u8) ?usize {
+fn resolveVm(allocator: std.mem.Allocator, conn: *transport.Connection, target: []const u8) ?usize {
     // Try parsing as numeric index first.
     if (std.fmt.parseInt(usize, target, 10)) |idx| {
         return idx;
     } else |_| {}
 
-    const json = sendRequest(conn, "GET", "/api/vms", null) catch return null;
+    const json = sendRequest(allocator, conn, "GET", "/api/vms", null) catch return null;
+    defer allocator.free(json);
     return findVmIdxInJson(json, target);
 }
 
-fn cmdList(conn: *transport.Connection, io: std.Io) !void {
+fn cmdList(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.Io) !void {
     _ = io;
-    const json = try sendRequest(conn, "GET", "/api/vms", null);
-    defer std.heap.page_allocator.free(json);
+    const json = try sendRequest(allocator, conn, "GET", "/api/vms", null);
+    defer allocator.free(json);
 
     // Parse and display VM names from JSON array.
     var rest = json;
@@ -291,85 +292,85 @@ fn cmdList(conn: *transport.Connection, io: std.Io) !void {
     }
 }
 
-fn cmdStatus(conn: *transport.Connection, io: std.Io) !void {
+fn cmdStatus(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.Io) !void {
     _ = io;
-    const resp = try sendRequest(conn, "GET", "/api/health", null);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "GET", "/api/health", null);
+    defer allocator.free(resp);
     _ = c.write(c.STDOUT_FILENO, resp.ptr, resp.len);
     _ = c.write(c.STDOUT_FILENO, "\n", 1);
 }
 
-fn cmdPower(conn: *transport.Connection, idx: usize, action: []const u8, io: std.Io) !void {
+fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, action: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/power/{d}", .{idx});
-    const resp = try sendRequest(conn, "POST", path, null);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "POST", path, null);
+    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "{s} VM [{d}]: {s}\n", .{ action, idx, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
-fn cmdClone(conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    return cmdSimple(conn, idx, "/api/clone/{d}", "clone", io);
+fn cmdClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
+    return cmdSimple(allocator, conn, idx, "/api/clone/{d}", "clone", io);
 }
 
-fn cmdLinkedClone(conn: *transport.Connection, idx: usize, io: std.Io) !void {
+fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
     _ = io;
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/clone/{d}", .{idx});
-    const resp = try sendRequest(conn, "POST", path, "linked=1");
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "POST", path, "linked=1");
+    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "linked-clone VM [{d}]: {s}\n", .{ idx, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
-fn cmdDelete(conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    return cmdSimple(conn, idx, "/api/delete/{d}", "delete", io);
+fn cmdDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
+    return cmdSimple(allocator, conn, idx, "/api/delete/{d}", "delete", io);
 }
 
-fn cmdRename(conn: *transport.Connection, idx: usize, new_name: []const u8, io: std.Io) !void {
+fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, new_name: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/rename/{d}", .{idx});
     var body_buf: [256]u8 = undefined;
     const body = try std.fmt.bufPrint(&body_buf, "name={s}", .{new_name});
-    const resp = try sendRequest(conn, "POST", path, body);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "POST", path, body);
+    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "rename VM [{d}] -> {s}: {s}\n", .{ idx, new_name, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
-fn cmdImport(conn: *transport.Connection, disk_path: []const u8, io: std.Io) !void {
+fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_path: []const u8, io: std.Io) !void {
     _ = io;
     var body_buf: [vm.MAX_PATH + 64]u8 = undefined;
     const body = try std.fmt.bufPrint(&body_buf, "path={s}", .{disk_path});
-    const resp = try sendRequest(conn, "POST", "/api/import", body);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "POST", "/api/import", body);
+    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "import {s}: {s}\n", .{ disk_path, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
-fn cmdExport(conn: *transport.Connection, idx: usize, io: std.Io) !void {
+fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
     _ = io;
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/export/{d}", .{idx});
-    const resp = try sendRequest(conn, "POST", path, null);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "POST", path, null);
+    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "export VM [{d}]: {s}\n", .{ idx, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
-fn cmdSnapshotList(conn: *transport.Connection, idx: usize, io: std.Io) !void {
+fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
     _ = io;
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/list/{d}", .{idx});
-    const resp = try sendRequest(conn, "GET", path, null);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "GET", path, null);
+    defer allocator.free(resp);
     if (resp.len == 0 or std.mem.eql(u8, resp, "(none)")) {
         _ = c.write(c.STDOUT_FILENO, "No snapshots found.\n", 20);
     } else {
@@ -378,52 +379,52 @@ fn cmdSnapshotList(conn: *transport.Connection, idx: usize, io: std.Io) !void {
     }
 }
 
-fn cmdSnapshotTake(conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
+fn cmdSnapshotTake(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/take/{d}", .{idx});
     var body_buf: [256]u8 = undefined;
     const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{tag});
-    const resp = try sendRequest(conn, "POST", path, body);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "POST", path, body);
+    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "snapshot take [{d}] '{s}': {s}\n", .{ idx, tag, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
-fn cmdSnapshotRevert(conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
+fn cmdSnapshotRevert(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/revert/{d}", .{idx});
     var body_buf: [256]u8 = undefined;
     const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{tag});
-    const resp = try sendRequest(conn, "POST", path, body);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "POST", path, body);
+    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "snapshot revert [{d}] '{s}': {s}\n", .{ idx, tag, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
-fn cmdSnapshotDelete(conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
+fn cmdSnapshotDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/delete/{d}", .{idx});
     var body_buf: [256]u8 = undefined;
     const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{tag});
-    const resp = try sendRequest(conn, "POST", path, body);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "POST", path, body);
+    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "snapshot delete [{d}] '{s}': {s}\n", .{ idx, tag, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
 }
 
 /// Generic POST to /api/{action}/{idx} with no body.
-fn cmdSimple(conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, action: []const u8, io: std.Io) !void {
+fn cmdSimple(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, action: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, path_fmt, .{idx});
-    const resp = try sendRequest(conn, "POST", path, null);
-    defer std.heap.page_allocator.free(resp);
+    const resp = try sendRequest(allocator, conn, "POST", path, null);
+    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "{s} VM [{d}]: {s}\n", .{ action, idx, resp });
     _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
@@ -446,7 +447,7 @@ fn extractJsonInt(obj: []const u8, key: []const u8) ?usize {
     const start = std.mem.indexOf(u8, obj, pat) orelse return null;
     const val_start = start + pat.len;
     const val_end = std.mem.indexOfScalar(u8, obj[val_start..], ',') orelse
-                    std.mem.indexOfScalar(u8, obj[val_start..], '}') orelse obj.len - val_start;
+        std.mem.indexOfScalar(u8, obj[val_start..], '}') orelse obj.len - val_start;
     return std.fmt.parseInt(usize, obj[val_start..][0..val_end], 10) catch null;
 }
 

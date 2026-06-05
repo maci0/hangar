@@ -132,10 +132,10 @@ pub const DiskCache = enum(u8) {
 
     /// Parse a QEMU cache string (e.g. from JSON), case-insensitive.
     pub fn fromStr(s: []const u8) DiskCache {
-        if (std.ascii.eqlIgnoreCase(s, "writethrough")) return .writethrough;
-        if (std.ascii.eqlIgnoreCase(s, "none")) return .none;
-        if (std.ascii.eqlIgnoreCase(s, "directsync")) return .directsync;
-        if (std.ascii.eqlIgnoreCase(s, "unsafe")) return .unsafe;
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: DiskCache = @enumFromInt(f.value);
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
+        }
         return .writeback;
     }
 };
@@ -179,13 +179,10 @@ pub const NetworkMode = enum(u8) {
     }
 
     pub fn fromStr(s: []const u8) NetworkMode {
-        const lower = if (s.len < 32) blk: {
-            var buf: [32]u8 = undefined;
-            break :blk std.ascii.lowerString(&buf, s);
-        } else return .user;
-        if (std.mem.eql(u8, lower, "user")) return .user;
-        if (std.mem.eql(u8, lower, "bridge")) return .bridge;
-        if (std.mem.eql(u8, lower, "none")) return .none;
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: NetworkMode = @enumFromInt(f.value);
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
+        }
         return .user;
     }
 };
@@ -417,7 +414,7 @@ pub const GuestOs = enum(u8) {
         return @enumFromInt(@as(u8, @intCast(i)));
     }
 
-    /// Parse a GuestOs from its toStr representation (case-insensitive prefix).
+    /// Parse a GuestOs from its toStr representation (case-insensitive exact match).
     pub fn fromStr(s: []const u8) GuestOs {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: GuestOs = @enumFromInt(f.value);
@@ -573,14 +570,41 @@ pub const CpuModel = enum(u8) {
     }
 
     pub fn label(self: CpuModel) [*:0]const u8 {
-        return self.toStr();
+        return switch (self) {
+            .host => "Host (default)",
+            .max => "Max (all features)",
+            .qemu64 => "QEMU 64-bit",
+            .kvm64 => "KVM 64-bit",
+            .EPYC => "AMD EPYC",
+            .EPYC_Rome => "AMD EPYC Rome",
+            .EPYC_Milan => "AMD EPYC Milan",
+            .Skylake_Server => "Intel Skylake Server",
+            .Skylake_Client => "Intel Skylake Client",
+            .Icelake_Server => "Intel Icelake Server",
+            .Cascadelake_Server => "Intel Cascadelake Server",
+            .Nehalem => "Intel Nehalem",
+            .Westmere => "Intel Westmere",
+            .SandyBridge => "Intel Sandy Bridge",
+            .IvyBridge => "Intel Ivy Bridge",
+            .Haswell => "Intel Haswell",
+            .Broadwell => "Intel Broadwell",
+            .Opteron_G5 => "AMD Opteron G5",
+            .host_passthrough => "Host Passthrough",
+            .Cooperlake => "Intel Cooperlake",
+            .SapphireRapids => "Intel Sapphire Rapids",
+            .GraniteRapids => "Intel Granite Rapids",
+            .Neoverse_N1 => "ARM Neoverse N1",
+            .Neoverse_N2 => "ARM Neoverse N2",
+            .Neoverse_V1 => "ARM Neoverse V1",
+            .aarch64 => "ARM aarch64 (generic)",
+        };
     }
 
-    /// Parse a QEMU CPU model string (from JSON or CLI).
+    /// Parse a QEMU CPU model string (from JSON or CLI), case-insensitive.
     pub fn fromStr(s: []const u8) CpuModel {
-        inline for (0..count) |i| {
-            const m = fromIndex(i);
-            if (std.ascii.eqlIgnoreCase(s, std.mem.span(m.toStr()))) return m;
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: CpuModel = @enumFromInt(f.value);
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
         return .host;
     }
@@ -670,11 +694,10 @@ pub const BootFirmware = enum(u8) {
     }
 
     pub fn fromStr(s: []const u8) BootFirmware {
-        const lower = if (s.len < 32) blk: {
-            var buf: [32]u8 = undefined;
-            break :blk std.ascii.lowerString(&buf, s);
-        } else return .bios;
-        if (std.mem.eql(u8, lower, "uefi")) return .uefi;
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: BootFirmware = @enumFromInt(f.value);
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
+        }
         return .bios;
     }
 };
@@ -705,12 +728,6 @@ pub const Theme = enum(u8) {
         };
     }
 
-    pub fn fromStr(s: []const u8) Theme {
-        if (std.ascii.eqlIgnoreCase(s, "system")) return .system;
-        if (std.ascii.eqlIgnoreCase(s, "dark")) return .dark;
-        return .light; // default
-    }
-
     /// Human-readable label for the UI.
     pub fn label(self: Theme) [*:0]const u8 {
         return switch (self) {
@@ -718,6 +735,14 @@ pub const Theme = enum(u8) {
             .light => "Light",
             .dark => "Dark",
         };
+    }
+
+    pub fn fromStr(s: []const u8) Theme {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: Theme = @enumFromInt(f.value);
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .light;
     }
 };
 
@@ -731,8 +756,13 @@ pub const GpuDevice = enum(u8) {
     std_vga = 5,
 
     pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
-    pub fn toIndex(self: GpuDevice) usize { return @intFromEnum(self); }
-    pub fn fromIndex(i: usize) GpuDevice { if (i >= count) return .virtio_vga_gl; return @enumFromInt(@as(u8, @intCast(i))); }
+    pub fn toIndex(self: GpuDevice) usize {
+        return @intFromEnum(self);
+    }
+    pub fn fromIndex(i: usize) GpuDevice {
+        if (i >= count) return .virtio_vga_gl;
+        return @enumFromInt(@as(u8, @intCast(i)));
+    }
     pub fn toStr(self: GpuDevice) [*:0]const u8 {
         return switch (self) {
             .virtio_gpu_gl => "virtio_gpu_gl",
@@ -857,9 +887,10 @@ pub const WatchdogAction = enum(u8) {
     }
 
     pub fn fromStr(s: []const u8) WatchdogAction {
-        if (std.ascii.eqlIgnoreCase(s, "reset")) return .reset;
-        if (std.ascii.eqlIgnoreCase(s, "poweroff")) return .poweroff;
-        if (std.ascii.eqlIgnoreCase(s, "pause")) return .pause;
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: WatchdogAction = @enumFromInt(f.value);
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
+        }
         return .none;
     }
 };
@@ -974,7 +1005,7 @@ pub const VmConfig = struct {
     iso_path_len: u16 = 0,
 
     // ── Network adapters (persisted) ──────────────────────────────
-    nics: [MAX_NICS]Nic = [_]Nic{ .{ .mode = .user } } ++ [_]Nic{Nic{}} ** (MAX_NICS - 1),
+    nics: [MAX_NICS]Nic = [_]Nic{.{ .mode = .user }} ++ [_]Nic{Nic{}} ** (MAX_NICS - 1),
 
     // ── Notes ────────────────────────────────────────────────────
     notes_buf: [4096]u8 = [_]u8{0} ** 4096,
@@ -1395,6 +1426,19 @@ pub const VmConfig = struct {
         self.nics[2].mac_len = len;
     }
 
+    /// Generic accessors for any NIC (0 = NIC1, 1 = NIC2, … up to MAX_NICS-1).
+    pub fn getNicMacSliceAny(self: *const VmConfig, idx: usize) []const u8 {
+        if (idx >= MAX_NICS) return "";
+        return self.nics[idx].mac_buf[0..self.nics[idx].mac_len];
+    }
+    pub fn setNicMacAny(self: *VmConfig, idx: usize, s: []const u8) void {
+        if (idx >= MAX_NICS) return;
+        const len: u16 = @intCast(@min(s.len, 17));
+        @memcpy(self.nics[idx].mac_buf[0..len], s[0..len]);
+        self.nics[idx].mac_buf[len] = 0;
+        self.nics[idx].mac_len = len;
+    }
+
     // ── Floppy accessors ─────────────────────────────────────────
 
     pub fn getFloppyPath(self: *const VmConfig) [*:0]const u8 {
@@ -1510,7 +1554,6 @@ pub fn generateMacAddress(buf: *[18]u8) [*:0]const u8 {
     return std.fmt.bufPrintZ(buf, "{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}:{X:0>2}", .{ b0, b1, b2, b3, b4, b5 }) catch "02:00:00:00:00:00";
 }
 
-
 // ── Input validation helpers ─────────────────────────────────────────
 
 /// Returns true if `name` is safe to use as a VM name (no path separators,
@@ -1551,7 +1594,10 @@ pub fn findUnusedVncPort(vms: []VmConfig) u16 {
     while (port <= 5999) : (port += 1) {
         var used = false;
         for (vms) |*v| {
-            if (v.vnc_port == port) { used = true; break; }
+            if (v.vnc_port == port) {
+                used = true;
+                break;
+            }
         }
         if (!used) return port;
     }
@@ -1564,7 +1610,10 @@ pub fn findUnusedSpicePort(vms: []VmConfig) u16 {
     while (port <= 5999) : (port += 1) {
         var used = false;
         for (vms) |*v| {
-            if (v.spice_port == port) { used = true; break; }
+            if (v.spice_port == port) {
+                used = true;
+                break;
+            }
         }
         if (!used) return port;
     }
@@ -1585,7 +1634,6 @@ pub fn clampCpuCores(cores: u32) u32 {
 pub fn clampDiskSize(gb: u32) u32 {
     return std.math.clamp(gb, 1, 65536);
 }
-
 
 // ── Tests ────────────────────────────────────────────────────────────
 
@@ -1956,10 +2004,13 @@ test "CpuModel: toStr values" {
 }
 
 test "CpuModel: label values" {
-    try std.testing.expectEqualStrings("host", std.mem.span(CpuModel.host.label()));
-    try std.testing.expectEqualStrings("max", std.mem.span(CpuModel.max.label()));
-    try std.testing.expectEqualStrings("qemu64", std.mem.span(CpuModel.qemu64.label()));
-    try std.testing.expectEqualStrings("kvm64", std.mem.span(CpuModel.kvm64.label()));
+    try std.testing.expectEqualStrings("Host (default)", std.mem.span(CpuModel.host.label()));
+    try std.testing.expectEqualStrings("Max (all features)", std.mem.span(CpuModel.max.label()));
+    try std.testing.expectEqualStrings("QEMU 64-bit", std.mem.span(CpuModel.qemu64.label()));
+    try std.testing.expectEqualStrings("KVM 64-bit", std.mem.span(CpuModel.kvm64.label()));
+    try std.testing.expectEqualStrings("AMD EPYC", std.mem.span(CpuModel.EPYC.label()));
+    try std.testing.expectEqualStrings("Intel Haswell", std.mem.span(CpuModel.Haswell.label()));
+    try std.testing.expectEqualStrings("ARM Neoverse N1", std.mem.span(CpuModel.Neoverse_N1.label()));
 }
 
 test "CpuModel: fromStr round-trip" {
@@ -2234,6 +2285,15 @@ test "DisplayResolution: xres/yres values" {
     try std.testing.expectEqual(@as(u32, 1080), DisplayResolution.res_1920x1080.yres());
 }
 
+test "DisplayResolution: fromStr round-trip" {
+    for (0..DisplayResolution.count) |i| {
+        const dr = DisplayResolution.fromIndex(i);
+        try std.testing.expectEqual(dr, DisplayResolution.fromStr(std.mem.span(dr.toStr())));
+    }
+    try std.testing.expectEqual(DisplayResolution.auto, DisplayResolution.fromStr("unknown"));
+    try std.testing.expectEqual(DisplayResolution.auto, DisplayResolution.fromStr(""));
+}
+
 // -- Extended enum counts --
 
 test "enum counts: AudioDevice, BootOrder, DisplayResolution" {
@@ -2383,6 +2443,8 @@ test "fuzz: enum fromIndex always yields a valid variant" {
         try std.testing.expect(Theme.fromIndex(i).toIndex() < Theme.count);
         try std.testing.expect(DiskCache.fromIndex(i).toIndex() < DiskCache.count);
         try std.testing.expect(VmAccel.fromIndex(i).toIndex() < VmAccel.count);
+        try std.testing.expect(CpuModel.fromIndex(i).toIndex() < CpuModel.count);
+        try std.testing.expect(WatchdogAction.fromIndex(i).toIndex() < WatchdogAction.count);
     }
 }
 
@@ -2965,3 +3027,88 @@ test "VmConfig: findUnusedSpicePort wraps at 5999" {
     try std.testing.expectEqual(@as(u16, 5930), findUnusedSpicePort(&vms));
 }
 
+test "DisplayType: fromStr round-trip" {
+    inline for (@typeInfo(DisplayType).@"enum".fields) |f| {
+        const variant: DisplayType = @enumFromInt(f.value);
+        try std.testing.expectEqual(variant, DisplayType.fromStr(std.mem.span(variant.toStr())));
+    }
+    try std.testing.expectEqual(DisplayType.gtk, DisplayType.fromStr("unknown"));
+    try std.testing.expectEqual(DisplayType.gtk, DisplayType.fromStr(""));
+}
+
+test "DisplayType: fromStr backward compat spice" {
+    try std.testing.expectEqual(DisplayType.spice, DisplayType.fromStr("spice"));
+    try std.testing.expectEqual(DisplayType.spice, DisplayType.fromStr("SPICE"));
+}
+
+test "BootOrder: fromStr round-trip" {
+    inline for (@typeInfo(BootOrder).@"enum".fields) |f| {
+        const variant: BootOrder = @enumFromInt(f.value);
+        try std.testing.expectEqual(variant, BootOrder.fromStr(std.mem.span(variant.toStr())));
+    }
+    try std.testing.expectEqual(BootOrder.disk_first, BootOrder.fromStr("unknown"));
+    try std.testing.expectEqual(BootOrder.disk_first, BootOrder.fromStr(""));
+}
+
+test "AudioDevice: fromStr round-trip" {
+    inline for (@typeInfo(AudioDevice).@"enum".fields) |f| {
+        const variant: AudioDevice = @enumFromInt(f.value);
+        try std.testing.expectEqual(variant, AudioDevice.fromStr(std.mem.span(variant.toStr())));
+    }
+    try std.testing.expectEqual(AudioDevice.none, AudioDevice.fromStr("unknown"));
+    try std.testing.expectEqual(AudioDevice.none, AudioDevice.fromStr(""));
+}
+
+test "GpuDevice: fromStr round-trip" {
+    inline for (@typeInfo(GpuDevice).@"enum".fields) |f| {
+        const variant: GpuDevice = @enumFromInt(f.value);
+        try std.testing.expectEqual(variant, GpuDevice.fromStr(std.mem.span(variant.toStr())));
+    }
+    try std.testing.expectEqual(GpuDevice.virtio_vga_gl, GpuDevice.fromStr("unknown"));
+    try std.testing.expectEqual(GpuDevice.virtio_vga_gl, GpuDevice.fromStr(""));
+}
+
+test "VmAccel: fromStr round-trip" {
+    inline for (@typeInfo(VmAccel).@"enum".fields) |f| {
+        const variant: VmAccel = @enumFromInt(f.value);
+        try std.testing.expectEqual(variant, VmAccel.fromStr(std.mem.span(variant.toStr())));
+    }
+    try std.testing.expectEqual(VmAccel.auto, VmAccel.fromStr("unknown"));
+    try std.testing.expectEqual(VmAccel.auto, VmAccel.fromStr(""));
+}
+
+test "VmConfig: extra disk accessors round-trip" {
+    var vm: VmConfig = .{};
+    var buf: [MAX_PATH + 1]u8 = undefined;
+
+    // Initially no extra disks.
+    for (0..MAX_EXTRA_DISKS) |i| {
+        try std.testing.expect(!vm.hasExtraDisk(i));
+        try std.testing.expectEqualStrings("", vm.getExtraDiskPathSlice(i));
+        try std.testing.expectEqual(0, std.mem.sliceTo(vm.getExtraDiskPath(i), 0).len);
+    }
+
+    // Set and verify each extra disk slot.
+    for (0..MAX_EXTRA_DISKS) |i| {
+        const name = std.fmt.bufPrintZ(&buf, "disk{d}.qcow2", .{i}) catch return;
+        vm.setExtraDiskPath(i, name);
+        try std.testing.expect(vm.hasExtraDisk(i));
+        try std.testing.expectEqualStrings(name, vm.getExtraDiskPathSlice(i));
+        try std.testing.expectEqualStrings(name, std.mem.sliceTo(vm.getExtraDiskPath(i), 0));
+    }
+
+    // Clear and verify.
+    for (0..MAX_EXTRA_DISKS) |i| {
+        vm.clearExtraDiskPath(i);
+        try std.testing.expect(!vm.hasExtraDisk(i));
+        try std.testing.expectEqualStrings("", vm.getExtraDiskPathSlice(i));
+    }
+
+    // Path truncation at MAX_PATH.
+    var long: [MAX_PATH + 1]u8 = undefined;
+    @memset(&long, 'x');
+    long[MAX_PATH] = 0;
+    vm.setExtraDiskPath(0, long[0..MAX_PATH]);
+    try std.testing.expect(vm.hasExtraDisk(0));
+    try std.testing.expectEqual(MAX_PATH, vm.getExtraDiskPathSlice(0).len);
+}

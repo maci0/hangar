@@ -56,6 +56,7 @@
     <button class="btn" data-action="editVm" title="Settings">⚙ Settings</button>
     <button class="btn" data-action="renameGuest" title="Rename">✎ Rename</button>
     <button class="btn" data-action="newVm" title="New VM">＋ New</button>
+    <button class="btn" data-action="openCatalog" title="Catalog">📋 Catalog</button>
     <button class="btn" data-action="takeSnapshot" title="Take Snapshot">📸 Snapshot</button>
     <button class="btn" data-action="cloneGuest" title="Clone">⧉ Clone</button>
     <button class="btn" data-action="sendCad" title="Ctrl+Alt+Del">⌨ CAD</button>
@@ -77,7 +78,7 @@
     <button class="btn" data-action="openPrefs" title="Preferences">🔧 Prefs</button>
     <button class="btn" data-action="openVnets" title="Virtual Networks">🌐 VNets</button>
     <button class="btn" data-action="openAbout" title="About">ℹ About</button>
-    <button class="btn theme-toggle-btn" data-action="toggleTheme" title="Toggle theme" aria-label="Toggle theme">🌓</button>
+    <button class="btn theme-toggle-btn keep-mobile" data-action="toggleTheme" title="Toggle theme" aria-label="Toggle theme">🌓</button>
     <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-expanded="false">⋯</button>
     <div class="toolbar-more-popover" role="menu" aria-label="More actions"></div>
   </div>
@@ -85,15 +86,19 @@
   <!-- Content Area -->
   <div class="content-area">
     <!-- Display panel (VNC/SPICE framebuffer) -->
-    <div id="display"></div>
+    <div id="display">
+      <div class="display-badge" id="displayBadge" aria-hidden="true"></div>
+    </div>
 
     <!-- Serial console panel -->
     <div id="serialpanel">
       <textarea id="serialterm" readonly rows="14" placeholder="Serial console — not connected" aria-label="Serial console"></textarea>
-      <div style="display:flex;gap:6px;padding:6px 14px 10px;background:var(--serial-bg);border-top:1px solid var(--border)">
-        <button class="btn" data-action="clearSerial" style="font-size:11px;padding:3px 10px">Clear</button>
-        <button class="btn" data-action="exportSerial" style="font-size:11px;padding:3px 10px">Export</button>
-        <button class="btn" data-action="manualDisconnectSerial" style="font-size:11px;padding:3px 10px">Disconnect</button>
+      <div class="serial-resize-handle" id="serialResize" title="Drag to resize" aria-hidden="true"></div>
+      <div class="serial-toolbar">
+        <button class="btn" data-action="clearSerial">Clear</button>
+        <button class="btn" data-action="exportSerial">Export</button>
+        <span style="flex:1"></span>
+        <button class="btn" data-action="manualDisconnectSerial">Disconnect</button>
       </div>
     </div>
 
@@ -145,7 +150,7 @@
 
 <!-- New VM Dialog -->
 <dialog id="newdlg" aria-label="New Virtual Machine">
-  <form method="dialog" onsubmit="return false">
+  <form method="dialog">
     <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">New Virtual Machine</h3>
     <div style="padding:16px 24px">
       <label for="n_name">Name</label>
@@ -262,7 +267,7 @@
     <div style="width:48px;height:48px;background:var(--gradient);border-radius:var(--radius);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--text-on-accent);margin-bottom:12px">H</div>
     <p style="font-weight:600;font-size:15px">Hangar VM Manager</p>
     <p style="color:var(--text-muted);font-size:13px;margin-top:4px">Lightweight QEMU VM manager</p>
-    <p style="color:var(--text-dim);font-size:12px;margin-top:8px">Zig + FLTK + noVNC/SPICE web UI</p>
+    <p style="color:var(--text-dim);font-size:12px;margin-top:8px">Zig + QEMU + noVNC/SPICE web UI</p>
   </div>
   <div class="btn-row">
     <button type="button" class="btn" data-action="closeDlg" data-dialog="aboutdlg">Close</button>
@@ -309,12 +314,47 @@
   </div>
 </dialog>
 
+<!-- Catalog Dialog -->
+<dialog id="catalogdlg" aria-label="VM Catalog">
+  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">VM Catalog</h3>
+  <p style="padding:4px 24px 12px;font-size:12px;color:var(--text-muted)">Choose a template to create a pre-configured VM.</p>
+  <div id="catalogList" style="padding:0 24px 20px;max-height:400px;overflow-y:auto"></div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="catalogdlg">Close</button>
+  </div>
+</dialog>
+
 <!-- Display-only overlay bar -->
 <div class="displayonly-bar">
   <span>Display-only mode</span>
   <kbd>F11</kbd><span>or</span><kbd>Esc</kbd><span>to exit</span>
 </div>
 
+<!-- Confirm dialog -->
+<dialog id="confirmdlg" class="dialog confirm-dialog">
+  <div class="dialog-body">
+    <p id="confirmmsg"></p>
+  </div>
+  <div class="btn-row">
+    <button id="confirmCancelBtn" type="button" class="btn">Cancel</button>
+    <button id="confirmOkBtn" type="button" class="btn primary">OK</button>
+  </div>
+</dialog>
+
+<!-- Prompt dialog (replaces native prompt()) -->
+<dialog id="promptdlg" aria-label="Prompt">
+  <form method="dialog" style="padding:20px 24px">
+    <label for="promptInput" id="promptLabel"></label>
+    <input id="promptInput" type="text" style="width:100%;margin:4px 0 12px">
+  </form>
+  <div class="btn-row">
+    <button id="promptCancelBtn" type="button" class="btn">Cancel</button>
+    <button id="promptOkBtn" type="button" class="btn primary">OK</button>
+  </div>
+</dialog>
+
+<script src="/novnc.js"></script>
+<script src="/spice.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

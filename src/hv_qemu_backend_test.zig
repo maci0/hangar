@@ -7,6 +7,6 @@
 //! module root is src/hv/. Placing this wrapper at src/ makes the
 //! module root src/, so `../` imports from hv/ resolve correctly.
 
-test {
+comptime {
     _ = @import("hv/qemu_backend.zig");
 }

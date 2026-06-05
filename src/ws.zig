@@ -94,6 +94,8 @@ pub fn readFrameHeader(fd: c.fd_t) ?FrameHeader {
         var ext: [8]u8 = undefined;
         if (c.read(fd, &ext, 8) != 8) return null;
         payload_len = std.mem.readInt(u64, &ext, .big);
+        // RFC 6455 §5.2: MSB of 64-bit extended length must be clear.
+        if ((payload_len & (1 << 63)) != 0) return null;
     }
 
     return FrameHeader{
@@ -172,15 +174,15 @@ pub fn writeFrame(fd: c.fd_t, opcode: Opcode, payload: []const u8) !void {
         header_len = 10;
     }
 
-    _ = c.write(fd, &header, header_len);
-    _ = c.write(fd, payload.ptr, payload.len);
+    if (c.write(fd, &header, header_len) != @as(isize, @intCast(header_len))) return error.WriteFailed;
+    if (c.write(fd, payload.ptr, payload.len) != @as(isize, @intCast(payload.len))) return error.WriteFailed;
 }
 
 /// Write a WebSocket close frame.
 pub fn writeClose(fd: c.fd_t) !void {
     var buf: [4]u8 = undefined;
     buf[0] = 0x88; // FIN + close
-    buf[1] = 2;    // 2-byte payload (status code)
+    buf[1] = 2; // 2-byte payload (status code)
     buf[2] = 0x03; // 1000 = normal closure
     buf[3] = 0xe8;
     _ = c.write(fd, &buf, 4);
@@ -190,7 +192,7 @@ pub fn writeClose(fd: c.fd_t) !void {
 pub fn writePing(fd: c.fd_t) !void {
     var buf: [2]u8 = undefined;
     buf[0] = 0x89; // FIN + ping
-    buf[1] = 0;    // no payload
+    buf[1] = 0; // no payload
     _ = c.write(fd, &buf, 2);
 }
 
@@ -198,7 +200,7 @@ pub fn writePing(fd: c.fd_t) !void {
 pub fn writePong(fd: c.fd_t) !void {
     var buf: [2]u8 = undefined;
     buf[0] = 0x8a; // FIN + pong
-    buf[1] = 0;    // no payload
+    buf[1] = 0; // no payload
     _ = c.write(fd, &buf, 2);
 }
 
@@ -364,7 +366,10 @@ test "fuzz: parseUpgrade never panics on random HTTP headers" {
 test "writeUpgradeResponse: emits valid HTTP 101 response" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     var accept: [29]u8 = undefined;
     @memcpy(accept[0..28], "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
@@ -385,7 +390,10 @@ test "writeUpgradeResponse: emits valid HTTP 101 response" {
 test "readFrameHeader: small payload (2-byte header)" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     // FIN + text opcode, unmasked, payload_len=5
     var frame: [2]u8 = .{ 0x81, 5 };
@@ -405,7 +413,10 @@ test "readFrameHeader: small payload (2-byte header)" {
 test "readFrameHeader: medium payload (4-byte header)" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     // FIN + binary, unmasked, extended payload_len=300 (126 marker + 2 bytes)
     var frame: [4]u8 = .{ 0x82, 126, 0x01, 0x2c };
@@ -420,7 +431,10 @@ test "readFrameHeader: medium payload (4-byte header)" {
 test "readFrameHeader: large payload (10-byte header)" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     // FIN + binary, unmasked, extended payload_len=100000 (127 marker + 8 bytes)
     var frame: [10]u8 = undefined;
@@ -434,10 +448,52 @@ test "readFrameHeader: large payload (10-byte header)" {
     try std.testing.expectEqual(@as(u64, 100000), hdr.?.payload_len);
 }
 
+test "readFrameHeader: MSB set in 64-bit extended length rejected" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
+
+    // FIN, text, payload_len=127 (= extended 8-byte length follows)
+    var header: [2]u8 = .{ 0x81, 127 };
+    _ = c.write(fds[1], &header, 2);
+    // Extended 8-byte length with MSB set
+    var ext: [8]u8 = undefined;
+    std.mem.writeInt(u64, &ext, 0x8000000000000000, .big);
+    _ = c.write(fds[1], &ext, 8);
+
+    const hdr = readFrameHeader(fds[0]);
+    try std.testing.expect(hdr == null);
+}
+
+test "readFrameHeader: MSB clear in 64-bit extended length accepted" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
+
+    var header: [2]u8 = .{ 0x81, 127 };
+    _ = c.write(fds[1], &header, 2);
+    var ext: [8]u8 = undefined;
+    std.mem.writeInt(u64, &ext, 0x7FFFFFFFFFFFFFFF, .big);
+    _ = c.write(fds[1], &ext, 8);
+
+    const hdr = readFrameHeader(fds[0]);
+    try std.testing.expect(hdr != null);
+    try std.testing.expectEqual(@as(u64, 0x7FFFFFFFFFFFFFFF), hdr.?.payload_len);
+}
+
 test "readFrameHeader: masked frame" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     // FIN + text, masked, payload_len=3
     var frame: [2]u8 = .{ 0x81, 0x80 | 3 };
@@ -457,7 +513,10 @@ test "readFrameHeader: masked frame" {
 test "readFrameHeader: EOF on first 2 bytes returns null" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     _ = c.shutdown(fds[1], c.SHUT.WR);
     const hdr = readFrameHeader(fds[0]);
@@ -467,7 +526,10 @@ test "readFrameHeader: EOF on first 2 bytes returns null" {
 test "readFrameHeader: EOF during extended length read returns null" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     // Write only the 2-byte base header with 126 marker, then shutdown.
     var frame: [2]u8 = .{ 0x82, 126 };
@@ -481,7 +543,10 @@ test "readFrameHeader: EOF during extended length read returns null" {
 test "readFramePayload: unmasked payload" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     const msg = "hello world";
     _ = c.write(fds[1], msg, msg.len);
@@ -496,7 +561,10 @@ test "readFramePayload: unmasked payload" {
 test "readFramePayload: masked payload" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     const mask: [4]u8 = .{ 0x11, 0x22, 0x33, 0x44 };
     const plain = "hello";
@@ -517,7 +585,10 @@ test "readFramePayload: masked payload" {
 test "readFramePayload: zero-length unmasked" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     var buf: [32]u8 = undefined;
     const hdr = FrameHeader{ .fin = true, .opcode = .text, .mask = false, .payload_len = 0 };
@@ -528,7 +599,10 @@ test "readFramePayload: zero-length unmasked" {
 test "readFramePayload: zero-length masked consumes mask key" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     // Write mask key + a subsequent byte so we can verify the mask was consumed.
     const mask: [4]u8 = .{ 0xaa, 0xbb, 0xcc, 0xdd };
@@ -549,7 +623,10 @@ test "readFramePayload: zero-length masked consumes mask key" {
 test "readFramePayload: buffer smaller than payload drains remainder" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     const payload = "ABCDEFGHIJKLMNOP"; // 16 bytes
     _ = c.write(fds[1], payload, payload.len);
@@ -565,7 +642,10 @@ test "readFramePayload: buffer smaller than payload drains remainder" {
 test "readFramePayload: EOF during read returns null" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     _ = c.shutdown(fds[1], c.SHUT.WR);
 
@@ -578,7 +658,10 @@ test "readFramePayload: EOF during read returns null" {
 test "readFramePayload: EOF during mask key read returns null" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
-    defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
 
     _ = c.shutdown(fds[1], c.SHUT.WR);
 
@@ -595,7 +678,10 @@ test "fuzz: readFrameHeader round-trip via socketpair" {
     while (iter < 800) : (iter += 1) {
         var fds: [2]c.fd_t = undefined;
         if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) continue;
-        defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+        defer {
+            _ = c.close(fds[0]);
+            _ = c.close(fds[1]);
+        }
 
         const opcode: Opcode = switch (rnd.uintLessThan(u3, 4)) {
             0 => .binary,
@@ -648,7 +734,10 @@ test "fuzz: readFramePayload never panics on random masked data" {
     while (iter < 600) : (iter += 1) {
         var fds: [2]c.fd_t = undefined;
         if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) continue;
-        defer { _ = c.close(fds[0]); _ = c.close(fds[1]); }
+        defer {
+            _ = c.close(fds[0]);
+            _ = c.close(fds[1]);
+        }
 
         const masked = rnd.boolean();
         const payload_len: usize = rnd.uintLessThan(usize, 200);

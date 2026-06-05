@@ -104,7 +104,7 @@ fn isAccelAvailable(accel: hv.Accelerator) bool {
 
 fn start(ctx: hv.VmmHandle, cfg_opaque: *anyopaque) hv.VmmError!void {
     const qv = getQv(ctx);
-    const cfg: *vm.VmConfig = @constCast(@ptrCast(@alignCast(cfg_opaque)));
+    const cfg: *vm.VmConfig = @ptrCast(@alignCast(@constCast(cfg_opaque)));
     qemu.startVm(cfg, qv.allocator) catch return error.SpawnFailed;
 }
 
@@ -195,7 +195,7 @@ fn getSerialSocket(ctx: hv.VmmHandle) ?[]const u8 {
     const qv = getQv(ctx);
     if (!qv.config.enable_serial or !qv.config.hasName()) return null;
     // Socket path is /tmp/hangar-serial-<name>.sock — computed at runtime.
-    return null; // Caller should use uimath.serialSocketPath
+    return null; // Caller should use serialpath.serialSocketPath
 }
 
 fn createDisk(ctx: hv.VmmHandle, cfg_opaque: *anyopaque, alloc: std.mem.Allocator) hv.VmmError!void {
@@ -287,8 +287,12 @@ test "resolveAccel: specific HW succeeds when available" {
     try std.testing.expectEqualStrings("hvf", std.mem.span(accel.flag));
 }
 
-fn alwaysOk(_: hv.Accelerator) bool { return true; }
-fn alwaysNo(_: hv.Accelerator) bool { return false; }
+fn alwaysOk(_: hv.Accelerator) bool {
+    return true;
+}
+fn alwaysNo(_: hv.Accelerator) bool {
+    return false;
+}
 
 test "Backend enum has qemu as default" {
     try std.testing.expectEqual(hv.Backend.qemu, @as(hv.Backend, @enumFromInt(0)));

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Remote API transport helpers for the FLTK frontend.
+//! Remote API transport helpers for the web frontend.
 //!
 //! Thin wrappers around transport.Connection that parse the remote URL,
 //! send HTTP requests, and refresh the local VM list from a remote server.

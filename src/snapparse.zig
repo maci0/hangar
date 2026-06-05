@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Pure parser for the snapshot tables printed by `qemu-img snapshot -l` and
-//! QMP `info snapshots`. Extracted from dialogs.zig (which is IUP-coupled) so
-//! the parsing can be unit-tested + fuzzed without a display. The Snapshot
-//! Manager graph canvas consumes the returned node list. No IO; deterministic.
+//! QMP `info snapshots`. No IO; deterministic.
 
 const std = @import("std");
 

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-//! Pure string-to-enum parsers extracted from main.zig editVmDialog and dialogs.zig.
+//! Pure string-to-enum parsers for the web UI and configuration.
 //!
 //! These functions map UI label strings (case-insensitive) to their corresponding
-//! enum values. All functions are pure: no FLTK, no I/O, no global state.
+//! enum values. All functions are pure: no I/O, no global state.
 //!
-//! Also includes parseU32OrDefault and themeFromIndex from dialogs.zig.
+//! Also includes parseU32OrDefault and themeFromIndex.
 
 const std = @import("std");
 const vm = @import("vm.zig");
@@ -27,42 +27,49 @@ pub fn diskFormatFromExtension(ext: []const u8) vm.DiskFormat {
 }
 
 /// Parse a NIC mode label ("bridged", "none") into a NetworkMode enum.
-/// Defaults to .user (User mode / NAT).
+/// UI labels are matched first, then falls back to NetworkMode.fromStr
+/// for exact toStr values. Defaults to .user.
 pub fn parseNicMode(s: []const u8) vm.NetworkMode {
+    // UI label matching (labels differ from toStr values).
     if (std.ascii.eqlIgnoreCase(s, "bridged")) return .bridge;
     if (std.ascii.eqlIgnoreCase(s, "none")) return .none;
-    return .user;
+    // Fallback to exact toStr matching ("user", "bridge").
+    return vm.NetworkMode.fromStr(s);
 }
 
 /// Parse a guest OS label into a GuestOs enum.
 /// Matches against substrings: "linux", "windows", "freebsd", "macos".
+/// Falls back to GuestOs.fromStr for the exact "other" match,
+/// then defaults to .other for unrecognized input.
 pub fn parseGuestOs(s: []const u8) vm.GuestOs {
     if (std.ascii.indexOfIgnoreCase(s, "linux") != null) return .linux;
     if (std.ascii.indexOfIgnoreCase(s, "windows") != null) return .windows;
     if (std.ascii.indexOfIgnoreCase(s, "freebsd") != null) return .freebsd;
     if (std.ascii.indexOfIgnoreCase(s, "macos") != null) return .macos;
+    if (std.ascii.eqlIgnoreCase(s, "other")) return .other;
     return .other;
 }
 
 /// Parse a boot order label ("cd/dvd", "network (pxe)", "disk first") into a BootOrder enum.
+/// UI labels are matched first, then falls back to BootOrder.fromStr
+/// for exact toStr values. Defaults to .disk_first.
 pub fn parseBootOrder(s: []const u8) vm.BootOrder {
     if (std.ascii.eqlIgnoreCase(s, "cd/dvd")) return .cdrom_first;
     if (std.ascii.eqlIgnoreCase(s, "network (pxe)")) return .network_first;
     if (std.ascii.indexOfIgnoreCase(s, "disk") != null) return .disk_first;
-    return .disk_first;
+    return vm.BootOrder.fromStr(s);
 }
 
 /// Parse a display type label ("sdl", "spice", "vnc", "none", "headless") into a DisplayType enum.
-/// Uses substring matching rather than delegating to DisplayType.fromStr because the UI
-/// dropdown labels can be longer descriptive strings (e.g. "SPICE (recommended)"),
-/// whereas DisplayType.fromStr expects exact equality with DisplayType.toStr values.
-/// Defaults to .gtk for unrecognized input.
+/// Uses substring matching because the UI dropdown labels can be longer descriptive
+/// strings (e.g. "SPICE (recommended)"). Falls back to DisplayType.fromStr for exact
+/// toStr values. Defaults to .gtk.
 pub fn parseDisplay(s: []const u8) vm.DisplayType {
     if (std.ascii.indexOfIgnoreCase(s, "sdl") != null) return .sdl;
     if (std.ascii.indexOfIgnoreCase(s, "spice") != null) return .spice;
     if (std.ascii.indexOfIgnoreCase(s, "vnc") != null) return .vnc;
     if (std.ascii.indexOfIgnoreCase(s, "none") != null or std.ascii.indexOfIgnoreCase(s, "headless") != null) return .none;
-    return .gtk;
+    return vm.DisplayType.fromStr(s);
 }
 
 /// Parse a display resolution string ("800x600", "1024x768", "1280x800", "1920x1080") into a DisplayResolution enum.
@@ -96,14 +103,15 @@ pub fn parseGpuDevice(s: []const u8) vm.GpuDevice {
 }
 
 /// Parse an audio device label ("hda", "ac97") into an AudioDevice enum.
+/// UI labels are matched first, then falls back to AudioDevice.fromStr
+/// for exact toStr values. Defaults to .none.
 pub fn parseAudio(s: []const u8) vm.AudioDevice {
     if (std.ascii.indexOfIgnoreCase(s, "hda") != null) return .hda;
     if (std.ascii.indexOfIgnoreCase(s, "ac97") != null) return .ac97;
-    return .none;
+    return vm.AudioDevice.fromStr(s);
 }
 
 /// Map a theme choice index (0 or 1) to a Theme enum.
-/// Extracted from dialogs.zig prefsDialog.
 pub fn themeFromIndex(idx: u8) vm.Theme {
     return if (idx == 1) .dark else .light;
 }
@@ -158,6 +166,9 @@ test "diskFormatFromExtension: unknown defaults to qcow2" {
 test "parseNicMode: known modes" {
     try std.testing.expectEqual(vm.NetworkMode.bridge, parseNicMode("bridged"));
     try std.testing.expectEqual(vm.NetworkMode.none, parseNicMode("none"));
+    try std.testing.expectEqual(vm.NetworkMode.user, parseNicMode("user"));
+    // Exact toStr values also work via fallback.
+    try std.testing.expectEqual(vm.NetworkMode.bridge, parseNicMode("bridge"));
     try std.testing.expectEqual(vm.NetworkMode.user, parseNicMode("user"));
 }
 
