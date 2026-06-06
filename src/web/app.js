@@ -28,6 +28,10 @@ function cycleTheme(){
 }
 })();
 var vms=[]; var sel=null; var activeTab='summary'; var transitioningIdx=null; var refreshBusy=false;
+var openActionMenu=null;
+var settingsCategory='compute';
+var displayLabels=['GTK','SDL','SPICE','VNC','None'];
+var gpuLabels=['Virtio-GPU (virgl 3D)','Virtio-VGA (virgl 3D)','Virtio-GPU','Virtio-VGA','QXL','Standard VGA'];
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function setStatus(s){var el=document.getElementById('statusbar');if(!el)return;el.textContent=s;el.classList.remove('loading');}
 function setStatusLoading(s){var el=document.getElementById('statusbar');if(!el)return;el.textContent='⏳ '+s;el.classList.add('loading');}
@@ -35,7 +39,8 @@ var toastIcons={success:'✓',error:'✗',info:'ℹ',warn:'⚠'};
 function showToast(msg,type,opts){type=type||'info';var c=document.getElementById('toast-container');if(!c)return;var toasts=c.querySelectorAll('.toast');while(toasts.length>=5){c.removeChild(toasts[0]);toasts=c.querySelectorAll('.toast');}var t=document.createElement('div');t.className='toast '+type;var icon=toastIcons[type]||toastIcons.info;var inner='<span class=\"toast-icon\">'+icon+'</span><span class=\"toast-msg\">'+escHtml(msg)+'</span>';if(opts&&opts.action){inner+='<button class=\"toast-action\" data-toast-action=\"'+opts.action+'\">UNDO</button>';}t.innerHTML=inner;c.appendChild(t);
 if(opts&&opts.action&&opts.onAction){t.querySelector('.toast-action').addEventListener('click',function(){opts.onAction();c.removeChild(t);});}
 var reducedMotion=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-setTimeout(function(){if(reducedMotion){if(t.parentNode)c.removeChild(t);}else{t.classList.add('exit');setTimeout(function(){if(t.parentNode)c.removeChild(t);},280);}},opts&&opts.duration?opts.duration:3500);}
+var defaultDur=type==='error'?6500:type==='warn'?5000:4000;
+setTimeout(function(){if(reducedMotion){if(t.parentNode)c.removeChild(t);}else{t.classList.add('exit');setTimeout(function(){if(t.parentNode)c.removeChild(t);},280);}},opts&&opts.duration?opts.duration:defaultDur);}
 function toastUndo(msg,onUndo){showToast(msg,'info',{action:'undo',onAction:onUndo,duration:5000});}
 // ── Confirm dialog (replaces native confirm() with custom modal) ──
 function showConfirmDialog(msg){return new Promise(function(resolve){var dlg=document.getElementById('confirmdlg');var msgEl=document.getElementById('confirmmsg');var okBtn=document.getElementById('confirmOkBtn');var cancelBtn=document.getElementById('confirmCancelBtn');if(!dlg||!msgEl||!okBtn||!cancelBtn){resolve(confirm(msg));return;}msgEl.textContent=msg;function cleanup(){okBtn.removeEventListener('click',onOk);cancelBtn.removeEventListener('click',onCancel);dlg.removeEventListener('close',onCancel);dlg.close();}function onOk(){cleanup();resolve(true);}function onCancel(){cleanup();resolve(false);}okBtn.addEventListener('click',onOk);cancelBtn.addEventListener('click',onCancel);dlg.addEventListener('close',onCancel);trapFocus(dlg);dlg.showModal();});}
@@ -58,19 +63,26 @@ if(tb){if(toolbarMoreOpen){tb.classList.add('open-more');}else{tb.classList.remo
 if(btn)btn.setAttribute('aria-expanded',toolbarMoreOpen?'true':'false');
 if(popover){if(toolbarMoreOpen){populateToolbarMore(popover);positionToolbarMore(popover,btn);popover.classList.add('open');}else{popover.classList.remove('open');}}
 }
-function populateToolbarMore(popover){popover.innerHTML='';const tb=document.querySelector('.toolbar');if(!tb)return;const children=tb.querySelectorAll('.btn:not(.keep-mobile):not(.toolbar-more):not(.theme-toggle-btn), .sep');children.forEach(function(el){if(el.classList.contains('sep')){const clone=document.createElement('span');clone.className='sep';popover.appendChild(clone);return;}if(!el.matches('.btn:not(.keep-mobile)'))return;const clone=document.createElement('button');clone.className='btn';clone.textContent=el.textContent||el.getAttribute('title')||el.getAttribute('aria-label')||'';clone.setAttribute('data-action',el.getAttribute('data-action')||'');popover.appendChild(clone);});}
+function populateToolbarMore(popover){popover.innerHTML='';const tb=document.querySelector('.toolbar');if(!tb)return;const children=tb.querySelectorAll('.btn:not(.keep-mobile):not(.toolbar-more):not(.theme-toggle-btn), .sep');children.forEach(function(el){if(el.classList.contains('sep')){const clone=document.createElement('span');clone.className='sep';popover.appendChild(clone);return;}if(!el.matches('.btn:not(.keep-mobile)'))return;const clone=document.createElement('button');clone.className='btn';if(el.classList.contains('danger-menu'))clone.classList.add('danger');clone.textContent=el.textContent||el.getAttribute('title')||el.getAttribute('aria-label')||'';clone.setAttribute('data-action',el.getAttribute('data-action')||'');['data-menu','data-vm-action','aria-haspopup','aria-expanded'].forEach(function(a){var v=el.getAttribute(a);if(v!==null)clone.setAttribute(a,v);});popover.appendChild(clone);});updateCommandState();}
 function positionToolbarMore(popover,btn){if(!btn)return;var r=btn.getBoundingClientRect();popover.style.top=(r.bottom+4)+'px';popover.style.right=(window.innerWidth-r.right)+'px';popover.style.left='auto';popover.style.bottom='auto';}
 function closeToolbarMore(){if(!toolbarMoreOpen)return;toolbarMoreOpen=false;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');if(tb)tb.classList.remove('open-more');if(btn)btn.setAttribute('aria-expanded','false');if(popover)popover.classList.remove('open');}
+function closeActionMenus(){var menus=document.querySelectorAll('.action-menu.open');for(var i=0;i<menus.length;i++)menus[i].classList.remove('open');var btns=document.querySelectorAll('[data-action="toggleActionMenu"]');for(var j=0;j<btns.length;j++)btns[j].setAttribute('aria-expanded','false');openActionMenu=null;}
+function positionActionMenu(menu,btn){if(!menu||!btn)return;var r=btn.getBoundingClientRect();menu.style.top=(r.bottom+5)+'px';menu.style.left=r.left+'px';menu.style.right='auto';var mr=menu.getBoundingClientRect();if(r.left+mr.width>window.innerWidth-8){menu.style.left='auto';menu.style.right='8px';}}
+function toggleActionMenu(btn){if(!btn)return;var id=btn.getAttribute('data-menu');var menu=id?document.getElementById(id):null;if(!menu)return;if(openActionMenu===id){closeActionMenus();return;}closeActionMenus();menu.classList.add('open');btn.setAttribute('aria-expanded','true');openActionMenu=id;positionActionMenu(menu,btn);updateCommandState();}
 function clearSearch(){var s=document.getElementById('search');if(!s)return;s.value='';filterList();}
 var settingsDirty=false;
+function syncTabPanels(){var panelIds={console:'tabConsole',summary:'tabSummary',settings:'tabSettings'};var btns=document.querySelectorAll('.tab-btn');for(var bi=0;bi<btns.length;bi++){var on=btns[bi].getAttribute('data-tab')===activeTab;btns[bi].classList.toggle('active',on);btns[bi].setAttribute('aria-selected',on?'true':'false');}
+for(var k in panelIds){var p=document.getElementById(panelIds[k]);if(!p)continue;var show=k===activeTab;p.style.display=show?'block':'none';p.setAttribute('aria-hidden',show?'false':'true');}}
 async function switchTab(tab){if(activeTab===tab)return;
-if(activeTab==='settings'&&tab==='summary'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;}
-var oldEl=document.getElementById(activeTab==='summary'?'tabSummary':'tabSettings');
+if(activeTab==='settings'&&tab!=='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;}
+var panelIds={console:'tabConsole',summary:'tabSummary',settings:'tabSettings'};
+var oldEl=document.getElementById(panelIds[activeTab]||'tabSummary');
 activeTab=tab;
-var s=document.getElementById('tabSummary');var st=document.getElementById('tabSettings');
+var s=document.getElementById('tabSummary');var st=document.getElementById('tabSettings');var co=document.getElementById('tabConsole');
 const btns=document.querySelectorAll('.tab-btn');btns.forEach(b=>{b.classList.remove('active');b.setAttribute('aria-selected','false');});
-var newEl=tab==='summary'?s:st;
-if(tab==='summary'){btns[0].classList.add('active');btns[0].setAttribute('aria-selected','true');}else{btns[1].classList.add('active');btns[1].setAttribute('aria-selected','true');}
+var newEl=tab==='settings'?st:(tab==='console'?co:s);
+for(var bi=0;bi<btns.length;bi++){if(btns[bi].getAttribute('data-tab')===tab){btns[bi].classList.add('active');btns[bi].setAttribute('aria-selected','true');}}
+if(!newEl)return;
 if(oldEl){oldEl.style.display='none';oldEl.setAttribute('aria-hidden','true');newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
 else{newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
 if(tab==='settings'&&sel!==null)editVm();}
@@ -93,36 +105,55 @@ if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
 const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
 const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
 h+=`<div class="vm-item${sel===x.i?' active':''}${transitioningIdx===x.i?' transitioning':''}" role="option" aria-selected="${sel===x.i?'true':'false'}" data-vm-index="${x.i}" tabindex="0" data-action="select" draggable="true"><span class="dot ${dotCls}" aria-label="${dotLabel}"></span> ${escHtml(x.v.name)}<span class="star" style="margin-left:auto" data-action="toggleFavorite" aria-label="Add to favorites">★</span>${vmBars(x.v)}</div>`;}}}
-e.innerHTML=h||'<div style="color:var(--text-dim);font-size:12px">No VMs</div>';
+if(!h){if(f)h='<div class="sidebar-empty"><p>No matching VMs</p><button class="btn" data-action="clearSearch">Clear search</button></div>';else h='<div class="sidebar-empty"><p>No virtual machines yet</p><button class="btn primary" data-action="newVm">＋ New VM</button></div>';}
+e.innerHTML=h;
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+' virtual machine(s)';if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
 if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+' — '+v.status;if(v.started&&v.started>0&&v.status==='running'){const elapsed=Math.floor(Date.now()/1000)-v.started;const days=Math.floor(elapsed/86400);const hrs=Math.floor((elapsed%86400)/3600);const mins=Math.floor((elapsed%3600)/60);const secs=elapsed%60;st+=' | Uptime: '+(days>0?days+'d ':'')+hrs+':'+String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');}st+='    |    '+parts;var sb=document.getElementById('statusbar');if(sb)sb.textContent=st;}
-else{var sb2=document.getElementById('statusbar');if(sb2)sb2.textContent=parts;}}
+else{var sb2=document.getElementById('statusbar');if(sb2)sb2.textContent=parts;}updateCommandState();}
 async function toggleFavorite(i){if(i>=vms.length)return;const fav=vms[i].favorite==='true'?'0':'1';
 const r=await apiPost('/api/save/'+i,'favorite='+fav);if(r){if(i<vms.length){vms[i].favorite=fav==='1'?'true':'false';}renderList();if(sel===i)renderDetails();}}
-async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;settingsDirty=false;}stopFb();stopSerial(true);sel=i;renderList();closeSidebar();closeToolbarMore();if(sel!==null){if(activeTab==='summary')renderDetails();else editVm();if(vms[sel]&&vms[sel].status==='running'){startFb();startSerial(sel);}}else{showEmptyState();}updatePowerBtn();}
-async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;}stopFb();sel=null;renderList();showEmptyState();updatePowerBtn();}
+function selectedVm(){return sel!==null&&sel<vms.length?vms[sel]:null;}
+function isRunning(v){return v&&(v.status==='running'||v.status==='paused');}
+function isPaused(v){return v&&v.status==='paused';}
+function isStopped(v){return !v||v.status==='stopped'||v.status==='suspended';}
+function statusLabel(s){if(s==='running')return 'Running';if(s==='paused')return 'Paused';if(s==='suspended')return 'Suspended';if(s==='stopped')return 'Stopped';return s||'Unknown';}
+function embeddedDisplayCapable(v){var dt=Number(v&&v.display);return v&&v.embed_display==='true'&&(dt===2||dt===3);}
+function networkLabel(v){var n=(v&&v.net)||'user';if(n==='user')return 'NAT (user mode)';if(n==='bridge')return 'Bridged';if(n==='none')return 'Disconnected';return n;}
+function displayInfo(v){var displayLabel=displayLabels[Number(v&&v.display)]||'Display';var gpuLabel=gpuLabels[Number(v&&v.gpu_device)]||'GPU';var embedLabel=v&&v.embed_display==='true'?'Embedded':'Native';var accelLabel=v&&v.enable_3d==='true'?'3D enabled':'2D';return {displayLabel:displayLabel,gpuLabel:gpuLabel,embedLabel:embedLabel,accelLabel:accelLabel};}
+async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;settingsDirty=false;}stopFb();stopSerial(true);sel=i;renderList();closeSidebar();closeToolbarMore();closeActionMenus();if(sel!==null){var v=vms[sel];if(v&&v.status==='running'&&embeddedDisplayCapable(v)&&activeTab!=='settings')activeTab='console';if(activeTab==='settings')editVm();else renderDetails();if(v&&v.status==='running'){startFb();startSerial(sel);}}else{showEmptyState();}updateCommandState();}
+async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?')))return;}stopFb();stopSerial(true);sel=null;renderList();showEmptyState();updateCommandState();}
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
-const nm=document.getElementById('vmname');const tb=document.getElementById('tabBar');
+const c=document.getElementById('tabConsole');const nm=document.getElementById('vmname');const tb=document.getElementById('tabBar');
 if(!t||!s||!nm||!tb)return;
 nm.textContent='Select a VM';tb.style.display='none';
-t.setAttribute('aria-hidden','true');s.setAttribute('aria-hidden','true');
-t.innerHTML='<div class="empty-state"><svg class="empty-icon"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to view its details, or create a new one.</p></div>';
-s.innerHTML='<div class="empty-state"><svg class="empty-icon"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';}
+t.style.display='block';s.style.display='none';if(c)c.style.display='none';activeTab='summary';
+t.setAttribute('aria-hidden','false');s.setAttribute('aria-hidden','true');if(c)c.setAttribute('aria-hidden','true');
+var empty='<div class="empty-state"><svg class="empty-icon"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p><div class="empty-actions"><button class="btn primary" data-action="newVm">＋ New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
+t.innerHTML=empty;
+s.innerHTML='<div class="empty-state"><svg class="empty-icon"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';
+if(c)c.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';
+updateCommandState();}
 function renderDetails(){if(sel===null||sel>=vms.length){showEmptyState();return;}
-const tb=document.getElementById('tabBar');const nm=document.getElementById('vmname');const ts=document.getElementById('tabSummary');
+const tb=document.getElementById('tabBar');const nm=document.getElementById('vmname');const ts=document.getElementById('tabSummary');const tc=document.getElementById('tabConsole');
 if(!tb||!nm||!ts)return;
 tb.style.display='flex';
 const v=vms[sel];const sc=v.status==='running'?'running':v.status==='paused'?'paused':v.status==='suspended'?'suspended':'stopped';
+if(activeTab==='console'&&!(v.status==='running'&&embeddedDisplayCapable(v)))activeTab='summary';
+syncTabPanels();
 nm.textContent=v.name;
+var info=displayInfo(v);
+var videoMeta='<span>'+escHtml(info.embedLabel+' '+info.displayLabel)+'</span><span>'+escHtml(info.gpuLabel)+'</span><span>'+escHtml(info.accelLabel)+'</span>';
+if(tc){tc.innerHTML=embeddedDisplayCapable(v)?'<div class="console-empty compact"><strong>Console controls are above the VM header.</strong><span>Use Display Only for full-screen guest interaction.</span></div>':'<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}
 let h='<div class="summary-grid">';
-h+=`<div class="summary-card ${sc}"><div class="card-label">State</div><div class="card-value ${sc}">${escHtml(v.status)}</div></div>`;
+h+=`<div class="summary-card ${sc}"><div class="card-label">State</div><div class="card-value ${sc}">${escHtml(statusLabel(v.status))}</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">Guest OS</div><div class="card-value">${escHtml(v.os)}</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">Memory</div><div class="card-value">${escHtml(v.mem)} MB</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">CPU</div><div class="card-value">${escHtml(v.cpu)} cores</div></div>`;
 h+=`<div class="summary-card"><div class="card-label">Hard Disk</div><div class="card-value">${escHtml(v.disk)} GB</div></div>`;
+h+=`<div class="summary-card"><div class="card-label">Video</div><div class="card-value video-value">${videoMeta}</div></div>`;
 if(v.iso_path)h+=`<div class="summary-card"><div class="card-label">CD/DVD</div><div class="card-value">${escHtml(v.iso_path)}</div></div>`;
-h+=`<div class="summary-card"><div class="card-label">Network</div><div class="card-value">${escHtml(v.net)}</div></div>`;
+h+=`<div class="summary-card"><div class="card-label">Network</div><div class="card-value">${escHtml(networkLabel(v))}</div></div>`;
 if(v.mac)h+=`<div class="summary-card"><div class="card-label">MAC</div><div class="card-value">${escHtml(v.mac)}</div></div>`;
 if(v.nic2_mode&&v.nic2_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 2</div><div class="card-value">${escHtml(v.nic2_mode)}</div></div>`;
 if(v.nic3_mode&&v.nic3_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 3</div><div class="card-value">${escHtml(v.nic3_mode)}</div></div>`;
@@ -143,11 +174,12 @@ if(v.extra3_path&&v.extra3_path!=='')h+=`<div class="summary-card"><div class="c
 if(v.hasFloppy==='true')h+=`<div class="summary-card"><div class="card-label">Floppy</div><div class="card-value">attached</div></div>`;
 if(v.port_forwards)h+=`<div class="summary-card"><div class="card-label">Port Forwards</div><div class="card-value">${escHtml(v.port_forwards)}</div></div>`;
 if(v.notes)h+=`<div class="summary-card"><div class="card-label">Notes</div><div class="card-value">${escHtml(v.notes)}</div></div>`;
+h+=summaryWarnings(v);
 h+='</div>';
 ts.innerHTML=h;
-updatePowerBtn();}
+updateCommandState();}
 async function powerToggle(){const idx=sel;if(idx===null)return;const v=vms[idx];if(v&&(v.status==='running'||v.status==='paused')){if(!(await showConfirmDialog('Power off VM "'+v.name+'"?\nUnsaved data may be lost.')))return;}
-var btn=document.getElementById('powerbtn');if(btn){btn.disabled=true;btn.textContent='...';}
+var btn=document.getElementById('powerbtn');if(btn){btn.disabled=true;btn.textContent='...';btn.setAttribute('aria-busy','true');}
 transitioningIdx=idx;renderList();
 try{const r=await apiPost('/api/power/'+idx);transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);renderList();}finally{if(btn){updatePowerBtn();btn.disabled=false;}}}else{if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}catch(e){transitioningIdx=null;if(btn){updatePowerBtn();btn.disabled=false;}renderList();setStatus('Power toggle failed: '+e.message);}}
 async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Send ACPI shutdown to "'+v.name+'"?')))return;const r=await apiPost('/api/shutdown/'+sel);if(r)setStatus('Shut down guest — ACPI power button sent.');}
@@ -159,28 +191,29 @@ async function suspendGuest(){if(sel===null)return;const v=vms[sel];if(!(await s
 async function cloneGuest(){if(sel===null)return;var cn=document.getElementById('clone_name');var cd=document.getElementById('clonedlg');if(cn)cn.textContent=vms[sel].name;if(cd)cd.showModal();}
 async function doClone(linked){if(sel===null)return;const body=linked?'linked=1':'';const r=await apiPost('/api/clone/'+sel,body);if(r){var cd=document.getElementById('clonedlg');if(cd)cd.close();await refresh();setStatus(linked?'Linked clone created.':'VM cloned.');}}
 async function importGuest(){const p=await showPromptDialog('Path to VM disk image (.qcow2):');const trimmed=p?p.trim():'';if(!trimmed){showToast('A file path is required','error');return;}if(trimmed.includes('..')){showToast('Invalid path: parent directory traversal not allowed','error');return;}if(!/\.(qcow2|qcow|vmdk|vdi|vhdx|raw|img)$/i.test(trimmed)){showToast('Path should end with a disk image extension (.qcow2, .vmdk, etc.)','warn');}const r=await apiPost('/api/import','path='+encodeURIComponent(trimmed));if(r){await refresh();setStatus('VM imported.');}}
-async function batchStart(){var btns=document.querySelectorAll('[data-action="batchStart"]');for(var b=0;b<btns.length;b++){btns[b].disabled=true;btns[b].textContent='...';}
+async function batchStart(){var btns=document.querySelectorAll('[data-action="batchStart"]');for(var b=0;b<btns.length;b++){btns[b].setAttribute('data-prev-label',btns[b].textContent);btns[b].disabled=true;btns[b].textContent='...';}
 var started=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped')total++;}
 for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){setStatus('Batch start: VM '+(started+failed+1)+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r){started++;}else{failed++;setStatus('Batch start: VM '+(started+failed)+' of '+total+' failed, continuing...');}}}
 await refresh();setStatus('Batch start complete: '+started+' started'+(failed>0?', '+failed+' failed':''));
-for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent='▶▶ All';}}
+for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent=btns[b2].getAttribute('data-prev-label')||'Power On All Stopped';btns[b2].removeAttribute('data-prev-label');}}
 async function batchStop(){if(!(await showConfirmDialog('Power off ALL running VMs?\nUnsaved data may be lost.')))return;
-var btns=document.querySelectorAll('[data-action="batchStop"]');for(var b=0;b<btns.length;b++){btns[b].disabled=true;btns[b].textContent='...';}
+var btns=document.querySelectorAll('[data-action="batchStop"]');for(var b=0;b<btns.length;b++){btns[b].setAttribute('data-prev-label',btns[b].textContent);btns[b].disabled=true;btns[b].textContent='...';}
 var stopped=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status==='running'||vms[i].status==='paused')total++;}
 for(let i=vms.length-1;i>=0;i--){if(vms[i].status==='running'||vms[i].status==='paused'){setStatus('Batch stop: VM '+(stopped+failed+1)+' of '+total+'...');const r=await apiPost('/api/power/'+i);if(r){stopped++;}else{failed++;setStatus('Batch stop: VM '+(stopped+failed)+' of '+total+' failed, continuing...');}}}
 await refresh();setStatus('Batch stop complete: '+stopped+' stopped'+(failed>0?', '+failed+' failed':''));
-for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent='⏹⏹ All';}}
+for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent=btns[b2].getAttribute('data-prev-label')||'Power Off All Running';btns[b2].removeAttribute('data-prev-label');}}
 async function takeSnapshot(){if(sel===null)return;openSnapshots();}
-async function takeSnapshotFromDlg(){if(sel===null){showToast('No VM selected','warn');return;}const st=document.getElementById('s_tag');if(!st)return;const t=st.value;if(!t){showToast('Enter a tag name','warn');return;}
+async function takeSnapshotFromDlg(){if(sel===null){showToast('No VM selected','warn');return;}const st=document.getElementById('s_tag');if(!st)return;const t=st.value.trim();if(!t){showToast('Enter a snapshot name','warn');return;}if(/[\x00-\x1f]|\.\./.test(t)||t.length>255){showToast('Snapshot name is invalid','error');return;}
 var takeBtn=document.querySelector('[data-action="takeSnapshotFromDlg"]');if(takeBtn){takeBtn.disabled=true;takeBtn.textContent='Taking...';}
 const r=await apiPost('/api/snapshot/take/'+sel,'tag='+encodeURIComponent(t));if(r){st.value='';loadSnapshots();setStatus('Snapshot taken: '+t);}
 if(takeBtn){takeBtn.disabled=false;takeBtn.textContent='Take';}}
 async function openSnapshots(){if(sel===null)return;var sd=document.getElementById('snapdlg');if(sd)sd.showModal();loadSnapshots();}
 async function loadSnapshots(){if(sel===null)return;const el=document.getElementById('snaplist');if(!el)return;
+var v=selectedVm();var meta=document.getElementById('snapMeta');var running=v&&(v.status==='running'||v.status==='paused');if(meta)meta.innerHTML=v?'<strong>'+escHtml(v.name)+'</strong><span>'+escHtml(statusLabel(v.status))+'</span>'+(running?'<span class="warn-text">Revert and delete require the VM to be powered off.</span>':''):'';
 try{const r=await fetch('/api/snapshot/list/'+sel);if(!r.ok){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';return;}const t=(await r.text()).trim();
-if(!t||t==='(none)'){el.innerHTML='<div style="color:var(--text-dim)">No snapshots</div>';return;}
+if(!t||t==='(none)'){el.innerHTML='<div class="snapshot-empty">No snapshots for this VM.</div>';return;}
 const lines=t.split('\n');let h='';for(const ln of lines){const tag=ln.trim();if(!tag)continue;
-h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center"><span>${escHtml(tag)}</span><span><button class="btn" style="padding:2px 8px;font-size:11px" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}">Revert</button><button class="btn danger" style="padding:2px 8px;font-size:11px" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}">Del</button></span></div>`;}
+h+=`<div class="snapshot-row"><div><strong>${escHtml(tag)}</strong><small>Saved state</small></div><div class="snapshot-actions"><button class="btn" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}"${running?' disabled title="Power off the VM before reverting"':''}>Revert</button><button class="btn danger" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}"${running?' disabled title="Power off the VM before deleting"':''}>Delete</button></div></div>`;}
 el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
 async function revertSnapshot(tag){if(sel===null||!tag)return;if(!(await showConfirmDialog('Revert to snapshot "'+tag+'"? This will discard current state.')))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
 const r=await apiPost('/api/snapshot/revert/'+sel,'tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);var sd=document.getElementById('snapdlg');if(sd)sd.close();}else{loadSnapshots();}}
@@ -213,17 +246,35 @@ info.textContent='Migration '+s.status+'...';
 }catch(e){info.textContent='Migration polling error';}
 migPollTimer=setTimeout(pollMigStatus,500);}
 async function cancelMigrate(){if(migIdx===null)return;var r=await apiPost('/api/migrate/cancel/'+migIdx,'');if(r){var info=document.getElementById('mig_pct');if(info)info.textContent='Cancelling...';setStatus('Migration cancel requested');}}
-function updatePowerBtn(){const b=document.getElementById('powerbtn');if(!b)return;if(sel===null||sel>=vms.length){b.textContent='▶ Power On';b.className='btn primary';return;}
-const v=vms[sel];if(v.status==='running'||v.status==='paused'){b.textContent='⏹ Power Off';b.className='btn danger';}else{b.textContent='▶ Power On';b.className='btn primary';}}
-function newVm(){var d=document.getElementById('newdlg');if(d)d.showModal();}
+function summaryWarnings(v){var warnings=[];if(v.embed_display==='true'&&!embeddedDisplayCapable(v))warnings.push('Embedded display is enabled, but browser console requires VNC or SPICE.');if(v.enable_3d==='true'&&(Number(v.gpu_device)===0||Number(v.gpu_device)===1)&&v.embed_display==='true'&&Number(v.display)===3)warnings.push('Virgl 3D cannot use embedded VNC; use embedded SPICE or disable 3D.');if(v.net==='none')warnings.push('Network adapter is disconnected.');if(!warnings.length)return'';var h='<div class="summary-card warning-card"><div class="card-label">Attention</div><div class="card-value">';for(var i=0;i<warnings.length;i++)h+='<div>'+escHtml(warnings[i])+'</div>';return h+'</div></div>';}
+function actionAllowed(name,v){var has=!!v;var running=v&&v.status==='running';var paused=v&&v.status==='paused';switch(name){
+case'settings':case'rename':case'clone':case'export':case'delete':case'snapshot':return has;
+case'power-toggle':return has;
+case'shutdown':case'reset':case'pause':case'suspend':case'cad':case'migrate':return running;
+case'resume':return paused;
+case'hard-power':return running||paused;
+case'display':return running&&embeddedDisplayCapable(v);
+case'serial':return running&&v.hasSerial==='true';
+case'batch-start':return vms.some(function(x){return x.status==='stopped'||x.status==='suspended';});
+case'batch-stop':return vms.some(function(x){return x.status==='running'||x.status==='paused';});
+default:return true;}}
+function disabledReason(name,v){if(!v&&name!=='batch-start'&&name!=='batch-stop')return 'Select a VM first';if(name==='display')return 'Requires a running VM with embedded VNC or SPICE display';if(name==='serial')return 'Requires a running VM with serial enabled';if(name==='resume')return 'Only paused or suspended VMs can resume';if(name==='shutdown'||name==='reset'||name==='pause'||name==='suspend'||name==='cad'||name==='migrate')return 'Requires a running VM';if(name==='hard-power')return 'Requires a running or paused VM';if(name==='batch-start')return 'No stopped VMs';if(name==='batch-stop')return 'No running VMs';return 'Unavailable';}
+function updatePowerBtn(){const b=document.getElementById('powerbtn');if(!b)return;const v=selectedVm();b.removeAttribute('aria-busy');b.disabled=!v;if(!v){b.textContent='▶ Power On';b.className='btn primary keep-mobile';b.title='Select a VM first';return;}
+if(v.status==='running'||v.status==='paused'){b.textContent='⏹ Power Off';b.className='btn danger keep-mobile';b.title='Hard power off selected VM';}else{b.textContent='▶ Power On';b.className='btn primary keep-mobile';b.title='Power on selected VM';}}
+function updateCommandState(){updatePowerBtn();var v=selectedVm();var nodes=document.querySelectorAll('[data-vm-action]');for(var i=0;i<nodes.length;i++){var n=nodes[i];var name=n.getAttribute('data-vm-action');var ok=actionAllowed(name,v);n.disabled=!ok;n.setAttribute('aria-disabled',ok?'false':'true');if(!ok){n.title=disabledReason(name,v);n.setAttribute('data-disabled-title','1');}else if(n.getAttribute('data-disabled-title')==='1'){n.removeAttribute('title');n.removeAttribute('data-disabled-title');}}
+var tabBar=document.getElementById('tabBar');if(tabBar&&v){var consoleBtn=tabBar.querySelector('[data-tab="console"]');if(consoleBtn){consoleBtn.disabled=!(v.status==='running'&&embeddedDisplayCapable(v));consoleBtn.title=consoleBtn.disabled?'Console requires a running embedded VNC or SPICE display':'Open VM console';}}}
+function newVm(){['n_name','n_mem','n_cpu','n_disk'].forEach(function(id){var e=document.getElementById('err_'+id);if(e)e.textContent='';var f=document.getElementById(id);if(f)f.classList.remove('invalid');});var d=document.getElementById('newdlg');if(d)d.showModal();}
+function setNewVmError(id,msg){var err=document.getElementById('err_'+id);var f=document.getElementById(id);if(err)err.textContent=msg||'';if(f)f.classList.toggle('invalid',!!msg);}
 async function createVm(){const nn=document.getElementById('n_name');const nm=document.getElementById('n_mem');const nc=document.getElementById('n_cpu');const nd=document.getElementById('n_disk');
 if(!nn||!nm||!nc||!nd)return;
 const n=nn.value.trim();const m=parseInt(nm.value,10)||0;
 const c=parseInt(nc.value,10)||0;const d=parseInt(nd.value,10)||0;
-if(!n){showToast('VM name is required','error');return;}
-if(m<128||m>65536){showToast('Memory must be 128–65536 MB','error');return;}
-if(c<1||c>256){showToast('CPU cores must be 1–256','error');return;}
-if(d<1||d>65536){showToast('Disk size must be 1–65536 GB','error');return;}
+var ok=true;setNewVmError('n_name','');setNewVmError('n_mem','');setNewVmError('n_cpu','');setNewVmError('n_disk','');
+if(!n){setNewVmError('n_name','Name is required.');ok=false;}
+if(m<128||m>65536){setNewVmError('n_mem','Memory must be 128-65536 MB.');ok=false;}
+if(c<1||c>256){setNewVmError('n_cpu','CPU cores must be 1-256.');ok=false;}
+if(d<1||d>65536){setNewVmError('n_disk','Disk size must be 1-65536 GB.');ok=false;}
+if(!ok){showToast('Fix highlighted fields before creating the VM.','error');return;}
 const r=await apiPost('/api/new','name='+encodeURIComponent(n)+'&mem='+m+'&cpu='+c+'&disk='+d);if(r){var ndlg=document.getElementById('newdlg');if(ndlg)ndlg.close();await refresh();}}
 async function deleteVm(){if(sel===null)return;if(!(await showConfirmDialog('Delete this VM?')))return;var deleted=vms[sel];var r=await apiPost('/api/delete/'+sel);if(r){sel=null;var delName=deleted.name;await refresh();toastUndo('Deleted "'+escHtml(delName)+'"',async function(){await apiPost('/api/undo');await refresh();});}}
 function reorderVm(from,to){var oldFrom=from,oldTo=to,oldSel=sel;
@@ -338,19 +389,43 @@ e_hyperv_enlightenments:[['0','No'],['1','Yes']],e_hugepages:[['0','No'],['1','Y
 e_ballooning:[['0','No'],['1','Yes']],e_host_autostart:[['0','No'],['1','Yes']],
 e_watchdog:[['0','None'],['1','Reset Guest'],['2','Power Off Guest'],['3','Pause Guest']],
 e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
-let h='<div class="settings-form">';
-for(const f of fields){
-if(f.s!==undefined){h+=`<h4 class="form-section-header">${f.s}</h4>`;continue;}
-const[lbl,id,type,val]=f;const attrs=f.length>4?f[4]:'';h+='<div class="field-group">';
-h+=`<label for="${id}">${lbl}</label>`;
-if(type==='disk2actions'){h+='<span style="display:flex;gap:6px"><button type="button" class="btn" data-action="disk2upload" style="font-size:11px;padding:3px 10px">📤 Upload Disk 2</button><button type="button" class="btn" data-action="disk2download" style="font-size:11px;padding:3px 10px">📥 Download Disk 2</button></span>';}
-else if(type==='select'&&selects[id]){h+=`<select id="${id}">`;
-for(const[ov,ol]of selects[id])h+=`<option value="${ov}"${ov===String(val)?' selected':''}>${ol}</option>`;
-h+='</select>';}else{h+=`<input id="${id}" type="${type}" value="${escHtml(String(val))}" ${attrs}>`;}
-h+='</div>';}
-h+='</div><div class="btn-row" style="margin-top:20px"><button id="savevmbtn" class="btn primary" data-action="saveVm" title="Save VM settings">Save Changes</button></div>';
-var ts=document.getElementById('tabSettings');if(ts)ts.innerHTML=h;settingsDirty=false;}
+	var sectionNotes={
+	 basic:'Identity, operating system, firmware, and boot defaults.',
+	 network_and_boot:'VMnet, NAT, bridged adapters, MAC addresses, and port forwarding.',
+	 sharing:'Guest integration, shared folders, and USB policy.',
+	 autoprotect:'Automatic snapshot scheduling for this VM.',
+	 display_and_video:'Browser console, SPICE/VNC, virgl, display ports, serial, audio.',
+	 storage_and_notes:'Secondary storage, removable media, favorite flag, and notes.',
+	 extra_disks:'Additional virtual disks exposed to the guest.',
+	 qemu_capabilities:'Advanced QEMU capabilities and performance controls.'
+	};
+	function secId(title){return title.replace(/&amp;/g,'and').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');}
+	var sections=[];var current=null;
+	for(const f of fields){if(f.s!==undefined){current={id:secId(f.s),title:f.s,fields:[]};sections.push(current);continue;}if(!current){current={id:'general',title:'General',fields:[]};sections.push(current);}current.fields.push(f);}
+	if(!sections.some(function(s){return s.id===settingsCategory;}))settingsCategory=sections.length?sections[0].id:'basic';
+	function renderField(f){const[lbl,id,type,val]=f;const attrs=f.length>4?f[4]:'';var out='<div class="field-group" data-field-id="'+id+'">';if(lbl)out+=`<label for="${id}">${lbl}</label>`;
+	if(type==='disk2actions'){out+='<span class="inline-actions"><button type="button" class="btn" data-action="disk2upload">Upload Disk 2</button><button type="button" class="btn" data-action="disk2download">Download Disk 2</button></span>';}
+	else if(type==='select'&&selects[id]){out+=`<select id="${id}" data-field="${id}">`;for(const[ov,ol]of selects[id])out+=`<option value="${ov}"${ov===String(val)?' selected':''}>${ol}</option>`;out+='</select>';}
+	else{out+=`<input id="${id}" data-field="${id}" type="${type}" value="${escHtml(String(val))}" ${attrs}>`;}
+	out+='<div class="field-error" id="err_'+id+'" aria-live="polite"></div></div>';return out;}
+	let h='<div class="settings-shell"><nav class="settings-nav" aria-label="Settings categories">';
+	for(const sec of sections){h+=`<button type="button" class="settings-nav-item${sec.id===settingsCategory?' active':''}" data-action="setSettingsCategory" data-settings-category="${sec.id}"><span>${sec.title}</span><small>${escHtml(sectionNotes[sec.id]||'Configure this virtual hardware group.')}</small></button>`;}
+	h+='</nav><div class="settings-detail">';
+	for(const sec of sections){h+=`<section class="settings-panel${sec.id===settingsCategory?' active':''}" data-settings-panel="${sec.id}"${sec.id===settingsCategory?'':' style="display:none"'}><div class="settings-panel-head"><h3>${sec.title}</h3><p>${escHtml(sectionNotes[sec.id]||'Configure this virtual hardware group.')}</p></div><div class="settings-form">`;for(const f of sec.fields)h+=renderField(f);h+='</div></section>';}
+	h+='</div></div><div class="settings-actions"><button type="button" class="btn" data-action="switchTab" data-tab="summary">Cancel</button><button id="savevmbtn" type="button" class="btn primary" data-action="saveVm" title="Save VM settings">Save Changes</button></div>';
+	var ts=document.getElementById('tabSettings');if(ts)ts.innerHTML=h;settingsDirty=false;}
+function setSettingsCategory(cat){settingsCategory=cat;var panels=document.querySelectorAll('.settings-panel');for(var i=0;i<panels.length;i++){var on=panels[i].getAttribute('data-settings-panel')===cat;panels[i].classList.toggle('active',on);panels[i].style.display=on?'block':'none';}
+var items=document.querySelectorAll('.settings-nav-item');for(var j=0;j<items.length;j++)items[j].classList.toggle('active',items[j].getAttribute('data-settings-category')===cat);}
+function setFieldError(id,msg,kind){var el=document.getElementById('err_'+id);var field=document.getElementById(id);if(el){el.textContent=msg||'';el.classList.toggle('warning',kind==='warn');}if(field)field.classList.toggle('invalid',!!msg&&kind!=='warn');}
+function validateSettings(show){var ok=true;function fail(id,msg){ok=false;if(show)setFieldError(id,msg);}function clear(id){if(show)setFieldError(id,'');}
+var macIds=['e_mac_address','e_nic2_mac','e_nic3_mac','e_nic4_mac','e_nic5_mac','e_nic6_mac','e_nic7_mac','e_nic8_mac'];for(var i=0;i<macIds.length;i++){var m=document.getElementById(macIds[i]);if(!m)continue;var val=m.value.trim();clear(macIds[i]);if(val&&!/^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(val))fail(macIds[i],'Use XX:XX:XX:XX:XX:XX.');}
+['e_vnc_port','e_spice_port'].forEach(function(id){var p=document.getElementById(id);if(!p)return;var n=parseInt(p.value,10);clear(id);if(!Number.isFinite(n)||n<1||n>65535)fail(id,'Port must be 1-65535.');});
+var pf=document.getElementById('e_portfw');if(pf){clear('e_portfw');var val=pf.value.trim();if(val&&!/^\\s*\\d{1,5}:\\d{1,5}(\\s*,\\s*\\d{1,5}:\\d{1,5})*\\s*$/.test(val)&&!/^\\s*\\d{1,5}:[^,]+:\\d{1,5}(\\s*,\\s*\\d{1,5}:[^,]+:\\d{1,5})*\\s*$/.test(val))fail('e_portfw','Use host:guest or host:ip:guest entries.');}
+var embed=document.getElementById('e_embed_display');var disp=document.getElementById('e_display');var accel=document.getElementById('e_enable_3d');var gpu=document.getElementById('e_gpu_device');if(embed&&disp){clear('e_display');if(embed.value==='1'&&!(disp.value==='2'||disp.value==='3')&&show)setFieldError('e_display','Browser console requires SPICE or VNC; native display opens outside the browser.','warn');}
+if(embed&&disp&&accel&&gpu){clear('e_gpu_device');if(embed.value==='1'&&disp.value==='3'&&accel.value==='1'&&(gpu.value==='0'||gpu.value==='1')&&show)setFieldError('e_gpu_device','Virgl 3D needs embedded SPICE; VNC will fall back to non-GL virtio.','warn');}
+return ok;}
 async function saveVm(){const idx=sel;if(idx===null)return;const btn=document.getElementById('savevmbtn');if(btn){btn.disabled=true;btn.textContent='Saving...';}
+if(!validateSettings(true)){var bad=document.querySelector('#tabSettings .invalid');if(bad){var panel=bad.closest('.settings-panel');if(panel)setSettingsCategory(panel.getAttribute('data-settings-panel')||settingsCategory);bad.focus({preventScroll:false});}if(btn){btn.disabled=false;btn.textContent='Save Changes';}showToast('Fix highlighted settings before saving.','error');return;}
 saveInFlight=true;
 const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
 const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
@@ -443,6 +518,7 @@ document.body.addEventListener('click',function(e){if(document.body.classList.co
 (function(){var md=document.getElementById('migratedlg');if(md)md.addEventListener('close',function(){if(migrating){hideMigProgress();}});})();
 // ── Toolbar More Click-Outside ──
 document.body.addEventListener('click',function(e){if(toolbarMoreOpen&&!e.target.closest('.toolbar')){closeToolbarMore();}});
+document.body.addEventListener('click',function(e){if(openActionMenu&&!e.target.closest('.action-menu')&&!e.target.closest('[data-action="toggleActionMenu"]'))closeActionMenus();});
 // ── Right-Click Context Menu ──
 let ctxMenu=null,ctxVmIdx=-1;
 function hideCtxMenu(){if(ctxMenu){ctxMenu.remove();ctxMenu=null;ctxVmIdx=-1;}}
@@ -463,24 +539,30 @@ var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventList
   if(y+mr.height>vh)y=vh-mr.height-4;if(y<4)y=4;
   ctxMenu.style.left=x+'px';ctxMenu.style.top=y+'px';
   ctxMenu.style.visibility='';
+  var vmForMenu=vms[idx];
   var items=[
-    ['▶ Power On/Off',function(){if(ctxVmIdx>=0){select(ctxVmIdx);powerToggle();}}],
-    ['⏸ Pause',function(){if(ctxVmIdx>=0){select(ctxVmIdx);pauseGuest();}}],
-    ['▶ Resume',function(){if(ctxVmIdx>=0){select(ctxVmIdx);resumeGuest();}}],
-    ['💾 Suspend',function(){if(ctxVmIdx>=0){select(ctxVmIdx);suspendGuest();}}],
-    ['⏻ Shut Down',function(){if(ctxVmIdx>=0){select(ctxVmIdx);shutdownGuest();}}],
-    ['↻ Reset',function(){if(ctxVmIdx>=0){select(ctxVmIdx);resetGuest();}}],
-    ['🚚 Migrate',function(){if(ctxVmIdx>=0){select(ctxVmIdx);migrateGuest();}}],
-    ['⚙ Settings',function(){if(ctxVmIdx>=0){select(ctxVmIdx);editVm();}}],
-    ['✎ Rename',function(){if(ctxVmIdx>=0){select(ctxVmIdx);renameGuest();}}],
-    ['⧉ Clone',function(){if(ctxVmIdx>=0){select(ctxVmIdx);cloneGuest();}}],
-    ['⌨ Send Ctrl+Alt+Del',function(){if(ctxVmIdx>=0){select(ctxVmIdx);sendCad();}}],
-    ['★ Toggle Favorite',function(){if(ctxVmIdx>=0){select(ctxVmIdx);toggleFavorite(ctxVmIdx);}}],
-    ['✕ Delete',function(){if(ctxVmIdx>=0){select(ctxVmIdx);deleteVm();}}]
+    {label:vmForMenu.status==='running'||vmForMenu.status==='paused'?'Power Off':'Power On',action:'power-toggle',fn:powerToggle},
+    {label:'Shut Down Guest',action:'shutdown',fn:shutdownGuest},
+    {label:'Suspend',action:'suspend',fn:suspendGuest},
+    {label:'Pause',action:'pause',fn:pauseGuest},
+    {label:'Resume',action:'resume',fn:resumeGuest},
+    {sep:true},
+    {label:'Snapshot Manager',action:'snapshot',fn:openSnapshots},
+    {label:'Send Ctrl+Alt+Del',action:'cad',fn:sendCad},
+    {label:'Display Only',action:'display',fn:enterDisplayOnly},
+    {sep:true},
+    {label:'Settings',action:'settings',fn:editVm},
+    {label:'Rename',action:'rename',fn:renameGuest},
+    {label:'Clone',action:'clone',fn:cloneGuest},
+    {label:'Migrate',action:'migrate',fn:migrateGuest},
+    {label:'Export OVF',action:'export',fn:exportOvf},
+    {label:'Toggle Favorite',action:'settings',fn:function(target){toggleFavorite(target);}},
+    {sep:true},
+    {label:'Reset',action:'reset',danger:true,fn:resetGuest},
+    {label:'Delete',action:'delete',danger:true,fn:deleteVm}
   ];
-  items.forEach(function(pair){var lbl=pair[0],fn=pair[1];var mi=document.createElement('div');mi.className='ctx-item';mi.setAttribute('role','menuitem');mi.setAttribute('tabindex','-1');
-    mi.textContent=lbl;
-    mi.addEventListener('click',function(){fn();hideCtxMenu();});
+  items.forEach(function(item){if(item.sep){var sep=document.createElement('div');sep.className='ctx-sep';ctxMenu.appendChild(sep);return;}var mi=document.createElement('button');mi.type='button';mi.className='ctx-item'+(item.danger?' danger':'');mi.setAttribute('role','menuitem');var ok=actionAllowed(item.action,vmForMenu);mi.disabled=!ok;mi.title=ok?'':disabledReason(item.action,vmForMenu);mi.textContent=item.label;
+    mi.addEventListener('click',function(){if(mi.disabled)return;var target=ctxVmIdx;Promise.resolve(select(target)).then(function(){item.fn(target);});hideCtxMenu();});
     ctxMenu.appendChild(mi);});
 });
 // ── Keyboard Shortcuts ──
@@ -488,6 +570,7 @@ document.addEventListener('keydown',async function(e){var shift=e.shiftKey;
 if((e.ctrlKey||e.metaKey)&&e.key==='s'&&activeTab==='settings'&&sel!==null){e.preventDefault();saveVm();return;}
 if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
 if(e.key==='ArrowUp'||e.key==='ArrowDown'){var listEl=document.getElementById('vmlist');if(listEl&&listEl.contains(e.target)){e.preventDefault();var dir=e.key==='ArrowUp'?-1:1;var idx=sel===null?(dir<0?vms.length-1:0):Math.max(0,Math.min(vms.length-1,sel+dir));select(idx);return;}}
+if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&e.target.closest('[role="tablist"]')){var tabs=Array.from(document.querySelectorAll('.tab-btn:not([disabled])'));var cur=tabs.indexOf(e.target);if(cur<0)return;e.preventDefault();var next=cur+(e.key==='ArrowRight'?1:-1);if(next<0)next=tabs.length-1;if(next>=tabs.length)next=0;switchTab(tabs[next].getAttribute('data-tab')||'summary');tabs[next].focus();return;}
 if(e.key==='Escape'){
   var anyOpen=false;['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','shortcutsdlg'].forEach(function(id){var d=document.getElementById(id);if(!d)return;if(d.hasAttribute('open')){d.close();anyOpen=true;}});
   if(!anyOpen&&document.body.classList.contains('displayonly')){exitDisplayOnly();return;}
@@ -518,6 +601,7 @@ function showShortcutsModal(){
   if(d)d.showModal();
 }
 function enterDisplayOnly(){
+  if(!rfb&&!spice){showToast('No embedded display is connected','warn');return;}
   document.body.classList.add('displayonly');
   document.documentElement.requestFullscreen().catch(function(){});
   setStatus('Display-only — F11 or Esc to exit');
@@ -527,14 +611,230 @@ function exitDisplayOnly(){
   if(document.fullscreenElement)document.exitFullscreen();
   setStatus('Exited display-only mode');
 }
+function reconnectDisplay(){if(sel===null||sel>=vms.length)return;stopFb();startFb();}
 // ── Periodic Refresh ──
 refresh();
 setInterval(refresh,5000);
-// ── Show keyboard shortcuts on first visit ──
-if(!localStorage.getItem('hangar-shortcuts-shown')){localStorage.setItem('hangar-shortcuts-shown','1');setTimeout(showShortcutsModal,1500);}
 // ── noVNC / SPICE live viewer ──
 var rfb = null; // noVNC RFB client instance
 var spice = null; // SPICE HTML5 client instance
+var displayPresenter = null;
+
+function findProtocolCanvas(displayEl) {
+  if (!displayEl) return null;
+  var canvases = displayEl.querySelectorAll('canvas');
+  for (var i = 0; i < canvases.length; i++) {
+    if (!canvases[i].classList.contains('gpu-presenter')) return canvases[i];
+  }
+  return null;
+}
+
+function ensurePresenterCanvas(p) {
+  if (p.canvas) return p.canvas;
+  var canvas = document.createElement('canvas');
+  canvas.className = 'gpu-presenter';
+  canvas.setAttribute('aria-hidden', 'true');
+  p.displayEl.appendChild(canvas);
+  p.canvas = canvas;
+  return canvas;
+}
+
+function stopDisplayPresenter() {
+  if (!displayPresenter) return;
+  displayPresenter.stopped = true;
+  if (displayPresenter.raf) cancelAnimationFrame(displayPresenter.raf);
+  if (displayPresenter.canvas && displayPresenter.canvas.parentNode) {
+    displayPresenter.canvas.parentNode.removeChild(displayPresenter.canvas);
+  }
+  if (displayPresenter.displayEl) {
+    displayPresenter.displayEl.classList.remove('gpu-presenting');
+    displayPresenter.displayEl.removeAttribute('data-renderer');
+    var sources = displayPresenter.displayEl.querySelectorAll('.display-source-canvas');
+    for (var i = 0; i < sources.length; i++) sources[i].classList.remove('display-source-canvas');
+  }
+  displayPresenter = null;
+}
+
+function markPresenterReady(p, mode) {
+  p.mode = mode;
+  p.displayEl.classList.add('gpu-presenting');
+  p.displayEl.setAttribute('data-renderer', mode);
+  updateDisplayBadge('connected', p.protocol);
+}
+
+function startDisplayPresenter(displayEl, protocol) {
+  stopDisplayPresenter();
+  var p = { displayEl: displayEl, protocol: protocol, mode: 'canvas', stopped: false, raf: 0, canvas: null };
+  displayPresenter = p;
+  if (navigator.gpu) {
+    initWebGpuPresenter(p).catch(function() {
+      if (!p.stopped) initWebGlPresenter(p);
+    });
+  } else {
+    initWebGlPresenter(p);
+  }
+}
+
+async function initWebGpuPresenter(p) {
+  if (!navigator.gpu) throw new Error('WebGPU unavailable');
+  var adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) throw new Error('WebGPU adapter unavailable');
+  var device = await adapter.requestDevice();
+  if (p.stopped) return;
+  var canvas = ensurePresenterCanvas(p);
+  var context = canvas.getContext('webgpu');
+  if (!context) throw new Error('WebGPU canvas unavailable');
+  var format = navigator.gpu.getPreferredCanvasFormat ? navigator.gpu.getPreferredCanvasFormat() : 'bgra8unorm';
+  context.configure({ device: device, format: format, alphaMode: 'opaque' });
+  var sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+  var shader = device.createShaderModule({ code:
+    'struct Out { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };\n' +
+    '@vertex fn vs(@builtin(vertex_index) i: u32) -> Out {\n' +
+    '  var pos = array<vec2<f32>, 6>(vec2<f32>(-1.0,-1.0), vec2<f32>(1.0,-1.0), vec2<f32>(-1.0,1.0), vec2<f32>(-1.0,1.0), vec2<f32>(1.0,-1.0), vec2<f32>(1.0,1.0));\n' +
+    '  var uv = array<vec2<f32>, 6>(vec2<f32>(0.0,1.0), vec2<f32>(1.0,1.0), vec2<f32>(0.0,0.0), vec2<f32>(0.0,0.0), vec2<f32>(1.0,1.0), vec2<f32>(1.0,0.0));\n' +
+    '  var out: Out; out.pos = vec4<f32>(pos[i], 0.0, 1.0); out.uv = uv[i]; return out;\n' +
+    '}\n' +
+    '@group(0) @binding(0) var frameTex: texture_2d<f32>;\n' +
+    '@group(0) @binding(1) var frameSampler: sampler;\n' +
+    '@fragment fn fs(in: Out) -> @location(0) vec4<f32> { return textureSample(frameTex, frameSampler, in.uv); }\n'
+  });
+  var bindLayout = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+    { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} }
+  ]});
+  var pipeline = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [bindLayout] }),
+    vertex: { module: shader, entryPoint: 'vs' },
+    fragment: { module: shader, entryPoint: 'fs', targets: [{ format: format }] },
+    primitive: { topology: 'triangle-list' }
+  });
+  p.webgpu = { device: device, context: context, sampler: sampler, bindLayout: bindLayout, pipeline: pipeline, texture: null, bindGroup: null, width: 0, height: 0 };
+  markPresenterReady(p, 'webgpu');
+  function frame() {
+    if (p.stopped) return;
+    var source = findProtocolCanvas(p.displayEl);
+    if (source && source.width > 0 && source.height > 0) {
+      source.classList.add('display-source-canvas');
+      if (canvas.width !== source.width || canvas.height !== source.height) {
+        canvas.width = source.width;
+        canvas.height = source.height;
+      }
+      if (p.webgpu.width !== source.width || p.webgpu.height !== source.height) {
+        p.webgpu.width = source.width;
+        p.webgpu.height = source.height;
+        p.webgpu.texture = device.createTexture({
+          size: [source.width, source.height, 1],
+          format: 'rgba8unorm',
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+        });
+        p.webgpu.bindGroup = device.createBindGroup({
+          layout: bindLayout,
+          entries: [
+            { binding: 0, resource: p.webgpu.texture.createView() },
+            { binding: 1, resource: sampler }
+          ]
+        });
+      }
+      device.queue.copyExternalImageToTexture({ source: source }, { texture: p.webgpu.texture }, { width: source.width, height: source.height });
+      var encoder = device.createCommandEncoder();
+      var pass = encoder.beginRenderPass({ colorAttachments: [{
+        view: context.getCurrentTexture().createView(),
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+        loadOp: 'clear',
+        storeOp: 'store'
+      }]});
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, p.webgpu.bindGroup);
+      pass.draw(6);
+      pass.end();
+      device.queue.submit([encoder.finish()]);
+    }
+    p.raf = requestAnimationFrame(frame);
+  }
+  frame();
+}
+
+function initWebGlPresenter(p) {
+  var canvas = ensurePresenterCanvas(p);
+  var mode = 'webgl2';
+  var gl = canvas.getContext('webgl2', { alpha: false, antialias: false });
+  if (!gl) {
+    mode = 'webgl';
+    gl = canvas.getContext('webgl', { alpha: false, antialias: false });
+  }
+  if (!gl) {
+    p.mode = 'canvas';
+    if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
+    p.canvas = null;
+    p.displayEl.classList.remove('gpu-presenting');
+    p.displayEl.setAttribute('data-renderer', 'canvas');
+    updateDisplayBadge('connected', p.protocol);
+    return;
+  }
+  function shader(type, source) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, source);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'shader compile failed');
+    return s;
+  }
+  try {
+    var vs = shader(gl.VERTEX_SHADER, 'attribute vec2 aPos;attribute vec2 aUv;varying vec2 vUv;void main(){vUv=aUv;gl_Position=vec4(aPos,0.0,1.0);}');
+    var fs = shader(gl.FRAGMENT_SHADER, 'precision mediump float;varying vec2 vUv;uniform sampler2D uTex;void main(){gl_FragColor=texture2D(uTex,vUv);}');
+    var program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'program link failed');
+    gl.useProgram(program);
+    var data = new Float32Array([
+      -1,-1, 0,0,  1,-1, 1,0,  -1,1, 0,1,
+      -1,1, 0,1,   1,-1, 1,0,   1,1, 1,1
+    ]);
+    var buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    var stride = 4 * 4;
+    var aPos = gl.getAttribLocation(program, 'aPos');
+    var aUv = gl.getAttribLocation(program, 'aUv');
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, stride, 0);
+    gl.enableVertexAttribArray(aUv);
+    gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, stride, 8);
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    markPresenterReady(p, mode);
+    function frame() {
+      if (p.stopped) return;
+      var source = findProtocolCanvas(p.displayEl);
+      if (source && source.width > 0 && source.height > 0) {
+        source.classList.add('display-source-canvas');
+        if (canvas.width !== source.width || canvas.height !== source.height) {
+          canvas.width = source.width;
+          canvas.height = source.height;
+          gl.viewport(0, 0, canvas.width, canvas.height);
+        }
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+      p.raf = requestAnimationFrame(frame);
+    }
+    frame();
+  } catch (e) {
+    p.mode = 'canvas';
+    if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
+    p.canvas = null;
+    p.displayEl.classList.remove('gpu-presenting');
+    p.displayEl.setAttribute('data-renderer', 'canvas');
+    updateDisplayBadge('connected', p.protocol);
+  }
+}
 
 function startFb() {
   if (rfb || spice) return; // already connected
@@ -547,6 +847,7 @@ function startFb() {
   displayEl.style.display = 'block';
   displayEl.classList.add('loading');
   displayEl.classList.remove('connected');
+  var hint=document.getElementById('displayHint');if(hint)hint.textContent='';
 
   // Dispatch based on display type: 2 = SPICE, 3 = VNC
   var dt = Number(v.display);
@@ -556,14 +857,21 @@ function startFb() {
   } else if (dt === 3) {
     updateDisplayBadge('connecting', 'vnc');
     startVnc(idx, displayEl);
+  } else {
+    displayEl.classList.remove('loading');
+    displayEl.classList.remove('connected');
+    displayEl.setAttribute('data-renderer','native');
+    updateDisplayBadge('native');
+    if(hint)hint.innerHTML='<strong>Native '+escHtml((displayLabels[dt]||'QEMU'))+' display</strong><span>Browser console requires embedded VNC or SPICE. Change Display & Video in Settings to use this pane.</span>';
   }
   // Other display types (GTK, SDL, None) have no remote framebuffer; skip.
 }
 
 function startVnc(idx, displayEl) {
+  stopDisplayPresenter();
   // Remove any previously-created canvas.
-  var oldCanvas = displayEl.querySelector('canvas');
-  if (oldCanvas) displayEl.removeChild(oldCanvas);
+  var oldCanvases = displayEl.querySelectorAll('canvas');
+  for (var ci = 0; ci < oldCanvases.length; ci++) { if (oldCanvases[ci].parentNode === displayEl) displayEl.removeChild(oldCanvases[ci]); }
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = proto + '//' + location.host + '/ws/vnc/' + idx;
@@ -575,6 +883,7 @@ function startVnc(idx, displayEl) {
       displayEl.classList.remove('loading');
       displayEl.classList.add('connected');
       updateDisplayBadge('connected', 'vnc');
+      startDisplayPresenter(displayEl, 'vnc');
     });
     rfb.addEventListener('disconnect', function(e) {
       stopFb();
@@ -590,9 +899,10 @@ function startVnc(idx, displayEl) {
 }
 
 function startSpice(idx, displayEl, v) {
+  stopDisplayPresenter();
   // Remove any previously-created canvas.
-  var oldCanvas = displayEl.querySelector('canvas');
-  if (oldCanvas) displayEl.removeChild(oldCanvas);
+  var oldCanvases = displayEl.querySelectorAll('canvas');
+  for (var ci = 0; ci < oldCanvases.length; ci++) { if (oldCanvases[ci].parentNode === displayEl) displayEl.removeChild(oldCanvases[ci]); }
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = proto + '//' + location.host + '/ws/spice/' + idx;
@@ -611,6 +921,7 @@ function startSpice(idx, displayEl, v) {
         displayEl.classList.remove('loading');
         displayEl.classList.add('connected');
         updateDisplayBadge('connected', 'spice');
+        startDisplayPresenter(displayEl, 'spice');
       }
     });
   } catch (e) {
@@ -619,6 +930,7 @@ function startSpice(idx, displayEl, v) {
 }
 
 function stopFb() {
+  stopDisplayPresenter();
   if (rfb) {
     try { rfb.disconnect(); } catch (e) {}
     rfb = null;
@@ -634,6 +946,8 @@ function stopFb() {
     displayEl.style.display = 'none';
     displayEl.classList.remove('loading');
     displayEl.classList.remove('connected');
+    displayEl.removeAttribute('data-renderer');
+    var hint=document.getElementById('displayHint');if(hint)hint.textContent='';
     updateDisplayBadge('disconnected');
   }
 }
@@ -644,7 +958,10 @@ function updateDisplayBadge(state, proto) {
   if (state === 'connecting') {
     badge.textContent = 'Connecting\u2026';
   } else if (state === 'connected') {
-    badge.textContent = 'Connected';
+    var mode = displayPresenter && displayPresenter.mode ? displayPresenter.mode.toUpperCase() : 'Canvas';
+    badge.textContent = (proto ? proto.toUpperCase() : 'Display') + ' · ' + mode;
+  } else if (state === 'native') {
+    badge.textContent = 'Native Display';
   } else {
     badge.textContent = 'Disconnected';
   }
@@ -727,9 +1044,10 @@ if(s){e.preventDefault();e.stopPropagation();serialWs.send(s);}});}
 var filterTimer=null;
 // ── Event Delegation (CSP-safe: no inline handlers) ──
 var actionHandlers={
- toggleSidebar:function(){toggleSidebar();},deselectVm:function(){deselectVm();},
- toggleToolbarMore:function(){toggleToolbarMore();},
- powerToggle:function(){powerToggle();},pauseGuest:function(){pauseGuest();},
+	 toggleSidebar:function(){toggleSidebar();},deselectVm:function(){deselectVm();},
+	 toggleToolbarMore:function(){toggleToolbarMore();},
+	 toggleActionMenu:function(el){toggleActionMenu(el);},
+	 powerToggle:function(){powerToggle();},pauseGuest:function(){pauseGuest();},
  resumeGuest:function(){resumeGuest();},shutdownGuest:function(){shutdownGuest();},
  resetGuest:function(){resetGuest();},suspendGuest:function(){suspendGuest();},
  sendCad:function(){sendCad();},editVm:function(){editVm();},
@@ -737,6 +1055,7 @@ var actionHandlers={
  importGuest:function(){importGuest();},takeSnapshot:function(){takeSnapshot();},
  exportOvf:function(){exportOvf();},migrateGuest:function(){migrateGuest();},doMigrate:function(){doMigrate();},openVnets:function(){openVnets();},
  openPrefs:function(){openPrefs();},openAbout:function(){openAbout();},openCatalog:function(){openCatalog();},
+ showShortcutsModal:function(){showShortcutsModal();},
  quickstartVm:function(el){var slug=el.getAttribute('data-catalog-id');if(slug)quickstartVm(slug);},
  batchStart:function(){batchStart();},batchStop:function(){batchStop();},
  deleteVm:function(){deleteVm();},clearSearch:function(){clearSearch();},
@@ -762,16 +1081,20 @@ var actionHandlers={
  toggleTheme:function(){cycleTheme();},
  filterList:function(){filterList();},
  onVnetSelect:function(){onVnetSelect();},
- disk2upload:function(){uploadDisk2();},
- disk2download:function(){downloadDisk2();}
-};
+	 disk2upload:function(){uploadDisk2();},
+	 disk2download:function(){downloadDisk2();},
+	 enterDisplayOnly:function(){enterDisplayOnly();},
+	 reconnectDisplay:function(){reconnectDisplay();},
+	 setSettingsCategory:function(el){setSettingsCategory(el.getAttribute('data-settings-category')||'compute');}
+	};
 document.body.addEventListener('click',function(e){
  var el=e.target.closest('[data-action]');if(!el)return;
  var action=el.getAttribute('data-action');var h=actionHandlers[action];if(h)h(el);
  if(e.target.closest('.toolbar-more-popover'))closeToolbarMore();
+ if(e.target.closest('.action-menu')&&action!=='toggleActionMenu')closeActionMenus();
 });
 document.body.addEventListener('input',function(e){
- if(e.target.closest('#tabSettings'))settingsDirty=true;
+ if(e.target.closest('#tabSettings')){settingsDirty=true;validateSettings(true);}
  var el=e.target.closest('[data-action="filterList"]');if(el){
   if(filterTimer)clearTimeout(filterTimer);
   filterTimer=setTimeout(filterList,180);
@@ -779,7 +1102,7 @@ document.body.addEventListener('input',function(e){
  if(e.target.id==='mig_host'||e.target.id==='mig_port')updateMigUri();
 });
 document.body.addEventListener('change',function(e){
- if(e.target.closest('#tabSettings'))settingsDirty=true;
+ if(e.target.closest('#tabSettings')){settingsDirty=true;validateSettings(true);}
  var el=e.target.closest('[data-action]');if(!el)return;
  var action=el.getAttribute('data-action');
  if(action==='onVnetSelect')onVnetSelect();
@@ -896,7 +1219,9 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
 })();
 // ── Accessibility attributes (elements from server-rendered HTML) ──
 (function initA11y(){
-  var sl=document.getElementById('skip-link');if(!sl){sl=document.createElement('a');sl.id='skip-link';sl.href='#';sl.textContent='Skip to main content';sl.addEventListener('click',function(e){e.preventDefault();var mn=document.querySelector('main');if(mn)mn.focus();});document.body.insertBefore(sl,document.body.firstChild);}
+  var sl=document.getElementById('skip-link');if(!sl){sl=document.createElement('a');sl.id='skip-link';sl.href='#main-content';sl.textContent='Skip to main content';document.body.insertBefore(sl,document.body.firstChild);}else{sl.href='#main-content';}
+  sl.addEventListener('click',function(e){e.preventDefault();var mn=document.getElementById('main-content');if(mn){if(!mn.hasAttribute('tabindex'))mn.setAttribute('tabindex','-1');mn.focus();}});
+  var mn=document.getElementById('main-content');if(mn&&!mn.hasAttribute('tabindex'))mn.setAttribute('tabindex','-1');
   var aside=document.querySelector('aside');if(aside){aside.id='sidebar';aside.setAttribute('role','navigation');aside.setAttribute('aria-label','VM Library');}
   var hamb=document.querySelector('.hamburger');if(hamb){hamb.setAttribute('aria-controls','sidebar');hamb.setAttribute('aria-expanded','false');}
   var vml=document.getElementById('vmlist');if(vml){vml.setAttribute('role','listbox');vml.setAttribute('aria-label','VM Library');}

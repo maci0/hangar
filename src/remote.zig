@@ -12,7 +12,7 @@ const app = @import("appstate.zig");
 
 /// GET from the remote server. Returns bytes read.
 pub fn apiGet(path: []const u8, out: []u8) usize {
-    if (!app.remote_mode or app.remote_url_len == 0) return 0;
+    if (!@atomicLoad(bool, &app.remote_mode, .seq_cst) or @atomicLoad(usize, &app.remote_url_len, .seq_cst) == 0) return 0;
     const url = transport.Url.parse(app.remote_url[0..app.remote_url_len]) orelse return 0;
     var conn = transport.Connection.connect(&url) orelse return 0;
     defer conn.close();
@@ -21,7 +21,7 @@ pub fn apiGet(path: []const u8, out: []u8) usize {
 
 /// POST to the remote server. Returns bytes read.
 pub fn apiPost(path: []const u8, body: []const u8, out: []u8) usize {
-    if (!app.remote_mode or app.remote_url_len == 0) return 0;
+    if (!@atomicLoad(bool, &app.remote_mode, .seq_cst) or @atomicLoad(usize, &app.remote_url_len, .seq_cst) == 0) return 0;
     const url = transport.Url.parse(app.remote_url[0..app.remote_url_len]) orelse return 0;
     var conn = transport.Connection.connect(&url) orelse return 0;
     defer conn.close();
@@ -30,7 +30,7 @@ pub fn apiPost(path: []const u8, body: []const u8, out: []u8) usize {
 
 /// Fetch the full vms.json config from the remote server and load it locally.
 pub fn remoteRefreshVmList() void {
-    if (!app.remote_mode or app.remote_url_len == 0) return;
+    if (!@atomicLoad(bool, &app.remote_mode, .seq_cst) or @atomicLoad(usize, &app.remote_url_len, .seq_cst) == 0) return;
     const url = transport.Url.parse(app.remote_url[0..app.remote_url_len]) orelse return;
     var conn = transport.Connection.connect(&url) orelse return;
     defer conn.close();
@@ -39,7 +39,9 @@ pub fn remoteRefreshVmList() void {
     const n = conn.request("GET", "/api/config", null, &buf);
     if (n == 0) return;
     var tmp_prefs: vm.Prefs = .{};
+    app.vms_mutex.lock();
     app.vm_count = persist.loadFromSlice(&app.vms, buf[0..n], &tmp_prefs);
+    app.vms_mutex.unlock();
 }
 
 // ── tests ──────────────────────────────────────────────────────────

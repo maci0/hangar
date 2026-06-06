@@ -1,6 +1,13 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
+    const local_global_cache = b.pathFromRoot(".zig-cache/global");
+    const local_global_cache_dir = try std.Io.Dir.cwd().createDirPathOpen(b.graph.io, local_global_cache, .{});
+    b.graph.global_cache_root = .{
+        .path = local_global_cache,
+        .handle = local_global_cache_dir,
+    };
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -28,11 +35,12 @@ pub fn build(b: *std.Build) !void {
         .use_llvm = true,
         .use_lld = true,
     });
-    b.installArtifact(webui_app);
+    const install_webui_app = b.addInstallArtifact(webui_app, .{});
+    b.getInstallStep().dependOn(&install_webui_app.step);
 
     const webui_run = b.step("webui", "Run webui desktop app");
     const webui_run_cmd = b.addSystemCommand(&.{b.getInstallPath(.bin, "hangar-webui")});
-    webui_run_cmd.step.dependOn(&webui_app.step);
+    webui_run_cmd.step.dependOn(&install_webui_app.step);
     webui_run.dependOn(&webui_run_cmd.step);
 
     // ── Web Backend ──
@@ -44,18 +52,20 @@ pub fn build(b: *std.Build) !void {
     web_mod.linkSystemLibrary("gio-2.0", .{});
     web_mod.addIncludePath(.{ .cwd_relative = "/usr/include" });
     const web_exe = b.addExecutable(.{ .name = "hangar-web", .root_module = web_mod, .use_llvm = true, .use_lld = true });
-    b.installArtifact(web_exe);
+    const install_web_exe = b.addInstallArtifact(web_exe, .{});
+    b.getInstallStep().dependOn(&install_web_exe.step);
 
     const web_run = b.step("web", "Run web frontend");
     const web_cmd = b.addSystemCommand(&.{b.getInstallPath(.bin, "hangar-web")});
-    web_cmd.step.dependOn(&web_exe.step);
+    web_cmd.step.dependOn(&install_web_exe.step);
     web_run.dependOn(&web_cmd.step);
 
     // ── vmrun CLI ──
     const vmrun_mod = b.createModule(.{ .root_source_file = b.path("src/vmrun.zig"), .target = target, .optimize = optimize });
     vmrun_mod.link_libc = true;
     const vmrun_exe = b.addExecutable(.{ .name = "vmrun", .root_module = vmrun_mod, .use_llvm = true, .use_lld = true });
-    b.installArtifact(vmrun_exe);
+    const install_vmrun_exe = b.addInstallArtifact(vmrun_exe, .{});
+    b.getInstallStep().dependOn(&install_vmrun_exe.step);
 
     // ── Unit tests ──
     const test_step = b.step("test", "Run unit tests");
@@ -87,8 +97,8 @@ pub fn build(b: *std.Build) !void {
 
     // ── Web UI E2E smoke test (Xvfb + Node/Puppeteer) ──
     const web_smoke = b.step("web-smoke", "Web UI end-to-end smoke test");
-    web_smoke.dependOn(&web_exe.step);
     const web_smoke_cmd = b.addSystemCommand(&.{ "node", "tests/web_smoke.mjs" });
+    web_smoke_cmd.step.dependOn(&install_web_exe.step);
     web_smoke.dependOn(&web_smoke_cmd.step);
 
     // ── Include web-smoke in the umbrella test step ──

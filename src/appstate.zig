@@ -74,21 +74,25 @@ pub fn destroyVmmHandle(idx: usize) void {
 
 // ── Config path helpers ────────────────────────────────────────────
 
-/// Return the hangar config directory path, or null if HOME is unset.
+fn configHome() ?[]const u8 {
+    return appio.getenv("HANGAR_CONFIG_HOME") orelse appio.getenv("HOME");
+}
+
+/// Return the hangar config directory path, or null if no config home is set.
 pub fn configDir(buf: *[512]u8) ?[]const u8 {
-    const home = appio.getenv("HOME") orelse return null;
+    const home = configHome() orelse return null;
     return std.fmt.bufPrint(buf, "{s}/.config/hangar", .{home}) catch null;
 }
 
-/// Return the path to vms.json, or null if HOME is unset.
+/// Return the path to vms.json, or null if no config home is set.
 pub fn vmsPath(buf: *[512]u8) ?[]const u8 {
-    const home = appio.getenv("HOME") orelse return null;
+    const home = configHome() orelse return null;
     return std.fmt.bufPrint(buf, "{s}/.config/hangar/vms.json", .{home}) catch null;
 }
 
-/// Return the path to networks.json, or null if HOME is unset.
+/// Return the path to networks.json, or null if no config home is set.
 pub fn networksPath(buf: *[512]u8) ?[]const u8 {
-    const home = appio.getenv("HOME") orelse return null;
+    const home = configHome() orelse return null;
     return std.fmt.bufPrint(buf, "{s}/.config/hangar/networks.json", .{home}) catch null;
 }
 
@@ -118,15 +122,33 @@ test "appstate: networksPath returns expected suffix when HOME is set" {
 test "appstate: config path helpers return null when HOME is unset" {
     // Save and clear HOME.
     const saved = appio.getenv("HOME");
+    const saved_config = appio.getenv("HANGAR_CONFIG_HOME");
     defer {
         if (saved) |v| _ = setenv("HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HOME");
+        if (saved_config) |v| _ = setenv("HANGAR_CONFIG_HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HANGAR_CONFIG_HOME");
     }
     _ = unsetenv("HOME");
+    _ = unsetenv("HANGAR_CONFIG_HOME");
 
     var buf: [512]u8 = undefined;
     try std.testing.expect(configDir(&buf) == null);
     try std.testing.expect(vmsPath(&buf) == null);
     try std.testing.expect(networksPath(&buf) == null);
+}
+
+test "appstate: HANGAR_CONFIG_HOME overrides HOME" {
+    const saved_home = appio.getenv("HOME");
+    const saved_config = appio.getenv("HANGAR_CONFIG_HOME");
+    defer {
+        if (saved_home) |v| _ = setenv("HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HOME");
+        if (saved_config) |v| _ = setenv("HANGAR_CONFIG_HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HANGAR_CONFIG_HOME");
+    }
+    _ = setenv("HOME", "/home/ignored", 1);
+    _ = setenv("HANGAR_CONFIG_HOME", "/tmp/hangar-config-test", 1);
+
+    var buf: [512]u8 = undefined;
+    const path = configDir(&buf).?;
+    try std.testing.expectEqualStrings("/tmp/hangar-config-test/.config/hangar", path);
 }
 
 test "appstate: getVmmHandle out-of-bounds returns null" {

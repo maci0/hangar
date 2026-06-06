@@ -9,6 +9,8 @@
 </head>
 <body>
 
+<a id="skip-link" href="#main-content">Skip to main content</a>
+
 <svg style="display:none" aria-hidden="true">
   <defs>
     <symbol id="icon-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -23,8 +25,8 @@
   </defs>
 </svg>
 
-<div id="connbanner" style="display:none">
-  <span>⚠ Connection lost</span>
+<div id="connbanner" role="alert" aria-live="assertive" style="display:none">
+  <span>⚠ Connection lost — retrying automatically</span>
   <button class="btn" data-action="dismissBanner">Dismiss</button>
 </div>
 
@@ -46,41 +48,60 @@
 </aside>
 
 <!-- ═══ Main Content ═══ -->
-<main id="main-content">
+<main id="main-content" tabindex="-1">
   <!-- Toolbar -->
   <div class="toolbar" role="toolbar" aria-label="VM actions">
-    <button class="hamburger" data-action="toggleSidebar" aria-label="Toggle sidebar" aria-expanded="false">☰</button>
+    <button class="hamburger" data-action="toggleSidebar" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="false">☰</button>
     <button class="btn keep-mobile" data-action="deselectVm" title="Deselect VM (Ctrl+W)">⌂ Home</button>
     <button id="powerbtn" class="btn primary keep-mobile" data-action="powerToggle">▶ Power On</button>
+    <button class="btn primary keep-mobile new-vm-btn" data-action="newVm" title="New VM">＋ New VM</button>
     <span class="sep" aria-hidden="true"></span>
-    <button class="btn" data-action="editVm" title="Settings">⚙ Settings</button>
-    <button class="btn" data-action="renameGuest" title="Rename">✎ Rename</button>
-    <button class="btn" data-action="newVm" title="New VM">＋ New</button>
-    <button class="btn" data-action="openCatalog" title="Catalog">📋 Catalog</button>
-    <button class="btn" data-action="takeSnapshot" title="Take Snapshot">📸 Snapshot</button>
-    <button class="btn" data-action="cloneGuest" title="Clone">⧉ Clone</button>
-    <button class="btn" data-action="sendCad" title="Ctrl+Alt+Del">⌨ CAD</button>
-    <span class="sep" aria-hidden="true"></span>
-    <button class="btn" data-action="shutdownGuest" title="Shut Down Guest">⏻ Shut Down</button>
-    <button class="btn" data-action="resetGuest" title="Reset">↻ Reset</button>
-    <button class="btn" data-action="pauseGuest" title="Pause">⏸ Pause</button>
-    <button class="btn" data-action="resumeGuest" title="Resume">▶ Resume</button>
-    <button class="btn" data-action="suspendGuest" title="Suspend to Disk">💾 Suspend</button>
-    <span class="sep" aria-hidden="true"></span>
-    <button class="btn" data-action="migrateGuest" title="Migrate">🚚 Migrate</button>
-    <button class="btn" data-action="exportOvf" title="Export OVF">📦 Export</button>
-    <button class="btn" data-action="importGuest" title="Import">📥 Import</button>
-    <span class="sep" aria-hidden="true"></span>
-    <button class="btn" data-action="batchStart" title="Batch Start">▶▶ All</button>
-    <button class="btn danger" data-action="batchStop" title="Batch Stop">⏹⏹ All</button>
-    <button class="btn danger" data-action="deleteVm" title="Delete VM">🗑 Delete</button>
-    <span class="sep" aria-hidden="true"></span>
-    <button class="btn" data-action="openPrefs" title="Preferences">🔧 Prefs</button>
-    <button class="btn" data-action="openVnets" title="Virtual Networks">🌐 VNets</button>
-    <button class="btn" data-action="openAbout" title="About">ℹ About</button>
+    <button class="btn keep-mobile" data-action="editVm" data-vm-action="settings" title="Settings">⚙ Settings</button>
+    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="powerMenu" aria-haspopup="menu" aria-expanded="false">Power ▾</button>
+    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="snapshotMenu" aria-haspopup="menu" aria-expanded="false">Snapshots ▾</button>
+    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="devicesMenu" aria-haspopup="menu" aria-expanded="false">Devices ▾</button>
+    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="toolsMenu" aria-haspopup="menu" aria-expanded="false">Tools ▾</button>
+    <button class="btn menu-btn danger-menu" data-action="toggleActionMenu" data-menu="dangerMenu" aria-haspopup="menu" aria-expanded="false">More ▾</button>
     <button class="btn theme-toggle-btn keep-mobile" data-action="toggleTheme" title="Toggle theme" aria-label="Toggle theme">🌓</button>
     <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-expanded="false">⋯</button>
     <div class="toolbar-more-popover" role="menu" aria-label="More actions"></div>
+    <div id="powerMenu" class="action-menu" role="menu" aria-label="Power actions">
+      <button class="menu-item" data-action="shutdownGuest" data-vm-action="shutdown">Shut Down Guest</button>
+      <button class="menu-item" data-action="suspendGuest" data-vm-action="suspend">Suspend</button>
+      <button class="menu-item" data-action="pauseGuest" data-vm-action="pause">Pause</button>
+      <button class="menu-item" data-action="resumeGuest" data-vm-action="resume">Resume</button>
+      <span class="menu-sep" aria-hidden="true"></span>
+      <button class="menu-item danger" data-action="resetGuest" data-vm-action="reset">Reset</button>
+      <button class="menu-item danger" data-action="powerToggle" data-vm-action="hard-power">Power Off</button>
+    </div>
+    <div id="snapshotMenu" class="action-menu" role="menu" aria-label="Snapshot actions">
+      <button class="menu-item" data-action="takeSnapshot" data-vm-action="snapshot">Snapshot Manager</button>
+    </div>
+    <div id="devicesMenu" class="action-menu" role="menu" aria-label="Device actions">
+      <button class="menu-item" data-action="sendCad" data-vm-action="cad">Send Ctrl+Alt+Del</button>
+      <button class="menu-item" data-action="reconnectDisplay" data-vm-action="display">Reconnect Display</button>
+      <button class="menu-item" data-action="enterDisplayOnly" data-vm-action="display">Display Only</button>
+      <button class="menu-item" data-action="manualDisconnectSerial" data-vm-action="serial">Disconnect Serial</button>
+    </div>
+    <div id="toolsMenu" class="action-menu" role="menu" aria-label="Tools">
+      <button class="menu-item" data-action="renameGuest" data-vm-action="rename">Rename</button>
+      <button class="menu-item" data-action="cloneGuest" data-vm-action="clone">Clone</button>
+      <button class="menu-item" data-action="migrateGuest" data-vm-action="migrate">Migrate</button>
+      <button class="menu-item" data-action="exportOvf" data-vm-action="export">Export OVF</button>
+      <button class="menu-item" data-action="importGuest">Import VM</button>
+      <span class="menu-sep" aria-hidden="true"></span>
+      <button class="menu-item" data-action="openCatalog">VM Catalog</button>
+      <button class="menu-item" data-action="openVnets">Virtual Network Editor</button>
+      <button class="menu-item" data-action="openPrefs">Preferences</button>
+      <button class="menu-item" data-action="showShortcutsModal">Keyboard Shortcuts</button>
+      <button class="menu-item" data-action="openAbout">About Hangar</button>
+    </div>
+    <div id="dangerMenu" class="action-menu" role="menu" aria-label="Advanced actions">
+      <button class="menu-item" data-action="batchStart" data-vm-action="batch-start">Power On All Stopped</button>
+      <button class="menu-item danger" data-action="batchStop" data-vm-action="batch-stop">Power Off All Running</button>
+      <span class="menu-sep" aria-hidden="true"></span>
+      <button class="menu-item danger" data-action="deleteVm" data-vm-action="delete">Delete VM</button>
+    </div>
   </div>
 
   <!-- Content Area -->
@@ -88,6 +109,12 @@
     <!-- Display panel (VNC/SPICE framebuffer) -->
     <div id="display">
       <div class="display-badge" id="displayBadge" aria-hidden="true"></div>
+      <div class="display-toolbar" aria-label="Display controls">
+        <button class="display-tool" data-action="enterDisplayOnly" data-vm-action="display" title="Display only">⛶</button>
+        <button class="display-tool" data-action="reconnectDisplay" data-vm-action="display" title="Reconnect display">↻</button>
+        <button class="display-tool" data-action="sendCad" data-vm-action="cad" title="Send Ctrl+Alt+Del">⌨</button>
+      </div>
+      <div id="displayHint" class="display-hint" aria-live="polite"></div>
     </div>
 
     <!-- Serial console panel -->
@@ -105,23 +132,37 @@
     <!-- VM Header + Tabs -->
     <div class="vm-header">
       <h1 id="vmname">Select a VM</h1>
-      <div id="tabBar" class="tab-bar" role="tablist" style="display:none">
-        <button class="tab-btn active" data-action="switchTab" data-tab="summary" role="tab" aria-selected="true">Summary</button>
-        <button class="tab-btn" data-action="switchTab" data-tab="settings" role="tab" aria-selected="false">Settings</button>
+      <div id="tabBar" class="tab-bar" role="tablist" aria-label="VM views" style="display:none">
+        <button id="tab-btn-console" class="tab-btn" data-action="switchTab" data-tab="console" role="tab" aria-controls="tabConsole" aria-selected="false">Console</button>
+        <button id="tab-btn-summary" class="tab-btn active" data-action="switchTab" data-tab="summary" role="tab" aria-controls="tabSummary" aria-selected="true">Summary</button>
+        <button id="tab-btn-settings" class="tab-btn" data-action="switchTab" data-tab="settings" role="tab" aria-controls="tabSettings" aria-selected="false">Settings</button>
       </div>
     </div>
 
     <!-- Tab: Summary -->
-    <div id="tabSummary" role="tabpanel" aria-label="Summary">
+    <div id="tabConsole" role="tabpanel" aria-labelledby="tab-btn-console" style="display:none">
+      <div class="console-empty">
+        <strong>No embedded console is active.</strong>
+        <span>Power on a VM with embedded VNC or SPICE display to use the browser console.</span>
+      </div>
+    </div>
+
+    <!-- Tab: Summary -->
+    <div id="tabSummary" role="tabpanel" aria-labelledby="tab-btn-summary">
       <div class="empty-state">
         <svg class="empty-icon"><use href="#icon-monitor"/></svg>
         <h3>No Virtual Machine Selected</h3>
-        <p>Select a VM from the sidebar to view its details, or create a new one.</p>
+        <p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p>
+        <div class="empty-actions">
+          <button class="btn primary" data-action="newVm">＋ New VM</button>
+          <button class="btn" data-action="importGuest">Import VM</button>
+          <button class="btn" data-action="openCatalog">Catalog</button>
+        </div>
       </div>
     </div>
 
     <!-- Tab: Settings (hidden) -->
-    <div id="tabSettings" role="tabpanel" aria-label="Settings" aria-hidden="true" style="display:none">
+    <div id="tabSettings" role="tabpanel" aria-labelledby="tab-btn-settings" aria-hidden="true" style="display:none">
       <div class="empty-state">
         <svg class="empty-icon"><use href="#icon-settings"/></svg>
         <h3>No Virtual Machine Selected</h3>
@@ -153,14 +194,18 @@
   <form method="dialog">
     <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">New Virtual Machine</h3>
     <div style="padding:16px 24px">
-      <label for="n_name">Name</label>
+      <label for="n_name">Name <span class="req" aria-hidden="true">*</span></label>
       <input id="n_name" type="text" required maxlength="128" style="width:100%;margin:4px 0 12px">
+      <div class="field-error" id="err_n_name" aria-live="polite"></div>
       <label for="n_mem">Memory (MB)</label>
       <input id="n_mem" type="number" value="2048" min="128" max="65536" step="1" style="width:100%;margin:4px 0 12px">
+      <div class="field-error" id="err_n_mem" aria-live="polite"></div>
       <label for="n_cpu">CPU Cores</label>
       <input id="n_cpu" type="number" value="2" min="1" max="256" step="1" style="width:100%;margin:4px 0 12px">
+      <div class="field-error" id="err_n_cpu" aria-live="polite"></div>
       <label for="n_disk">Disk Size (GB)</label>
       <input id="n_disk" type="number" value="20" min="1" max="65536" step="1" style="width:100%;margin:4px 0 12px">
+      <div class="field-error" id="err_n_disk" aria-live="polite"></div>
     </div>
     <div class="btn-row">
       <button type="button" class="btn" data-action="closeDlg" data-dialog="newdlg">Cancel</button>
@@ -173,11 +218,12 @@
 <dialog id="snapdlg" aria-label="Snapshots">
   <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Snapshots</h3>
   <div style="padding:16px 24px">
-    <div style="display:flex;gap:8px;margin-bottom:12px">
-      <input id="s_tag" type="text" placeholder="Snapshot tag name" style="flex:1">
+    <div id="snapMeta" class="dialog-meta"></div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
+      <div style="flex:1"><label for="s_tag">Snapshot name</label><input id="s_tag" type="text" placeholder="e.g. Before update" style="width:100%;margin-top:4px"></div>
       <button type="button" class="btn primary" data-action="takeSnapshotFromDlg">Take</button>
     </div>
-    <div id="snaplist" style="max-height:260px;overflow-y:auto"></div>
+    <div id="snaplist" class="snapshot-list"></div>
   </div>
   <div class="btn-row">
     <button type="button" class="btn" data-action="closeDlg" data-dialog="snapdlg">Close</button>
@@ -331,7 +377,7 @@
 </div>
 
 <!-- Confirm dialog -->
-<dialog id="confirmdlg" class="dialog confirm-dialog">
+<dialog id="confirmdlg" class="dialog confirm-dialog" aria-labelledby="confirmmsg">
   <div class="dialog-body">
     <p id="confirmmsg"></p>
   </div>

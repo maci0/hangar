@@ -110,11 +110,18 @@ pub const SpiceClient = struct {
     /// arguments.  The port is formatted as a string because that's
     /// what the "port" property expects (GObject string property).
     pub fn connect(self: *SpiceClient, host: [*:0]const u8, port: c_int) bool {
-        if (self.connected) return false;
+        if (@atomicLoad(bool, &self.connected, .seq_cst)) return false;
 
         const session = c.spice_session_new();
         if (session == null) return false;
         self.session = session;
+
+        c.g_object_set(
+            @as(c.gpointer, @ptrCast(session)),
+            "enable-usbredir",
+            @as(c.gboolean, 0),
+            @as(?*anyopaque, null),
+        );
 
         // Set host/port properties via g_object_set (variadic).
         var port_buf: [16]u8 = undefined;
@@ -139,7 +146,7 @@ pub const SpiceClient = struct {
             return false;
         }
 
-        self.connected = true;
+        @atomicStore(bool, &self.connected, true, .seq_cst);
         return true;
     }
 
@@ -149,7 +156,7 @@ pub const SpiceClient = struct {
     /// `sendKey` / `sendPointer` (which check them under the mutex)
     /// see a consistent state — preventing a TOCTOU use-after-free.
     pub fn disconnect(self: *SpiceClient) void {
-        if (!self.connected) return;
+        if (!@atomicLoad(bool, &self.connected, .seq_cst)) return;
 
         if (self.session) |s| {
             c.spice_session_disconnect(s);
@@ -163,7 +170,7 @@ pub const SpiceClient = struct {
         self.width = 0;
         self.height = 0;
         self.stride = 0;
-        self.connected = false;
+        @atomicStore(bool, &self.connected, false, .seq_cst);
         @atomicStore(bool, &self.dirty, false, .seq_cst);
         self.mutex.unlock();
     }
@@ -225,7 +232,7 @@ pub const SpiceClient = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         const inp = self.inputs orelse return;
-        if (!self.connected) return;
+        if (!@atomicLoad(bool, &self.connected, .seq_cst)) return;
         if (down) {
             c.spice_inputs_channel_key_press(inp, scancode);
         } else {
@@ -238,13 +245,13 @@ pub const SpiceClient = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         const inp = self.inputs orelse return;
-        if (!self.connected) return;
+        if (!@atomicLoad(bool, &self.connected, .seq_cst)) return;
         c.spice_inputs_channel_position(inp, x, y, 0, button_state);
     }
 
     /// Returns true if connected to a SPICE server.
     pub fn isConnected(self: *const SpiceClient) bool {
-        return self.connected;
+        return @atomicLoad(bool, &self.connected, .seq_cst);
     }
 
     // ── GObject signal callbacks ───────────────────────────────────
@@ -424,6 +431,8 @@ test "fuzz: spice onInvalidate/onPrimaryDestroy self-side over random coords" {
 }
 
 test "fuzz: spice channel callbacks against real (unconnected) channels" {
+    if (std.c.getenv("HANGAR_RUN_SPICE_GLIB_TESTS") == null) return error.SkipZigTest;
+
     // Build a real SpiceSession + SpiceChannels of each type WITHOUT a network
     // connection (like the vnc test uses a real rfbClient). This drives the
     // real branches of onChannelNew/onChannelDestroy/onPrimaryCreate —
@@ -432,6 +441,12 @@ test "fuzz: spice channel callbacks against real (unconnected) channels" {
     // else branch) — rather than only the null-guard paths.
     const session = c.spice_session_new() orelse return;
     defer c.g_object_unref(session);
+    c.g_object_set(
+        @as(c.gpointer, @ptrCast(session)),
+        "enable-usbredir",
+        @as(c.gboolean, 0),
+        @as(?*anyopaque, null),
+    );
     const cl = SpiceClient.new() orelse return;
     defer cl.free();
 

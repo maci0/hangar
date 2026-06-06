@@ -414,14 +414,20 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     const boot_str = try std.fmt.bufPrint(&bufs.boot_buf, "order={s},menu=on", .{std.mem.span(config.boot_order.toStr())});
     try args.append(alloc, boot_str);
 
+    const wants_virgl = config.enable_3d and config.gpu_device.needsVirgl();
+    const embedded_spice_gl = config.embed_display and config.display == .spice and wants_virgl;
+
     if (config.embed_display) {
         // When embedding the display inside our app, QEMU must not open
-        // its own window — we set `-display none` and connect as a
-        // VNC/SPICE client instead.
+        // its own window. For virgl-over-SPICE we still need a GL-capable
+        // headless display backend, otherwise QEMU rejects virtio-*-gl.
         try args.append(alloc, "-display");
-        try args.append(alloc, "none");
+        try args.append(alloc, if (embedded_spice_gl) "egl-headless,gl=on" else "none");
         if (config.display == .spice) {
-            const spice_str = try std.fmt.bufPrint(&bufs.spice_buf, "port={d},disable-ticketing=on", .{config.spice_port});
+            const spice_str = if (embedded_spice_gl)
+                try std.fmt.bufPrint(&bufs.spice_buf, "port={d},disable-ticketing=on,gl=on", .{config.spice_port})
+            else
+                try std.fmt.bufPrint(&bufs.spice_buf, "port={d},disable-ticketing=on", .{config.spice_port});
             try args.append(alloc, "-spice");
             try args.append(alloc, spice_str);
         } else {
@@ -435,7 +441,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     } else {
         try args.append(alloc, "-display");
         // 3D acceleration (virgl) needs a GL-capable native display.
-        if (config.enable_3d and (config.display == .gtk or config.display == .sdl)) {
+        if (config.enable_3d and (config.display == .gtk or config.display == .sdl or config.display == .spice)) {
             const disp_str = try std.fmt.bufPrint(&bufs.disp_buf, "{s},gl=on", .{std.mem.span(config.display.toStr())});
             try args.append(alloc, disp_str);
         } else {
@@ -444,7 +450,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     }
 
     // GPU device selection.
-    const gl_ok = config.enable_3d and (config.display == .gtk or config.display == .sdl or config.display == .spice);
+    const gl_ok = wants_virgl and ((config.embed_display and embedded_spice_gl) or (!config.embed_display and (config.display == .gtk or config.display == .sdl or config.display == .spice)));
     if (gl_ok and config.gpu_device.needsVirgl()) {
         // virgl 3D-accelerated variants: virtio-gpu-gl or virtio-vga-gl
         const dev_str: []const u8 = switch (config.gpu_device) {
@@ -1574,6 +1580,32 @@ test "qemu: buildScriptStr with spice embed" {
     defer talloc.free(s);
     try expect(has(s, "-spice"));
     try expect(has(s, "disable-ticketing"));
+}
+
+test "qemu: buildScriptStr embedded SPICE virgl uses EGL headless GL" {
+    var cfg = vm.VmConfig{};
+    cfg.embed_display = true;
+    cfg.display = .spice;
+    cfg.enable_3d = true;
+    cfg.gpu_device = .virtio_vga_gl;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "egl-headless,gl=on"));
+    try expect(has(s, "disable-ticketing=on,gl=on"));
+    try expect(has(s, "virtio-vga-gl"));
+}
+
+test "qemu: buildScriptStr embedded VNC virgl falls back to non-GL virtio" {
+    var cfg = vm.VmConfig{};
+    cfg.embed_display = true;
+    cfg.display = .vnc;
+    cfg.enable_3d = true;
+    cfg.gpu_device = .virtio_vga_gl;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-vnc"));
+    try expect(!has(s, "virtio-vga-gl"));
+    try expect(has(s, "virtio"));
 }
 
 test "qemu: stopVm forceStopVm with null pid are no-ops" {

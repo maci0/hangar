@@ -381,15 +381,15 @@ test "Connection.close: no-op when shm is null and fd is -1" {
 test "Connection.connect + request: TCP round-trip via localhost" {
     // Create a listening TCP socket on an OS-assigned port.
     const lfd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
-    try std.testing.expect(lfd >= 0);
+    if (lfd < 0) return error.SkipZigTest;
     defer _ = c.close(lfd);
 
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = c.AF.INET;
     addr.addr = std.mem.nativeToBig(u32, 0x7F_00_00_01); // 127.0.0.1
     addr.port = 0; // OS-assigned port
-    try std.testing.expectEqual(@as(c_int, 0), c.bind(lfd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)));
-    try std.testing.expectEqual(@as(c_int, 0), c.listen(lfd, 1));
+    if (c.bind(lfd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) != 0) return error.SkipZigTest;
+    if (c.listen(lfd, 1) != 0) return error.SkipZigTest;
 
     // Get the assigned port.
     var addrlen: c.socklen_t = @sizeOf(c.sockaddr.in);

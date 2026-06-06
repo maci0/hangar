@@ -46,6 +46,8 @@ var tcp_sock_fd: c.fd_t = -1;
 var unix_sock_fd: c.fd_t = -1;
 
 const c = std.c;
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 // POSIX networking constants (not in std.c in Zig 0.16)
 const AF_INET: c_uint = 2;
@@ -3224,6 +3226,37 @@ fn autoprotectTicker() void {
 
 // ── Tests ──────────────────────────────────────────────────────────
 
+const TestConfigHome = struct {
+    path_buf: [128]u8 = undefined,
+    path_len: usize = 0,
+    saved_config_home: ?[]const u8 = null,
+
+    fn init(tag: []const u8) !TestConfigHome {
+        var self = TestConfigHome{
+            .saved_config_home = appio.getenv("HANGAR_CONFIG_HOME"),
+        };
+        const path = try std.fmt.bufPrintZ(&self.path_buf, "/tmp/hangar-web-server-{d}-{s}", .{ c.getpid(), tag });
+        self.path_len = path.len;
+        _ = std.Io.Dir.cwd().deleteTree(appio.io(), path[0..path.len]) catch {};
+        if (setenv("HANGAR_CONFIG_HOME", path.ptr, 1) != 0) return error.SetEnvFailed;
+        return self;
+    }
+
+    fn deinit(self: *const TestConfigHome) void {
+        _ = std.Io.Dir.cwd().deleteTree(appio.io(), self.path_buf[0..self.path_len]) catch {};
+        if (self.saved_config_home) |v| {
+            var zbuf: [512]u8 = undefined;
+            const z = std.fmt.bufPrintZ(&zbuf, "{s}", .{v}) catch {
+                _ = unsetenv("HANGAR_CONFIG_HOME");
+                return;
+            };
+            _ = setenv("HANGAR_CONFIG_HOME", z.ptr, 1);
+        } else {
+            _ = unsetenv("HANGAR_CONFIG_HOME");
+        }
+    }
+};
+
 test "parseIdx: extracts numeric index from URL path" {
     const req = "GET /api/power/42 HTTP/1.1\r\nHost: localhost\r\n\r\n";
     const idx = parseIdx(req, "/api/power/");
@@ -4072,6 +4105,9 @@ test "handleUndo: returns 'full' when vm_count is at MAX_VMS" {
 }
 
 test "handleUndo: restores the deleted VM at its original index" {
+    var cfg_home = try TestConfigHome.init("undo");
+    defer cfg_home.deinit();
+
     const restorer = struct {
         fn restore() void {
             appstate.vm_count = prev_count;
@@ -4255,7 +4291,7 @@ test "config body: fuzz field parsing never panics" {
     var prng = std.Random.DefaultPrng.init(0xC0FFEE);
     const rnd = prng.random();
     const fields = [_][]const u8{
-        "theme", "default_memory_mb", "default_cpu_cores",
+        "theme",               "default_memory_mb",    "default_cpu_cores",
         "autoprotect_enabled", "autoprotect_interval", "autoprotect_max",
         "default_vm_dir",
     };
@@ -4293,6 +4329,9 @@ test "config body: fuzz field parsing never panics" {
 // ── VNet save handler tests ──
 
 test "handleVnetsSave: saves valid vnet JSON" {
+    var cfg_home = try TestConfigHome.init("vnets-valid");
+    defer cfg_home.deinit();
+
     const json =
         \\{"networks":[{"name":"VMnet0","type":"bridge","subnet":"","mask":"","dhcp":false,"dhcp_start":"","dhcp_end":"","host_iface":"","gateway":"","port_forwards":""}]}
     ;
@@ -4315,6 +4354,9 @@ test "handleVnetsSave: malformed JSON returns parse error" {
 }
 
 test "handleVnetsSave: empty JSON object returns defaults (ok)" {
+    var cfg_home = try TestConfigHome.init("vnets-empty");
+    defer cfg_home.deinit();
+
     const req = "POST /api/vnets/save HTTP/1.1\r\nHost: localhost\r\n\r\n{}";
     const result = try handleVnetsSave(req);
     // Empty JSON yields count=0 and body.len > 2, but vnet.fromJson("{}") should work.
@@ -4329,16 +4371,33 @@ pub fn main() !void {
     appstate.g_vmm = hv_backend.createVmm(.auto);
     appstate.g_vmm_ready = true;
 
-    // Allow custom API key via environment variable.
+    // Allow custom API key via environment variable. Fail fast on an invalid
+    // value instead of silently falling back to the weak built-in default —
+    // an operator who set KV_API_KEY expects it to take effect.
     if (appio.getenv("KV_API_KEY")) |key| {
-        if (key.len > 0 and key.len <= 64) {
-            auth_token_len = key.len;
-            @memcpy(auth_token[0..key.len], key);
+        if (key.len == 0 or key.len > 64) {
+            logErr("KV_API_KEY must be 1-64 bytes — refusing to start with an invalid key");
+            return;
         }
+        auth_token_len = key.len;
+        @memcpy(auth_token[0..key.len], key);
+    } else {
+        // No custom key: the built-in default API key is in effect and the TCP
+        // listener binds to all interfaces. Warn loudly that anyone who can
+        // reach this port can control VMs.
+        logErr("WARNING: KV_API_KEY not set — serving with the default API key on a port reachable from all interfaces. Set KV_API_KEY to a strong secret for any non-local deployment.");
     }
 
     const port: u16 = if (appio.getenv("KV_PORT")) |env| blk: {
-        break :blk std.fmt.parseInt(u16, env, 10) catch 9080;
+        const p = std.fmt.parseInt(u16, env, 10) catch {
+            logErr("KV_PORT is not a valid port number — refusing to start");
+            return;
+        };
+        if (p == 0) {
+            logErr("KV_PORT must be 1-65535 — refusing to start");
+            return;
+        }
+        break :blk p;
     } else 9080;
 
     const sock = c.socket(AF_INET6, SOCK_STREAM, 0);
@@ -4645,6 +4704,9 @@ test "handleReorder: same from and to returns 'ok' (no-op)" {
 }
 
 test "handleReorder: valid reorder produces 'ok'" {
+    var cfg_home = try TestConfigHome.init("reorder");
+    defer cfg_home.deinit();
+
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
     appstate.vm_count = 2;
@@ -4716,6 +4778,9 @@ test "handleSave: path traversal in iso_path returns 'bad path'" {
 }
 
 test "handleSave: valid fields produce 'ok'" {
+    var cfg_home = try TestConfigHome.init("save-valid");
+    defer cfg_home.deinit();
+
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
     appstate.vm_count = 1;

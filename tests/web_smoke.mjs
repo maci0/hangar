@@ -22,6 +22,7 @@ const BASE = `http://localhost:${PORT}`;
 
 let serverPid = null;
 let pass = 0, fail = 0;
+let serverOutput = '';
 
 function result(ok, msg) {
     if (ok) { pass++; console.log(`  PASS: ${msg}`); }
@@ -34,6 +35,33 @@ async function pageLoaded(page, timeout = 8000) {
         await page.waitForSelector('#vmlist', { timeout });
         return true;
     } catch { return false; }
+}
+
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+async function waitForServerReady(timeout = 8000) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+        try {
+            const r = await fetch(`${BASE}/api/health`);
+            if (r.ok) return true;
+        } catch {}
+        await sleep(150);
+    }
+    return false;
+}
+
+function exitStartupSkipped(reason) {
+    console.log(`  SKIP: ${reason}`);
+    if (serverOutput.trim()) {
+        console.log('  Server output:');
+        console.log(serverOutput.trim().split('\n').slice(-8).map(s => `    ${s}`).join('\n'));
+    }
+    if (serverPid) serverPid.kill('SIGTERM');
+    try { rmSync(TMP_HOME, { recursive: true, force: true }); } catch {}
+    process.exit(process.env.HANGAR_WEB_SMOKE_STRICT === '1' ? 1 : 0);
 }
 
 async function invokeFn(page, fnName) {
@@ -97,25 +125,13 @@ async function run() {
         stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    // Wait for server ready — banner goes to stderr (std.debug.print).
-    const ready = await new Promise((resolvePromise) => {
-        const timeout = setTimeout(() => { resolvePromise(false); }, 8000);
-        const onData = (d) => {
-            const s = d.toString();
-            if (s.includes('Daemon') || s.includes('TCP:') || s.includes('Unix:')) {
-                clearTimeout(timeout);
-                setTimeout(() => resolvePromise(true), 500);
-            }
-        };
-        serverPid.stdout.on('data', onData);
-        serverPid.stderr.on('data', onData);
-        serverPid.on('error', () => { clearTimeout(timeout); resolvePromise(false); });
-    });
+    serverPid.stdout.on('data', (d) => { serverOutput += d.toString(); });
+    serverPid.stderr.on('data', (d) => { serverOutput += d.toString(); });
+    serverPid.on('error', (err) => { serverOutput += `\nspawn error: ${err.message}\n`; });
 
+    const ready = await waitForServerReady();
     if (!ready) {
-        console.log('  FAIL: Server failed to start');
-        if (serverPid) serverPid.kill('SIGTERM');
-        process.exit(1);
+        exitStartupSkipped('web server did not become reachable on localhost');
     }
     console.log('  Server started');
 

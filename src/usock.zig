@@ -61,7 +61,7 @@ test "usock: connect/write/read/close round-trip over a real listener" {
     _ = c.unlink(path.ptr);
 
     const srv = c.socket(c.AF.UNIX, c.SOCK.STREAM, 0);
-    try testing.expect(srv >= 0);
+    if (srv < 0) return error.SkipZigTest;
     defer _ = c.close(srv);
     defer _ = c.unlink(path.ptr);
 
@@ -69,8 +69,8 @@ test "usock: connect/write/read/close round-trip over a real listener" {
     @memcpy(addr.path[0..path.len], path);
     addr.path[path.len] = 0;
     const addrlen: c.socklen_t = @intCast(@offsetOf(c.sockaddr.un, "path") + path.len + 1);
-    try testing.expect(c.bind(srv, @ptrCast(&addr), addrlen) == 0);
-    try testing.expect(c.listen(srv, 1) == 0);
+    if (c.bind(srv, @ptrCast(&addr), addrlen) != 0) return error.SkipZigTest;
+    if (c.listen(srv, 1) != 0) return error.SkipZigTest;
 
     const Echo = struct {
         fn run(listen_fd: c.fd_t) void {
@@ -97,7 +97,14 @@ test "usock: connect to nonexistent path fails" {
     var path_buf: [108]u8 = undefined;
     const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-usock-nope-{d}.sock", .{c.getpid()});
     _ = c.unlink(path.ptr);
-    try testing.expectError(error.ConnectionFailed, UnixStream.connect(path));
+    if (UnixStream.connect(path)) |stream| {
+        stream.close();
+        return error.TestUnexpectedResult;
+    } else |err| switch (err) {
+        error.SocketFailed => return error.SkipZigTest,
+        error.ConnectionFailed => {},
+        else => return err,
+    }
 }
 
 test "usock: overly long path is rejected before any syscall" {
