@@ -4,6 +4,31 @@
 const std = @import("std");
 const c = std.c;
 
+/// Client socket I/O timeout (ms). Prevents a CLI command (vmrun/remote) from
+/// hanging forever against a dead or wedged daemon that accepts the connection
+/// but never replies.
+const CLIENT_IO_TIMEOUT_MS = 15_000;
+
+/// Default TCP port, used when a URL omits or has an unparseable port.
+const DEFAULT_PORT: u16 = 9080;
+
+/// Parse a port from a host:port tail, stopping at an optional trailing path.
+/// Falls back to DEFAULT_PORT on a missing or invalid value.
+fn parsePort(s: []const u8) u16 {
+    const end = std.mem.indexOfScalar(u8, s, '/') orelse s.len;
+    return std.fmt.parseInt(u16, s[0..end], 10) catch DEFAULT_PORT;
+}
+
+/// Best-effort recv/send timeout on a client socket fd.
+fn setFdTimeout(fd: c.fd_t, ms: u32) void {
+    const tv: c.timeval = .{
+        .sec = @intCast(ms / 1000),
+        .usec = @intCast((ms % 1000) * 1000),
+    };
+    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+    _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.SNDTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+}
+
 /// Transport protocol variants.
 pub const Proto = enum {
     unix, // unix:///path/to/socket — AF_UNIX same-machine
@@ -16,12 +41,12 @@ pub const Url = struct {
     proto: Proto,
     host: [128]u8 = [_]u8{0} ** 128,
     host_len: usize = 0,
-    port: u16 = 9080,
+    port: u16 = DEFAULT_PORT,
     path: [256]u8 = [_]u8{0} ** 256,
     path_len: usize = 0,
 
     pub fn parse(s: []const u8) ?Url {
-        var u = Url{ .proto = .tcp, .port = 9080 };
+        var u = Url{ .proto = .tcp, .port = DEFAULT_PORT };
         var rest: []const u8 = s;
 
         if (std.mem.startsWith(u8, s, "unix://")) {
@@ -50,12 +75,7 @@ pub const Url = struct {
                 std.mem.copyForwards(u8, &u.host, host_slice[0..u.host_len]);
                 const after = rest[rbracket + 1 ..];
                 if (after.len > 0 and after[0] == ':') {
-                    const port_str = after[1..];
-                    if (std.mem.indexOfScalar(u8, port_str, '/')) |slash| {
-                        u.port = std.fmt.parseInt(u16, port_str[0..slash], 10) catch 9080;
-                    } else {
-                        u.port = std.fmt.parseInt(u16, port_str, 10) catch 9080;
-                    }
+                    u.port = parsePort(after[1..]);
                 }
                 return u;
             }
@@ -63,12 +83,7 @@ pub const Url = struct {
         if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
             u.host_len = @min(colon, u.host.len);
             std.mem.copyForwards(u8, &u.host, rest[0..u.host_len]);
-            const port_str = rest[colon + 1 ..];
-            if (std.mem.indexOfScalar(u8, port_str, '/')) |slash| {
-                u.port = std.fmt.parseInt(u16, port_str[0..slash], 10) catch 9080;
-            } else {
-                u.port = std.fmt.parseInt(u16, port_str, 10) catch 9080;
-            }
+            u.port = parsePort(rest[colon + 1 ..]);
         } else {
             u.host_len = @min(rest.len, u.host.len);
             std.mem.copyForwards(u8, &u.host, rest[0..u.host_len]);
@@ -150,6 +165,7 @@ fn connectUnixFd(url: *const Url) c.fd_t {
     @memcpy(addr.path[0..path_bytes.len], path_bytes);
     addr.path[path_bytes.len] = 0;
     const addrlen = @offsetOf(c.sockaddr.un, "path") + path_bytes.len + 1;
+    setFdTimeout(sock, CLIENT_IO_TIMEOUT_MS);
     if (c.connect(sock, @ptrCast(&addr), @intCast(addrlen)) != 0) {
         _ = c.close(sock);
         return -1;
@@ -191,6 +207,7 @@ fn connectTcpFd(url: *const Url) c.fd_t {
     const sock = c.socket(@intCast(ai.family), c.SOCK.STREAM, 0);
     if (sock < 0) return -1;
 
+    setFdTimeout(sock, CLIENT_IO_TIMEOUT_MS);
     if (c.connect(sock, @ptrCast(&addr), ai.addrlen) != 0) {
         _ = c.close(sock);
         return -1;

@@ -44,6 +44,20 @@ pub const UnixStream = struct {
         return @intCast(n);
     }
 
+    /// Apply a receive + send timeout (milliseconds) so blocking reads/writes
+    /// cannot hang forever when the peer (e.g. a frozen QEMU) stops responding.
+    /// A timed-out `read`/`write` surfaces as `error.ReadFailed`/`error.WriteFailed`.
+    /// Best-effort: failure to set the option is ignored (the socket simply
+    /// stays in its default blocking mode).
+    pub fn setTimeout(self: UnixStream, ms: u32) void {
+        const tv: c.timeval = .{
+            .sec = @intCast(ms / 1000),
+            .usec = @intCast((ms % 1000) * 1000),
+        };
+        _ = c.setsockopt(self.fd, c.SOL.SOCKET, c.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+        _ = c.setsockopt(self.fd, c.SOL.SOCKET, c.SO.SNDTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+    }
+
     pub fn close(self: UnixStream) void {
         _ = c.close(self.fd);
     }

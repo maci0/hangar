@@ -2,23 +2,30 @@
 //! Process-wide `std.Io` instance and small timing helpers.
 //!
 //! Zig 0.16 routes filesystem, process, and networking calls through the
-//! `std.Io` interface, which must be threaded through every call. Hangar is a
-//! synchronous GUI app, so we keep a single lazily-initialised threaded `Io`
-//! and hand it out on demand rather than plumbing it through every function.
+//! `std.Io` interface, which must be threaded through every call. Hangar's web
+//! server and its background tickers all run synchronous blocking I/O, so we
+//! keep a single lazily-initialised threaded `Io` and hand it out on demand
+//! rather than plumbing it through every function.
 
 const std = @import("std");
+const sync = @import("sync.zig");
 
 var instance: std.Io.Threaded = undefined;
 var ready: bool = false;
+var ready_mutex: sync.SpinMutex = .{};
 
 /// Return the shared `Io`. Lazily initialised on first use.
 ///
-/// All callers run on the main thread, so the unsynchronised init flag is
-/// safe. The c_allocator backs the rare async/spawn arena allocations.
+/// Thread-safe: request handlers and background tickers may call this after
+/// the web server has spawned worker threads.
 pub fn io() std.Io {
-    if (!ready) {
-        instance = std.Io.Threaded.init(std.heap.c_allocator, .{});
-        ready = true;
+    if (!@atomicLoad(bool, &ready, .acquire)) {
+        ready_mutex.lock();
+        defer ready_mutex.unlock();
+        if (!ready) {
+            instance = std.Io.Threaded.init(std.heap.c_allocator, .{});
+            @atomicStore(bool, &ready, true, .release);
+        }
     }
     return instance.io();
 }
@@ -50,10 +57,9 @@ const testing = std.testing;
 
 test "appio: io() returns a usable instance and caches it" {
     const a = io();
-    _ = a;
     const b = io(); // second call must hit the cached instance, not re-init
-    _ = b;
     try testing.expect(ready);
+    try testing.expect(std.meta.eql(a, b)); // same cached Io, not a fresh instance
 }
 
 extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;

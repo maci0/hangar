@@ -13,7 +13,7 @@
 //!   5. `reapVm`       — blocking `waitpid`; for synchronous cleanup (e.g. delete)
 //!
 //! All buffer-formatted arguments are kept in function-scoped storage so
-//! that their slices remain valid through the `child.spawn()` call.
+//! that their slices remain valid through the `forkExec` call.
 
 const std = @import("std");
 const vm = @import("vm.zig");
@@ -224,14 +224,14 @@ var virtio_mutex: sync.SpinMutex = .{};
 
 /// Formatting buffers for QEMU arguments.
 ///
-/// These must outlive the `spawn()` call because Zig's `Child.init` stores
-/// slices by reference — if the buffers were stack-local inside `buildArgs`,
-/// they'd be freed before `spawn()` reads them.
+/// These must outlive the `forkExec` call: `buildArgs` stores slices into
+/// these buffers, so if they were stack-local inside `buildArgs` they'd be
+/// freed before the argv is handed to `execvp`.
 const ArgBuffers = struct {
     mach_buf: [64]u8 = undefined,
     smp_buf: [32]u8 = undefined,
     mem_buf: [32]u8 = undefined,
-    disk_buf: [vm.MAX_PATH + 64]u8 = undefined,
+    disk_buf: [vm.MAX_PATH + 192]u8 = undefined,
     cdrom_buf: [vm.MAX_PATH + 64]u8 = undefined,
     tools_buf: [vm.MAX_PATH + 64]u8 = undefined,
     tools_iso_buf: [vm.MAX_PATH]u8 = undefined,
@@ -326,32 +326,25 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     try args.append(alloc, mem_str);
 
     if (config.hasDisk()) {
-        const disk_str = try std.fmt.bufPrint(&bufs.disk_buf, "file={s},format={s},if=virtio,cache={s}", .{
+        // Throttle options are part of the SAME -drive that defines the disk —
+        // a standalone `-drive throttling.*` with no file= makes QEMU reject
+        // the command line ("Device needs media, but drive is empty").
+        const base = try std.fmt.bufPrint(&bufs.disk_buf, "file={s},format={s},if=virtio,cache={s}", .{
             config.getDiskPathSlice(),
             std.mem.span(config.disk_format.toStr()),
             std.mem.span(config.disk_cache.toStr()),
         });
-        try args.append(alloc, "-drive");
-        try args.append(alloc, disk_str);
-
-        if (config.disk_bps_throttle > 0 or config.disk_iops_throttle > 0) {
-            var throttle_buf: [128]u8 = undefined;
-            var tpos: usize = 0;
-            if (config.disk_bps_throttle > 0) {
-                const chunk = try std.fmt.bufPrint(throttle_buf[tpos..], "throttling.bps-total={d}", .{config.disk_bps_throttle});
-                tpos += chunk.len;
-            }
-            if (config.disk_iops_throttle > 0) {
-                if (tpos > 0) {
-                    throttle_buf[tpos] = ',';
-                    tpos += 1;
-                }
-                const chunk = try std.fmt.bufPrint(throttle_buf[tpos..], "throttling.iops-total={d}", .{config.disk_iops_throttle});
-                tpos += chunk.len;
-            }
-            try args.append(alloc, "-drive");
-            try args.append(alloc, throttle_buf[0..tpos]);
+        var dpos: usize = base.len;
+        if (config.disk_bps_throttle > 0) {
+            const chunk = try std.fmt.bufPrint(bufs.disk_buf[dpos..], ",throttling.bps-total={d}", .{config.disk_bps_throttle});
+            dpos += chunk.len;
         }
+        if (config.disk_iops_throttle > 0) {
+            const chunk = try std.fmt.bufPrint(bufs.disk_buf[dpos..], ",throttling.iops-total={d}", .{config.disk_iops_throttle});
+            dpos += chunk.len;
+        }
+        try args.append(alloc, "-drive");
+        try args.append(alloc, bufs.disk_buf[0..dpos]);
     }
 
     // Optional second (data) disk, attached as another virtio drive.
@@ -497,9 +490,11 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         },
     }
 
-    // Additional displays for multi-monitor support.
+    // Additional displays for multi-monitor support.  Clamp here so a value
+    // loaded from a hand-edited vms.json cannot explode the device list.
+    const display_count = std.math.clamp(config.num_displays, 1, vm.MAX_DISPLAYS);
     var disp_n: u32 = 1;
-    while (disp_n < config.num_displays) : (disp_n += 1) {
+    while (disp_n < display_count) : (disp_n += 1) {
         try args.append(alloc, "-device");
         try args.append(alloc, "virtio-gpu");
     }
@@ -706,7 +701,8 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 }
 
 /// Start a QEMU process for the given VM configuration.
-/// QEMU stderr is written to /var/tmp/hangar-vm-<name>.log for diagnostics.
+/// QEMU stderr is written to /var/tmp/hangar-vm-<name>.log for diagnostics
+/// when the VM has a name; otherwise it is discarded (/dev/null).
 pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
     var args: std.ArrayList([]const u8) = .empty;
     defer args.deinit(allocator);
@@ -1711,6 +1707,18 @@ test "qemu: buildScriptStr with both throttles emits combined flags" {
     defer talloc.free(s);
     try expect(has(s, "throttling.bps-total=104857600"));
     try expect(has(s, "throttling.iops-total=5000"));
+}
+
+test "qemu: throttle options ride on the disk's own -drive (not a fileless drive)" {
+    // Regression: a standalone `-drive throttling.*` with no file= makes QEMU
+    // reject the command line. Throttle must be appended to the file= drive.
+    var cfg = vm.VmConfig{};
+    cfg.setDiskPath("/tmp/disk.qcow2");
+    cfg.disk_bps_throttle = 104857600;
+    cfg.disk_iops_throttle = 5000;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "file=/tmp/disk.qcow2,format=qcow2,if=virtio,cache=writeback,throttling.bps-total=104857600,throttling.iops-total=5000"));
 }
 
 test "qemu: buildScriptStr with hyperv_enlightenments emits hv flags" {

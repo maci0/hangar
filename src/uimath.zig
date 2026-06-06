@@ -21,9 +21,11 @@ pub fn scaleToolbarWidths(comptime N: usize, ref_w: [N]i32, ww: i32) [N]i32 {
 /// Compute the gap between toolbar buttons for a given window width.
 /// `scaled_w` has the (possibly scaled) button widths; `n_buttons` is the total count.
 pub fn computeToolbarGap(ww: i32, scaled_w: []const i32, n_buttons: usize) i32 {
+    // With 0 or 1 buttons there are no inter-button gaps; avoid /0.
+    if (n_buttons <= 1) return 3;
     var tw: i32 = 0;
     for (scaled_w) |w| tw += w;
-    return @max(3, @divTrunc(ww - 10 - tw, @as(i32, @intCast(n_buttons -| 1))));
+    return @max(3, @divTrunc(ww - 10 - tw, @as(i32, @intCast(n_buttons - 1))));
 }
 
 // ── Display: widget-space → framebuffer-space click mapping ──────────
@@ -185,6 +187,12 @@ test "computeToolbarGap: wider window increases gap" {
     const scaled = [_]i32{80} ** 15;
     const gap = computeToolbarGap(2400, &scaled, 15);
     try t.expectEqual(@as(i32, 85), gap);
+}
+
+test "computeToolbarGap: 0 or 1 button does not divide by zero" {
+    const scaled = [_]i32{80};
+    try t.expectEqual(@as(i32, 3), computeToolbarGap(1200, &scaled, 1));
+    try t.expectEqual(@as(i32, 3), computeToolbarGap(1200, scaled[0..0], 0));
 }
 
 test "computeToolbarGap: gap at least 3" {

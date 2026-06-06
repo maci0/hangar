@@ -2,9 +2,9 @@
 //! vmrun — CLI tool for managing Hangar VMs remotely.
 //!
 //! Connects to a Hangar web server via the transport abstraction layer
-//! and issues commands: list, start, stop, restart, clone, delete, suspend,
-//! pause, resume, shutdown, reset, rename, cad, snapshots, linked-clone,
-//! import, export.
+//! and issues commands: list, status, start, stop, restart, clone,
+//! linked-clone, delete, suspend, pause, resume, shutdown, reset, rename,
+//! cad, snapshot, import, export.
 //!
 //! Usage:
 //!   vmrun <server-url> list
@@ -62,38 +62,95 @@ const usage =
     \\  status                  Show server health
     \\
     \\Server URL formats:
-    \\  http://host:port   HTTP over TCP (default)
+    \\  http://host:port   HTTP over TCP (port defaults to 9080)
     \\  unix:///path       Unix domain socket
+    \\  shm:///name        POSIX shared memory (same-machine, fastest)
+    \\
+    \\Global:
+    \\  help, -h, --help     Show this help and exit
+    \\  -v, --version        Show version and exit
+    \\
+    \\Exit codes: 0 success, 1 runtime error, 2 usage error.
+    \\
+    \\Examples:
+    \\  vmrun http://localhost:9080 list
+    \\  vmrun http://localhost:9080 start myvm
+    \\  vmrun unix:///run/hangar.sock snapshot take 0 before-update
     \\
 ;
 
+const version = "vmrun 0.1.0\n";
+
+/// Write a slice to a file descriptor using its real length.
+/// Replaces error-prone hand-counted byte lengths in `c.write` calls.
+fn fdWrite(fd: c_int, msg: []const u8) void {
+    _ = c.write(fd, msg.ptr, msg.len);
+}
+
+/// Exit code for usage/argument errors (POSIX convention: 2).
+const EXIT_USAGE: u8 = 2;
+
 pub fn main(init: std.process.Init) !void {
+    // Translate any runtime error from the command dispatch into a clean,
+    // single-line diagnostic and exit code 1 (the documented "runtime error"
+    // code) instead of letting Zig dump an error-return trace at the user.
+    run(init) catch |err| {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Error: {s}\n", .{@errorName(err)}) catch "Error: command failed\n";
+        fdWrite(c.STDERR_FILENO, msg);
+        std.process.exit(1);
+    };
+}
+
+fn run(init: std.process.Init) !void {
     const allocator = std.heap.page_allocator;
 
     var args_iter = std.process.Args.Iterator.init(init.minimal.args);
 
-    const prog = args_iter.next() orelse {
-        _ = c.write(c.STDERR_FILENO, usage.ptr, usage.len);
-        std.process.exit(1);
-    };
-    _ = prog;
+    _ = args_iter.next(); // program name
 
     const server_url = args_iter.next() orelse {
-        _ = c.write(c.STDERR_FILENO, usage.ptr, usage.len);
-        std.process.exit(1);
-    };
-    const command = args_iter.next() orelse {
-        _ = c.write(c.STDERR_FILENO, usage.ptr, usage.len);
-        std.process.exit(1);
+        fdWrite(c.STDERR_FILENO, usage);
+        std.process.exit(EXIT_USAGE);
     };
 
+    // Help / version are accepted in the first positional slot.
+    if (std.mem.eql(u8, server_url, "-h") or std.mem.eql(u8, server_url, "--help") or std.mem.eql(u8, server_url, "help")) {
+        fdWrite(c.STDOUT_FILENO, usage);
+        std.process.exit(0);
+    }
+    if (std.mem.eql(u8, server_url, "-v") or std.mem.eql(u8, server_url, "--version")) {
+        fdWrite(c.STDOUT_FILENO, version);
+        std.process.exit(0);
+    }
+
+    const command = args_iter.next() orelse {
+        fdWrite(c.STDERR_FILENO, usage);
+        std.process.exit(EXIT_USAGE);
+    };
+
+    // Help / version are also accepted in the command slot (e.g. after the
+    // URL) so `vmrun <url> --help` works and never needs a connection.
+    if (std.mem.eql(u8, command, "-h") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "help")) {
+        fdWrite(c.STDOUT_FILENO, usage);
+        std.process.exit(0);
+    }
+    if (std.mem.eql(u8, command, "-v") or std.mem.eql(u8, command, "--version")) {
+        fdWrite(c.STDOUT_FILENO, version);
+        std.process.exit(0);
+    }
+
     const url = transport.Url.parse(server_url) orelse {
-        _ = c.write(c.STDERR_FILENO, "Error: invalid server URL\n", 26);
-        std.process.exit(1);
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Error: invalid server URL '{s}' (expected http://host:port, unix:///path, or shm:///name)\n", .{server_url}) catch "Error: invalid server URL\n";
+        fdWrite(c.STDERR_FILENO, msg);
+        std.process.exit(EXIT_USAGE);
     };
 
     var conn = transport.Connection.connect(&url) orelse {
-        _ = c.write(c.STDERR_FILENO, "Error: failed to connect to server\n", 34);
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Error: failed to connect to server '{s}' (is the daemon running?)\n", .{server_url}) catch "Error: failed to connect to server\n";
+        fdWrite(c.STDERR_FILENO, msg);
         std.process.exit(1);
     };
     defer conn.close();
@@ -104,48 +161,48 @@ pub fn main(init: std.process.Init) !void {
         return cmdStatus(allocator, &conn, init.io);
     } else if (std.mem.eql(u8, command, "import")) {
         const path = args_iter.next() orelse {
-            _ = c.write(c.STDERR_FILENO, "Error: missing disk path\n", 25);
-            std.process.exit(1);
+            fdWrite(c.STDERR_FILENO, "Error: missing disk path\n");
+            std.process.exit(EXIT_USAGE);
         };
         return cmdImport(allocator, &conn, path, init.io);
     } else if (std.mem.eql(u8, command, "snapshot")) {
         const sub = args_iter.next() orelse {
-            _ = c.write(c.STDERR_FILENO, "Error: snapshot command requires subcommand: list|take|revert|delete\n", 69);
-            std.process.exit(1);
+            fdWrite(c.STDERR_FILENO, "Error: snapshot command requires subcommand: list|take|revert|delete\n");
+            std.process.exit(EXIT_USAGE);
         };
         const target = args_iter.next() orelse {
-            _ = c.write(c.STDERR_FILENO, "Error: missing VM name or index\n", 31);
-            std.process.exit(1);
+            fdWrite(c.STDERR_FILENO, "Error: missing VM name or index\n");
+            std.process.exit(EXIT_USAGE);
         };
         const idx = resolveVm(allocator, &conn, target) orelse {
             var buf: [128]u8 = undefined;
             const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
-            _ = c.write(c.STDERR_FILENO, msg.ptr, msg.len);
+            fdWrite(c.STDERR_FILENO, msg);
             std.process.exit(1);
         };
         if (std.mem.eql(u8, sub, "list")) {
             return cmdSnapshotList(allocator, &conn, idx, init.io);
         } else if (std.mem.eql(u8, sub, "take")) {
             const tag = args_iter.next() orelse {
-                _ = c.write(c.STDERR_FILENO, "Error: missing snapshot tag\n", 28);
-                std.process.exit(1);
+                fdWrite(c.STDERR_FILENO, "Error: missing snapshot tag\n");
+                std.process.exit(EXIT_USAGE);
             };
             return cmdSnapshotTake(allocator, &conn, idx, tag, init.io);
         } else if (std.mem.eql(u8, sub, "revert")) {
             const tag = args_iter.next() orelse {
-                _ = c.write(c.STDERR_FILENO, "Error: missing snapshot tag\n", 28);
-                std.process.exit(1);
+                fdWrite(c.STDERR_FILENO, "Error: missing snapshot tag\n");
+                std.process.exit(EXIT_USAGE);
             };
             return cmdSnapshotRevert(allocator, &conn, idx, tag, init.io);
         } else if (std.mem.eql(u8, sub, "delete")) {
             const tag = args_iter.next() orelse {
-                _ = c.write(c.STDERR_FILENO, "Error: missing snapshot tag\n", 28);
-                std.process.exit(1);
+                fdWrite(c.STDERR_FILENO, "Error: missing snapshot tag\n");
+                std.process.exit(EXIT_USAGE);
             };
             return cmdSnapshotDelete(allocator, &conn, idx, tag, init.io);
         } else {
-            _ = c.write(c.STDERR_FILENO, "Error: unknown snapshot subcommand (use: list|take|revert|delete)\n", 66);
-            std.process.exit(1);
+            fdWrite(c.STDERR_FILENO, "Error: unknown snapshot subcommand (use: list|take|revert|delete)\n");
+            std.process.exit(EXIT_USAGE);
         }
     } else if (std.mem.eql(u8, command, "start") or
         std.mem.eql(u8, command, "stop") or
@@ -162,15 +219,15 @@ pub fn main(init: std.process.Init) !void {
         std.mem.eql(u8, command, "export"))
     {
         const target = args_iter.next() orelse {
-            _ = c.write(c.STDERR_FILENO, "Error: missing VM name or index\n", 31);
-            std.process.exit(1);
+            fdWrite(c.STDERR_FILENO, "Error: missing VM name or index\n");
+            std.process.exit(EXIT_USAGE);
         };
 
         // Resolve name or index to VM index.
         const idx = resolveVm(allocator, &conn, target) orelse {
             var buf: [128]u8 = undefined;
             const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
-            _ = c.write(c.STDERR_FILENO, msg.ptr, msg.len);
+            fdWrite(c.STDERR_FILENO, msg);
             std.process.exit(1);
         };
 
@@ -204,31 +261,37 @@ pub fn main(init: std.process.Init) !void {
         }
     } else if (std.mem.eql(u8, command, "rename")) {
         const target = args_iter.next() orelse {
-            _ = c.write(c.STDERR_FILENO, "Error: missing VM name or index\n", 31);
-            std.process.exit(1);
+            fdWrite(c.STDERR_FILENO, "Error: missing VM name or index\n");
+            std.process.exit(EXIT_USAGE);
         };
         const new_name = args_iter.next() orelse {
-            _ = c.write(c.STDERR_FILENO, "Error: missing new name\n", 23);
-            std.process.exit(1);
+            fdWrite(c.STDERR_FILENO, "Error: missing new name\n");
+            std.process.exit(EXIT_USAGE);
         };
         const idx = resolveVm(allocator, &conn, target) orelse {
             var buf: [128]u8 = undefined;
             const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
-            _ = c.write(c.STDERR_FILENO, msg.ptr, msg.len);
+            fdWrite(c.STDERR_FILENO, msg);
             std.process.exit(1);
         };
         return cmdRename(allocator, &conn, idx, new_name, init.io);
     } else {
-        var buf: [64]u8 = undefined;
-        const msg = std.fmt.bufPrintZ(&buf, "Error: unknown command '{s}'\n", .{command}) catch "Error: unknown command\n";
-        _ = c.write(c.STDERR_FILENO, msg.ptr, msg.len);
-        std.process.exit(1);
+        var buf: [96]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Error: unknown command '{s}' (run with --help for usage)\n", .{command}) catch "Error: unknown command\n";
+        fdWrite(c.STDERR_FILENO, msg);
+        std.process.exit(EXIT_USAGE);
     }
 }
 
 fn sendRequest(allocator: std.mem.Allocator, conn: *transport.Connection, method: []const u8, path: []const u8, body: ?[]const u8) ![]u8 {
-    var buf: [4096]u8 = undefined;
-    const n = conn.request(method, path, body, &buf);
+    // Match the server's /api/vms render cap (vm.MAX_VMS * 4096). A small fixed
+    // buffer here silently truncated large fleets, so `list` stopped early and
+    // name→index resolution failed for any VM past the cutoff. Allocate on the
+    // heap — a buffer this size cannot live on the stack.
+    const cap = vm.MAX_VMS * 4096;
+    const buf = try allocator.alloc(u8, cap);
+    defer allocator.free(buf);
+    const n = conn.request(method, path, body, buf);
     if (n == 0) return error.RequestFailed;
     return try allocator.dupe(u8, buf[0..n]);
 }
@@ -287,8 +350,12 @@ fn cmdList(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.Io
 
         var buf: [256]u8 = undefined;
         const line = try std.fmt.bufPrint(&buf, "[{d}] {s}  status={s}  mem={d}MB  cpu={d}\n", .{ idx, name, status, mem, cpu });
-        _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+        fdWrite(c.STDOUT_FILENO, line);
         idx += 1;
+    }
+
+    if (idx == 0) {
+        fdWrite(c.STDOUT_FILENO, "No VMs found.\n");
     }
 }
 
@@ -296,8 +363,8 @@ fn cmdStatus(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.
     _ = io;
     const resp = try sendRequest(allocator, conn, "GET", "/api/health", null);
     defer allocator.free(resp);
-    _ = c.write(c.STDOUT_FILENO, resp.ptr, resp.len);
-    _ = c.write(c.STDOUT_FILENO, "\n", 1);
+    fdWrite(c.STDOUT_FILENO, resp);
+    fdWrite(c.STDOUT_FILENO, "\n");
 }
 
 fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, action: []const u8, io: std.Io) !void {
@@ -308,7 +375,7 @@ fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usiz
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "{s} VM [{d}]: {s}\n", .{ action, idx, resp });
-    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 fn cmdClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
@@ -323,7 +390,7 @@ fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "linked-clone VM [{d}]: {s}\n", .{ idx, resp });
-    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 fn cmdDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
@@ -340,7 +407,7 @@ fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "rename VM [{d}] -> {s}: {s}\n", .{ idx, new_name, resp });
-    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_path: []const u8, io: std.Io) !void {
@@ -351,7 +418,7 @@ fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_pat
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "import {s}: {s}\n", .{ disk_path, resp });
-    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
@@ -362,7 +429,7 @@ fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "export VM [{d}]: {s}\n", .{ idx, resp });
-    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
@@ -372,10 +439,10 @@ fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, id
     const resp = try sendRequest(allocator, conn, "GET", path, null);
     defer allocator.free(resp);
     if (resp.len == 0 or std.mem.eql(u8, resp, "(none)")) {
-        _ = c.write(c.STDOUT_FILENO, "No snapshots found.\n", 20);
+        fdWrite(c.STDOUT_FILENO, "No snapshots found.\n");
     } else {
-        _ = c.write(c.STDOUT_FILENO, resp.ptr, resp.len);
-        _ = c.write(c.STDOUT_FILENO, "\n", 1);
+        fdWrite(c.STDOUT_FILENO, resp);
+        fdWrite(c.STDOUT_FILENO, "\n");
     }
 }
 
@@ -389,7 +456,7 @@ fn cmdSnapshotTake(allocator: std.mem.Allocator, conn: *transport.Connection, id
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "snapshot take [{d}] '{s}': {s}\n", .{ idx, tag, resp });
-    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 fn cmdSnapshotRevert(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
@@ -402,7 +469,7 @@ fn cmdSnapshotRevert(allocator: std.mem.Allocator, conn: *transport.Connection, 
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "snapshot revert [{d}] '{s}': {s}\n", .{ idx, tag, resp });
-    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 fn cmdSnapshotDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
@@ -415,7 +482,7 @@ fn cmdSnapshotDelete(allocator: std.mem.Allocator, conn: *transport.Connection, 
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "snapshot delete [{d}] '{s}': {s}\n", .{ idx, tag, resp });
-    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 /// Generic POST to /api/{action}/{idx} with no body.
@@ -427,7 +494,7 @@ fn cmdSimple(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "{s} VM [{d}]: {s}\n", .{ action, idx, resp });
-    _ = c.write(c.STDOUT_FILENO, line.ptr, line.len);
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 /// Extract a quoted string value from a JSON object snippet.

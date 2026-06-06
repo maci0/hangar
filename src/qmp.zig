@@ -28,6 +28,10 @@ const appio = @import("appio.zig");
 /// Maximum line length for a QMP JSON message.
 const MAX_LINE = 16384;
 
+/// Per-read/write socket timeout. A frozen QEMU monitor must not be able to
+/// wedge the calling thread indefinitely; commands fail fast instead.
+const QMP_IO_TIMEOUT_MS = 10_000;
+
 /// Build the QMP Unix socket path for a VM.
 ///
 /// Returns `null` if the name is too long to fit in the buffer.
@@ -50,6 +54,13 @@ pub const QmpClient = struct {
     /// Internal line-read buffer.
     line_buf: [MAX_LINE]u8 = undefined,
 
+    /// Socket read buffer. readLine pulls bytes from here, refilling with a
+    /// single read() per buffer rather than one syscall per byte — QMP
+    /// responses (query-block, snapshot lists) run to many KB.
+    rbuf: [MAX_LINE]u8 = undefined,
+    rbuf_pos: usize = 0,
+    rbuf_len: usize = 0,
+
     // ── Connection management ───────────────────────────────────
 
     /// Connect to a QEMU QMP Unix socket and perform the capability
@@ -59,6 +70,10 @@ pub const QmpClient = struct {
 
         const stream = usock.UnixStream.connect(socket_path_arg) catch
             return error.ConnectionFailed;
+        // Guard every QMP read/write against a wedged QEMU: without this a
+        // single-byte read in readLine blocks the calling (web request) thread
+        // forever when the guest/monitor stops responding.
+        stream.setTimeout(QMP_IO_TIMEOUT_MS);
         self.stream = stream;
 
         // Read greeting ({"QMP": ...})
@@ -96,6 +111,8 @@ pub const QmpClient = struct {
     fn closeStream(self: *QmpClient) void {
         if (self.stream) |s| s.close();
         self.stream = null;
+        self.rbuf_pos = 0;
+        self.rbuf_len = 0;
     }
 
     // ── Low-level I/O ───────────────────────────────────────────
@@ -103,18 +120,23 @@ pub const QmpClient = struct {
     /// Read a single line (up to `\n`) from the socket.
     /// Returns a slice into `self.line_buf`; valid until the next call.
     fn readLine(self: *QmpClient) ![]const u8 {
-        const stream = self.stream orelse return error.SocketClosed;
         var pos: usize = 0;
         while (pos < self.line_buf.len - 1) {
-            var one: [1]u8 = undefined;
-            const n = stream.read(&one) catch return error.SocketClosed;
-            if (n == 0) return error.SocketClosed;
-            if (one[0] == '\n') {
+            if (self.rbuf_pos >= self.rbuf_len) {
+                const stream = self.stream orelse return error.SocketClosed;
+                const n = stream.read(&self.rbuf) catch return error.SocketClosed;
+                if (n == 0) return error.SocketClosed;
+                self.rbuf_len = n;
+                self.rbuf_pos = 0;
+            }
+            const ch = self.rbuf[self.rbuf_pos];
+            self.rbuf_pos += 1;
+            if (ch == '\n') {
                 // Strip trailing \r if present
                 const end = if (pos > 0 and self.line_buf[pos - 1] == '\r') pos - 1 else pos;
                 return self.line_buf[0..end];
             }
-            self.line_buf[pos] = one[0];
+            self.line_buf[pos] = ch;
             pos += 1;
         }
         return self.line_buf[0..pos];
@@ -224,7 +246,11 @@ pub const QmpClient = struct {
     /// Suspend VM state to a file.
     pub fn suspendToFile(self: *QmpClient, path: []const u8) !void {
         var hmp_buf: [vm.MAX_PATH + 128]u8 = undefined;
-        // Escape double-quotes in the path to prevent shell injection via `exec:`.
+        // The `exec:` migration target is run through `/bin/sh -c`, so quote
+        // escaping alone is insufficient — backticks, `$()`, `;`, `|`, `&` and
+        // friends would still be interpreted. Reject any path containing shell
+        // metacharacters before it reaches the shell.
+        if (!isShellSafePath(path)) return error.UnsafeStatePath;
         var esc_buf: [vm.MAX_PATH + 64]u8 = undefined;
         const escaped = escapeHmpArg(path, &esc_buf);
         const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "migrate \"exec:cat > {s}\"", .{escaped}) catch
@@ -246,11 +272,16 @@ pub const QmpClient = struct {
     }
 
     /// Block until migration finishes or timeout (30s).
-    /// Polls `info migrate` every 500ms.
+    /// Polls `info migrate` every 500ms. Fails fast (instead of waiting out the
+    /// full timeout) if QEMU reports the migration failed or was cancelled.
     pub fn waitMigrateComplete(self: *QmpClient) !void {
+        var out: [2048]u8 = undefined;
         var attempts: u32 = 0;
         while (attempts < 60) : (attempts += 1) {
-            if (try self.isMigrateComplete()) return;
+            const result = try self.execHmp("info migrate", &out);
+            if (std.mem.indexOf(u8, result, "completed") != null) return;
+            if (std.mem.indexOf(u8, result, "failed") != null) return error.MigrateFailed;
+            if (std.mem.indexOf(u8, result, "cancelled") != null) return error.MigrateCancelled;
             appio.sleepMs(500);
         }
         return error.MigrateTimeout;
@@ -328,50 +359,35 @@ pub const QmpClient = struct {
         return extractJsonString(resp, "return", out);
     }
 
-    /// Create an internal snapshot (VM must have a qcow2 disk).
-    pub fn saveSnapshot(self: *QmpClient, name: []const u8) !void {
+    /// Run an HMP snapshot verb (`savevm`/`loadvm`/`delvm`) for `name`.
+    /// HMP returns "" on success, or text containing "Error" on failure.
+    fn execSnapshotHmp(self: *QmpClient, verb: []const u8, name: []const u8) !void {
         if (!isValidSnapshotTag(name)) return error.InvalidTag;
         var hmp_buf: [300]u8 = undefined;
-        const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "savevm {s}", .{name}) catch
+        const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "{s} {s}", .{ verb, name }) catch
             return error.BufferTooSmall;
 
         var out: [2048]u8 = undefined;
         const result = try self.execHmp(hmp_cmd, &out);
 
-        // HMP returns "" on success, or text containing "Error" on failure.
         if (result.len > 0 and std.mem.indexOf(u8, result, "Error") != null) {
             return error.CommandFailed;
         }
+    }
+
+    /// Create an internal snapshot (VM must have a qcow2 disk).
+    pub fn saveSnapshot(self: *QmpClient, name: []const u8) !void {
+        return self.execSnapshotHmp("savevm", name);
     }
 
     /// Load (restore) an internal snapshot.
     pub fn loadSnapshot(self: *QmpClient, name: []const u8) !void {
-        if (!isValidSnapshotTag(name)) return error.InvalidTag;
-        var hmp_buf: [300]u8 = undefined;
-        const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "loadvm {s}", .{name}) catch
-            return error.BufferTooSmall;
-
-        var out: [2048]u8 = undefined;
-        const result = try self.execHmp(hmp_cmd, &out);
-
-        if (result.len > 0 and std.mem.indexOf(u8, result, "Error") != null) {
-            return error.CommandFailed;
-        }
+        return self.execSnapshotHmp("loadvm", name);
     }
 
     /// Delete an internal snapshot.
     pub fn deleteSnapshot(self: *QmpClient, name: []const u8) !void {
-        if (!isValidSnapshotTag(name)) return error.InvalidTag;
-        var hmp_buf: [300]u8 = undefined;
-        const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "delvm {s}", .{name}) catch
-            return error.BufferTooSmall;
-
-        var out: [2048]u8 = undefined;
-        const result = try self.execHmp(hmp_cmd, &out);
-
-        if (result.len > 0 and std.mem.indexOf(u8, result, "Error") != null) {
-            return error.CommandFailed;
-        }
+        return self.execSnapshotHmp("delvm", name);
     }
 
     /// List internal snapshots.  Returns the tabular HMP output
@@ -391,9 +407,10 @@ pub const QmpClient = struct {
     /// Uses the stable device id "ide2-cd0" that `qemu.zig` creates with
     /// an explicit `-device ide-cd,drive=cdrom0,id=ide2-cd0` argument.
     pub fn changeCdrom(self: *QmpClient, path: []const u8) !void {
-        var hmp_buf: [vm.MAX_PATH + 128]u8 = undefined;
-        // Escape double-quotes in the path to prevent HMP injection.
-        var esc_buf: [vm.MAX_PATH + 64]u8 = undefined;
+        var hmp_buf: [vm.MAX_PATH * 2 + 128]u8 = undefined;
+        // Escape double-quotes in the path to prevent HMP injection. Size for the
+        // worst case (every byte a quote → doubled) so paths never truncate silently.
+        var esc_buf: [vm.MAX_PATH * 2 + 1]u8 = undefined;
         const escaped = escapeHmpArg(path, &esc_buf);
         const hmp_cmd = std.fmt.bufPrint(&hmp_buf, "change ide2-cd0 \"{s}\"", .{escaped}) catch
             return error.BufferTooSmall;
@@ -421,13 +438,6 @@ pub const QmpClient = struct {
 // Minimal parser that finds `"key": "value"` in a JSON string.
 // Handles standard JSON escape sequences.
 
-/// Extract a JSON string value for the given key.
-///
-/// Searches the input for `"key": "..."` and writes the unescaped value
-/// to `out`.  Returns a slice of `out` containing the result.
-///
-/// Works for both flat objects (`{"status": "running"}`) and the first
-/// match in nested objects (`{"return": {"status": "paused"}}`).
 /// Decode a single hex digit to its 4-bit value, or null if not hex.
 fn hexDigit(c: u8) ?u4 {
     return switch (c) {
@@ -483,24 +493,35 @@ fn parseUnicodeEscape(json: []const u8, i: *usize) !u21 {
     i.* += 6; // consumed \uXXXX
 
     // Handle UTF-16 surrogate pairs: high surrogate followed by \u + low.
+    // A lone surrogate (high without a valid low, or a bare low) is not a valid
+    // Unicode scalar and would encode to invalid UTF-8 (WTF-8) — reject it so we
+    // never emit a malformed byte sequence into status/error strings.
     if (cp >= 0xD800 and cp <= 0xDBFF) {
-        if (i.* + 5 < json.len and json[i.*] == '\\' and json[i.* + 1] == 'u') {
-            var lo: u21 = 0;
-            var d2: usize = 0;
-            while (d2 < 4) : (d2 += 1) {
-                const h2 = hexDigit(json[i.* + 2 + d2]) orelse break;
-                lo = (lo << 4) | @as(u21, h2);
-            }
-            if (lo >= 0xDC00 and lo <= 0xDFFF) {
-                i.* += 6; // consumed the low surrogate
-                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-            }
+        if (i.* + 5 >= json.len or json[i.*] != '\\' or json[i.* + 1] != 'u')
+            return error.CommandFailed;
+        var lo: u21 = 0;
+        var d2: usize = 0;
+        while (d2 < 4) : (d2 += 1) {
+            const h2 = hexDigit(json[i.* + 2 + d2]) orelse return error.CommandFailed;
+            lo = (lo << 4) | @as(u21, h2);
         }
+        if (lo < 0xDC00 or lo > 0xDFFF) return error.CommandFailed;
+        i.* += 6; // consumed the low surrogate
+        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+    } else if (cp >= 0xDC00 and cp <= 0xDFFF) {
+        return error.CommandFailed; // bare low surrogate
     }
 
     return cp;
 }
 
+/// Extract a JSON string value for the given key.
+///
+/// Searches the input for `"key": "..."` and writes the unescaped value
+/// to `out`.  Returns a slice of `out` containing the result.
+///
+/// Works for both flat objects (`{"status": "running"}`) and the first
+/// match in nested objects (`{"return": {"status": "paused"}}`).
 pub fn extractJsonString(json: []const u8, key: []const u8, out: []u8) ![]const u8 {
     // Build the search needle: "key"
     var needle_buf: [130]u8 = undefined;
@@ -523,8 +544,7 @@ pub fn extractJsonString(json: []const u8, key: []const u8, out: []u8) ![]const 
         if (json[i] == '"') {
             return out[0..out_len];
         }
-        // Output buffer full but string continues — truncate gracefully
-        // by scanning forward for the closing quote.
+        // Output buffer full but string continues — fail rather than truncate.
         if (out_len >= out.len) {
             return error.BufferTooSmall;
         }
@@ -644,6 +664,22 @@ test "extractJsonString: unknown escape passes through literal" {
     try std.testing.expectEqualStrings("testx", result);
 }
 
+test "extractJsonString: lone surrogate rejected (no invalid UTF-8)" {
+    var out: [64]u8 = undefined;
+    // Lone high surrogate — must fail rather than emit WTF-8 (ED A0 80).
+    try std.testing.expectError(error.CommandFailed, extractJsonString(
+        \\{"msg": "\uD800"}
+    , "msg", &out));
+    // High surrogate followed by a non-low-surrogate escape.
+    try std.testing.expectError(error.CommandFailed, extractJsonString(
+        \\{"msg": "\uD800A"}
+    , "msg", &out));
+    // Bare low surrogate.
+    try std.testing.expectError(error.CommandFailed, extractJsonString(
+        \\{"msg": "\uDC00"}
+    , "msg", &out));
+}
+
 test "extractJsonString: extra whitespace around colon" {
     var out: [64]u8 = undefined;
     const result = try extractJsonString(
@@ -754,6 +790,87 @@ test "fuzz: extractJsonString never crashes or overflows" {
     }
 }
 
+// Structure-aware fuzz: the random-byte fuzzer above essentially never forms a
+// well-shaped `"k":"...\uXXXX..."` value, so the `\u` decoder (parseUnicodeEscape),
+// its UTF-16 surrogate-pair handling, and the multi-byte UTF-8 encoder (encodeUtf8)
+// stay unexercised. Build valid-shaped JSON carrying random `\uXXXX` escapes —
+// including high/low surrogate combinations, both valid and broken — and assert
+// the decoder never panics, never overflows `out`, and only ever emits valid UTF-8.
+test "fuzz: extractJsonString unicode-escape decoding stays valid and bounded" {
+    var prng = std.Random.DefaultPrng.init(0xCAFE_F00D);
+    const rnd = prng.random();
+    var json: [1024]u8 = undefined;
+    var out: [512]u8 = undefined;
+    const hex = "0123456789abcdefABCDEF";
+
+    var iter: usize = 0;
+    while (iter < 8000) : (iter += 1) {
+        var n: usize = 0;
+        const prefix = "{\"k\":\"";
+        @memcpy(json[0..prefix.len], prefix);
+        n += prefix.len;
+
+        const escapes = rnd.uintLessThan(usize, 12);
+        var e: usize = 0;
+        while (e < escapes and n + 16 < json.len) : (e += 1) {
+            switch (rnd.uintLessThan(u8, 5)) {
+                // A valid surrogate pair: high (D800-DBFF) then low (DC00-DFFF).
+                0 => {
+                    const hi: u16 = 0xD800 + rnd.uintLessThan(u16, 0x400);
+                    const lo: u16 = 0xDC00 + rnd.uintLessThan(u16, 0x400);
+                    n += (std.fmt.bufPrint(json[n..], "\\u{x:0>4}\\u{x:0>4}", .{ hi, lo }) catch break).len;
+                },
+                // A lone high surrogate (the decoder must reject — no broken UTF-8).
+                1 => {
+                    const hi: u16 = 0xD800 + rnd.uintLessThan(u16, 0x400);
+                    n += (std.fmt.bufPrint(json[n..], "\\u{x:0>4}", .{hi}) catch break).len;
+                },
+                // A random BMP code point (covers 1/2/3-byte UTF-8 encoder paths).
+                2 => {
+                    const cp: u16 = rnd.int(u16);
+                    n += (std.fmt.bufPrint(json[n..], "\\u{x:0>4}", .{cp}) catch break).len;
+                },
+                // A `\u` with possibly-garbage hex digits (some non-hex).
+                3 => {
+                    json[n] = '\\';
+                    json[n + 1] = 'u';
+                    var d: usize = 0;
+                    while (d < 4) : (d += 1) {
+                        json[n + 2 + d] = if (rnd.boolean())
+                            hex[rnd.uintLessThan(usize, hex.len)]
+                        else
+                            rnd.int(u8);
+                    }
+                    n += 6;
+                },
+                // A plain literal ASCII byte mixed in with the escapes. Kept to
+                // printable ASCII (minus quote/backslash) so the only non-ASCII
+                // bytes in a successful result come from the `\u` decoder — that
+                // lets us assert UTF-8 validity below (literal bytes are copied
+                // through verbatim and are not otherwise validated).
+                else => {
+                    json[n] = 0x20 + rnd.uintLessThan(u8, 0x5F); // 0x20..0x7E
+                    if (json[n] != '"' and json[n] != '\\') n += 1;
+                },
+            }
+        }
+        // Close the string + object (truncation also exercised: see below).
+        if (n + 2 <= json.len and rnd.boolean()) {
+            json[n] = '"';
+            json[n + 1] = '}';
+            n += 2;
+        }
+
+        if (extractJsonString(json[0..n], "k", &out)) |res| {
+            const base = @intFromPtr(&out);
+            const p = @intFromPtr(res.ptr);
+            try std.testing.expect(p >= base and p + res.len <= base + out.len);
+            // On success the decoder must only ever have emitted valid UTF-8.
+            try std.testing.expect(std.unicode.utf8ValidateSlice(res));
+        } else |_| {}
+    }
+}
+
 test "fuzz: socketPath never crashes" {
     var prng = std.Random.DefaultPrng.init(0x3344_5566);
     const rnd = prng.random();
@@ -830,6 +947,8 @@ fn qmpFuzzServer(listen_fd: c_qmp.fd_t, seed: u64) void {
 test "fuzz: QmpClient survives a malformed/garbage server" {
     var prng = std.Random.DefaultPrng.init(0x9119_2244);
     const rnd = prng.random();
+    var connected_sessions: usize = 0;
+    var command_batches: usize = 0;
 
     var iter: usize = 0;
     while (iter < 200) : (iter += 1) {
@@ -858,6 +977,7 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
             client.disconnect();
             continue;
         };
+        connected_sessions += 1;
 
         // Every command wrapper → execSimple/execHmp → writeAll + readResponse
         // against random replies. Ignore errors; we only assert no crash/hang.
@@ -881,9 +1001,28 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
         client.cancelMigrate() catch {};
         client.quit() catch {};
         client.disconnect();
+        command_batches += 1;
     }
-    // Reaching here = no crash/overflow/hang across 200 garbage sessions.
-    try std.testing.expect(true);
+    try std.testing.expect(connected_sessions > 0);
+    try std.testing.expectEqual(connected_sessions, command_batches);
+}
+
+test "readLine: splits multiple lines delivered in a single read" {
+    var fds: [2]c_qmp.fd_t = undefined;
+    if (c_qmp.socketpair(c_qmp.AF.UNIX, c_qmp.SOCK.STREAM, 0, &fds) != 0) return error.SkipZigTest;
+    defer _ = c_qmp.close(fds[0]);
+
+    var client = QmpClient{ .stream = usock.UnixStream{ .fd = fds[1] }, .connected = true };
+    defer client.disconnect();
+
+    // Three lines (one with a trailing \r) in a single write — the buffered
+    // reader must hand them back one at a time without extra syscalls.
+    const blob = "first\r\nsecond\nthird\n";
+    try std.testing.expectEqual(@as(isize, @intCast(blob.len)), c_qmp.write(fds[0], blob.ptr, blob.len));
+
+    try std.testing.expectEqualStrings("first", try client.readLine());
+    try std.testing.expectEqualStrings("second", try client.readLine());
+    try std.testing.expectEqualStrings("third", try client.readLine());
 }
 
 // ── Missing standalone coverage ─────────────────────────────────────
@@ -947,6 +1086,20 @@ fn isValidSnapshotTag(tag: []const u8) bool {
     return true;
 }
 
+/// Return true if `path` is safe to embed in an `exec:`/`/bin/sh -c` context.
+/// Rejects shell metacharacters and control characters.
+fn isShellSafePath(path: []const u8) bool {
+    if (path.len == 0) return false;
+    for (path) |c| {
+        switch (c) {
+            ' ', ';', '|', '&', '$', '`', '(', ')', '<', '>', '\'', '"',
+            '\\', '~', '#', '!', '*', '?', '\n', '\r', '\t', 0 => return false,
+            else => {},
+        }
+    }
+    return true;
+}
+
 /// Escape double-quote characters in an HMP argument string.
 /// Returns a slice of `out` guaranteed to contain no unescaped `"`.
 fn escapeHmpArg(arg: []const u8, out: []u8) []const u8 {
@@ -973,6 +1126,33 @@ test "isValidSnapshotTag: valid and invalid tags" {
     try std.testing.expect(!isValidSnapshotTag("bad tag"));
     try std.testing.expect(!isValidSnapshotTag("bad\"tag"));
     try std.testing.expect(!isValidSnapshotTag("bad;tag"));
+}
+
+test "isShellSafePath: rejects shell metacharacters" {
+    try std.testing.expect(isShellSafePath("/tmp/hangar-state-myvm.bin"));
+    try std.testing.expect(!isShellSafePath(""));
+    try std.testing.expect(!isShellSafePath("/tmp/hangar-state-`id`.bin"));
+    try std.testing.expect(!isShellSafePath("/tmp/state-$(id).bin"));
+    try std.testing.expect(!isShellSafePath("/tmp/state;rm -rf /.bin"));
+    try std.testing.expect(!isShellSafePath("/tmp/state|cat.bin"));
+    try std.testing.expect(!isShellSafePath("/tmp/state with space.bin"));
+}
+
+test "isShellSafePath: fuzz never crashes" {
+    var seed: u64 = 0x9e3779b97f4a7c15;
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        var buf: [64]u8 = undefined;
+        const n = seed % buf.len;
+        var j: usize = 0;
+        var s = seed;
+        while (j < n) : (j += 1) {
+            s = s *% 2862933555777941757 +% 3037000493;
+            buf[j] = @truncate(s);
+        }
+        _ = isShellSafePath(buf[0..n]);
+    }
 }
 
 test "escapeHmpArg: no special chars" {

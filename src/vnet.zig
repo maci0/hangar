@@ -241,6 +241,17 @@ fn emit(list: *List, alloc: std.mem.Allocator, s: []const u8) !void {
     try list.appendSlice(alloc, s);
 }
 
+fn writeFileAtomic(file_path: []const u8, data: []const u8) !void {
+    // Propagate the real error (NoSpaceLeft, AccessDenied, ...) rather than
+    // masking it as a generic WriteFailed, so the actual cause reaches callers.
+    var af = try std.Io.Dir.cwd().createFileAtomic(appio.io(), file_path, .{ .replace = true });
+    defer af.deinit(appio.io());
+
+    try af.file.writeStreamingAll(appio.io(), data);
+    try af.file.sync(appio.io());
+    try af.replace(appio.io());
+}
+
 /// Append `s` as a quoted, escaped JSON string.
 fn emitStr(list: *List, alloc: std.mem.Allocator, s: []const u8) !void {
     try list.append(alloc, '"');
@@ -324,10 +335,7 @@ pub fn save(set: *const NetworkSet) !void {
     const json = try toJson(set, alloc);
     defer alloc.free(json);
 
-    std.Io.Dir.cwd().writeFile(appio.io(), .{
-        .sub_path = file_path,
-        .data = json,
-    }) catch return error.WriteFailed;
+    try writeFileAtomic(file_path, json);
 }
 
 // ── Parse ────────────────────────────────────────────────────────────
@@ -336,6 +344,35 @@ fn skipWs(s: []const u8) []const u8 {
     var i: usize = 0;
     while (i < s.len and (s[i] == ' ' or s[i] == '\t' or s[i] == '\n' or s[i] == '\r')) : (i += 1) {}
     return s[i..];
+}
+
+/// Current on-disk `networks.json` format version. Bump when the schema changes
+/// in a way that older parsers cannot safely round-trip.
+pub const CUR_VERSION: u32 = 1;
+
+/// Extract the top-level `"version"` value from raw bytes. Defaults to 1 when
+/// absent. If the version is higher than `CUR_VERSION`, writes a warning to
+/// stderr so the user knows the file was saved by a newer Hangar. Exposed for
+/// testing.
+pub fn parseVersion(content: []const u8) u32 {
+    if (std.mem.indexOf(u8, content, "\"version\"")) |vidx| {
+        var cur = skipWs(content[vidx + "\"version\"".len ..]);
+        if (cur.len > 0 and cur[0] == ':') {
+            cur = skipWs(cur[1..]);
+            var i: usize = 0;
+            var val: u32 = 0;
+            while (i < cur.len and cur[i] >= '0' and cur[i] <= '9') : (i += 1) {
+                val = val *| 10 +| (cur[i] - '0');
+            }
+            if (i == 0) return 1; // non-numeric (e.g. "abc", true) → default
+            if (val > CUR_VERSION and !@import("builtin").is_test) {
+                const msg = "hangar: networks file version newer than supported (max 1); some settings may be ignored\n";
+                _ = std.c.write(2, msg, msg.len);
+            }
+            return val;
+        }
+    }
+    return 1;
 }
 
 /// Read a JSON string starting at `s[0] == '"'` into `out`. Returns the
@@ -409,6 +446,7 @@ fn isValidIpv4(s: []const u8) bool {
         }
         if (c < '0' or c > '9') return false;
         if (digits > 0 and cur == 0) return false; // leading zero
+        if (digits >= 3) return false; // an octet is at most 3 digits
         cur = cur * 10 + (c - '0');
         digits += 1;
     }
@@ -500,6 +538,9 @@ fn nextObject(s: []const u8) ?struct { obj: []const u8, rest: []const u8 } {
 pub fn fromJson(content: []const u8) NetworkSet {
     var set = NetworkSet{};
 
+    // Forward-compat: warn (once) if the file was written by a newer Hangar.
+    _ = parseVersion(content);
+
     // Narrow to the "networks" array; if absent, parse the whole buffer (the
     // object scanner ignores the outer wrapper object anyway because we start
     // after the array bracket).
@@ -529,10 +570,13 @@ pub fn fromJson(content: []const u8) NetworkSet {
         const mask_val = fieldStr(obj, "mask", &tmp);
         n.setMask(if (isValidSubnetMask(mask_val)) mask_val else "");
         n.dhcp = fieldBool(obj, "dhcp");
-        n.setDhcpStart(fieldStr(obj, "dhcp_start", &tmp));
-        n.setDhcpEnd(fieldStr(obj, "dhcp_end", &tmp));
+        const dhcp_start_val = fieldStr(obj, "dhcp_start", &tmp);
+        n.setDhcpStart(if (dhcp_start_val.len == 0 or isValidIpv4(dhcp_start_val)) dhcp_start_val else "");
+        const dhcp_end_val = fieldStr(obj, "dhcp_end", &tmp);
+        n.setDhcpEnd(if (dhcp_end_val.len == 0 or isValidIpv4(dhcp_end_val)) dhcp_end_val else "");
         n.setHostIface(fieldStr(obj, "host_iface", &tmp));
-        n.setGateway(fieldStr(obj, "gateway", &tmp));
+        const gateway_val = fieldStr(obj, "gateway", &tmp);
+        n.setGateway(if (gateway_val.len == 0 or isValidIpv4(gateway_val)) gateway_val else "");
         var pf_tmp: [PORTFWD_CAP]u8 = undefined;
         n.setPortForwards(fieldStr(obj, "port_forwards", &pf_tmp));
         set.count += 1;
@@ -552,7 +596,16 @@ pub fn load() NetworkSet {
         file_path,
         alloc,
         .limited(4 * 1024 * 1024),
-    ) catch return NetworkSet.defaults();
+    ) catch |e| {
+        // FileNotFound is normal before the first save. Any other failure means
+        // an existing networks.json could not be read — surface it instead of
+        // silently falling back to defaults (which a later save would persist).
+        if (e != error.FileNotFound) {
+            const msg = "vnet: load failed to read networks.json (existing config not loaded)\n";
+            _ = std.c.write(2, msg, msg.len);
+        }
+        return NetworkSet.defaults();
+    };
     defer alloc.free(content);
 
     if (content.len == 0) return NetworkSet.defaults();
@@ -670,6 +723,32 @@ test "vnet fuzz: fromJson never panics and stays bounded" {
     }
 }
 
+test "vnet: parseVersion reads version from JSON" {
+    try testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":1}"));
+    try testing.expectEqual(@as(u32, 7), parseVersion("{\"version\": 7}")); // newer than supported — warns to stderr (suppressed in test)
+    try testing.expectEqual(@as(u32, 1), parseVersion("{\"networks\":[]}")); // absent → default 1
+}
+
+test "vnet: parseVersion survives malformed version" {
+    try testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":\"abc\"}"));
+    try testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":true}"));
+    try testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":}"));
+    try testing.expectEqual(@as(u32, 1), parseVersion(""));
+}
+
+test "vnet fuzz: parseVersion never panics and never overflows" {
+    var prng = std.Random.DefaultPrng.init(0xCAFE01);
+    const rnd = prng.random();
+    var buf: [128]u8 = undefined;
+    const alphabet = "{}\"version:0123456789 truefalse,";
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.intRangeAtMost(usize, 0, buf.len);
+        for (0..len) |i| buf[i] = alphabet[rnd.intRangeLessThan(usize, 0, alphabet.len)];
+        _ = parseVersion(buf[0..len]); // saturating arithmetic → never traps
+    }
+}
+
 test "vnet fuzz: nextObject rest is always a suffix slice" {
     var prng = std.Random.DefaultPrng.init(0x1234);
     const rnd = prng.random();
@@ -728,17 +807,19 @@ test "vnet: emitStr escapes control characters as \\uXXXX" {
 
 test "vnet: emitStr escapes survive emit -> parse round-trip" {
     var s = NetworkSet{};
-    _ = s.add("a\"b\\c", .nat, "1.1.1.1", "255.255.255.0", true, "x\ny", "z\tw", "if\r0");
-    s.nets[0].setGateway("g\\\"1");
+    _ = s.add("a\"b\\c", .nat, "1.1.1.1", "255.255.255.0", true, "10.0.0.10", "10.0.0.20", "if\r0");
+    s.nets[0].setGateway("10.0.0.1");
+    s.nets[0].setPortForwards("host\\\"rule");
     const json = try toJson(&s, testing.allocator);
     defer testing.allocator.free(json);
     const back = fromJson(json);
     try testing.expectEqual(@as(usize, 1), back.count);
     try testing.expectEqualStrings("a\"b\\c", back.nets[0].getNameSlice());
-    try testing.expectEqualStrings("x\ny", back.nets[0].getDhcpStartSlice());
-    try testing.expectEqualStrings("z\tw", back.nets[0].getDhcpEndSlice());
+    try testing.expectEqualStrings("10.0.0.10", back.nets[0].getDhcpStartSlice());
+    try testing.expectEqualStrings("10.0.0.20", back.nets[0].getDhcpEndSlice());
     try testing.expectEqualStrings("if\r0", back.nets[0].getHostIfaceSlice());
-    try testing.expectEqualStrings("g\\\"1", back.nets[0].getGatewaySlice());
+    try testing.expectEqualStrings("10.0.0.1", back.nets[0].getGatewaySlice());
+    try testing.expectEqualStrings("host\\\"rule", back.nets[0].getPortForwardsSlice());
 }
 
 // ── Missing standalone coverage ─────────────────────────────────────
@@ -890,6 +971,9 @@ test "isValidIpv4: invalid addresses" {
     try testing.expect(!isValidIpv4("abc.def.ghi.jkl"));
     try testing.expect(!isValidIpv4("1.2.3."));
     try testing.expect(!isValidIpv4(".1.2.3"));
+    // Regression: a long run of digits in one octet must not overflow `cur`.
+    try testing.expect(!isValidIpv4("999999999999.1.1"));
+    try testing.expect(!isValidIpv4("1234.1.1.1"));
 }
 
 test "isValidSubnetMask: valid masks" {
@@ -922,6 +1006,15 @@ test "vnet: fromJson rejects invalid subnet and mask" {
     try testing.expectEqual(@as(usize, 0), set.nets[0].getMaskSlice().len);
 }
 
+test "vnet: fromJson rejects invalid DHCP and gateway IPs" {
+    const json = "{\"networks\": [{\"name\": \"bad\", \"type\": \"nat\", \"dhcp\": true, \"dhcp_start\": \"999.1.1.1\", \"dhcp_end\": \"10.0.0.x\", \"gateway\": \"not-ip\"}]}";
+    const set = fromJson(json);
+    try testing.expectEqual(@as(usize, 1), set.count);
+    try testing.expectEqual(@as(usize, 0), set.nets[0].getDhcpStartSlice().len);
+    try testing.expectEqual(@as(usize, 0), set.nets[0].getDhcpEndSlice().len);
+    try testing.expectEqual(@as(usize, 0), set.nets[0].getGatewaySlice().len);
+}
+
 test "vnet: fromJson accepts valid subnet and mask" {
     const json = "{\"networks\": [{\"name\": \"VMnet8\", \"type\": \"nat\", \"subnet\": \"192.168.140.0\", \"mask\": \"255.255.255.0\"}]}";
     const set = fromJson(json);
@@ -934,4 +1027,27 @@ test "vnet: fromJson rejects non-contiguous mask" {
     const set = fromJson(json);
     try testing.expectEqualStrings("10.0.0.0", set.nets[0].getSubnetSlice()); // subnet is valid
     try testing.expectEqual(@as(usize, 0), set.nets[0].getMaskSlice().len); // mask rejected
+}
+
+test "fuzz: fromJson on mutated valid JSON never crashes" {
+    const alloc = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x7E7_BEEF);
+    const rnd = prng.random();
+
+    var iter: usize = 0;
+    while (iter < 2000) : (iter += 1) {
+        const orig = NetworkSet.defaults();
+        const json = try toJson(&orig, alloc);
+        defer alloc.free(json);
+
+        // Apply a handful of random byte mutations to otherwise-valid JSON.
+        const muts = rnd.uintLessThan(usize, 16);
+        var m: usize = 0;
+        while (m < muts and json.len > 0) : (m += 1) {
+            json[rnd.uintLessThan(usize, json.len)] = rnd.int(u8);
+        }
+
+        const set = fromJson(json);
+        try testing.expect(set.count <= MAX_VNETS);
+    }
 }

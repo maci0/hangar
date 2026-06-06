@@ -53,7 +53,7 @@
   --border-hover:#b9c1ca;
   --text:#171a1f;
   --text-muted:#5c6672;
-  --text-dim:#8a949f;
+  --text-dim:#6a7280;
   --accent:#197d72;
   --accent-2:#5261da;
   --accent-hover:#22998c;
@@ -233,7 +233,7 @@ aside .vm-item .dot{
 aside .vm-item .dot.running{background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb,var(--success) 20%,transparent)}
 aside .vm-item .dot.paused{background:var(--pause);box-shadow:0 0 0 3px color-mix(in srgb,var(--pause) 20%,transparent)}
 aside .vm-item .dot.suspended{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 18%,transparent)}
-aside .vm-item .star{font-size:12px;color:var(--text-dim)}
+aside .vm-item .star{padding:3px;border:0;background:transparent;font-size:12px;line-height:1;color:var(--text-dim);cursor:pointer}
 aside .vm-item .star.fav{color:var(--warn)}
 aside .vm-item:focus-visible,aside .vm-item .star:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 aside .vm-item .vm-bars{
@@ -839,5 +839,9 @@ body.displayonly #display canvas,
 body.displayonly #display.gpu-presenting .gpu-presenter{width:100%;height:100%;max-width:100vw;max-height:100vh;object-fit:contain}
 body.displayonly .displayonly-bar{display:flex}
 .displayonly-bar{display:none;position:fixed;top:0;left:0;right:0;z-index:10000;align-items:center;gap:12px;padding:5px 12px;background:rgba(0,0,0,.72);color:#d7d7d7;font-size:11px;opacity:0;pointer-events:none;transition:opacity var(--transition)}
-.displayonly-bar:hover{opacity:1;pointer-events:auto}
+.displayonly-bar:hover,.displayonly-bar:focus-within{opacity:1;pointer-events:auto}
 .displayonly-bar kbd{background:rgba(255,255,255,.15);border-radius:3px;padding:1px 5px;font-size:10px}
+.displayonly-exit{margin-left:auto;min-height:28px;padding:3px 12px;border:1px solid rgba(255,255,255,.35);border-radius:4px;background:rgba(255,255,255,.12);color:#fff;font-size:11px;font-weight:600;cursor:pointer}
+.displayonly-exit:hover{background:rgba(255,255,255,.22)}
+.displayonly-exit:focus-visible{outline:2px solid #fff;outline-offset:2px}
+@media(hover:none){body.displayonly .displayonly-bar{opacity:1;pointer-events:auto}}

@@ -191,6 +191,12 @@ pub const NetworkMode = enum(u8) {
 /// reasonable upper bound for any guest OS; no hypervisor-enforced limit.
 pub const MAX_NICS: usize = 8;
 
+/// Maximum number of virtual displays per VM (single source of truth).
+/// Enforced at the web input boundary and clamped again at QEMU arg-build
+/// time so an out-of-range value loaded from JSON cannot explode the device
+/// list.
+pub const MAX_DISPLAYS: u32 = 16;
+
 /// A single virtual network adapter (persisted).
 pub const Nic = struct {
     mode: NetworkMode = .none,
@@ -1026,7 +1032,8 @@ pub const VmConfig = struct {
     disk_cache: DiskCache = .writeback,
     display: DisplayType = .gtk,
     display_resolution: DisplayResolution = .auto,
-    /// Number of virtual displays (1-4).  QEMU adds a virtio-gpu device for each.
+    /// Number of virtual displays (1-`MAX_DISPLAYS`).  QEMU adds a virtio-gpu
+    /// device for each.
     num_displays: u32 = 1,
     /// Which accelerator to use.  `.auto` picks the best hardware accelerator
     /// available on this platform, falling back to TCG if none is found.
@@ -1589,12 +1596,16 @@ pub fn isValidDisplayPort(port: u16) bool {
 }
 
 /// Find an unused VNC port by scanning existing VMs. Falls back to 5900 + count.
+///
+/// VNC (5900-5999) and SPICE (5930-5999) draw from an overlapping port range,
+/// so both `vnc_port` and `spice_port` of every VM are treated as reserved to
+/// avoid two VMs (one VNC, one SPICE) racing for the same TCP port.
 pub fn findUnusedVncPort(vms: []VmConfig) u16 {
     var port: u16 = 5900;
     while (port <= 5999) : (port += 1) {
         var used = false;
         for (vms) |*v| {
-            if (v.vnc_port == port) {
+            if (v.vnc_port == port or v.spice_port == port) {
                 used = true;
                 break;
             }
@@ -1605,12 +1616,14 @@ pub fn findUnusedVncPort(vms: []VmConfig) u16 {
 }
 
 /// Find an unused SPICE port by scanning existing VMs. Falls back to 5930 + count.
+///
+/// Reserves both `vnc_port` and `spice_port` of every VM — see `findUnusedVncPort`.
 pub fn findUnusedSpicePort(vms: []VmConfig) u16 {
     var port: u16 = 5930;
     while (port <= 5999) : (port += 1) {
         var used = false;
         for (vms) |*v| {
-            if (v.spice_port == port) {
+            if (v.spice_port == port or v.vnc_port == port) {
                 used = true;
                 break;
             }
@@ -2837,8 +2850,8 @@ test "GpuDevice: fromIndex round-trip" {
 }
 
 test "GpuDevice: toIndex inverts fromIndex" {
-    const variants = [_]GpuDevice{ .virtio_gpu_gl, .virtio_vga_gl };
-    for (variants) |v| {
+    inline for (std.meta.fields(GpuDevice)) |f| {
+        const v: GpuDevice = @enumFromInt(f.value);
         try std.testing.expectEqual(v, GpuDevice.fromIndex(v.toIndex()));
     }
 }
@@ -3025,6 +3038,18 @@ test "VmConfig: findUnusedSpicePort wraps at 5999" {
     var vms: [1]VmConfig = .{VmConfig{}} ** 1;
     vms[0].spice_port = 5999;
     try std.testing.expectEqual(@as(u16, 5930), findUnusedSpicePort(&vms));
+}
+
+test "VmConfig: port finders avoid VNC/SPICE cross-collision" {
+    // A VM whose SPICE port sits in the overlapping range must block VNC
+    // allocation from reusing that TCP port, and vice versa.
+    var vms: [1]VmConfig = .{VmConfig{}} ** 1;
+    vms[0].vnc_port = 5930;
+    vms[0].spice_port = 5931;
+    try std.testing.expect(findUnusedVncPort(&vms) != 5931);
+    try std.testing.expect(findUnusedSpicePort(&vms) != 5930);
+    // First SPICE slot free of both reserved ports is 5932.
+    try std.testing.expectEqual(@as(u16, 5932), findUnusedSpicePort(&vms));
 }
 
 test "DisplayType: fromStr round-trip" {

@@ -4,14 +4,15 @@
 //! Saves VM configurations to `~/.config/hangar/vms.json` and loads
 //! them back at startup.  Runtime state (status, pid) is NOT persisted.
 //!
-//! Format: JSON object with `version` (integer) and `vms` (array of objects).
+//! Format: JSON object with `version` (currently 2), `theme`, a `prefs`
+//! object, and `vms` (array of objects).
 //! Enum fields are stored as their QEMU command-line strings (e.g. "qcow2",
 //! "gtk", "user") for human readability and forward compatibility.
 //!
-//! Save builds JSON in memory using `std.ArrayList(u8)` then writes the
-//! whole buffer with `File.writeAll()`.  Load uses `File.readToEndAlloc()`
-//! and a hand-rolled JSON parser (std.json is banned due to f128 linker
-//! errors with the system `cc` link step).
+//! Save builds JSON in memory using `std.ArrayList(u8)` then writes it
+//! atomically (`createFileAtomic` + `writeStreamingAll` + `replace`).  Load
+//! uses `readFileAlloc()` and a hand-rolled JSON parser (std.json is banned
+//! due to f128 linker errors with the system `cc` link step).
 
 const std = @import("std");
 const appio = @import("appio.zig");
@@ -20,6 +21,11 @@ const vm = @import("vm.zig");
 
 /// Maximum number of VMs (single source in vm.zig).
 const MAX_VMS = vm.MAX_VMS;
+
+/// Current on-disk config schema version. Single source of truth: bumped
+/// whenever the persisted format changes in a way readers must notice.
+/// Emitted by `save`, compared against by `parseVersion`.
+pub const CONFIG_VERSION: u32 = 2;
 
 // ── JSON-friendly intermediate struct ───────────────────────────────
 
@@ -200,16 +206,12 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
 }
 
 // ── JSON building helpers ───────────────────────────────────────────
-// Zig 0.15.2 ArrayList requires the allocator on every method call.
+// Zig 0.16 ArrayList requires the allocator on every method call.
 
 const List = std.ArrayList(u8);
 
 fn emit(list: *List, alloc: std.mem.Allocator, s: []const u8) !void {
     try list.appendSlice(alloc, s);
-}
-
-fn emitByte(list: *List, alloc: std.mem.Allocator, c: u8) !void {
-    try list.append(alloc, c);
 }
 
 fn emitJsonStr(list: *List, alloc: std.mem.Allocator, s: []const u8) !void {
@@ -247,6 +249,18 @@ fn emitInt(list: *List, alloc: std.mem.Allocator, val: anytype) !void {
 
 fn emitBool(list: *List, alloc: std.mem.Allocator, val: bool) !void {
     try list.appendSlice(alloc, if (val) "true" else "false");
+}
+
+fn writeFileAtomic(file_path: []const u8, data: []const u8) !void {
+    // Propagate the real error (NoSpaceLeft, AccessDenied, ...) instead of
+    // collapsing everything into a generic WriteFailed — callers log
+    // @errorName(e), so the actual cause is what lands in the operator's logs.
+    var af = try std.Io.Dir.cwd().createFileAtomic(appio.io(), file_path, .{ .replace = true });
+    defer af.deinit(appio.io());
+
+    try af.file.writeStreamingAll(appio.io(), data);
+    try af.file.sync(appio.io());
+    try af.replace(appio.io());
 }
 
 /// Append a single VM config as a JSON object.
@@ -580,11 +594,16 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
     var path_buf: [512]u8 = undefined;
     const file_path = appstate.vmsPath(&path_buf) orelse return error.HomeNotFound;
 
-    // Build JSON in memory.
+    // Build JSON in memory. Reserve up front so the page-allocator-backed
+    // ArrayList does not repeatedly remap as ~200 small slices are appended
+    // per VM (save runs on every mutation: power, edit, delete, reorder, ...).
     var list: List = .empty;
     defer list.deinit(alloc);
+    list.ensureTotalCapacity(alloc, 1024 + @as(usize, @min(count, MAX_VMS)) * 4096) catch return error.OutOfMemory;
 
-    emit(&list, alloc, "{\n  \"version\": 2,\n  \"theme\": ") catch return error.OutOfMemory;
+    emit(&list, alloc, "{\n  \"version\": ") catch return error.OutOfMemory;
+    emitInt(&list, alloc, CONFIG_VERSION) catch return error.OutOfMemory;
+    emit(&list, alloc, ",\n  \"theme\": ") catch return error.OutOfMemory;
     emitJsonStr(&list, alloc, std.mem.span(prefs.theme.toStr())) catch return error.OutOfMemory;
     emit(&list, alloc, ",\n  \"prefs\": {\n    \"default_vm_dir\": ") catch return error.OutOfMemory;
     emitJsonStr(&list, alloc, prefs.default_vm_dir_buf[0..prefs.default_vm_dir_len]) catch return error.OutOfMemory;
@@ -617,11 +636,7 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
 
     emit(&list, alloc, "\n  ]\n}\n") catch return error.OutOfMemory;
 
-    // Write to file.
-    std.Io.Dir.cwd().writeFile(appio.io(), .{
-        .sub_path = file_path,
-        .data = list.items,
-    }) catch return error.WriteFailed;
+    try writeFileAtomic(file_path, list.items);
 }
 
 // ── Load ────────────────────────────────────────────────────────────
@@ -754,6 +769,18 @@ fn parseJsonIntGeneric(comptime T: type, s: []const u8) ?struct { value: T, rest
     while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
     if (i == 0) return null;
     const val = std.fmt.parseInt(T, s[0..i], 10) catch return null;
+    return .{ .value = val, .rest = s[i..] };
+}
+
+/// Parse a signed JSON integer (decimal, optional leading '-'). Returns i32.
+/// Needed for fields that legitimately hold negative values (e.g. window
+/// coordinates on multi-monitor layouts), which `parseJsonInt` rejects.
+fn parseJsonIntSigned(s: []const u8) ?struct { value: i32, rest: []const u8 } {
+    var i: usize = 0;
+    if (s.len > 0 and s[0] == '-') i += 1;
+    while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
+    if (i == 0 or (i == 1 and s[0] == '-')) return null;
+    const val = std.fmt.parseInt(i32, s[0..i], 10) catch return null;
     return .{ .value = val, .rest = s[i..] };
 }
 
@@ -1185,12 +1212,12 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "vnc_port")) {
             if (parseJsonInt(cur)) |r| {
-                cfg.vnc_port = @intCast(r.value & 0xFFFF);
+                cfg.vnc_port = std.math.cast(u16, r.value) orelse cfg.vnc_port;
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "spice_port")) {
             if (parseJsonInt(cur)) |r| {
-                cfg.spice_port = @intCast(r.value & 0xFFFF);
+                cfg.spice_port = std.math.cast(u16, r.value) orelse cfg.spice_port;
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "accel")) {
@@ -1309,9 +1336,10 @@ fn parseVersion(content: []const u8) u32 {
         const vcur = skipWs(content[vidx + 9 ..]);
         if (vcur.len > 0 and vcur[0] == ':') {
             if (parseJsonInt(skipWs(vcur[1..]))) |r| {
-                if (r.value > 2 and !@import("builtin").is_test) {
-                    const msg = "hangar: config file version newer than supported (max 2); some settings may be ignored\n";
-                    _ = std.c.write(2, msg, msg.len);
+                if (r.value > CONFIG_VERSION and !@import("builtin").is_test) {
+                    var msg_buf: [128]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&msg_buf, "hangar: config file version newer than supported (max {d}); some settings may be ignored\n", .{CONFIG_VERSION}) catch "hangar: config file version newer than supported; some settings may be ignored\n";
+                    _ = std.c.write(2, msg.ptr, msg.len);
                 }
                 return r.value;
             }
@@ -1381,18 +1409,14 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
                     cur = r.rest;
                 } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_x")) {
-                if (parseJsonInt(cur)) |r| {
-                    if (std.math.cast(i32, r.value)) |v| {
-                        prefs_out.win_x = v;
-                        cur = r.rest;
-                    } else cur = cur[1..];
+                if (parseJsonIntSigned(cur)) |r| {
+                    prefs_out.win_x = r.value;
+                    cur = r.rest;
                 } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_y")) {
-                if (parseJsonInt(cur)) |r| {
-                    if (std.math.cast(i32, r.value)) |v| {
-                        prefs_out.win_y = v;
-                        cur = r.rest;
-                    } else cur = cur[1..];
+                if (parseJsonIntSigned(cur)) |r| {
+                    prefs_out.win_y = r.value;
+                    cur = r.rest;
                 } else cur = cur[1..];
             } else if (std.mem.eql(u8, key, "win_w")) {
                 if (parseJsonInt(cur)) |r| {
@@ -1428,7 +1452,17 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
         file_path,
         allocator,
         .limited(10 * 1024 * 1024),
-    ) catch return 0;
+    ) catch |e| {
+        // FileNotFound is normal on first run. Any other failure (permission,
+        // I/O error, oversize) means an existing config exists but could not be
+        // read — make it visible, because returning 0 here lets the next save()
+        // overwrite vms.json with an empty list and destroy the user's VMs.
+        if (e != error.FileNotFound) {
+            const msg = "persist: load failed to read vms.json (existing config not loaded)\n";
+            _ = std.c.write(2, msg, msg.len);
+        }
+        return 0;
+    };
     defer allocator.free(content);
 
     if (content.len == 0) return 0;
@@ -2372,6 +2406,59 @@ test "fuzz: mutated valid JSON never crashes the parser" {
     }
 }
 
+test "fuzz: loadFromSlice never crashes on random document bytes" {
+    var prng = std.Random.DefaultPrng.init(0x10AD_5117);
+    const rnd = prng.random();
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        var buf: [256]u8 = undefined;
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        var prefs = vm.Prefs{};
+        // The top-level document scanner (vms-key guards, array iteration,
+        // forward-progress loops) must never panic and never overrun MAX_VMS.
+        const n = loadFromSlice(&vms, buf[0..len], &prefs);
+        try std.testing.expect(n <= MAX_VMS);
+    }
+}
+
+test "fuzz: loadFromSlice on mutated valid documents never crashes" {
+    const alloc = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x10AD_DEAD);
+    const rnd = prng.random();
+    var sbuf: [120]u8 = undefined;
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+
+    var iter: usize = 0;
+    while (iter < 2000) : (iter += 1) {
+        // Build a full, valid {"version":..,"vms":[..]} document.
+        var list: List = .empty;
+        defer list.deinit(alloc);
+        try emit(&list, alloc, "{\"version\": 2, \"vms\": [");
+        const vm_count = rnd.uintLessThan(usize, 4);
+        var v: usize = 0;
+        while (v < vm_count) : (v += 1) {
+            if (v > 0) try emit(&list, alloc, ",");
+            var cfg = fuzzConfig(rnd, &sbuf);
+            try emitVmJson(&list, alloc, &cfg);
+        }
+        try emit(&list, alloc, "]}");
+
+        // Mutate a handful of random bytes anywhere in the document.
+        const muts = rnd.uintLessThan(usize, 16);
+        var m: usize = 0;
+        while (m < muts and list.items.len > 0) : (m += 1) {
+            list.items[rnd.uintLessThan(usize, list.items.len)] = rnd.int(u8);
+        }
+
+        var prefs = vm.Prefs{};
+        const n = loadFromSlice(&vms, list.items, &prefs);
+        try std.testing.expect(n <= MAX_VMS);
+    }
+}
+
 // ── Direct coverage for primitive parsers (previously only fuzzed) ──
 
 test "consumeLiteral: matches prefix or returns null" {
@@ -2404,13 +2491,6 @@ test "parseThemeKey: concrete values + default" {
     try std.testing.expectEqual(vm.Theme.system, parseThemeKey("{\"theme\":\"system\"}"));
     try std.testing.expectEqual(vm.Theme.light, parseThemeKey("{\"theme\":\"light\"}"));
     try std.testing.expectEqual(vm.Theme.light, parseThemeKey("{}")); // absent → default light
-}
-
-test "emitByte: appends a single byte" {
-    var list: List = .empty;
-    defer list.deinit(std.testing.allocator);
-    try emitByte(&list, std.testing.allocator, 'Z');
-    try std.testing.expectEqualStrings("Z", list.items);
 }
 
 // ── Missing standalone coverage ─────────────────────────────────────
@@ -2831,4 +2911,56 @@ test "save: full JSON build + loadFromSlice round-trip" {
     try std.testing.expectEqual(@as(i32, 200), parsed_prefs.win_y);
     try std.testing.expectEqual(@as(i32, 1280), parsed_prefs.win_w);
     try std.testing.expectEqual(@as(i32, 800), parsed_prefs.win_h);
+    try std.testing.expectEqualStrings(
+        "test",
+        parsed_prefs.default_vm_dir_buf[0..parsed_prefs.default_vm_dir_len],
+    );
+}
+
+test "parseJsonIntSigned: negative, positive, and invalid" {
+    const neg = parseJsonIntSigned("-42,").?;
+    try std.testing.expectEqual(@as(i32, -42), neg.value);
+    try std.testing.expectEqualStrings(",", neg.rest);
+
+    const pos = parseJsonIntSigned("100}").?;
+    try std.testing.expectEqual(@as(i32, 100), pos.value);
+
+    try std.testing.expect(parseJsonIntSigned("-") == null); // lone minus
+    try std.testing.expect(parseJsonIntSigned("abc") == null);
+    try std.testing.expect(parseJsonIntSigned("") == null);
+}
+
+test "prefs: negative window coordinates survive round-trip" {
+    const alloc = std.testing.allocator;
+    var list: List = .empty;
+    defer list.deinit(alloc);
+
+    // Window dragged onto a secondary monitor to the left/above primary —
+    // negative coords are valid and must not be clamped to the -1 default.
+    var prefs = vm.Prefs{};
+    prefs.win_x = -1280;
+    prefs.win_y = -50;
+    prefs.win_w = 800;
+    prefs.win_h = 600;
+
+    try emit(&list, alloc, "{\n  \"version\": 2,\n  \"theme\": ");
+    try emitJsonStr(&list, alloc, std.mem.span(prefs.theme.toStr()));
+    try emit(&list, alloc, ",\n  \"prefs\": {\n    \"win_x\": ");
+    try emitInt(&list, alloc, prefs.win_x);
+    try emit(&list, alloc, ",\n    \"win_y\": ");
+    try emitInt(&list, alloc, prefs.win_y);
+    try emit(&list, alloc, ",\n    \"win_w\": ");
+    try emitInt(&list, alloc, prefs.win_w);
+    try emit(&list, alloc, ",\n    \"win_h\": ");
+    try emitInt(&list, alloc, prefs.win_h);
+    try emit(&list, alloc, "\n  },\n  \"vms\": []\n}\n");
+
+    var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
+    var parsed_prefs: vm.Prefs = .{};
+    _ = loadFromSlice(&vms, list.items, &parsed_prefs);
+
+    try std.testing.expectEqual(@as(i32, -1280), parsed_prefs.win_x);
+    try std.testing.expectEqual(@as(i32, -50), parsed_prefs.win_y);
+    try std.testing.expectEqual(@as(i32, 800), parsed_prefs.win_w);
+    try std.testing.expectEqual(@as(i32, 600), parsed_prefs.win_h);
 }

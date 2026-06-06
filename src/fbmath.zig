@@ -177,11 +177,14 @@ test "bgraToRgba: identity round-trip (apply twice = original)" {
 }
 
 test "bgraToRgba: zero-size no-ops" {
-    var dummy: [4]u8 = undefined;
-    // width=0: no panic
-    bgraToRgba(&dummy, &dummy, 0, 0, 4, 4);
-    bgraToRgba(&dummy, &dummy, 1, 0, 4, 4);
-    bgraToRgba(&dummy, &dummy, 0, 1, 4, 4);
+    var dst = [4]u8{ 0xAA, 0xBB, 0xCC, 0xDD };
+    const src = [4]u8{ 1, 2, 3, 4 };
+    const sentinel = dst;
+    // Any zero dimension must write nothing (no panic, dst untouched).
+    bgraToRgba(&dst, &src, 0, 0, 4, 4);
+    bgraToRgba(&dst, &src, 1, 0, 4, 4);
+    bgraToRgba(&dst, &src, 0, 1, 4, 4);
+    try std.testing.expectEqualSlices(u8, &sentinel, &dst);
 }
 
 test "fuzz: bgraToRgba never panics on random dimensions" {

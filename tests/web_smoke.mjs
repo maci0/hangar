@@ -9,6 +9,7 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
+import { createServer } from 'net';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -17,8 +18,21 @@ const BINARY = resolve(ROOT, 'zig-out/bin/hangar-web');
 // Use a temp HOME so test data doesn't bleed across runs.
 const TMP_HOME = mkdtempSync(resolve(tmpdir(), 'hangar-smoke-'));
 
-const PORT = process.env.KV_PORT || (process.argv.includes('--port') ? process.argv[process.argv.indexOf('--port') + 1] : '9879');
-const BASE = `http://localhost:${PORT}`;
+async function getFreePort() {
+    return await new Promise((resolvePort, reject) => {
+        const srv = createServer();
+        srv.listen(0, '127.0.0.1', () => {
+            const addr = srv.address();
+            const port = String(addr.port);
+            srv.close(() => resolvePort(port));
+        });
+        srv.on('error', reject);
+    });
+}
+
+const cliPort = process.argv.includes('--port') ? process.argv[process.argv.indexOf('--port') + 1] : null;
+const PORT = process.env.KV_PORT || cliPort || await getFreePort();
+const BASE = `http://127.0.0.1:${PORT}`;
 
 let serverPid = null;
 let pass = 0, fail = 0;
@@ -53,15 +67,15 @@ async function waitForServerReady(timeout = 8000) {
     return false;
 }
 
-function exitStartupSkipped(reason) {
-    console.log(`  SKIP: ${reason}`);
+function exitStartupFailed(reason) {
+    console.log(`  FAIL: ${reason}`);
     if (serverOutput.trim()) {
         console.log('  Server output:');
         console.log(serverOutput.trim().split('\n').slice(-8).map(s => `    ${s}`).join('\n'));
     }
     if (serverPid) serverPid.kill('SIGTERM');
     try { rmSync(TMP_HOME, { recursive: true, force: true }); } catch {}
-    process.exit(process.env.HANGAR_WEB_SMOKE_STRICT === '1' ? 1 : 0);
+    process.exit(1);
 }
 
 async function invokeFn(page, fnName) {
@@ -131,7 +145,7 @@ async function run() {
 
     const ready = await waitForServerReady();
     if (!ready) {
-        exitStartupSkipped('web server did not become reachable on localhost');
+        exitStartupFailed('web server did not become reachable on 127.0.0.1');
     }
     console.log('  Server started');
 
@@ -308,10 +322,12 @@ async function run() {
                     headers: { 'X-API-Key': 'hangar' },
                     body: 'from=0&to=0',
                 });
-                return r.ok;
-            } catch { return false; }
+                return { ok: r.ok, body: await r.text() };
+            } catch (e) {
+                return { ok: false, body: String(e) };
+            }
         });
-        result(reorderResult, 'reorder API endpoint reachable');
+        result(reorderResult.ok && reorderResult.body.trim() === 'ok', 'reorder API returns ok for no-op reorder');
 
         // ── 13. Rename VM ──
         console.log('--- 13. Rename VM ---');
@@ -335,9 +351,9 @@ async function run() {
         // VM name should now reflect the rename
         const nameAfterRename = await page.evaluate(() => {
             const el = document.getElementById('vmname');
-            return el && el.textContent.includes('SmokeTest');
+            return el && el.textContent.includes('SmokeTest Renamed');
         });
-        result(nameAfterRename, 'VM still visible after rename attempt');
+        result(nameAfterRename, 'VM header reflects renamed VM');
 
         // ── 14. Clone VM dialog ──
         console.log('--- 14. Clone VM ---');
@@ -346,6 +362,7 @@ async function run() {
         const cloneDialogOpen = await isDialogOpen(page, 'clonedlg');
         result(cloneDialogOpen, 'clone dialog opens');
         if (cloneDialogOpen) {
+            const countBeforeClone = await vmCount(page);
             // Click Full Clone button
             await page.evaluate(() => {
                 const btns = document.querySelectorAll('#clonedlg .btn');
@@ -353,9 +370,15 @@ async function run() {
                     if (b.textContent.includes('Full')) { b.click(); break; }
                 }
             });
-            await new Promise(r => setTimeout(r, 1000));
+            await page.waitForFunction((prev) => {
+                return document.querySelectorAll('#vmlist .vm-item').length === prev + 1;
+            }, { timeout: 5000 }, countBeforeClone);
             const countAfterClone = await vmCount(page);
-            result(countAfterClone >= 1, `clone produces VM (count: ${countAfterClone})`);
+            const hasCloneName = await page.evaluate(() => {
+                return Array.from(document.querySelectorAll('#vmlist .vm-item'))
+                    .some(item => item.textContent.includes('(clone)'));
+            });
+            result(countAfterClone === countBeforeClone + 1 && hasCloneName, `full clone creates one VM (count: ${countBeforeClone} -> ${countAfterClone})`);
             await closeDialog(page, 'clonedlg');
         }
 
@@ -363,18 +386,24 @@ async function run() {
         console.log('--- 15. Favorite ---');
         await selectVm(page, 0);
         await new Promise(r => setTimeout(r, 300));
-        // Toggle favorite via API call on VM 0
-        await page.evaluate(() => window.toggleFavorite(0));
-        await new Promise(r => setTimeout(r, 800));
-        const hasStar = await page.evaluate(() => {
-            const items = document.querySelectorAll('#vmlist .vm-item');
-            for (const item of items) {
-                const star = item.querySelector('.star.fav');
-                if (star) return true;
-            }
-            return false;
+        const favoriteBefore = await page.evaluate(async () => {
+            const r = await fetch('/api/vms');
+            const rows = await r.json();
+            return rows[0] ? rows[0].favorite : null;
         });
-        result(hasStar || (await vmCount(page)) >= 1, 'favorite toggle executed (star or VMs present)');
+        await page.click('#vmlist .vm-item[data-vm-index="0"] [data-action="toggleFavorite"]');
+        await page.waitForFunction((before) => {
+            const item = document.querySelector('#vmlist .vm-item[data-vm-index="0"]');
+            const star = item && item.querySelector('.star');
+            if (!star) return false;
+            return before === 'true' ? !star.classList.contains('fav') : star.classList.contains('fav');
+        }, { timeout: 5000 }, favoriteBefore);
+        const favoriteAfter = await page.evaluate(async () => {
+            const r = await fetch('/api/vms');
+            const rows = await r.json();
+            return rows[0] ? rows[0].favorite : null;
+        });
+        result(favoriteBefore !== null && favoriteAfter !== favoriteBefore, 'favorite toggle persists changed favorite state');
 
         // ── 16. Search / filter ──
         console.log('--- 16. Search ---');
@@ -415,9 +444,8 @@ async function run() {
         // ── 19. Migrate dialog ──
         console.log('--- 19. Migrate ---');
         await invokeFn(page, 'migrateGuest');
-        // Migrate dialog may or may not open (requires VM selected)
         const migrateOpen = await waitForDialogOpen(page, 'migratedlg', 2000).catch(() => false);
-        result(migrateOpen !== false, 'migrate dialog or prompt handled gracefully');
+        result(migrateOpen, 'migrate dialog opens for selected VM');
         if (await isDialogOpen(page, 'migratedlg')) {
             await closeDialog(page, 'migratedlg');
         }

@@ -110,9 +110,9 @@
     <div id="display">
       <div class="display-badge" id="displayBadge" aria-hidden="true"></div>
       <div class="display-toolbar" aria-label="Display controls">
-        <button class="display-tool" data-action="enterDisplayOnly" data-vm-action="display" title="Display only">⛶</button>
-        <button class="display-tool" data-action="reconnectDisplay" data-vm-action="display" title="Reconnect display">↻</button>
-        <button class="display-tool" data-action="sendCad" data-vm-action="cad" title="Send Ctrl+Alt+Del">⌨</button>
+        <button class="display-tool" data-action="enterDisplayOnly" data-vm-action="display" title="Display only" aria-label="Display only">⛶</button>
+        <button class="display-tool" data-action="reconnectDisplay" data-vm-action="display" title="Reconnect display" aria-label="Reconnect display">↻</button>
+        <button class="display-tool" data-action="sendCad" data-vm-action="cad" title="Send Ctrl+Alt+Del" aria-label="Send Ctrl+Alt+Del">⌨</button>
       </div>
       <div id="displayHint" class="display-hint" aria-live="polite"></div>
     </div>
@@ -374,6 +374,7 @@
 <div class="displayonly-bar">
   <span>Display-only mode</span>
   <kbd>F11</kbd><span>or</span><kbd>Esc</kbd><span>to exit</span>
+  <button type="button" class="displayonly-exit" data-action="exitDisplayOnly" aria-label="Exit display-only mode">Exit</button>
 </div>
 
 <!-- Confirm dialog -->

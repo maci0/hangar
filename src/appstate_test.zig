@@ -185,9 +185,32 @@ test "delete: first VM — index 0 stays 0, later VMs shift left" {
     try testing.expectEqualStrings("vm-X", vms[1].getNameSlice());
 }
 
-test "delete: out-of-range index is validated by caller, not tested here" {
-    // The caller (web_server.zig handleDelete) guards: `if (idx >= vm_count) return;`
-    // simulateDelete assumes a valid idx.
+test "delete: last valid index decrements count and reselects new last" {
+    // The caller (web_server.zig handleDelete) guards out-of-range via
+    // `if (idx >= vm_count) return;`, so simulateDelete only ever sees a
+    // valid idx. Exercise the highest valid index (vm_count - 1), the
+    // boundary most likely to mis-handle the left-shift / reselect logic.
+    var vms = [_]vm.VmConfig{.{}} ** MAX_VMS;
+    var handles = [_]?usize{null} ** MAX_VMS;
+    var started = [_]i64{0} ** MAX_VMS;
+    var vm_count: usize = 3;
+
+    _ = vms[0].setName("vm-0");
+    _ = vms[1].setName("vm-1");
+    _ = vms[2].setName("vm-2");
+
+    const sel = simulateDelete(&vms, &vm_count, &handles, &started, 2);
+    try testing.expectEqual(@as(usize, 2), vm_count);
+    try testing.expectEqual(@as(?usize, 1), sel);
+    // Surviving VMs are untouched and in order.
+    try testing.expectEqualStrings("vm-0", vms[0].getNameSlice());
+    try testing.expectEqualStrings("vm-1", vms[1].getNameSlice());
+
+    // Deleting down to empty yields a null selection.
+    _ = simulateDelete(&vms, &vm_count, &handles, &started, 1);
+    const empty_sel = simulateDelete(&vms, &vm_count, &handles, &started, 0);
+    try testing.expectEqual(@as(usize, 0), vm_count);
+    try testing.expectEqual(@as(?usize, null), empty_sel);
 }
 
 test "undo: restore VM at original index, count incremented" {

@@ -10,10 +10,23 @@ const persist = @import("persist.zig");
 const transport = @import("transport.zig");
 const app = @import("appstate.zig");
 
+fn clearVmmHandleSlotsLocked() void {
+    for (&app.g_vmm_handles) |*slot| {
+        slot.* = null;
+    }
+}
+
+fn remoteUrlSlice() ?[]const u8 {
+    if (!@atomicLoad(bool, &app.remote_mode, .seq_cst)) return null;
+    const len = @atomicLoad(usize, &app.remote_url_len, .seq_cst);
+    if (len == 0 or len > app.remote_url.len) return null;
+    return app.remote_url[0..len];
+}
+
 /// GET from the remote server. Returns bytes read.
 pub fn apiGet(path: []const u8, out: []u8) usize {
-    if (!@atomicLoad(bool, &app.remote_mode, .seq_cst) or @atomicLoad(usize, &app.remote_url_len, .seq_cst) == 0) return 0;
-    const url = transport.Url.parse(app.remote_url[0..app.remote_url_len]) orelse return 0;
+    const url_slice = remoteUrlSlice() orelse return 0;
+    const url = transport.Url.parse(url_slice) orelse return 0;
     var conn = transport.Connection.connect(&url) orelse return 0;
     defer conn.close();
     return conn.request("GET", path, null, out);
@@ -21,8 +34,8 @@ pub fn apiGet(path: []const u8, out: []u8) usize {
 
 /// POST to the remote server. Returns bytes read.
 pub fn apiPost(path: []const u8, body: []const u8, out: []u8) usize {
-    if (!@atomicLoad(bool, &app.remote_mode, .seq_cst) or @atomicLoad(usize, &app.remote_url_len, .seq_cst) == 0) return 0;
-    const url = transport.Url.parse(app.remote_url[0..app.remote_url_len]) orelse return 0;
+    const url_slice = remoteUrlSlice() orelse return 0;
+    const url = transport.Url.parse(url_slice) orelse return 0;
     var conn = transport.Connection.connect(&url) orelse return 0;
     defer conn.close();
     return conn.request("POST", path, body, out);
@@ -30,8 +43,8 @@ pub fn apiPost(path: []const u8, body: []const u8, out: []u8) usize {
 
 /// Fetch the full vms.json config from the remote server and load it locally.
 pub fn remoteRefreshVmList() void {
-    if (!@atomicLoad(bool, &app.remote_mode, .seq_cst) or @atomicLoad(usize, &app.remote_url_len, .seq_cst) == 0) return;
-    const url = transport.Url.parse(app.remote_url[0..app.remote_url_len]) orelse return;
+    const url_slice = remoteUrlSlice() orelse return;
+    const url = transport.Url.parse(url_slice) orelse return;
     var conn = transport.Connection.connect(&url) orelse return;
     defer conn.close();
 
@@ -40,7 +53,9 @@ pub fn remoteRefreshVmList() void {
     if (n == 0) return;
     var tmp_prefs: vm.Prefs = .{};
     app.vms_mutex.lock();
+    clearVmmHandleSlotsLocked();
     app.vm_count = persist.loadFromSlice(&app.vms, buf[0..n], &tmp_prefs);
+    app.prefs = tmp_prefs;
     app.vms_mutex.unlock();
 }
 
@@ -57,6 +72,15 @@ test "apiGet: returns 0 when remote_mode is false" {
 test "apiGet: returns 0 when remote_url_len is 0" {
     app.remote_mode = true;
     app.remote_url_len = 0;
+    var buf: [256]u8 = undefined;
+    const n = apiGet("/api/vms", &buf);
+    try testing.expectEqual(@as(usize, 0), n);
+}
+
+test "apiGet: returns 0 when remote_url_len exceeds buffer" {
+    app.remote_mode = true;
+    app.remote_url_len = app.remote_url.len + 1;
+    defer app.remote_url_len = 0;
     var buf: [256]u8 = undefined;
     const n = apiGet("/api/vms", &buf);
     try testing.expectEqual(@as(usize, 0), n);

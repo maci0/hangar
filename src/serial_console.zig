@@ -2,7 +2,8 @@
 //! Serial console reader and connection management.
 //!
 //! Spawns a background reader thread for the VM's Unix-domain serial socket,
-//! appending bytes into a shared ring buffer (polled by consoleTimerCB).
+//! appending bytes into a shared ring buffer that the web server relays to
+//! clients over the `/ws/serial/` WebSocket.
 
 const std = @import("std");
 const usock = @import("usock.zig");
@@ -11,8 +12,16 @@ const sync = @import("sync.zig");
 const serialpath = @import("serialpath.zig");
 const app = @import("appstate.zig");
 
+var serial_lifecycle_mutex: sync.SpinMutex = .{};
+
 fn serialReader() void {
-    const fd = app.serial_fd orelse return;
+    serial_lifecycle_mutex.lock();
+    const fd = app.serial_fd orelse {
+        serial_lifecycle_mutex.unlock();
+        return;
+    };
+    serial_lifecycle_mutex.unlock();
+
     var buf: [4096]u8 = undefined;
     while (@atomicLoad(bool, &app.serial_running, .seq_cst)) {
         const n = std.c.read(fd, &buf, buf.len);
@@ -32,20 +41,42 @@ fn serialReader() void {
     // Clean up after unexpected exit (VM died, socket error, etc.).
     // If serialDisconnect already set running=false, skip — it handles cleanup.
     if (@atomicRmw(bool, &app.serial_running, .Xchg, false, .seq_cst)) {
-        _ = std.c.close(fd);
-        app.serial_fd = null;
+        serial_lifecycle_mutex.lock();
+        if (app.serial_fd != null and app.serial_fd.? == fd) {
+            _ = std.c.close(fd);
+            app.serial_fd = null;
+        }
+        serial_lifecycle_mutex.unlock();
     }
 }
 
 /// Connect to the VM's serial Unix socket and start the reader thread.
 pub fn serialConnect(vm_name: []const u8) void {
-    if (app.serial_fd != null) return;
+    serial_lifecycle_mutex.lock();
+    defer serial_lifecycle_mutex.unlock();
+
+    // Reap a reader that exited on its own (EOF / socket error). Such a reader
+    // clears serial_fd in its cleanup path but cannot null its own thread
+    // handle; without this, serial_thread would stay set forever and every
+    // reconnect below would bail out at the guard, permanently wedging the
+    // serial console after the first disconnect (and leaking the thread).
+    // We hold serial_lifecycle_mutex, which the reader releases before
+    // returning, so the thread is already terminating — detach frees it.
+    if (app.serial_thread != null and app.serial_fd == null and
+        !@atomicLoad(bool, &app.serial_running, .seq_cst))
+    {
+        app.serial_thread.?.detach();
+        app.serial_thread = null;
+    }
+
+    if (app.serial_fd != null or app.serial_thread != null) return;
     var path_buf: [320]u8 = undefined;
     const path = serialpath.serialSocketPath(&path_buf, vm_name) catch return;
     const stream = usock.UnixStream.connect(path) catch return;
     app.serial_fd = stream.fd;
     @atomicStore(bool, &app.serial_running, true, .seq_cst);
     app.serial_thread = std.Thread.spawn(std.Thread.SpawnConfig{}, serialReader, .{}) catch {
+        @atomicStore(bool, &app.serial_running, false, .seq_cst);
         _ = std.c.close(stream.fd);
         app.serial_fd = null;
         return;
@@ -194,6 +225,25 @@ test "serial: serialConnect with non-existent socket fails gracefully" {
     try std.testing.expect(app.serial_thread == null);
 }
 
+test "serial: serialConnect reaps a self-exited reader so reconnect is possible" {
+    // Simulate the post-EOF state: serial_fd cleared by the reader's cleanup,
+    // serial_running false, but serial_thread still set (the reader cannot
+    // null its own handle). A trivial thread that returns immediately stands
+    // in for the exited reader.
+    app.serial_fd = null;
+    @atomicStore(bool, &app.serial_running, false, .seq_cst);
+    app.serial_thread = try std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+        fn run() void {}
+    }.run, .{});
+
+    // Connect to a non-existent socket: the connect itself fails, but the stale
+    // thread handle must be reaped first so the guard no longer wedges us.
+    serialConnect("no-such-vm-reap-test");
+
+    try std.testing.expect(app.serial_thread == null);
+    try std.testing.expect(app.serial_fd == null);
+}
+
 /// Stop the serial reader thread and close the socket.
 /// Uses shutdown() to unblock the reader's read() call without closing
 /// the fd prematurely — avoids a double-close race where the OS recycles
@@ -202,15 +252,24 @@ pub fn serialDisconnect() void {
     @atomicStore(bool, &app.serial_running, false, .seq_cst);
     // Shutdown the socket to unblock any in-flight read() in the reader
     // thread, so the thread can observe running==false and exit.
-    if (app.serial_fd) |fd| _ = std.c.shutdown(fd, std.c.SHUT.RDWR);
-    if (app.serial_thread) |t| {
+    serial_lifecycle_mutex.lock();
+    const fd = app.serial_fd;
+    if (fd) |current| _ = std.c.shutdown(current, std.c.SHUT.RDWR);
+    const thread = app.serial_thread;
+    app.serial_thread = null;
+    serial_lifecycle_mutex.unlock();
+
+    if (thread) |t| {
         t.join();
-        app.serial_thread = null;
     }
     // Now safe to close: the thread is joined and has either already
     // closed the fd via its cleanup path or skipped it (Rmw returned false).
-    if (app.serial_fd) |fd| {
-        _ = std.c.close(fd);
-        app.serial_fd = null;
+    serial_lifecycle_mutex.lock();
+    if (fd) |closing| {
+        if (app.serial_fd != null and app.serial_fd.? == closing) {
+            _ = std.c.close(closing);
+            app.serial_fd = null;
+        }
     }
+    serial_lifecycle_mutex.unlock();
 }

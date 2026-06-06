@@ -30,16 +30,20 @@ extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_
 const HTTP_OK: u16 = 200;
 const HTTP_CREATED: u16 = 201;
 const HTTP_BAD_REQUEST: u16 = 400;
+const HTTP_UNAUTHORIZED: u16 = 401;
 const HTTP_NOT_FOUND: u16 = 404;
 const HTTP_METHOD_NOT_ALLOWED: u16 = 405;
 const HTTP_PAYLOAD_TOO_LARGE: u16 = 413;
 const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 const HTTP_INTERNAL_ERROR: u16 = 500;
 
-const BIND_ADDR: [4]u8 = .{ 0, 0, 0, 0 }; // 0.0.0.0 — accessible remotely
 const API_KEY: []const u8 = "hangar"; // default API key for X-API-Key auth
+const DEFAULT_PORT: u16 = 9080; // KV_PORT default; matches transport.DEFAULT_PORT
 var auth_token: [64]u8 = [_]u8{0} ** 64;
 var auth_token_len: usize = 0;
+
+const FB_BMP_BUF_SIZE = 2 * 1024 * 1024 + 54;
+const CONFIG_RAW_MAX = 4 * 1024 * 1024;
 
 // Server socket fds for shutdown signaling.
 var tcp_sock_fd: c.fd_t = -1;
@@ -63,11 +67,44 @@ const F_SETFL: c_int = 4;
 const O_NONBLOCK: c_int = 2048;
 const IPPROTO_IPV6: c_int = 41;
 const IPV6_V6ONLY: c_int = 26;
+const IPPROTO_TCP: c_int = 6;
+const TCP_NODELAY: c_int = 1;
+
+/// Disable Nagle on a TCP socket. Interactive VNC/SPICE relay traffic is
+/// dominated by small mouse/keyboard packets; without this, Nagle coalescing
+/// adds up to ~40ms of latency per input event. Best-effort — failure is
+/// non-fatal (the relay still works, just with higher latency).
+fn setTcpNoDelay(fd: c.fd_t) void {
+    const one: c_int = 1;
+    _ = c.setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, @sizeOf(c_int));
+}
 
 const SIGPIPE: c_int = 13;
 const SIG_IGN: isize = 1;
 
 extern fn signal(sig: c_int, handler: isize) isize;
+
+fn loadServerFd(slot: *c.fd_t) c.fd_t {
+    return @atomicLoad(c.fd_t, slot, .seq_cst);
+}
+
+fn storeServerFd(slot: *c.fd_t, fd: c.fd_t) void {
+    @atomicStore(c.fd_t, slot, fd, .seq_cst);
+}
+
+fn rebindVmmHandleLocked(idx: usize) void {
+    const h = appstate.g_vmm_handles[idx] orelse return;
+    if (!appstate.g_vmm_ready) {
+        appstate.g_vmm_handles[idx] = null;
+        return;
+    }
+    switch (appstate.g_vmm.backend) {
+        .qemu => {
+            const qv: *hv_backend.QemuVm = @ptrCast(@alignCast(h));
+            qv.config = &appstate.vms[idx];
+        },
+    }
+}
 
 // ── Rate limiter ────────────────────────────────────────────────
 const RATE_LIMIT_PER_SEC: u32 = 200; // max POST requests per second
@@ -116,16 +153,42 @@ fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/api/config")) return true;
     if (std.mem.eql(u8, path, "/api/vnets")) return true;
     // Prefix paths — ensure the prefix ends at a path boundary
-    if (std.mem.startsWith(u8, path, "/api/vm/")) return true;
+    if (std.mem.startsWith(u8, path, "/api/vm/")) {
+        // The disk-image download streams raw guest disk bytes (filesystems,
+        // credentials, ...). It must never be exempt: when KV_API_KEY is set the
+        // daemon binds all interfaces, so exempting it would let an
+        // unauthenticated remote client exfiltrate the disk image.
+        if (std.mem.endsWith(u8, path, "/disk2/download")) return false;
+        return true;
+    }
     if (std.mem.startsWith(u8, path, "/api/snapshot/list/")) return true;
     if (std.mem.eql(u8, path, "/api/catalog")) return true;
-    if (std.mem.startsWith(u8, path, "/api/quickstart/")) return true;
+    // /api/quickstart/ creates a VM (state-changing) — it must require auth.
     return false;
 }
 
 fn clampPref(v: []const u8, fallback: u32, lo: u32, hi: u32) u32 {
     const val = std.fmt.parseInt(u32, v, 10) catch return fallback;
     return if (val < lo) lo else if (val > hi) hi else val;
+}
+
+/// Map an arbitrary name to a filesystem/shell-safe slug, replacing any
+/// character outside [A-Za-z0-9._-] with '_'. Never empty (falls back to "vm").
+fn sanitizeSlug(name: []const u8, out: []u8) []const u8 {
+    var n: usize = 0;
+    for (name) |ch| {
+        if (n >= out.len) break;
+        const safe = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
+            (ch >= '0' and ch <= '9') or ch == '.' or ch == '_' or ch == '-';
+        out[n] = if (safe) ch else '_';
+        n += 1;
+    }
+    if (n == 0) {
+        const fallback = "vm";
+        @memcpy(out[0..fallback.len], fallback);
+        return out[0..fallback.len];
+    }
+    return out[0..n];
 }
 
 fn findHeader(headers: []const u8, name: []const u8) ?[]const u8 {
@@ -146,23 +209,115 @@ fn findHeader(headers: []const u8, name: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Length-checked, constant-time byte-slice equality. The length is not secret
+/// (key bounds are public, 1-64 bytes), but the comparison must not early-exit
+/// on the first differing byte: `checkAuth` runs on the network-exposed daemon,
+/// where `std.mem.eql`'s short-circuit would leak the secret via response timing.
+fn secretEql(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    var diff: u8 = 0;
+    for (a, b) |x, y| diff |= x ^ y;
+    return diff == 0;
+}
+
 fn checkAuth(req: []const u8) bool {
     const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return false;
     const headers = req[0..hdr_end];
 
     if (auth_token_len > 0) {
         const provided = findHeader(headers, "X-API-Key: ") orelse return false;
-        return std.mem.eql(u8, provided, auth_token[0..auth_token_len]);
+        return secretEql(provided, auth_token[0..auth_token_len]);
     }
     // No custom token set — fall back to built-in API_KEY
     const provided = findHeader(headers, "X-API-Key: ") orelse return false;
-    return std.mem.eql(u8, provided, API_KEY);
+    return secretEql(provided, API_KEY);
 }
 
-/// Log a message to stderr (best-effort, thread-safe via atomic write).
+const LogLevel = enum {
+    info,
+    warn,
+    err,
+
+    fn tag(self: LogLevel) []const u8 {
+        return switch (self) {
+            .info => "info",
+            .warn => "warn",
+            .err => "error",
+        };
+    }
+};
+
+/// Log a message to stderr as a single timestamped, leveled line.
+///
+/// Format: `[<epoch_seconds>] hangar <level>: <msg>\n`. Emitting one write
+/// (rather than separate body + newline writes) keeps concurrent log lines
+/// from interleaving and gives operators a parseable, time-ordered record.
+/// `msg` must be server-controlled text — callers never echo untrusted request
+/// data here, so a single line cannot be split by injected newlines.
+fn logAt(level: LogLevel, msg: []const u8) void {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    const epoch: i64 = @intCast(ts.sec);
+    const lvl = level.tag();
+
+    var buf: [512]u8 = undefined;
+    const line = std.fmt.bufPrint(&buf, "[{d}] hangar {s}: {s}\n", .{ epoch, lvl, msg }) catch blk: {
+        // Message too long for the buffer — emit a truncated, still-leveled line.
+        var head_buf: [32]u8 = undefined;
+        const head = std.fmt.bufPrint(&head_buf, "[?] hangar {s}: ", .{lvl}) catch "[?] hangar log: ";
+        const room = buf.len - head.len - 1;
+        const clipped = if (msg.len > room) msg[0..room] else msg;
+        @memcpy(buf[0..head.len], head);
+        @memcpy(buf[head.len .. head.len + clipped.len], clipped);
+        buf[head.len + clipped.len] = '\n';
+        break :blk buf[0 .. head.len + clipped.len + 1];
+    };
+    _ = std.c.write(2, line.ptr, line.len);
+}
+
+/// Log an error-level line (operator action likely required).
 fn logErr(msg: []const u8) void {
-    _ = std.c.write(2, msg.ptr, msg.len);
-    _ = std.c.write(2, "\n", 1);
+    logAt(.err, msg);
+}
+
+/// Log a warn-level line (audit/security events such as rejected auth).
+fn logWarn(msg: []const u8) void {
+    logAt(.warn, msg);
+}
+
+/// Copy a user-controlled VM name into `out`, replacing every non-printable
+/// byte with '?' so it cannot inject newlines into a log line. Returns the
+/// populated, bounded slice.
+fn sanitizeLogName(out: []u8, name: []const u8) []const u8 {
+    const n = @min(name.len, out.len);
+    for (name[0..n], 0..) |ch, i| {
+        out[i] = if (ch >= 0x20 and ch < 0x7f) ch else '?';
+    }
+    return out[0..n];
+}
+
+/// Log an info-level audit line for a destructive state transition (power,
+/// delete, snapshot revert). The VM name is user-controlled, so it is
+/// sanitized to prevent log-line injection. Format: `audit: <action> vm="<name>"`.
+fn logAudit(action: []const u8, vm_name: []const u8) void {
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    const safe = sanitizeLogName(&name_buf, vm_name);
+    var msg: [320]u8 = undefined;
+    logAt(.info, std.fmt.bufPrint(&msg, "audit: {s} vm=\"{s}\"", .{ action, safe }) catch action);
+}
+
+/// Copy the HTTP request line (method + path, up to the first CR/LF) into
+/// `out`, replacing every non-printable byte with '?'. Request data is
+/// client-controlled, so sanitizing here lets error logs carry route context
+/// (which VM / operation failed) without risking log-line injection.
+fn requestLine(req: []const u8, out: []u8) []const u8 {
+    var n: usize = 0;
+    for (req) |ch| {
+        if (ch == '\r' or ch == '\n' or n >= out.len) break;
+        out[n] = if (ch >= 0x20 and ch < 0x7f) ch else '?';
+        n += 1;
+    }
+    return out[0..n];
 }
 
 /// Write exactly `len` bytes to fd, retrying on short writes. Returns false on failure.
@@ -182,12 +337,41 @@ fn jsonErr(buf: []u8, msg: []const u8) []const u8 {
     return std.fmt.bufPrint(buf, "{{\"error\":\"{s}\"}}", .{msg}) catch "{\"error\":\"internal\"}";
 }
 
-/// Write an HTTP response with status code, content type, CORS headers, and body.
+/// Dynamic server-side failure tokens that handlers return as their response
+/// body (e.g. `qemu-img`/QMP failures). These map to HTTP 500. Matched exactly
+/// rather than by substring: a substring test for "err" misclassifies legitimate
+/// `text/plain` data — e.g. a snapshot named `fix-error` in the snapshot list —
+/// as a server error.
+fn isServerErrToken(response: []const u8) bool {
+    if (std.mem.startsWith(u8, response, "start err")) return true; // incl. "start err: <detail>"
+    const tokens = [_][]const u8{
+        "apply err", "bd err",    "cad err",  "cancel err",
+        "create err", "delete err", "linkerr",  "migrate err",
+        "nameerr",   "path err",  "qmp err",  "sock err",
+        "write err",
+    };
+    for (tokens) |t| {
+        if (std.mem.eql(u8, response, t)) return true;
+    }
+    return false;
+}
+
+/// Write an HTTP response with status code, content type, security headers, and
+/// body. The shared security headers are emitted inline below.
+///
+/// No `Access-Control-Allow-Origin` is emitted: the web UI is served from the
+/// same origin as this daemon, so it never needs CORS. Sending a wildcard ACAO
+/// (together with the publicly known default `KV_API_KEY`) would let any website
+/// the victim visits drive the local daemon — read the VM inventory/config and,
+/// via a CORS-permitted `X-API-Key` preflight, issue state-changing POSTs
+/// (delete/create/power) cross-origin. Omitting it makes the browser block all
+/// cross-origin reads and the preflight, closing that CSRF/exfiltration path.
 fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8) void {
     const status_line: []const u8 = switch (status) {
         HTTP_OK => "HTTP/1.1 200 OK\r\n",
         HTTP_CREATED => "HTTP/1.1 201 Created\r\n",
         HTTP_BAD_REQUEST => "HTTP/1.1 400 Bad Request\r\n",
+        HTTP_UNAUTHORIZED => "HTTP/1.1 401 Unauthorized\r\n",
         HTTP_NOT_FOUND => "HTTP/1.1 404 Not Found\r\n",
         HTTP_METHOD_NOT_ALLOWED => "HTTP/1.1 405 Method Not Allowed\r\n",
         HTTP_PAYLOAD_TOO_LARGE => "HTTP/1.1 413 Payload Too Large\r\n",
@@ -195,96 +379,83 @@ fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8
         HTTP_INTERNAL_ERROR => "HTTP/1.1 500 Internal Server Error\r\n",
         else => "HTTP/1.1 500 Internal Server Error\r\n",
     };
-    if (!writeAll(conn, status_line.ptr, status_line.len)) return;
+    // Assemble the full header block in one buffer so the response costs two
+    // write() syscalls (headers + body) instead of ~11 small writes. The header
+    // set — status line, fixed security headers, content-type, content-length —
+    // is well under 1 KiB even with the CSP string.
+    var hbuf: [1024]u8 = undefined;
+    var hlen: usize = 0;
+    const append = struct {
+        fn add(b: []u8, n: *usize, s: []const u8) void {
+            if (n.* + s.len > b.len) return; // header set is bounded; never trips
+            @memcpy(b[n.*..][0..s.len], s);
+            n.* += s.len;
+        }
+    }.add;
 
-    // CORS headers (allow cross-origin browser access)
-    const h_acao: []const u8 = "Access-Control-Allow-Origin: *\r\n";
-    const h_acah: []const u8 = "Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n";
-    const h_acam: []const u8 = "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
-    const h_xcto: []const u8 = "X-Content-Type-Options: nosniff\r\n";
-    const h_xfo: []const u8 = "X-Frame-Options: DENY\r\n";
-    const h_csp: []const u8 = "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'\r\n";
-    const h_ct: []const u8 = "Content-Type: ";
-    if (!writeAll(conn, h_acao.ptr, h_acao.len)) return;
-    if (!writeAll(conn, h_acah.ptr, h_acah.len)) return;
-    if (!writeAll(conn, h_acam.ptr, h_acam.len)) return;
-    if (!writeAll(conn, h_xcto.ptr, h_xcto.len)) return;
-    if (!writeAll(conn, h_xfo.ptr, h_xfo.len)) return;
-    if (!writeAll(conn, h_csp.ptr, h_csp.len)) return;
-
-    if (!writeAll(conn, h_ct.ptr, h_ct.len)) return;
-    if (!writeAll(conn, ct.ptr, ct.len)) return;
-    const h_server: []const u8 = "\r\nServer: hangar";
-    if (!writeAll(conn, h_server.ptr, h_server.len)) return;
+    append(&hbuf, &hlen, status_line);
+    append(&hbuf, &hlen, "X-Content-Type-Options: nosniff\r\n");
+    append(&hbuf, &hlen, "X-Frame-Options: DENY\r\n");
+    append(&hbuf, &hlen, "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'\r\n");
+    append(&hbuf, &hlen, "Content-Type: ");
+    append(&hbuf, &hlen, ct);
+    append(&hbuf, &hlen, "\r\nServer: hangar");
     if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
-        const h_cc: []const u8 = "\r\nCache-Control: public, max-age=86400";
-        if (!writeAll(conn, h_cc.ptr, h_cc.len)) return;
+        append(&hbuf, &hlen, "\r\nCache-Control: public, max-age=86400");
     }
-    const h_cl: []const u8 = "\r\nContent-Length: ";
-    if (!writeAll(conn, h_cl.ptr, h_cl.len)) return;
+    if (status == HTTP_TOO_MANY_REQUESTS) {
+        // Rate-limit window is 1 second; tell clients/proxies when to retry.
+        append(&hbuf, &hlen, "\r\nRetry-After: 1");
+    }
+    if (status == HTTP_METHOD_NOT_ALLOWED) {
+        // RFC 9110: a 405 response must list the supported methods.
+        append(&hbuf, &hlen, "\r\nAllow: GET, POST, OPTIONS");
+    }
+    append(&hbuf, &hlen, "\r\nContent-Length: ");
     var len_buf: [16]u8 = undefined;
-    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{body.len}) catch "0";
-    if (!writeAll(conn, len_str.ptr, len_str.len)) return;
-    const h_conn: []const u8 = "\r\nConnection: close\r\n\r\n";
-    if (!writeAll(conn, h_conn.ptr, h_conn.len)) return;
+    append(&hbuf, &hlen, std.fmt.bufPrint(&len_buf, "{d}", .{body.len}) catch "0");
+    append(&hbuf, &hlen, "\r\nConnection: close\r\n\r\n");
+
+    if (!writeAll(conn, hbuf[0..hlen].ptr, hlen)) return;
     _ = writeAll(conn, body.ptr, body.len); // best effort for body
 }
 
-/// Write HTTP headers for a streaming response (no Content-Length, uses chunked or raw stream).
-fn writeStreamHeaders(conn: c.fd_t, status: u16, ct: []const u8, content_len: u64) void {
-    const status_line: []const u8 = switch (status) {
-        HTTP_OK => "HTTP/1.1 200 OK\r\n",
-        HTTP_NOT_FOUND => "HTTP/1.1 404 Not Found\r\n",
-        HTTP_INTERNAL_ERROR => "HTTP/1.1 500 Internal Server Error\r\n",
-        else => "HTTP/1.1 500 Internal Server Error\r\n",
-    };
-    if (!writeAll(conn, status_line.ptr, status_line.len)) return;
-    const h_acao: []const u8 = "Access-Control-Allow-Origin: *\r\n";
-    const h_acah: []const u8 = "Access-Control-Allow-Headers: Content-Type, X-API-Key\r\n";
-    const h_acam: []const u8 = "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
-    const h_xcto: []const u8 = "X-Content-Type-Options: nosniff\r\n";
-    const h_xfo: []const u8 = "X-Frame-Options: DENY\r\n";
-    const h_csp: []const u8 = "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'\r\n";
-    const h_ct: []const u8 = "Content-Type: ";
-    if (!writeAll(conn, h_acao.ptr, h_acao.len)) return;
-    if (!writeAll(conn, h_acah.ptr, h_acah.len)) return;
-    if (!writeAll(conn, h_acam.ptr, h_acam.len)) return;
-    if (!writeAll(conn, h_xcto.ptr, h_xcto.len)) return;
-    if (!writeAll(conn, h_xfo.ptr, h_xfo.len)) return;
-    if (!writeAll(conn, h_csp.ptr, h_csp.len)) return;
-    if (!writeAll(conn, h_ct.ptr, h_ct.len)) return;
-    if (!writeAll(conn, ct.ptr, ct.len)) return;
-    const h_server: []const u8 = "\r\nServer: hangar";
-    if (!writeAll(conn, h_server.ptr, h_server.len)) return;
-    if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
-        const h_cc: []const u8 = "\r\nCache-Control: public, max-age=86400";
-        if (!writeAll(conn, h_cc.ptr, h_cc.len)) return;
-    }
-    const h_cl: []const u8 = "\r\nContent-Length: ";
-    if (!writeAll(conn, h_cl.ptr, h_cl.len)) return;
-    var len_buf: [32]u8 = undefined;
-    const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{content_len}) catch "0";
-    if (!writeAll(conn, len_str.ptr, len_str.len)) return;
-    const h_conn: []const u8 = "\r\nConnection: close\r\n\r\n";
-    if (!writeAll(conn, h_conn.ptr, h_conn.len)) return;
+/// Auth-gate a WebSocket route. On failure, logs the rejected `route` and
+/// writes a 401, returning false; returns true when the request is authorized.
+fn wsAuthOk(conn: c.fd_t, req: []const u8, route: []const u8) bool {
+    if (checkAuth(req)) return true;
+    var buf: [64]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "auth rejected: GET {s}", .{route}) catch "auth rejected: GET /ws";
+    logWarn(msg);
+    writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
+    return false;
 }
 
 /// Signal the server to shut down by closing/halting its listen sockets.
 /// Safe to call from any thread — unblocks blocking accept() calls.
 pub fn shutdownSignal() void {
-    if (tcp_sock_fd >= 0) {
-        _ = c.shutdown(tcp_sock_fd, 2); // SHUT_RDWR
+    const tcp_fd = loadServerFd(&tcp_sock_fd);
+    if (tcp_fd >= 0) {
+        _ = c.shutdown(tcp_fd, 2); // SHUT_RDWR
     }
-    if (unix_sock_fd >= 0) {
-        _ = c.shutdown(unix_sock_fd, 2);
+    const unix_fd = loadServerFd(&unix_sock_fd);
+    if (unix_fd >= 0) {
+        _ = c.shutdown(unix_fd, 2);
     }
 }
 
 fn acceptLoop(fd: c.fd_t) void {
     while (true) {
         const conn = c.accept(fd, null, null);
-        if (conn < 0) break;
+        if (conn < 0) {
+            // The listener is gone — the daemon will silently stop serving on
+            // this socket. Surface it so an operator knows why requests stopped.
+            logErr("acceptLoop: accept() failed, listener thread exiting");
+            break;
+        }
         const th = std.Thread.spawn(std.Thread.SpawnConfig{}, serveHtml, .{conn}) catch {
+            // Thread exhaustion drops this request; log so load-shedding is visible.
+            logErr("acceptLoop: thread spawn failed, dropping connection");
             _ = c.close(conn);
             continue;
         };
@@ -292,22 +463,12 @@ fn acceptLoop(fd: c.fd_t) void {
     }
 }
 
-/// Returns true if `req` starts with `prefix` followed by end-of-string, space, or '?'.
-fn routeMatches(req: []const u8, prefix: []const u8) bool {
-    if (!std.mem.startsWith(u8, req, prefix)) return false;
-    if (req.len == prefix.len) return true;
-    const next = req[prefix.len];
-    return next == ' ' or next == '?';
-}
-
 fn serveHtml(conn: c.fd_t) void {
     defer _ = c.close(conn);
 
     // 30-second receive timeout (SO_RCVTIMEO).
-    var tv = std.mem.zeroes([16]u8);
-    @as(*align(8) i64, @ptrCast(@alignCast(&tv[0]))).* = 30; // tv_sec
-    @as(*align(8) i64, @ptrCast(@alignCast(&tv[8]))).* = 0; // tv_usec
-    _ = c.setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, @sizeOf(@TypeOf(tv)));
+    const tv: c.timeval = .{ .sec = 30, .usec = 0 };
+    _ = c.setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
 
     var buf: [65536]u8 = undefined;
     const n = c.read(conn, &buf, buf.len);
@@ -316,7 +477,7 @@ fn serveHtml(conn: c.fd_t) void {
 
     // ── Rate limiting: POST requests only ──
     if (std.mem.startsWith(u8, req, "POST ") and rateLimitCheck()) {
-        writeHttpResponse(conn, HTTP_TOO_MANY_REQUESTS, "text/plain", "Too Many Requests");
+        writeHttpResponse(conn, HTTP_TOO_MANY_REQUESTS, "application/json; charset=utf-8", "{\"error\":\"Too Many Requests\"}");
         return;
     }
 
@@ -328,7 +489,7 @@ fn serveHtml(conn: c.fd_t) void {
 
     // ── Method validation: only GET and POST are supported ──
     if (!std.mem.startsWith(u8, req, "GET ") and !std.mem.startsWith(u8, req, "POST ")) {
-        writeHttpResponse(conn, HTTP_METHOD_NOT_ALLOWED, "text/plain", "Method Not Allowed");
+        writeHttpResponse(conn, HTTP_METHOD_NOT_ALLOWED, "application/json; charset=utf-8", "{\"error\":\"Method Not Allowed\"}");
         return;
     }
 
@@ -345,7 +506,7 @@ fn serveHtml(conn: c.fd_t) void {
     if (std.mem.startsWith(u8, req, "POST ")) {
         if (parseContentLength(req)) |cl| {
             if (cl > buf.len - 1024) { // reserve 1KB for headers
-                writeHttpResponse(conn, HTTP_PAYLOAD_TOO_LARGE, "text/plain", "Payload Too Large");
+                writeHttpResponse(conn, HTTP_PAYLOAD_TOO_LARGE, "application/json; charset=utf-8", "{\"error\":\"Payload Too Large\"}");
                 return;
             }
         }
@@ -353,36 +514,27 @@ fn serveHtml(conn: c.fd_t) void {
 
     // ── WebSocket VNC Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/vnc/")) {
-        if (!checkAuth(req)) {
-            writeHttpResponse(conn, HTTP_BAD_REQUEST, "text/plain", "auth required");
-            return;
-        }
+        if (!wsAuthOk(conn, req, "/ws/vnc")) return;
         handleWsVnc(conn, req) catch {
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "VNC proxy failed");
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"VNC proxy failed\"}");
         };
         return;
     }
 
     // ── WebSocket SPICE Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/spice/")) {
-        if (!checkAuth(req)) {
-            writeHttpResponse(conn, HTTP_BAD_REQUEST, "text/plain", "auth required");
-            return;
-        }
+        if (!wsAuthOk(conn, req, "/ws/spice")) return;
         handleWsSpice(conn, req) catch {
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "SPICE proxy failed");
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"SPICE proxy failed\"}");
         };
         return;
     }
 
     // ── WebSocket Serial Console ──
     if (std.mem.startsWith(u8, req, "GET /ws/serial/")) {
-        if (!checkAuth(req)) {
-            writeHttpResponse(conn, HTTP_BAD_REQUEST, "text/plain", "auth required");
-            return;
-        }
+        if (!wsAuthOk(conn, req, "/ws/serial")) return;
         handleWsSerial(conn, req) catch {
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "Serial proxy failed");
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"Serial proxy failed\"}");
         };
         return;
     }
@@ -394,6 +546,8 @@ fn serveHtml(conn: c.fd_t) void {
     var json_buf: [32768]u8 = undefined;
     var detail_buf: [4096]u8 = undefined;
     var snap_buf: [4096]u8 = undefined;
+    var response_alloc: ?[]u8 = null;
+    defer if (response_alloc) |bytes| std.heap.page_allocator.free(bytes);
 
     // Auth: check X-API-Key for mutating endpoints.
     // Match against the extracted path (not the raw request line) to prevent
@@ -402,7 +556,8 @@ fn serveHtml(conn: c.fd_t) void {
     const needs_auth = !isAuthExempt(method_get, req_path);
 
     if (needs_auth and !checkAuth(req)) {
-        writeHttpResponse(conn, HTTP_BAD_REQUEST, "text/plain", "auth required");
+        logWarn(if (method_get) "auth rejected: GET /api" else "auth rejected: POST /api");
+        writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
         return;
     }
 
@@ -428,17 +583,43 @@ fn serveHtml(conn: c.fd_t) void {
 
     if (routeExact(req, "GET /api/vms")) {
         content_type = "application/json; charset=utf-8";
-        const json_bytes = renderJson(&json_buf);
-        response = if (json_bytes > 0) json_buf[0..json_bytes] else "[]";
+        // Typical fleets fit the 32KB stack json_buf (~25 VMs at the per-VM
+        // budget below), so the common /api/vms poll allocates nothing. Only
+        // large libraries spill to a heap buffer sized to the live VM count
+        // rather than always mmapping the MAX_VMS worst case.
+        const need = (appstate.vm_count + 1) * 4096;
+        const vms_buf: []u8 = if (need > json_buf.len)
+            (std.heap.page_allocator.alloc(u8, need) catch &json_buf)
+        else
+            &json_buf;
+        if (vms_buf.len > json_buf.len) response_alloc = vms_buf;
+        const json_bytes = renderJson(vms_buf);
+        response = if (json_bytes > 0) vms_buf[0..json_bytes] else "[]";
     } else if (routeExact(req, "GET /api/capabilities")) {
         content_type = "application/json; charset=utf-8";
         response = handleCapabilities(&snap_buf);
     } else if (routeExact(req, "GET /api/health")) {
-        response = "{\"status\":\"ok\",\"version\":\"1.0\"}";
+        // Report live state so the check actually verifies the daemon can read
+        // its VM table, not just that the socket accepts connections.
+        var running: u32 = 0;
+        {
+            appstate.vms_mutex.lock();
+            defer appstate.vms_mutex.unlock();
+            var i: usize = 0;
+            while (i < appstate.vm_count) : (i += 1) {
+                if (appstate.vms[i].status == .running) running += 1;
+            }
+        }
+        response = std.fmt.bufPrint(&snap_buf, "{{\"status\":\"ok\",\"version\":\"1.0\",\"vms\":{d},\"running\":{d}}}", .{ appstate.vm_count, running }) catch "{\"status\":\"ok\",\"version\":\"1.0\"}";
         content_type = "application/json; charset=utf-8";
     } else if (routeExact(req, "GET /api/config")) {
         content_type = "application/json; charset=utf-8";
-        response = try serveConfigRaw();
+        if (serveConfigRawAlloc()) |raw| {
+            response_alloc = raw;
+            response = raw;
+        } else {
+            response = "{}";
+        }
     } else if (routeExact(req, "GET /api/catalog")) {
         content_type = "application/json; charset=utf-8";
         response = handleCatalog(&snap_buf);
@@ -467,7 +648,12 @@ fn serveHtml(conn: c.fd_t) void {
         response = try handleReorder(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "GET /api/fb/")) {
-        response = try renderFramebuffer(req);
+        if (std.heap.page_allocator.alloc(u8, FB_BMP_BUF_SIZE)) |bytes| {
+            response_alloc = bytes;
+            response = try renderFramebuffer(req, bytes);
+        } else |_| {
+            response = "no fb";
+        }
         content_type = "image/bmp";
     } else if (std.mem.startsWith(u8, req, "POST /api/clone/")) {
         response = try handleClone(req);
@@ -480,6 +666,8 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/plain";
     } else if (routeExact(req, "POST /api/save")) {
         response = "saved";
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
         persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
             logErr("persist.save failed");
             response = "save failed";
@@ -529,7 +717,10 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/migrate/")) {
         response = try handleMigrate(req);
-        content_type = "application/json; charset=utf-8";
+        // Use text/plain so handleMigrate's error strings ("no dest", "qmp err",
+        // ...) flow through the central error mapper and become 4xx/5xx JSON.
+        // The success body is JSON; fetch's .json() parses it regardless of CT.
+        content_type = "text/plain";
     } else if (routeExact(req, "GET /api/vnets")) {
         content_type = "application/json; charset=utf-8";
         response = handleVnetsJson(&snap_buf);
@@ -564,7 +755,15 @@ fn serveHtml(conn: c.fd_t) void {
             \\  <text x="16" y="22" text-anchor="middle" font-size="18" font-weight="bold" fill="#fff" font-family="system-ui,sans-serif">H</text>
             \\</svg>
         ;
+    } else if (std.mem.startsWith(u8, req_path, "/api/") or std.mem.startsWith(u8, req_path, "/ws/")) {
+        // Unmatched API/WebSocket route: return a JSON 404 so programmatic
+        // clients see a real error instead of a 200 HTML page (the SPA shell).
+        // A wrong HTTP method on a known path lands here too.
+        status = HTTP_NOT_FOUND;
+        response = "{\"error\":\"no such endpoint\"}";
+        content_type = "application/json; charset=utf-8";
     } else {
+        // SPA fallback: serve the app shell for client-side routes.
         response = index_html;
         content_type = "text/html; charset=utf-8";
     }
@@ -574,15 +773,15 @@ fn serveHtml(conn: c.fd_t) void {
     // Map known error strings to HTTP status codes and JSON error responses.
     // Previously returned plain text; now unified as `{"error":"..."}`.
     if (std.mem.eql(u8, content_type, "text/plain")) {
-        if (std.mem.eql(u8, response, "invalid") or std.mem.eql(u8, response, "invalid idx")) {
+        if (std.mem.eql(u8, response, "invalid") or std.mem.eql(u8, response, "invalid idx") or std.mem.eql(u8, response, "not found") or std.mem.eql(u8, response, "no undo")) {
             status = HTTP_NOT_FOUND;
             response = jsonErr(&json_err_buf, response);
             content_type = "application/json; charset=utf-8";
-        } else if (std.mem.eql(u8, response, "no disk") or std.mem.eql(u8, response, "not running") or std.mem.eql(u8, response, "off")) {
+        } else if (std.mem.eql(u8, response, "no disk") or std.mem.eql(u8, response, "not running") or std.mem.eql(u8, response, "off") or std.mem.eql(u8, response, "not paused") or std.mem.eql(u8, response, "vm running")) {
             status = HTTP_BAD_REQUEST;
             response = jsonErr(&json_err_buf, response);
             content_type = "application/json; charset=utf-8";
-        } else if (std.mem.eql(u8, response, "full") or std.mem.eql(u8, response, "no body") or std.mem.eql(u8, response, "invalid name") or std.mem.eql(u8, response, "bad path")) {
+        } else if (std.mem.eql(u8, response, "full") or std.mem.eql(u8, response, "no body") or std.mem.eql(u8, response, "invalid name") or std.mem.eql(u8, response, "bad path") or std.mem.eql(u8, response, "no name") or std.mem.eql(u8, response, "no path") or std.mem.eql(u8, response, "bad ext") or std.mem.eql(u8, response, "no file") or std.mem.eql(u8, response, "bad name") or std.mem.eql(u8, response, "no dest") or std.mem.eql(u8, response, "bad dest") or std.mem.eql(u8, response, "missing from/to") or std.mem.eql(u8, response, "parse error")) {
             status = HTTP_BAD_REQUEST;
             response = jsonErr(&json_err_buf, response);
             content_type = "application/json; charset=utf-8";
@@ -594,44 +793,53 @@ fn serveHtml(conn: c.fd_t) void {
             status = HTTP_INTERNAL_ERROR;
             response = jsonErr(&json_err_buf, response);
             content_type = "application/json; charset=utf-8";
-        } else if (std.mem.indexOf(u8, response, "err") != null or std.mem.indexOf(u8, response, "Err") != null) {
+        } else if (isServerErrToken(response)) {
             status = HTTP_INTERNAL_ERROR;
             response = jsonErr(&json_err_buf, response);
             content_type = "application/json; charset=utf-8";
         }
     }
 
+    // Surface server-side failures: a 500 returned to the client with no log
+    // entry is a blind spot. `response` here is server-controlled (JSON error
+    // constants), so it is safe to include without log-injection risk.
+    if (status == HTTP_INTERNAL_ERROR) {
+        var lb: [320]u8 = undefined;
+        var rl_buf: [128]u8 = undefined;
+        const route = requestLine(req, &rl_buf);
+        logErr(std.fmt.bufPrint(&lb, "request failed (500): {s} :: {s}", .{ route, response }) catch "request failed (500)");
+    }
+
     writeHttpResponse(conn, status, content_type, response);
 }
 
-/// Return the raw vms.json content for remote clients to sync their state.
-fn serveConfigRaw() ![]const u8 {
+/// Return an allocated copy of the raw vms.json content for remote clients.
+/// Caller owns the returned memory.
+fn serveConfigRawAlloc() ?[]u8 {
     var path_buf: [512]u8 = undefined;
-    const home = appio.getenv("HOME") orelse return "{}";
-    const path = std.fmt.bufPrint(&path_buf, "{s}/.config/hangar/vms.json", .{home}) catch return "{}";
+    const path = appstate.vmsPath(&path_buf) orelse return null;
     const raw = std.Io.Dir.cwd().readFileAlloc(
         appio.io(),
         path,
         std.heap.page_allocator,
         .limited(10 * 1024 * 1024),
-    ) catch return "{}";
-    defer std.heap.page_allocator.free(raw);
-    const n = @min(raw.len, config_raw_buf.len);
-    if (raw.len > config_raw_buf.len) {
-        std.log.warn("vms.json truncated to {} bytes (file is {} bytes)", .{ config_raw_buf.len, raw.len });
-    }
-    @memcpy(config_raw_buf[0..n], raw[0..n]);
-    return config_raw_buf[0..n];
+    ) catch return null;
+    if (raw.len <= CONFIG_RAW_MAX) return raw;
+
+    const clipped = std.heap.page_allocator.alloc(u8, CONFIG_RAW_MAX) catch {
+        std.heap.page_allocator.free(raw);
+        return null;
+    };
+    @memcpy(clipped, raw[0..CONFIG_RAW_MAX]);
+    std.heap.page_allocator.free(raw);
+    std.log.warn("vms.json truncated to {} bytes", .{CONFIG_RAW_MAX});
+    return clipped;
 }
 
 var fb_client: ?*vnc.VncClient = null;
 // Tracks which VM index fb_client is connected to. appstate.MAX_VMS = sentinel (none).
 var fb_vm_idx: usize = appstate.MAX_VMS;
 var fb_mutex: sync.SpinMutex = .{};
-// BMP output buffer — 54-byte header + up to 2 MB of pixel data
-// 2 MB supports 640×480 at 32 bpp (≈1.23 MB) + margin for larger resolutions
-var fb_bmp_buf: [2 * 1024 * 1024 + 54]u8 = undefined;
-var config_raw_buf: [4 * 1024 * 1024]u8 = undefined;
 
 /// Handle WebSocket VNC proxy request.
 /// Upgrades the connection to WebSocket, connects to the VM's VNC port,
@@ -640,10 +848,17 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
     // Parse VM index from URL: GET /ws/vnc/<idx>
     const idx = parseIdx(req, "GET /ws/vnc/") orelse return;
     appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    if (idx >= appstate.vm_count) return;
+    if (idx >= appstate.vm_count) {
+        appstate.vms_mutex.unlock();
+        return;
+    }
     const v = &appstate.vms[idx];
-    if (!v.isAlive()) return;
+    if (!v.isAlive()) {
+        appstate.vms_mutex.unlock();
+        return;
+    }
+    const vnc_port = v.vnc_port;
+    appstate.vms_mutex.unlock();
 
     // Perform WebSocket upgrade handshake.
     const accept_key = ws.parseUpgrade(req) orelse return;
@@ -655,19 +870,27 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
 
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
-    addr.port = std.mem.nativeToBig(u16, v.vnc_port);
+    addr.port = std.mem.nativeToBig(u16, vnc_port);
     addr.addr = std.mem.nativeToBig(u32, @bitCast([4]u8{ 127, 0, 0, 1 }));
 
     if (c.connect(vnc_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) < 0) {
+        logWarn("ws/vnc: connect to VM VNC port failed");
         _ = c.close(vnc_fd);
         try ws.writeClose(conn);
         return;
     }
+    setTcpNoDelay(vnc_fd);
 
     // Spawn threads for bidirectional relay.
+    // `wmtx` serializes writes to `ws_fd`: both the data-relay thread
+    // (writeFrame) and the control thread (writePong) write to the same
+    // socket, and writeFrame emits the frame header and payload as two
+    // separate write() calls — without the lock a concurrent pong can
+    // interleave between them and corrupt the WebSocket frame stream.
     const RelayCtx = struct {
         ws_fd: c.fd_t,
         vnc_fd: c.fd_t,
+        wmtx: sync.SpinMutex = .{},
     };
     var ctx = RelayCtx{ .ws_fd = conn, .vnc_fd = vnc_fd };
 
@@ -679,7 +902,12 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
                 const n = c.read(ctx_ptr.vnc_fd, &buf, buf.len);
                 if (n <= 0) break;
                 // Send shutdown signal to peer via empty write
-                ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch break;
+                ctx_ptr.wmtx.lock();
+                ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch {
+                    ctx_ptr.wmtx.unlock();
+                    break;
+                };
+                ctx_ptr.wmtx.unlock();
             }
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
@@ -698,7 +926,12 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
                 const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
                 if (hdr.opcode == .close) break;
                 if (hdr.opcode == .ping) {
-                    ws.writePong(ctx_ptr.ws_fd) catch break;
+                    ctx_ptr.wmtx.lock();
+                    ws.writePong(ctx_ptr.ws_fd) catch {
+                        ctx_ptr.wmtx.unlock();
+                        break;
+                    };
+                    ctx_ptr.wmtx.unlock();
                     continue;
                 }
                 if (hdr.opcode == .pong) continue;
@@ -731,10 +964,17 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
     // Parse VM index from URL: GET /ws/spice/<idx>
     const idx = parseIdx(req, "GET /ws/spice/") orelse return;
     appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    if (idx >= appstate.vm_count) return;
+    if (idx >= appstate.vm_count) {
+        appstate.vms_mutex.unlock();
+        return;
+    }
     const v = &appstate.vms[idx];
-    if (!v.isAlive()) return;
+    if (!v.isAlive()) {
+        appstate.vms_mutex.unlock();
+        return;
+    }
+    const spice_port = v.spice_port;
+    appstate.vms_mutex.unlock();
 
     // Perform WebSocket upgrade handshake.
     const accept_key = ws.parseUpgrade(req) orelse return;
@@ -746,19 +986,23 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
 
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
-    addr.port = std.mem.nativeToBig(u16, v.spice_port);
+    addr.port = std.mem.nativeToBig(u16, spice_port);
     addr.addr = std.mem.nativeToBig(u32, @bitCast([4]u8{ 127, 0, 0, 1 }));
 
     if (c.connect(spice_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) < 0) {
+        logWarn("ws/spice: connect to VM SPICE port failed");
         _ = c.close(spice_fd);
         try ws.writeClose(conn);
         return;
     }
+    setTcpNoDelay(spice_fd);
 
-    // Spawn threads for bidirectional relay.
+    // Spawn threads for bidirectional relay. `wmtx` serializes writes to
+    // `ws_fd` (writeFrame vs writePong) — see handleWsVnc for the rationale.
     const RelayCtx = struct {
         ws_fd: c.fd_t,
         spice_fd: c.fd_t,
+        wmtx: sync.SpinMutex = .{},
     };
     var ctx = RelayCtx{ .ws_fd = conn, .spice_fd = spice_fd };
 
@@ -769,7 +1013,12 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
             while (true) {
                 const n = c.read(ctx_ptr.spice_fd, &buf, buf.len);
                 if (n <= 0) break;
-                ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch break;
+                ctx_ptr.wmtx.lock();
+                ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch {
+                    ctx_ptr.wmtx.unlock();
+                    break;
+                };
+                ctx_ptr.wmtx.unlock();
             }
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
@@ -788,7 +1037,12 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
                 const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
                 if (hdr.opcode == .close) break;
                 if (hdr.opcode == .ping) {
-                    ws.writePong(ctx_ptr.ws_fd) catch break;
+                    ctx_ptr.wmtx.lock();
+                    ws.writePong(ctx_ptr.ws_fd) catch {
+                        ctx_ptr.wmtx.unlock();
+                        break;
+                    };
+                    ctx_ptr.wmtx.unlock();
                     continue;
                 }
                 if (hdr.opcode == .pong) continue;
@@ -821,10 +1075,19 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     // Parse VM index from URL: GET /ws/serial/<idx>
     const idx = parseIdx(req, "GET /ws/serial/") orelse return;
     appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    if (idx >= appstate.vm_count) return;
+    if (idx >= appstate.vm_count) {
+        appstate.vms_mutex.unlock();
+        return;
+    }
     const v = &appstate.vms[idx];
-    if (!v.isAlive() or !v.enable_serial or !v.hasName()) return;
+    if (!v.isAlive() or !v.enable_serial or !v.hasName()) {
+        appstate.vms_mutex.unlock();
+        return;
+    }
+    var vm_name_buf: [vm.MAX_NAME]u8 = undefined;
+    const vm_name = v.getNameSlice();
+    @memcpy(vm_name_buf[0..vm_name.len], vm_name);
+    appstate.vms_mutex.unlock();
 
     // Perform WebSocket upgrade handshake.
     const accept_key = ws.parseUpgrade(req) orelse return;
@@ -835,26 +1098,36 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     const sock_path = std.fmt.bufPrintZ(
         &sock_buf,
         "/tmp/hangar-serial-{s}.sock",
-        .{v.getNameSlice()},
+        .{vm_name_buf[0..vm_name.len]},
     ) catch return;
 
-    const serial = usock.UnixStream.connect(sock_path) catch return;
+    const serial = usock.UnixStream.connect(sock_path) catch {
+        logWarn("ws/serial: connect to VM serial socket failed");
+        return;
+    };
 
     // Spawn threads for bidirectional relay.
     const RelayCtx = struct {
         ws_fd: c.fd_t,
         serial_fd: c.fd_t,
+        wmtx: sync.SpinMutex = .{},
     };
     var ctx = RelayCtx{ .ws_fd = conn, .serial_fd = serial.fd };
 
-    // Thread: serial → WebSocket
+    // Thread: serial → WebSocket. `wmtx` serializes writes to `ws_fd`
+    // (writeFrame vs writePong) — see handleWsVnc for the rationale.
     const ser2ws = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
         fn run(ctx_ptr: *RelayCtx) void {
             var buf: [65536]u8 = undefined;
             while (true) {
                 const n = c.read(ctx_ptr.serial_fd, &buf, buf.len);
                 if (n <= 0) break;
-                ws.writeFrame(ctx_ptr.ws_fd, .text, buf[0..@intCast(n)]) catch break;
+                ctx_ptr.wmtx.lock();
+                ws.writeFrame(ctx_ptr.ws_fd, .text, buf[0..@intCast(n)]) catch {
+                    ctx_ptr.wmtx.unlock();
+                    break;
+                };
+                ctx_ptr.wmtx.unlock();
             }
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
@@ -873,7 +1146,12 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
                 const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
                 if (hdr.opcode == .close) break;
                 if (hdr.opcode == .ping) {
-                    ws.writePong(ctx_ptr.ws_fd) catch break;
+                    ctx_ptr.wmtx.lock();
+                    ws.writePong(ctx_ptr.ws_fd) catch {
+                        ctx_ptr.wmtx.unlock();
+                        break;
+                    };
+                    ctx_ptr.wmtx.unlock();
                     continue;
                 }
                 if (hdr.opcode == .pong) continue;
@@ -899,14 +1177,21 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     serial.close();
 }
 
-fn renderFramebuffer(req: []const u8) ![]const u8 {
+fn renderFramebuffer(req: []const u8, out: []u8) ![]const u8 {
     // GET /api/fb/N — return the framebuffer for VM N as a valid BMP image
     const idx = parseIdx(req, "GET /api/fb/") orelse return "invalid";
     appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    if (idx >= appstate.vm_count) return "no vm";
+    if (idx >= appstate.vm_count) {
+        appstate.vms_mutex.unlock();
+        return "no vm";
+    }
     const v = &appstate.vms[idx];
-    if (!v.isAlive()) return "off";
+    if (!v.isAlive()) {
+        appstate.vms_mutex.unlock();
+        return "off";
+    }
+    const vnc_port = v.vnc_port;
+    appstate.vms_mutex.unlock();
 
     fb_mutex.lock();
     defer fb_mutex.unlock();
@@ -919,7 +1204,7 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
     // Reconnect if the VM changed or the connection dropped.
     if (fb_vm_idx != idx or !vc.isConnected()) {
         if (fb_vm_idx != appstate.MAX_VMS) vc.disconnect();
-        _ = vc.connect("127.0.0.1", @intCast(v.vnc_port));
+        _ = vc.connect("127.0.0.1", @intCast(vnc_port));
         fb_vm_idx = idx;
     }
     if (vc.lockFb()) |pixels| {
@@ -928,34 +1213,35 @@ fn renderFramebuffer(req: []const u8) ![]const u8 {
         var fh: c_int = 0;
         if (vc.getSize(&fw, &fh) and fw > 0 and fh > 0) {
             const pixel_size: usize = @intCast(@as(u64, @intCast(fw)) * @as(u64, @intCast(fh)) * 4);
-            const copy_size = @min(pixel_size, fb_bmp_buf.len - 54);
-            if (pixel_size > fb_bmp_buf.len - 54) {
-                std.log.warn("VNC framebuffer {}x{} ({} bytes) truncated to {} bytes", .{ fw, fh, pixel_size, fb_bmp_buf.len - 54 });
+            if (out.len < 54) return "no fb";
+            const copy_size = @min(pixel_size, out.len - 54);
+            if (pixel_size > out.len - 54) {
+                std.log.warn("VNC framebuffer {}x{} ({} bytes) truncated to {} bytes", .{ fw, fh, pixel_size, out.len - 54 });
             }
             const file_size: u32 = @intCast(54 + copy_size);
 
             // ── BITMAPFILEHEADER (14 bytes) ──────────────────────
-            fb_bmp_buf[0] = 'B';
-            fb_bmp_buf[1] = 'M';
-            std.mem.writeInt(u32, fb_bmp_buf[2..6], file_size, .little); // bfSize
-            std.mem.writeInt(u32, fb_bmp_buf[6..10], 0, .little); // bfReserved
-            std.mem.writeInt(u32, fb_bmp_buf[10..14], 54, .little); // bfOffBits
+            out[0] = 'B';
+            out[1] = 'M';
+            std.mem.writeInt(u32, out[2..6], file_size, .little); // bfSize
+            std.mem.writeInt(u32, out[6..10], 0, .little); // bfReserved
+            std.mem.writeInt(u32, out[10..14], 54, .little); // bfOffBits
 
             // ── BITMAPINFOHEADER (40 bytes) ──────────────────────
-            @memset(fb_bmp_buf[14..54], 0); // zero-fill then set fields
-            std.mem.writeInt(u32, fb_bmp_buf[14..18], 40, .little); // biSize
-            std.mem.writeInt(i32, fb_bmp_buf[18..22], fw, .little); // biWidth
-            std.mem.writeInt(i32, fb_bmp_buf[22..26], -fh, .little); // biHeight (negative = top-down)
-            std.mem.writeInt(u16, fb_bmp_buf[26..28], 1, .little); // biPlanes
-            std.mem.writeInt(u16, fb_bmp_buf[28..30], 32, .little); // biBitCount
+            @memset(out[14..54], 0); // zero-fill then set fields
+            std.mem.writeInt(u32, out[14..18], 40, .little); // biSize
+            std.mem.writeInt(i32, out[18..22], fw, .little); // biWidth
+            std.mem.writeInt(i32, out[22..26], -fh, .little); // biHeight (negative = top-down)
+            std.mem.writeInt(u16, out[26..28], 1, .little); // biPlanes
+            std.mem.writeInt(u16, out[28..30], 32, .little); // biBitCount
             // biCompression = 0 (BI_RGB), biSizeImage = 0 (OK for BI_RGB)
             // biXPelsPerMeter = biYPelsPerMeter = 2835 (~72 DPI)
-            std.mem.writeInt(u32, fb_bmp_buf[38..42], 2835, .little);
-            std.mem.writeInt(u32, fb_bmp_buf[42..46], 2835, .little);
+            std.mem.writeInt(u32, out[38..42], 2835, .little);
+            std.mem.writeInt(u32, out[42..46], 2835, .little);
 
             // ── Pixel data ───────────────────────────────────────
-            @memcpy(fb_bmp_buf[54..][0..copy_size], @as([*]const u8, @ptrCast(pixels))[0..copy_size]);
-            return fb_bmp_buf[0 .. 54 + copy_size];
+            @memcpy(out[54..][0..copy_size], @as([*]const u8, @ptrCast(pixels))[0..copy_size]);
+            return out[0 .. 54 + copy_size];
         }
     }
     return "no fb";
@@ -1254,8 +1540,8 @@ fn renderJson(buf: []u8) usize {
 }
 
 /// Per-request error detail buffer for start-failure diagnostics.
-/// Overwritten on each failed start; no allocation needed.
-var start_err_buf: [640]u8 = undefined;
+/// Thread-local because each accepted HTTP connection runs in its own thread.
+threadlocal var start_err_buf: [640]u8 = undefined;
 
 fn handlePower(req: []const u8) ![]const u8 {
     // Lock only to validate, copy the VM name, and determine the power action.
@@ -1278,6 +1564,13 @@ fn handlePower(req: []const u8) ![]const u8 {
     const vm_name = v.getNameSlice();
     @memcpy(vm_name_buf[0..vm_name.len], vm_name);
     vm_name_buf[vm_name.len] = 0;
+    // Take a full value copy of the config to drive the slow QEMU I/O outside
+    // the lock. Operating directly on `&appstate.vms[idx]` would be a
+    // use-after-free / wrong-VM hazard: another thread can delete or reorder
+    // the array while the lock is released, shifting the slot out from under
+    // the pointer. The pid/status the copy gains is propagated back after we
+    // re-acquire the lock and re-validate the slot.
+    var vm_copy = appstate.vms[idx];
     // Capture the VMM handle (if any) before unlocking.
     const vmm_handle = appstate.getVmmHandle(idx);
     appstate.vms_mutex.unlock();
@@ -1288,22 +1581,20 @@ fn handlePower(req: []const u8) ![]const u8 {
             appstate.g_vmm.forceStopFn(h);
             appstate.g_vmm.reapFn(h);
         } else {
-            // qemu.forceStopVm / reapVm need the VmConfig — use the copy
-            // captured above. Note: qemu.forceStopVm only reads .name and .pid.
-            qemu.forceStopVm(v);
-            qemu.reapVm(v);
+            qemu.forceStopVm(&vm_copy);
+            qemu.reapVm(&vm_copy);
         }
     } else {
         // Start the VM outside the lock.
         if (vmm_handle) |h| {
-            appstate.g_vmm.startFn(h, @ptrCast(v)) catch {
+            appstate.g_vmm.startFn(h, @ptrCast(&vm_copy)) catch {
                 appstate.vms_mutex.lock();
                 defer appstate.vms_mutex.unlock();
                 appstate.destroyVmmHandle(idx);
                 return "start err";
             };
         } else {
-            qemu.startVm(v, std.heap.page_allocator) catch {
+            qemu.startVm(&vm_copy, std.heap.page_allocator) catch {
                 var log_path_buf: [320]u8 = [_]u8{0} ** 320;
                 var log_content_buf: [512]u8 = undefined;
                 const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/hangar-vm-{s}.log", .{vm_name_buf[0..vm_name.len]}) catch null;
@@ -1322,12 +1613,17 @@ fn handlePower(req: []const u8) ![]const u8 {
     defer appstate.vms_mutex.unlock();
     if (idx >= appstate.vm_count) return "invalid idx";
     if (!std.mem.eql(u8, appstate.vms[idx].getNameSlice(), vm_name_buf[0..vm_name.len])) return "invalid idx";
+    // Propagate the pid/status the copy gained during the unlocked I/O back to
+    // the live entry (startVm sets pid+running; reapVm clears them).
+    appstate.vms[idx].pid = vm_copy.pid;
+    appstate.vms[idx].status = vm_copy.status;
     if (was_alive) {
         appstate.destroyVmmHandle(idx);
         appstate.vm_started[idx] = 0;
     } else {
         appstate.vm_started[idx] = time(null);
     }
+    logAudit(if (was_alive) "power off" else "power on", vm_name_buf[0..vm_name.len]);
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
         logErr("persist.save failed");
     };
@@ -1453,7 +1749,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         }
         if (std.mem.eql(u8, key, "enable_serial")) cfg.enable_serial = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "virtio_rng")) cfg.virtio_rng = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "num_displays")) cfg.num_displays = @max(1, @min(16, std.fmt.parseInt(u32, val, 10) catch cfg.num_displays));
+        if (std.mem.eql(u8, key, "num_displays")) cfg.num_displays = @max(1, @min(vm.MAX_DISPLAYS, std.fmt.parseInt(u32, val, 10) catch cfg.num_displays));
         if (std.mem.eql(u8, key, "favorite")) cfg.favorite = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "guest_agent")) cfg.guest_agent = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "watchdog")) cfg.watchdog = vm.WatchdogAction.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.watchdog.toIndex());
@@ -1558,8 +1854,8 @@ const catalog: [3]CatalogEntry = .{
 /// of hardcoding nic2/nic3/disk2.
 fn handleCapabilities(buf: []u8) []const u8 {
     return std.fmt.bufPrint(buf,
-        \\{{"max_vms":{d},"max_nics":{d},"max_extra_disks":{d},"max_displays":16,"version":"1.0"}}
-    , .{ vm.MAX_VMS, vm.MAX_NICS, vm.MAX_EXTRA_DISKS }) catch "{}";
+        \\{{"max_vms":{d},"max_nics":{d},"max_extra_disks":{d},"max_displays":{d},"version":"1.0"}}
+    , .{ vm.MAX_VMS, vm.MAX_NICS, vm.MAX_EXTRA_DISKS, vm.MAX_DISPLAYS }) catch "{}";
 }
 
 fn handleCatalog(buf: []u8) []const u8 {
@@ -1680,9 +1976,16 @@ fn handleClone(req: []const u8) ![]const u8 {
             return "nameerr";
         };
     }
-    // Capture the VMM handle and src disk info before unlocking.
+    // Capture the VMM handle and src disk info before unlocking. The disk
+    // path must be COPIED into a local buffer: `src` points into the shared
+    // `appstate.vms` array, and once the lock is released another thread can
+    // delete/reorder VMs — which overwrites that slot in place, corrupting any
+    // slice still pointing at it. The handle/format are captured by value.
     const vmm_handle = appstate.getVmmHandle(idx);
-    const src_disk = src.getDiskPathSlice();
+    var src_disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    const src_disk_slice = src.getDiskPathSlice();
+    @memcpy(src_disk_buf[0..src_disk_slice.len], src_disk_slice);
+    const src_disk = src_disk_buf[0..src_disk_slice.len];
     const src_fmt: vm.DiskFormat = src.disk_format;
     appstate.vms_mutex.unlock();
 
@@ -1721,17 +2024,18 @@ fn handleDelete(req: []const u8) ![]const u8 {
 
     const idx = parseIdx(req, "POST /api/delete/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
+    logAudit("delete", appstate.vms[idx].getNameSlice());
     // Save undo state before deleting.
     appstate.undo_vm = appstate.vms[idx];
     appstate.undo_idx = idx;
     appstate.undo_available = true;
-    // Destroy the VMM handle for the deleted VM
     appstate.destroyVmmHandle(idx);
     // Shift remaining
     var i = idx;
     while (i + 1 < appstate.vm_count) : (i += 1) {
         appstate.vms[i] = appstate.vms[i + 1];
         appstate.g_vmm_handles[i] = appstate.g_vmm_handles[i + 1];
+        rebindVmmHandleLocked(i);
         appstate.vm_started[i] = appstate.vm_started[i + 1];
     }
     appstate.g_vmm_handles[appstate.vm_count - 1] = null;
@@ -1757,6 +2061,7 @@ fn handleUndo() ![]const u8 {
     while (i > appstate.undo_idx) {
         appstate.vms[i] = appstate.vms[i - 1];
         appstate.g_vmm_handles[i] = appstate.g_vmm_handles[i - 1];
+        rebindVmmHandleLocked(i);
         appstate.vm_started[i] = appstate.vm_started[i - 1];
         i -= 1;
     }
@@ -1809,6 +2114,7 @@ fn handleReorder(req: []const u8) ![]const u8 {
         while (j < b) : (j += 1) {
             appstate.vms[j] = appstate.vms[j + 1];
             appstate.g_vmm_handles[j] = appstate.g_vmm_handles[j + 1];
+            rebindVmmHandleLocked(j);
             appstate.vm_started[j] = appstate.vm_started[j + 1];
         }
     } else {
@@ -1817,11 +2123,13 @@ fn handleReorder(req: []const u8) ![]const u8 {
         while (j > b) : (j -= 1) {
             appstate.vms[j] = appstate.vms[j - 1];
             appstate.g_vmm_handles[j] = appstate.g_vmm_handles[j - 1];
+            rebindVmmHandleLocked(j);
             appstate.vm_started[j] = appstate.vm_started[j - 1];
         }
     }
     appstate.vms[b] = saved_vm;
     appstate.g_vmm_handles[b] = saved_handle;
+    rebindVmmHandleLocked(b);
     appstate.vm_started[b] = saved_started;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
         logErr("persist.save failed");
@@ -1922,7 +2230,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         }
         if (std.mem.eql(u8, key, "enable_serial")) v.enable_serial = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "virtio_rng")) v.virtio_rng = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(16, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
+        if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(vm.MAX_DISPLAYS, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
         if (std.mem.eql(u8, key, "favorite")) v.favorite = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "guest_agent")) v.guest_agent = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "watchdog")) v.watchdog = vm.WatchdogAction.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.watchdog.toIndex());
@@ -2001,9 +2309,15 @@ fn routeExact(req: []const u8, prefix: []const u8) bool {
 fn parseIdx(req: []const u8, prefix: []const u8) ?usize {
     const start = std.mem.indexOf(u8, req, prefix) orelse return null;
     const rest = req[start + prefix.len ..];
-    const end_space = std.mem.indexOfScalar(u8, rest, ' ');
-    const end_slash = std.mem.indexOfScalar(u8, rest, '/');
-    const end: usize = if (end_space != null and end_slash != null) @min(end_space.?, end_slash.?) else (end_space orelse end_slash orelse return null);
+    var end: usize = rest.len;
+    var found = false;
+    for ([_]u8{ ' ', '/', '?' }) |term| {
+        if (std.mem.indexOfScalar(u8, rest, term)) |i| {
+            if (i < end) end = i;
+            found = true;
+        }
+    }
+    if (!found) return null;
     return std.fmt.parseInt(usize, rest[0..end], 10) catch null;
 }
 
@@ -2053,15 +2367,25 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     vm_name_buf[vm_name.len] = 0;
     appstate.vms_mutex.unlock();
 
+    // Build the saved-state filename from a sanitized slug, not the raw VM
+    // name. The path is later embedded in QMP `exec:` migration commands that
+    // run via /bin/sh, so the filename must contain no shell metacharacters.
+    var slug_buf: [vm.MAX_NAME]u8 = undefined;
+    const slug = sanitizeSlug(vm_name_buf[0..vm_name.len], &slug_buf);
     var state_path: [256]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&state_path, "/tmp/hangar-state-{s}.bin", .{vm_name_buf[0..vm_name.len]}) catch return "path err";
+    const path = std.fmt.bufPrintZ(&state_path, "/tmp/hangar-state-{s}.bin", .{slug}) catch return "path err";
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
     const sock = qmp.socketPath(vm_name_buf[0..vm_name.len], &sock_buf) orelse return "sock err";
     client.connect(sock) catch return "qmp err";
     defer client.disconnect();
     client.suspendToFile(path) catch return "migrate err";
-    client.waitMigrateComplete() catch return "timeout";
+    client.waitMigrateComplete() catch |e| return switch (e) {
+        error.MigrateFailed => "migrate failed",
+        error.MigrateCancelled => "migrate cancelled",
+        error.MigrateTimeout => "timeout",
+        else => "migrate err",
+    };
 
     // Re-acquire the lock for the state mutation. Re-validate idx in case the
     // VM was deleted or the array shifted during the migration I/O.
@@ -2217,6 +2541,7 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
+    if (v.isAlive()) return "vm running";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     var tag: []const u8 = "";
@@ -2299,6 +2624,7 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
     } else {
         qemu.snapshotApply(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
     }
+    logAudit("snapshot revert", v.getNameSlice());
     return "ok";
 }
 
@@ -2401,6 +2727,24 @@ fn handleCad(req: []const u8) ![]const u8 {
     return "ok";
 }
 
+/// Validate a live-migration destination URI supplied by an API client.
+///
+/// Only the documented `tcp:host:port` form the UI sends is accepted. QEMU's
+/// `migrate` command accepts other schemes — notably `exec:`, which runs its
+/// argument through `/bin/sh` — so accepting an arbitrary URI would hand any
+/// authenticated client host command execution. The value is also interpolated
+/// unescaped into a QMP JSON string by `qmp.liveMigrate`, so `"`/`\` (which
+/// would break out of that string) and control characters are rejected.
+fn isValidMigrateDest(dest: []const u8) bool {
+    if (!std.mem.startsWith(u8, dest, "tcp:")) return false;
+    if (std.mem.indexOf(u8, dest, "..") != null) return false;
+    for (dest) |ch| {
+        if (ch < 0x20) return false; // control characters
+        if (ch == '"' or ch == '\\') return false; // JSON string break-out
+    }
+    return true;
+}
+
 fn handleMigrate(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
@@ -2423,9 +2767,7 @@ fn handleMigrate(req: []const u8) ![]const u8 {
         }
     }
     if (dest.len == 0) return "no dest";
-    // Reject control characters and path traversal in destination URI.
-    if (std.mem.indexOfAny(u8, dest, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f") != null) return "bad dest";
-    if (std.mem.indexOf(u8, dest, "..") != null) return "bad dest";
+    if (!isValidMigrateDest(dest)) return "bad dest";
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
     const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
@@ -2504,7 +2846,6 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
     const headers = std.fmt.bufPrint(
         &hdr_buf,
         "HTTP/1.1 200 OK\r\n" ++
-            "Access-Control-Allow-Origin: *\r\n" ++
             "Content-Type: application/octet-stream\r\n" ++
             "Content-Disposition: {s}\r\n" ++
             "Content-Length: {d}\r\n" ++
@@ -2786,7 +3127,6 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     const headers = std.fmt.bufPrint(
         &hdr_buf,
         "HTTP/1.1 200 OK\r\n" ++
-            "Access-Control-Allow-Origin: *\r\n" ++
             "Content-Type: application/octet-stream\r\n" ++
             "Content-Disposition: {s}\r\n" ++
             "Content-Length: {d}\r\n" ++
@@ -2945,11 +3285,11 @@ fn jsonEscape(buf: []u8, s: []const u8) EscapeResult {
                 wi += 1;
                 buf[wi] = '0';
                 wi += 1;
-                _ = std.fmt.bufPrint(buf[wi..], "{x:0>2}", .{ch}) catch {
-                    truncated = true;
-                    break;
-                };
-                wi += 2;
+                const hex = "0123456789abcdef";
+                buf[wi] = hex[ch >> 4];
+                wi += 1;
+                buf[wi] = hex[ch & 0x0F];
+                wi += 1;
             },
             else => {
                 if (wi + 1 > buf.len) {
@@ -3103,7 +3443,6 @@ fn autoprotectTicker() void {
 
         // Collect work items under the lock, release before I/O
         const SnapWork = struct {
-            idx: usize,
             disk_path: [512]u8,
             disk_path_len: usize,
             snap_name: [40]u8,
@@ -3134,7 +3473,6 @@ fn autoprotectTicker() void {
             @memcpy(dp_buf[0..disk_path.len], disk_path);
 
             work_items[work_count] = .{
-                .idx = i,
                 .disk_path = dp_buf,
                 .disk_path_len = disk_path.len,
                 .snap_name = name_buf,
@@ -3152,28 +3490,15 @@ fn autoprotectTicker() void {
             const dp = w.disk_path[0..w.disk_path_len];
             const sn = w.snap_name[0..w.snap_name_len];
 
-            if (appstate.getVmmHandle(w.idx)) |h| {
-                appstate.g_vmm.snapshotCreateFn(h, dp, sn, std.heap.page_allocator) catch |e| {
-                    var ebuf: [64]u8 = undefined;
-                    logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotCreate failed");
-                    continue;
-                };
-            } else {
-                qemu.snapshotCreate(dp, sn, std.heap.page_allocator) catch |e| {
-                    var ebuf: [64]u8 = undefined;
-                    logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotCreate failed");
-                    continue;
-                };
-            }
+            qemu.snapshotCreate(dp, sn, std.heap.page_allocator) catch |e| {
+                var ebuf: [64]u8 = undefined;
+                logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotCreate failed");
+                continue;
+            };
 
             // Prune excess AutoProtect snapshots
             var list_buf: [4096]u8 = undefined;
-            const list_result = if (appstate.getVmmHandle(w.idx)) |h|
-                appstate.g_vmm.snapshotListFn(h, dp, &list_buf, std.heap.page_allocator)
-            else
-                qemu.snapshotList(dp, &list_buf, std.heap.page_allocator);
-
-            const list_n = list_result catch |e| {
+            const list_n = qemu.snapshotList(dp, &list_buf, std.heap.page_allocator) catch |e| {
                 var ebuf: [64]u8 = undefined;
                 logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotList failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotList failed");
                 continue;
@@ -3201,17 +3526,10 @@ fn autoprotectTicker() void {
             const excess = autoprotect.pruneExcess(auto_count, w.autoprotect_max);
             var d: usize = 0;
             while (d < excess and d < auto_names.len) : (d += 1) {
-                if (appstate.getVmmHandle(w.idx)) |h| {
-                    appstate.g_vmm.snapshotDeleteFn(h, dp, auto_names[d], std.heap.page_allocator) catch |e| {
-                        var ebuf: [64]u8 = undefined;
-                        logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotDelete failed");
-                    };
-                } else {
-                    qemu.snapshotDelete(dp, auto_names[d], std.heap.page_allocator) catch |e| {
-                        var ebuf: [64]u8 = undefined;
-                        logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotDelete failed");
-                    };
-                }
+                qemu.snapshotDelete(dp, auto_names[d], std.heap.page_allocator) catch |e| {
+                    var ebuf: [64]u8 = undefined;
+                    logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotDelete failed");
+                };
             }
         }
 
@@ -3256,6 +3574,25 @@ const TestConfigHome = struct {
         }
     }
 };
+
+test "isServerErrToken: matches dynamic error constants exactly" {
+    try std.testing.expect(isServerErrToken("qmp err"));
+    try std.testing.expect(isServerErrToken("apply err"));
+    try std.testing.expect(isServerErrToken("nameerr"));
+    try std.testing.expect(isServerErrToken("linkerr"));
+    try std.testing.expect(isServerErrToken("start err"));
+    try std.testing.expect(isServerErrToken("start err: spawn failed"));
+}
+
+test "isServerErrToken: does not flag data containing 'err'" {
+    // Snapshot list bodies are newline-joined user data; a snapshot named
+    // "fix-error" must not be misclassified as a server failure.
+    try std.testing.expect(!isServerErrToken("fix-error\nbaseline\n"));
+    try std.testing.expect(!isServerErrToken("kernel-werror"));
+    try std.testing.expect(!isServerErrToken("ok"));
+    try std.testing.expect(!isServerErrToken("saved"));
+    try std.testing.expect(!isServerErrToken("(none)"));
+}
 
 test "parseIdx: extracts numeric index from URL path" {
     const req = "GET /api/power/42 HTTP/1.1\r\nHost: localhost\r\n\r\n";
@@ -3489,6 +3826,94 @@ test "fuzz: parseIdx never panics on random URL-like input" {
         for (prefixes) |pfx| {
             _ = parseIdx(buf[0..len], pfx);
         }
+    }
+}
+
+test "fuzz: findHeader never panics and returns a sub-slice of headers" {
+    var prng = std.Random.DefaultPrng.init(0xF1DD_BEAD);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+
+    const names = [_][]const u8{ "X-API-Key: ", "Host: ", "Content-Length: ", "Cookie: " };
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        // Bias bytes toward CR/LF/colon/space so header framing gets exercised.
+        for (buf[0..len]) |*b| {
+            b.* = switch (rnd.uintLessThan(u8, 8)) {
+                0 => '\r',
+                1 => '\n',
+                2 => ':',
+                3 => ' ',
+                else => rnd.int(u8),
+            };
+        }
+        const headers = buf[0..len];
+        for (names) |nm| {
+            if (findHeader(headers, nm)) |val| {
+                // Returned value must be a contiguous slice inside `headers`.
+                const base = @intFromPtr(headers.ptr);
+                const vp = @intFromPtr(val.ptr);
+                try std.testing.expect(vp >= base);
+                try std.testing.expect(vp + val.len <= base + headers.len);
+            }
+        }
+    }
+}
+
+test "fuzz: parseVmIdxSuffix never panics on random request-like input" {
+    var prng = std.Random.DefaultPrng.init(0x5FF1_CEED);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+
+    const prefixes = [_][]const u8{ "GET /api/vm/", "POST /api/vm/" };
+    const suffixes = [_][]const u8{ "/disk2/download", "/serial", "/screenshot" };
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        // Bias toward digits, slashes and spaces to reach the parse paths.
+        for (buf[0..len]) |*b| {
+            b.* = switch (rnd.uintLessThan(u8, 6)) {
+                0 => rnd.intRangeAtMost(u8, '0', '9'),
+                1 => '/',
+                2 => ' ',
+                3 => '?',
+                else => rnd.int(u8),
+            };
+        }
+        for (prefixes) |pfx| {
+            for (suffixes) |sfx| {
+                _ = parseVmIdxSuffix(buf[0..len], pfx, sfx);
+            }
+        }
+    }
+}
+
+test "secretEql: equal, unequal, length mismatch" {
+    try std.testing.expect(secretEql("hangar", "hangar"));
+    try std.testing.expect(!secretEql("hangar", "hangaR"));
+    try std.testing.expect(!secretEql("hangar", "hang"));
+    try std.testing.expect(secretEql("", ""));
+    try std.testing.expect(!secretEql("a", ""));
+}
+
+test "fuzz: secretEql matches std.mem.eql semantics" {
+    var prng = std.Random.DefaultPrng.init(0xC0FFEE);
+    const rand = prng.random();
+    var a: [64]u8 = undefined;
+    var b: [64]u8 = undefined;
+    var i: usize = 0;
+    while (i < 2000) : (i += 1) {
+        const la = rand.uintLessThan(usize, a.len + 1);
+        const lb = rand.uintLessThan(usize, b.len + 1);
+        rand.bytes(a[0..la]);
+        rand.bytes(b[0..lb]);
+        // Occasionally force exact equality to exercise the true branch.
+        if (rand.boolean() and la <= b.len) {
+            @memcpy(b[0..la], a[0..la]);
+            try std.testing.expectEqual(secretEql(a[0..la], b[0..la]), std.mem.eql(u8, a[0..la], b[0..la]));
+        }
+        try std.testing.expectEqual(std.mem.eql(u8, a[0..la], b[0..lb]), secretEql(a[0..la], b[0..lb]));
     }
 }
 
@@ -4176,7 +4601,45 @@ test "isAuthExempt: prefix paths are exempt for GET" {
     try std.testing.expect(!isAuthExempt(true, "/api/fb/0"));
     try std.testing.expect(!isAuthExempt(true, "/api/fb/0?quality=50"));
     try std.testing.expect(isAuthExempt(true, "/api/snapshot/list/0"));
-    try std.testing.expect(isAuthExempt(true, "/api/quickstart/ubuntu2404"));
+    // /api/quickstart/ creates a VM (state-changing) — it must require auth.
+    try std.testing.expect(!isAuthExempt(true, "/api/quickstart/ubuntu2404"));
+    // Disk-image download streams raw guest bytes — must require auth even
+    // though it lives under the otherwise-exempt /api/vm/ prefix.
+    try std.testing.expect(!isAuthExempt(true, "/api/vm/0/disk2/download"));
+    try std.testing.expect(!isAuthExempt(true, "/api/vm/12/disk2/download"));
+}
+
+test "sanitizeSlug: strips shell-unsafe characters" {
+    var buf: [vm.MAX_NAME]u8 = undefined;
+    try std.testing.expectEqualStrings("My_VM", sanitizeSlug("My VM", &buf));
+    try std.testing.expectEqualStrings("test-vm_1.2", sanitizeSlug("test-vm_1.2", &buf));
+    try std.testing.expectEqualStrings("_id_", sanitizeSlug("`id`", &buf));
+    try std.testing.expectEqualStrings("__id_", sanitizeSlug("$(id)", &buf));
+    try std.testing.expectEqualStrings("vm", sanitizeSlug("", &buf));
+}
+
+test "sanitizeSlug: fuzz output is always shell-safe" {
+    var seed: u64 = 0x243f6a8885a308d3;
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        var in_buf: [80]u8 = undefined;
+        const n = seed % in_buf.len;
+        var s = seed;
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            s = s *% 2862933555777941757 +% 3037000493;
+            in_buf[j] = @truncate(s);
+        }
+        var out_buf: [vm.MAX_NAME]u8 = undefined;
+        const slug = sanitizeSlug(in_buf[0..n], &out_buf);
+        try std.testing.expect(slug.len > 0);
+        for (slug) |ch| {
+            const ok = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
+                (ch >= '0' and ch <= '9') or ch == '.' or ch == '_' or ch == '-';
+            try std.testing.expect(ok);
+        }
+    }
 }
 
 test "isAuthExempt: non-exempt paths are rejected for GET" {
@@ -4265,8 +4728,11 @@ test "config body: boolean field parsing" {
         var buf: [64]u8 = undefined;
         const body = std.fmt.bufPrint(&buf, "autoprotect_enabled={s}", .{mode}) catch unreachable;
         const val = bodyVal(body, "autoprotect_enabled");
-        const expected = std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "1");
-        try std.testing.expectEqual(expected, std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "1"));
+        // bodyVal must extract the literal value verbatim...
+        try std.testing.expectEqualStrings(mode, val);
+        // ...and only "true"/"1" (indices 0 and 1) are truthy.
+        const truthy = std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "1");
+        try std.testing.expectEqual(i < 2, truthy);
     }
 }
 
@@ -4379,14 +4845,25 @@ pub fn main() !void {
             logErr("KV_API_KEY must be 1-64 bytes — refusing to start with an invalid key");
             return;
         }
-        auth_token_len = key.len;
-        @memcpy(auth_token[0..key.len], key);
+        if (secretEql(key, API_KEY)) {
+            // KV_API_KEY was set to the publicly-known built-in default. Treat it
+            // as if unset: keep the loopback-only binding instead of exposing all
+            // interfaces behind a secret everyone already knows.
+            logErr("WARNING: KV_API_KEY equals the built-in default — keeping loopback-only binding. Set KV_API_KEY to a strong, unique secret to expose Hangar on all interfaces.");
+        } else {
+            auth_token_len = key.len;
+            @memcpy(auth_token[0..key.len], key);
+        }
     } else {
-        // No custom key: the built-in default API key is in effect and the TCP
-        // listener binds to all interfaces. Warn loudly that anyone who can
-        // reach this port can control VMs.
-        logErr("WARNING: KV_API_KEY not set — serving with the default API key on a port reachable from all interfaces. Set KV_API_KEY to a strong secret for any non-local deployment.");
+        // No custom key: the built-in default API key is in effect. Confine the
+        // TCP listener to loopback so the weak default cannot be reached from
+        // other hosts. An operator who sets KV_API_KEY opts into all-interface
+        // exposure (see `expose_all` below).
+        logErr("WARNING: KV_API_KEY not set — serving with the default API key, bound to loopback only. Set KV_API_KEY to a strong secret to expose Hangar on all interfaces.");
     }
+
+    // Only expose the daemon beyond loopback when a real API key is configured.
+    const expose_all = auth_token_len > 0;
 
     const port: u16 = if (appio.getenv("KV_PORT")) |env| blk: {
         const p = std.fmt.parseInt(u16, env, 10) catch {
@@ -4398,14 +4875,14 @@ pub fn main() !void {
             return;
         }
         break :blk p;
-    } else 9080;
+    } else DEFAULT_PORT;
 
     const sock = c.socket(AF_INET6, SOCK_STREAM, 0);
     if (sock < 0) return;
-    tcp_sock_fd = sock;
+    storeServerFd(&tcp_sock_fd, sock);
     defer {
         _ = c.close(sock);
-        tcp_sock_fd = -1;
+        storeServerFd(&tcp_sock_fd, -1);
     }
 
     const one: c_int = 1;
@@ -4414,13 +4891,22 @@ pub fn main() !void {
     const zero: c_int = 0;
     _ = c.setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &zero, @sizeOf(c_int));
 
-    // Bind to :: (IPv6 any-address, dual-stack).
+    // Bind to :: (IPv6 any-address, dual-stack) only when a real API key is
+    // set; otherwise confine to ::1 (loopback) so the default key is never
+    // reachable off-host.
     var addr: c.sockaddr.in6 = std.mem.zeroes(c.sockaddr.in6);
     addr.family = AF_INET6;
     addr.port = std.mem.nativeToBig(u16, port);
     addr.flowinfo = 0;
     addr.scope_id = 0;
-    // addr.addr stays zero-initialized (in6addr_any).
+    if (!expose_all) {
+        // ::ffff:127.0.0.1 — IPv4-mapped loopback. On this dual-stack (V6ONLY=0)
+        // socket this accepts IPv4 connections to 127.0.0.1, which is exactly
+        // what every local client (webui_app, smoke tests, browser fallback)
+        // uses, while rejecting any off-host address.
+        addr.addr = [_]u8{0} ** 10 ++ [_]u8{ 0xff, 0xff, 127, 0, 0, 1 };
+    }
+    // When expose_all, addr.addr stays zero-initialized (in6addr_any).
     if (c.bind(sock, @ptrCast(&addr), @sizeOf(c.sockaddr.in6)) != 0) {
         logErr("Failed to bind TCP port — already in use");
         return;
@@ -4434,10 +4920,10 @@ pub fn main() !void {
     const unix_path = "/tmp/hangar-daemon.sock";
     _ = c.unlink(unix_path);
     const unix_sock = c.socket(AF_UNIX, SOCK_STREAM, 0);
-    unix_sock_fd = unix_sock;
+    storeServerFd(&unix_sock_fd, unix_sock);
     defer {
         _ = c.close(unix_sock);
-        unix_sock_fd = -1;
+        storeServerFd(&unix_sock_fd, -1);
     }
     var unix_addr: c.sockaddr.un = .{ .family = AF_UNIX, .path = undefined };
     @memcpy(unix_addr.path[0..unix_path.len], unix_path);
@@ -4457,8 +4943,8 @@ pub fn main() !void {
     }
 
     std.debug.print("\n╔══════════════════════════════════════════════╗\n", .{});
-    std.debug.print("║  Hangar Daemon v1.0                         ║\n", .{});
-    std.debug.print("║  TCP:   http://0.0.0.0:{d}                 ║\n", .{port});
+    std.debug.print("║  Hangar Daemon v0.1.0                       ║\n", .{});
+    std.debug.print("║  TCP:   http://{s}:{d}\n", .{ if (expose_all) "0.0.0.0" else "127.0.0.1", port });
     std.debug.print("║  Unix:  unix://{s}       ║\n", .{unix_path});
     std.debug.print("║  Health: GET /api/health                    ║\n", .{});
     std.debug.print("╚══════════════════════════════════════════════╝\n\n", .{});
@@ -5046,6 +5532,41 @@ test "handleMigrate: idx out of range returns 'invalid idx'" {
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
+test "isValidMigrateDest: accepts tcp targets, rejects injection" {
+    try std.testing.expect(isValidMigrateDest("tcp:10.0.0.2:4444"));
+    try std.testing.expect(isValidMigrateDest("tcp:[fe80::1]:4444"));
+    // Non-tcp schemes — exec: would run a shell command on the host.
+    try std.testing.expect(!isValidMigrateDest("exec:touch /tmp/pwned"));
+    try std.testing.expect(!isValidMigrateDest("unix:/tmp/x.sock"));
+    try std.testing.expect(!isValidMigrateDest("fd:3"));
+    // JSON string break-out via quote/backslash.
+    try std.testing.expect(!isValidMigrateDest("tcp:h\":4444"));
+    try std.testing.expect(!isValidMigrateDest("tcp:h\\:4444"));
+    // Control characters and traversal.
+    try std.testing.expect(!isValidMigrateDest("tcp:h\n:4444"));
+    try std.testing.expect(!isValidMigrateDest("tcp:../../x"));
+    try std.testing.expect(!isValidMigrateDest(""));
+}
+
+test "fuzz: isValidMigrateDest never crashes and never allows shell/JSON escape" {
+    var prng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15);
+    const rand = prng.random();
+    var buf: [64]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 5000) : (iter += 1) {
+        const len = rand.intRangeAtMost(usize, 0, buf.len);
+        for (buf[0..len]) |*b| b.* = rand.int(u8);
+        const dest = buf[0..len];
+        if (isValidMigrateDest(dest)) {
+            // Any accepted value must be a clean tcp: target — no shell-exec
+            // scheme, no characters that could break the QMP JSON string.
+            try std.testing.expect(std.mem.startsWith(u8, dest, "tcp:"));
+            try std.testing.expect(std.mem.indexOfAny(u8, dest, "\"\\") == null);
+            for (dest) |ch| try std.testing.expect(ch >= 0x20);
+        }
+    }
+}
+
 test "handleMigrateStatus: missing prefix returns error JSON" {
     var buf: [512]u8 = undefined;
     const result = handleMigrateStatus("GET /api/other HTTP/1.1", &buf);
@@ -5166,5 +5687,62 @@ test "fuzz: handleReorder never panics on random request-like input" {
         var buf: [128]u8 = undefined;
         for (&buf) |*b| b.* = rnd.int(u8);
         _ = handleReorder(&buf) catch {};
+    }
+}
+
+test "requestLine: stops at CRLF and keeps method+path" {
+    var out: [128]u8 = undefined;
+    const line = requestLine("POST /api/power/3 HTTP/1.1\r\nHost: x\r\n", &out);
+    try std.testing.expectEqualStrings("POST /api/power/3 HTTP/1.1", line);
+}
+
+test "requestLine: sanitizes control bytes to '?'" {
+    var out: [128]u8 = undefined;
+    const line = requestLine("GET /a\tb\x01c", &out);
+    try std.testing.expectEqualStrings("GET /a?b?c", line);
+}
+
+test "requestLine: respects output buffer bound" {
+    var out: [4]u8 = undefined;
+    const line = requestLine("GET /aaaaaaaa", &out);
+    try std.testing.expectEqual(@as(usize, 4), line.len);
+    try std.testing.expectEqualStrings("GET ", line);
+}
+
+test "sanitizeLogName: replaces control bytes and bounds output" {
+    var out: [vm.MAX_NAME]u8 = undefined;
+    try std.testing.expectEqualStrings("my-vm", sanitizeLogName(&out, "my-vm"));
+    try std.testing.expectEqualStrings("a?b?c", sanitizeLogName(&out, "a\nb\x00c"));
+    var small: [3]u8 = undefined;
+    try std.testing.expectEqualStrings("abc", sanitizeLogName(&small, "abcdef"));
+}
+
+test "fuzz: sanitizeLogName never panics and stays printable/bounded" {
+    var prng = std.Random.DefaultPrng.init(0xA0D17);
+    const rnd = prng.random();
+    for (0..1000) |_| {
+        var in: [80]u8 = undefined;
+        for (&in) |*b| b.* = rnd.int(u8);
+        const in_len = rnd.intRangeAtMost(usize, 0, in.len);
+        const cap = rnd.intRangeAtMost(usize, 1, 64);
+        var out: [64]u8 = undefined;
+        const safe = sanitizeLogName(out[0..cap], in[0..in_len]);
+        try std.testing.expect(safe.len <= cap);
+        try std.testing.expect(safe.len <= in_len);
+        for (safe) |ch| try std.testing.expect(ch >= 0x20 and ch < 0x7f);
+    }
+}
+
+test "fuzz: requestLine never panics and stays printable/bounded" {
+    var prng = std.Random.DefaultPrng.init(0x5EE11DE);
+    const rnd = prng.random();
+    for (0..1000) |_| {
+        var in: [64]u8 = undefined;
+        for (&in) |*b| b.* = rnd.int(u8);
+        const cap = rnd.intRangeAtMost(usize, 1, 64);
+        var out: [64]u8 = undefined;
+        const line = requestLine(&in, out[0..cap]);
+        try std.testing.expect(line.len <= cap);
+        for (line) |ch| try std.testing.expect(ch >= 0x20 and ch < 0x7f);
     }
 }

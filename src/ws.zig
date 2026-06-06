@@ -239,10 +239,21 @@ test "parseUpgrade: missing Upgrade header returns null" {
 }
 
 test "writeFrame: binary frame encoding" {
-    // Test we don't crash — actual encoding verification would need a socket.
+    // Drive writeFrame against a real pipe and read back the wire bytes.
+    var fds: [2]c.fd_t = undefined;
+    if (c.pipe(&fds) != 0) return error.SkipZigTest;
+    defer _ = c.close(fds[0]);
+    defer _ = c.close(fds[1]);
+
     const payload = "hello";
-    // Just verify the header encoding path doesn't panic.
-    _ = payload;
+    try writeFrame(fds[1], .binary, payload);
+
+    var buf: [16]u8 = undefined;
+    const n = c.read(fds[0], &buf, buf.len);
+    try std.testing.expectEqual(@as(isize, 2 + payload.len), n);
+    try std.testing.expectEqual(@as(u8, 0x82), buf[0]); // FIN + binary opcode
+    try std.testing.expectEqual(@as(u8, payload.len), buf[1]); // unmasked length
+    try std.testing.expectEqualStrings(payload, buf[2 .. 2 + payload.len]);
 }
 
 test "writeFrame: header sizes for different payload lengths" {

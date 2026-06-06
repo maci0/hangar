@@ -1,226 +1,142 @@
 # AGENTS.md — Hangar
 
-Lightweight QEMU VM manager with a web UI and optional native WebView wrapper.
-Zig 0.16.0. No libvirt dependency.
+Lightweight QEMU VM manager with web UI and optional native WebView wrapper.
+Zig 0.16.0. No libvirt.
 
 ## Build / Run / Test Commands
 
 ```bash
-zig build web          # Build + launch web backend (HTTP on :9080)
+zig build web          # Build + launch web backend (HTTP on :9080; also the remote daemon)
 zig build webui        # Build + launch native WebView desktop wrapper
-zig build test         # Run ALL unit + fuzz tests (34 modules + HV)
+zig build test         # Run ALL unit + fuzz tests + web-smoke E2E (umbrella step)
+zig build web-smoke    # Web UI end-to-end smoke only (puppeteer)
 ```
 
-### Running a single test file
+All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`.
 
-Each test module is registered separately in `build.zig`. To run only one
-module's tests, temporarily comment out the other `test_step.dependOn(...)`
-lines, or run the test binary directly. The modules reach `std.c`, so the
-direct invocation needs `-lc` plus the LLVM backend/LLD (see "Build link step"):
+### Running a single test module
+
+Each test module is explicitly registered in `build.zig`. To run only one:
 
 ```bash
-zig test src/vm.zig      -lc -fllvm -flld
-zig test src/qmp.zig     -lc -fllvm -flld
 zig test src/persist.zig -lc -fllvm -flld
-zig test src/transport.zig -lc -fllvm -flld
+zig test src/qmp.zig     -lc -fllvm -flld
 ```
 
-## Architecture Overview
-
-```
-src/
-  web_server.zig    Standalone HTTP daemon with embedded HTML/CSS/JS UI (port 9080)
-  webui_app.zig     Native WebView desktop wrapper (zig-webui) that spawns hangar-web
-  vm.zig            VM config model, enums (DiskFormat, GuestOs, VmStatus, ...)
-  vnet.zig          Virtual switch model (VMnet0..N: type/subnet/DHCP) + own JSON store
-  qemu.zig          QEMU/qemu-img process spawn (fork+execvp), disk image create
-  qmp.zig           QMP client: pause/resume/powerdown/reset/snapshots/sendkey
-  persist.zig       JSON save/load with hand-rolled parser (no std.json)
-  vnc_client.zig    libvncclient wrapper (@cImport rfb headers + poll thread)
-  spice_client.zig  spice-client-glib wrapper (hand-written extern decls)
-  ws.zig            WebSocket implementation (upgrade, frame read/write)
-  usock.zig         Blocking AF_UNIX socket (libc) — replaces std.net
-  appio.zig         Global std.Io instance + getenv/sleepMs helpers
-  sync.zig          SpinMutex — replaces std.Thread.Mutex
-  ringbuf.zig       Ring buffer for serial console
-  termfilter.zig    Terminal output sanitization
-  fbmath.zig        Framebuffer geometry math (fbFits)
-  uimath.zig        UI math helpers (coordinate mapping, mem-bar, socket paths)
-  snapparse.zig     Snapshot table parser (QMP + HMP variants)
-  ovf.zig           OVF descriptor builder
-  autoprotect.zig   AutoProtect snapshot scheduling logic
-  transport.zig     Transport abstraction (Unix/TCP/SHM) for client↔daemon
-  vmrun.zig         CLI tool for remote VM management (vmrun list/start/stop/...)
-  hv/
-    interface.zig   Hypervisor abstraction interface (Vmm dispatch table)
-    qemu_backend.zig  QEMU backend implementing the Vmm interface
-  web/
-    index.html      Single-page web UI (embedded in web_server.zig)
-    app.js          Web frontend logic (VM management, theme, display, console)
-    app.css         Web UI stylesheet (light + dark theme CSS variables)
-
-Shared state: appstate.zig (VM arrays, mutex, serial state, remote mode).
-```
-
-### Frontend: Web UI (port 9080)
-
-- Single-page HTML app with CSS custom properties for light/dark theming.
-- All VM operations via REST API + WebSocket (framebuffer streaming).
-- The `webui_app.zig` native wrapper uses zig-webui to open a desktop window
-  showing the same web UI — no frontend changes needed.
-
-### Global state (no App struct)
-
-State is stored as flat module-level globals in `appstate.zig`:
-- `vms: [MAX_VMS]vm.VmConfig` — fixed array of 64 VM configs
-- `vm_count`, `prefs` — session state
-- `g_vmm: hv_iface.Vmm`, `g_vmm_handles` — hypervisor dispatch table
-- `remote_mode`, `remote_url`, `remote_url_len` — remote client mode
-- `serial_*` — serial console ring buffer and reader thread state
-- `undo_vm`, `undo_idx`, `undo_available` — delete undo support
-- `vms_mutex` — protects the VM array
-
-There is no `App` struct. State lives in `appstate.zig` globals, shared
-by `web_server.zig`, `persist.zig`, `serial_console.zig`, `remote.zig`,
-and `vnet.zig`.
-
-### Remote client/daemon mode
-
-`web_server.zig` serves as both local backend and remote daemon:
-- `transport.zig`: URL parsing, TCP/Unix/SHM connection, HTTP request helpers
-- `remote.zig`: remote client mode that fetches VM state via HTTP from a
-  remote `web_server.zig` instance
-- `vmrun.zig`: CLI wrapper for remote operations
-
-### HV abstraction layer
-
-All QEMU operations go through `g_vmm.*Fn` dispatch table (`hv/interface.zig`)
-when a VMM handle exists, falling back to direct `qemu.*` calls:
-- Power: `powerOnFn` / `powerOffFn`
-- Snapshots: `snapshotTakeFn` / `snapshotListFn` / `snapshotRevertFn` / `snapshotDeleteFn`
-- Clone: `cloneFn` / `createLinkedCloneFn`
-- Disk: `createDiskFn` / `convertDiskFn`
+`-lc` is required (many modules reach `std.c`). `-fllvm -flld` is required because the self-hosted backend/linker cannot relocate `.sframe` entries in GCC's crt1.o.
 
 ## Critical Constraints
 
 ### No `std.json`
-`std.json` pulls in f128 float math that causes linker errors with the
-system `cc` link step. All JSON parsing/emitting is hand-rolled in
-`persist.zig`. Never import or use `std.json`.
+`std.json` pulls in f128 float math that causes linker errors with the system `cc` link step. All JSON is hand-rolled in `persist.zig` (also `qmp.zig`, `vnet.zig`). Never import or use `std.json`.
 
 ### Build link step
-- **Test artifacts** (`zig build test`): use `use_llvm = true` + `use_lld = true`
-  because the self-hosted backend/linker can't relocate `.sframe` in GCC's crt1.o.
-- **Web backend** (`hangar-web`): also uses `use_llvm = true, use_lld = true`.
-- **WebUI app** (`hangar-webui`): uses `use_llvm = true, use_lld = true`.
+Tests and the three shipped executables must use `use_llvm = true, use_lld = true`.
 
 ### Zig 0.16 `std.Io` migration
-0.16 routed filesystem, process, networking, and threading through the
-`std.Io` interface and gutted `std.posix`. House rules:
-- Filesystem: `std.Io.Dir.cwd().<op>(appio.io(), ...)` — never `std.fs.cwd()`.
+Filesystem, process, networking, and threading go through `std.Io`. Never use the removed/emptied APIs:
+
+- FS: `std.Io.Dir.cwd().<op>(appio.io(), ...)` — never `std.fs.cwd()`.
 - Unix sockets: `usock.UnixStream` (libc-backed) — `std.net` is gone.
 - Mutex: `sync.SpinMutex` — `std.Thread.Mutex` is gone.
-- `getenv` / sleep / monotonic clock: `appio.getenv` / `appio.sleepMs` /
-  `std.c.clock_gettime` — `std.posix.getenv` / `std.Thread.sleep` /
-  `std.time.milliTimestamp` are gone.
-- Process spawn: `qemu.forkExec` / `qemu.runWait` (manual `fork`+`execvp`).
-  Do NOT use `std.process.spawn` — its `Io` carries an empty environment,
-  which strips `DISPLAY`/`XDG_RUNTIME_DIR`/`HOME` and breaks QEMU's GTK display.
+- Env / sleep / clock: `appio.getenv`, `appio.sleepMs`, `std.c.clock_gettime`.
+- Process spawn for QEMU: `qemu.forkExec` / `qemu.runWait` (manual `fork` + `execvp`). These preserve the real environment (`DISPLAY`, `HOME`, `XDG_RUNTIME_DIR`, ...). Never `std.process.spawn`.
 
 ### No glib `@cImport`
-Zig 0.16's C importer (aro) rejects GLib headers — they emit file-scope
-`_Pragma("GCC diagnostic ...")`. `spice_client.zig` declares the handful of
-GLib/SPICE symbols it needs by hand (`extern fn` + opaque types) instead of
-`@cImport`. The rfb (VNC) headers import fine.
+Zig 0.16's C importer rejects GLib headers (they emit file-scope `_Pragma`). `spice_client.zig` declares the few symbols it needs by hand (`extern fn` + opaque types). rfb (VNC) headers may be `@cImport`'ed.
 
-## Code Style
+## State & Wiring
 
-### Language: Zig 0.16.0
-- Use `zig fmt` conventions (4-space indent, no tabs).
-- All source files use `//!` doc comments at the top describing the module.
-- Functions use `///` doc comments. Keep them concise (1-3 lines).
+- There is no `App` struct. All shared state lives as module-level globals in `appstate.zig`:
+  - `vms` / `vm_count` / `vms_mutex`, `prefs`, `g_vmm` + `g_vmm_handles`, serial console ring + thread state, remote mode flags, undo state.
+- `web_server.zig` is both the local web UI server and the remote daemon. Remote clients (`remote.zig`, `vmrun`) talk to it via `transport.zig` (Unix/TCP/SHM + HTTP helpers).
+- Hypervisor abstraction: when a VMM handle exists, QEMU operations must go through the `g_vmm.*Fn` dispatch table (`hv/interface.zig` + `hv/qemu_backend.zig`). Falls back to direct `qemu.*` calls otherwise.
+- Power, snapshots, clone, and disk creation are the operations that flow through the dispatch.
 
-### Imports
-- `std` first, then local files.
-- Local imports use string literal paths: `@import("vm.zig")`.
+## Configuration (environment variables)
 
-### Naming
-- Types/structs: `PascalCase` (`VmConfig`, `QmpClient`, `DiskFormat`)
-- Functions: `camelCase` (`startVm`, `saveSnapshot`, `refreshDetails`)
-- Constants: `SCREAMING_SNAKE` for hard limits (`MAX_VMS`, `MAX_NAME`, `MAX_PATH`)
-- Constants: `snake_case` for source lists and config values
-- Enum variants: `snake_case` (`qcow2`, `user`, `running`)
-- File names: `snake_case.zig`
+Runtime config is read once in `web_server.main`. All variables are optional.
 
-### Enum pattern
-Every enum in `vm.zig` follows the same API surface. When adding a new
-enum, replicate this pattern exactly:
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `KV_API_KEY` | `hangar` (built-in) | X-API-Key secret. **Setting it also opts the daemon into binding all interfaces (`::`).** With no key set, the daemon binds **loopback only** (`::1`) so the weak default is never reachable off-host. Must be 1–64 bytes; an invalid value aborts startup. Setting it to the built-in default value (`hangar`) is treated as unset — the daemon stays loopback-only rather than exposing all interfaces behind the known default. |
+| `KV_PORT` | `9080` | TCP listen port. Must parse as a non-zero `u16`; otherwise startup aborts. |
+| `HANGAR_CONFIG_HOME` | `$HOME` | Base dir for `~/.config/hangar/*` state (see Persistence). |
 
-```zig
-pub const MyEnum = enum(u8) {
-    variant_a = 0,
-    variant_b = 1,
+Never commit a real `KV_API_KEY`. For any non-local deployment, set a strong `KV_API_KEY` (which is also what exposes the daemon beyond loopback).
 
-    pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
+## Persistence
 
-    pub fn toIndex(self: MyEnum) usize {
-        return @intFromEnum(self);
-    }
+- VMs: `~/.config/hangar/vms.json` (override via `HANGAR_CONFIG_HOME`).
+- Virtual networks: `~/.config/hangar/networks.json` (owned by `vnet.zig`).
+- Only configuration is persisted. Runtime state (`status`, `pid`, ...) is never written.
+- When adding fields to `VmConfig`, also update `VmJson`, `emitVmJson`, `fromVmJson` / `parseVmObject` in `persist.zig`, and add parser tests.
 
-    pub fn fromIndex(i: usize) MyEnum {
-        if (i >= count) return .variant_a; // safe default
-        return @enumFromInt(@as(u8, @intCast(i)));
-    }
+## Testing
 
-    pub fn toStr(self: MyEnum) [*:0]const u8 { ... }  // QEMU CLI value
-    pub fn label(self: MyEnum) [*:0]const u8 { ... }   // UI display label
-};
-```
+- Tests live at the bottom of each module's `.zig` (not in separate files), except for thin wrappers (`appstate_test.zig`, `hv_*_test.zig`).
+- Fuzz tests are deterministic PRNG harnesses (fixed seed) and are ordinary `zig build test` entries. They cover parsers, setters, arg builders, and pure helpers.
+- Every enum must have tests for: fromIndex round-trip, toIndex inverts fromIndex, toStr values, label values, out-of-range default.
+- `qemu.zig` arg-builder tests must use the `buildScriptStr` / `buildArgs` functions — never by spawning QEMU.
+- The puppeteer web-smoke (`tests/web_smoke.mjs`) is pulled into the umbrella `test` step. It spawns the built binary on a temp port against a temp `$HOME`.
 
-### Strings
-- Fixed-size buffers for VM data (`name_buf`, `disk_path_buf`), not heap.
-- C interop strings: `[*:0]const u8` (null-terminated pointers).
-- Zig slices: `[]const u8` for internal logic.
-- Use `std.fmt.bufPrint` / `std.fmt.bufPrintZ` for formatting into stack buffers.
+## Code Style & Conventions
 
-### Error handling
-- Functions return `!void` or `!T` for operations that can fail.
-- Use `catch return` for non-critical failures.
-- Use `catch {}` only for persistence saves where failure is acceptable.
+- `//!` module doc at the top of every `.zig`; `///` docs on public functions (1-3 lines).
+- Imports: `std` first, then local files as string literals (`@import("vm.zig")`).
+- Enums follow the exact `vm.zig` pattern (see `DiskFormat`, `GuestOs`, etc.):
+  - `count`, `toIndex`, `fromIndex` (safe default), `toStr` (QEMU CLI value), `label` (UI).
+- Naming: `PascalCase` types, `camelCase` functions, `SCREAMING_SNAKE` hard limits, `snake_case` for enum variants and source lists.
+- Fixed-size buffers for VM data (`name_buf`, `disk_path_buf`); C interop uses `[*:0]const u8`; internal slices are `[]const u8`.
+- UI terminology follows VMware Workstation conventions:
+  - "Power On" / "Power Off", "Suspend" / "Resume", "Shut Down Guest", "Take Snapshot" / "Revert to Snapshot", "VM Library", "Settings".
+- Config enums are stored in JSON as their `toStr` values (e.g. `"qcow2"`, `"gtk"`, `"user"`).
 
-### Testing
-- Tests live at the bottom of each module (not in separate files).
-- Use `std.testing.expectEqual` for values, `std.testing.expectEqualStrings`
-  for string comparisons (with `std.mem.span()` to convert `[*:0]const u8`).
-- Test names: `"TypeName: description"` (e.g. `"DiskFormat: fromIndex round-trip"`).
-- Every enum needs: fromIndex round-trip, toIndex inverts fromIndex,
-  toStr values, label values, out-of-range default.
-- `qemu.zig` also has a test module (registered in `build.zig`) for its arg
-  builder — `buildScriptStr`/`buildArgs` must never be tested via spawning.
+## Zig Idioms & Rules
 
-### Fuzz tests
-Deterministic PRNG harnesses (fixed seed → reproducible) that run as
-ordinary `zig build test` tests. Covered surfaces: JSON parser (`persist.zig`),
-`VmConfig` setters + enum `fromIndex` (`vm.zig`), QEMU arg builder (`qemu.zig`),
-QMP response parser (`qmp.zig`), virtual-network store (`vnet.zig`), pure
-helpers: `fbmath.fbFits`, `ringbuf.append`, `uimath`, `snapparse.parse`,
-`sync.SpinMutex` (4-thread contention).
-Invariants asserted: never panic, parsers only return suffix slices of their
-input, writers never exceed their buffers. Keep iteration counts modest (≤8k)
-so `-fllvm` test builds stay fast.
+Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, `std.posix`, or `std.Thread` APIs — see the `std.Io` migration constraint above for the required replacements.
 
-### UI terminology
-Follow VMware Workstation conventions:
-- "Power On" / "Power Off" (not Start/Stop)
-- "Suspend" / "Resume" (not Pause/Unpause)
-- "Shut Down Guest" (ACPI powerdown)
-- "VM Library" (not VM list)
-- "Settings" (not Edit/Configure)
-- "Take Snapshot" / "Revert to Snapshot"
+### Builtins & comptime
+- Reach for builtins/comptime where natural: `@typeInfo`, `@TypeOf`, `@intCast`, `@enumFromInt`, `@intFromEnum`, `@memcpy`, `@memset`, `@atomicLoad`, `@atomicStore`.
+- There is **no** `@builtin`. Platform/build info comes from `const builtin = @import("builtin");`.
 
-### Config persistence
-- Save path: `~/.config/hangar/vms.json`
-- Enum fields stored as QEMU CLI strings (e.g. `"qcow2"`, `"gtk"`, `"user"`).
-- Runtime state (`status`, `pid`) is never persisted.
-- When adding new fields to VmConfig, also update: `VmJson` struct,
-  `emitVmJson`, `fromVmJson` / `parseVmObject`, and add parser tests.
+### Avoid low-level OS work
+- No direct syscalls; no new `fork`/`exec` code.
+- Avoid `std.os`, `std.posix`, and raw libc unless there is no Zig 0.16 API.
+- Keep existing low-level code behind the local wrappers (`usock`, `appio`, `qemu`).
+- Process spawning: use `std.process` only where Zig 0.16 environment handling is safe. Keep QEMU/`qemu-img` on the existing `qemu.forkExec`/`runWait` wrapper until the env-stripping issue is proven fixed with tests.
+
+### Structured stdlib helpers
+- `std.mem` for slicing/search/copying.
+- `std.fmt.bufPrint` / `bufPrintZ` for fixed buffers.
+- `std.testing` helpers in tests.
+- `std.heap` allocators only when fixed buffers are not enough.
+
+### Ownership
+- Functions that allocate must document who frees.
+- Prefer caller-provided buffers for hot paths and config serialization.
+- Use `defer` / `errdefer` consistently.
+
+### Slices over raw pointers
+- Use `[]const u8` / `[]u8` for internal Zig logic.
+- Reserve `[*:0]const u8` for C/QEMU interop boundaries.
+- Convert with `std.mem.span()` only at boundaries.
+
+### Errors
+- Return `!T` / `!void`.
+- `catch return` for non-critical failure paths.
+- Avoid silent `catch {}` except known acceptable best-effort persistence cases.
+
+### Concurrency
+- Use `sync.SpinMutex` (per project rule); atomics for cross-thread scalar flags.
+- Never touch `appstate.vms` / `vm_count` without `vms_mutex`.
+- Do not hold locks during QEMU/QMP/filesystem/network I/O.
+
+### build.zig
+- Keep link/backend choices explicit (`use_llvm`/`use_lld` — see constraint above).
+- Avoid global-machine assumptions; prefer project-local cache/config for reproducible test runs.
+
+## References
+
+- `CLAUDE.md` is a symlink to this file.
+- Longer design notes (if needed) are in `docs/`.
