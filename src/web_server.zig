@@ -3027,63 +3027,73 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-fn handlePause(req: []const u8) ![]const u8 {
+/// Capture a VM's name under the lock for a name-keyed action whose I/O runs
+/// unlocked. Validates idx and (optionally) a state predicate. Returns the name
+/// length in `out` (0 and an error-token via the `*?[]const u8` on failure).
+/// Caller must NOT hold vms_mutex.
+fn captureVmName(req: []const u8, out: *[vm.MAX_NAME]u8, require: enum { any, alive, paused }, err: *[]const u8) ?usize {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.isAlive()) return "not running";
-    if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.pauseFn(h) catch |e| {
-            logOpErr("pause", e, v.getNameSlice());
-            return "qmp err";
-        };
-    } else {
-        var client = qmp.QmpClient{};
-        var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-        client.connect(sock) catch |e| {
-            logOpErr("pause", e, v.getNameSlice());
-            return "qmp err";
-        };
-        defer client.disconnect();
-        client.pause() catch |e| {
-            logOpErr("pause", e, v.getNameSlice());
-            return "qmp err";
-        };
+    const idx = parseIdx(req, "POST /api/vms/") orelse {
+        err.* = "invalid";
+        return null;
+    };
+    if (idx >= appstate.vm_count) {
+        err.* = "invalid idx";
+        return null;
     }
-    logAudit("pause", v.getNameSlice());
+    const v = &appstate.vms[idx];
+    switch (require) {
+        .any => {},
+        .alive => if (!v.isAlive()) {
+            err.* = "not running";
+            return null;
+        },
+        .paused => if (!v.isPaused()) {
+            err.* = "not paused";
+            return null;
+        },
+    }
+    const nm = v.getNameSlice();
+    const nl = @min(nm.len, out.len);
+    @memcpy(out[0..nl], nm[0..nl]);
+    return nl;
+}
+
+/// Run a QMP method on the VM named `name` over a fresh connection, with the
+/// caller NOT holding vms_mutex (keeps QMP socket I/O off the lock — the
+/// lifecycle handlers previously held vms_mutex across the QMP call). Centralizes
+/// the connect/disconnect boilerplate that was duplicated across ~16 handlers.
+fn vmQmpByName(name: []const u8, comptime op: fn (*qmp.QmpClient) anyerror!void) !void {
+    var client = qmp.QmpClient{};
+    var sock_buf: [256]u8 = undefined;
+    const sock = qmp.socketPath(name, &sock_buf) orelse return error.SockPath;
+    try client.connect(sock);
+    defer client.disconnect();
+    try op(&client);
+}
+
+fn handlePause(req: []const u8) ![]const u8 {
+    var nb: [vm.MAX_NAME]u8 = undefined;
+    var err: []const u8 = "";
+    const nl = captureVmName(req, &nb, .alive, &err) orelse return err;
+    vmQmpByName(nb[0..nl], qmp.QmpClient.pause) catch |e| {
+        logOpErr("pause", e, nb[0..nl]);
+        return "qmp err";
+    };
+    logAudit("pause", nb[0..nl]);
     return "ok";
 }
 
 fn handleResume(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.isPaused()) return "not paused";
-    if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.resumeFn(h) catch |e| {
-            logOpErr("resume", e, v.getNameSlice());
-            return "qmp err";
-        };
-    } else {
-        var client = qmp.QmpClient{};
-        var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-        client.connect(sock) catch |e| {
-            logOpErr("resume", e, v.getNameSlice());
-            return "qmp err";
-        };
-        defer client.disconnect();
-        client.cont() catch |e| {
-            logOpErr("resume", e, v.getNameSlice());
-            return "qmp err";
-        };
-    }
-    logAudit("resume", v.getNameSlice());
+    var nb: [vm.MAX_NAME]u8 = undefined;
+    var err: []const u8 = "";
+    const nl = captureVmName(req, &nb, .paused, &err) orelse return err;
+    vmQmpByName(nb[0..nl], qmp.QmpClient.cont) catch |e| {
+        logOpErr("resume", e, nb[0..nl]);
+        return "qmp err";
+    };
+    logAudit("resume", nb[0..nl]);
     return "ok";
 }
 
@@ -3128,62 +3138,26 @@ fn handleRename(req: []const u8) ![]const u8 {
 }
 
 fn handleShutdown(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.isAlive()) return "not running";
-    if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.shutdownFn(h) catch |e| {
-            logOpErr("shut down guest", e, v.getNameSlice());
-            return "qmp err";
-        };
-    } else {
-        var client = qmp.QmpClient{};
-        var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-        client.connect(sock) catch |e| {
-            logOpErr("shut down guest", e, v.getNameSlice());
-            return "qmp err";
-        };
-        defer client.disconnect();
-        client.powerdown() catch |e| {
-            logOpErr("shut down guest", e, v.getNameSlice());
-            return "qmp err";
-        };
-    }
-    logAudit("shut down guest", v.getNameSlice());
+    var nb: [vm.MAX_NAME]u8 = undefined;
+    var err: []const u8 = "";
+    const nl = captureVmName(req, &nb, .alive, &err) orelse return err;
+    vmQmpByName(nb[0..nl], qmp.QmpClient.powerdown) catch |e| {
+        logOpErr("shut down guest", e, nb[0..nl]);
+        return "qmp err";
+    };
+    logAudit("shut down guest", nb[0..nl]);
     return "ok";
 }
 
 fn handleReset(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.isAlive()) return "not running";
-    if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.resetFn(h) catch |e| {
-            logOpErr("reset", e, v.getNameSlice());
-            return "qmp err";
-        };
-    } else {
-        var client = qmp.QmpClient{};
-        var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-        client.connect(sock) catch |e| {
-            logOpErr("reset", e, v.getNameSlice());
-            return "qmp err";
-        };
-        defer client.disconnect();
-        client.systemReset() catch |e| {
-            logOpErr("reset", e, v.getNameSlice());
-            return "qmp err";
-        };
-    }
-    logAudit("reset", v.getNameSlice());
+    var nb: [vm.MAX_NAME]u8 = undefined;
+    var err: []const u8 = "";
+    const nl = captureVmName(req, &nb, .alive, &err) orelse return err;
+    vmQmpByName(nb[0..nl], qmp.QmpClient.systemReset) catch |e| {
+        logOpErr("reset", e, nb[0..nl]);
+        return "qmp err";
+    };
+    logAudit("reset", nb[0..nl]);
     return "ok";
 }
 
@@ -3870,25 +3844,14 @@ fn handleImport(req: []const u8) ![]const u8 {
 }
 
 fn handleCad(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.isAlive()) return "not running";
-    var client = qmp.QmpClient{};
-    var sock_buf: [256]u8 = undefined;
-    const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-    client.connect(sock) catch |e| {
-        logOpErr("ctrl-alt-del", e, v.getNameSlice());
-        return "qmp err";
-    };
-    defer client.disconnect();
-    client.sendCtrlAltDel() catch |e| {
-        logOpErr("ctrl-alt-del", e, v.getNameSlice());
+    var nb: [vm.MAX_NAME]u8 = undefined;
+    var err: []const u8 = "";
+    const nl = captureVmName(req, &nb, .alive, &err) orelse return err;
+    vmQmpByName(nb[0..nl], qmp.QmpClient.sendCtrlAltDel) catch |e| {
+        logOpErr("ctrl-alt-del", e, nb[0..nl]);
         return "cad err";
     };
-    logAudit("ctrl-alt-del", v.getNameSlice());
+    logAudit("ctrl-alt-del", nb[0..nl]);
     return "ok";
 }
 
