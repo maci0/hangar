@@ -32,6 +32,7 @@ pub fn diskFormatFromExtension(ext: []const u8) vm.DiskFormat {
 pub fn parseNicMode(s: []const u8) vm.NetworkMode {
     // UI label matching (labels differ from toStr values).
     if (std.ascii.eqlIgnoreCase(s, "bridged")) return .bridge;
+    if (std.ascii.indexOfIgnoreCase(s, "gvproxy") != null) return .gvproxy;
     if (std.ascii.eqlIgnoreCase(s, "none")) return .none;
     // Fallback to exact toStr matching ("user", "bridge").
     return vm.NetworkMode.fromStr(s);
@@ -162,6 +163,8 @@ test "diskFormatFromExtension: unknown defaults to qcow2" {
 
 test "parseNicMode: known modes" {
     try std.testing.expectEqual(vm.NetworkMode.bridge, parseNicMode("bridged"));
+    try std.testing.expectEqual(vm.NetworkMode.gvproxy, parseNicMode("gvproxy"));
+    try std.testing.expectEqual(vm.NetworkMode.gvproxy, parseNicMode("gvproxy (user mode)"));
     try std.testing.expectEqual(vm.NetworkMode.none, parseNicMode("none"));
     try std.testing.expectEqual(vm.NetworkMode.user, parseNicMode("user"));
     // Exact toStr values also work via fallback.

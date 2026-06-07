@@ -146,7 +146,8 @@ pub const DiskCache = enum(u8) {
 pub const NetworkMode = enum(u8) {
     user = 0,
     bridge = 1,
-    none = 2,
+    gvproxy = 2,
+    none = 3,
 
     pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
 
@@ -165,6 +166,7 @@ pub const NetworkMode = enum(u8) {
         return switch (self) {
             .user => "user",
             .bridge => "bridge",
+            .gvproxy => "gvproxy",
             .none => "none",
         };
     }
@@ -174,6 +176,7 @@ pub const NetworkMode = enum(u8) {
         return switch (self) {
             .user => "NAT (User mode)",
             .bridge => "Bridged",
+            .gvproxy => "gvproxy (User mode)",
             .none => "None",
         };
     }
@@ -1850,7 +1853,7 @@ test "VmConfig: default values" {
 
 test "enum counts match expected values" {
     try std.testing.expectEqual(@as(usize, 4), DiskFormat.count);
-    try std.testing.expectEqual(@as(usize, 3), NetworkMode.count);
+    try std.testing.expectEqual(@as(usize, 4), NetworkMode.count);
     try std.testing.expectEqual(@as(usize, 5), DisplayType.count);
     try std.testing.expectEqual(@as(usize, 4), VmStatus.count);
     try std.testing.expectEqual(@as(usize, 2), BootFirmware.count);
@@ -2079,7 +2082,8 @@ test "CpuModel: fromStr round-trip" {
 test "NetworkMode: fromIndex round-trip" {
     try std.testing.expectEqual(NetworkMode.user, NetworkMode.fromIndex(0));
     try std.testing.expectEqual(NetworkMode.bridge, NetworkMode.fromIndex(1));
-    try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromIndex(2));
+    try std.testing.expectEqual(NetworkMode.gvproxy, NetworkMode.fromIndex(2));
+    try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromIndex(3));
     try std.testing.expectEqual(NetworkMode.user, NetworkMode.fromIndex(99));
 }
 
@@ -2092,12 +2096,14 @@ test "NetworkMode: toIndex inverts fromIndex" {
 test "NetworkMode: toStr values" {
     try std.testing.expectEqualStrings("user", std.mem.span(NetworkMode.user.toStr()));
     try std.testing.expectEqualStrings("bridge", std.mem.span(NetworkMode.bridge.toStr()));
+    try std.testing.expectEqualStrings("gvproxy", std.mem.span(NetworkMode.gvproxy.toStr()));
     try std.testing.expectEqualStrings("none", std.mem.span(NetworkMode.none.toStr()));
 }
 
 test "NetworkMode: label values" {
     try std.testing.expectEqualStrings("NAT (User mode)", std.mem.span(NetworkMode.user.label()));
     try std.testing.expectEqualStrings("Bridged", std.mem.span(NetworkMode.bridge.label()));
+    try std.testing.expectEqualStrings("gvproxy (User mode)", std.mem.span(NetworkMode.gvproxy.label()));
     try std.testing.expectEqualStrings("None", std.mem.span(NetworkMode.none.label()));
 }
 
@@ -2999,6 +3005,7 @@ test "UsbPolicy: fromStr unknown defaults to usb2" {
 test "NetworkMode: fromStr values" {
     try std.testing.expectEqual(NetworkMode.user, NetworkMode.fromStr("user"));
     try std.testing.expectEqual(NetworkMode.bridge, NetworkMode.fromStr("bridge"));
+    try std.testing.expectEqual(NetworkMode.gvproxy, NetworkMode.fromStr("gvproxy"));
     try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromStr("none"));
 }
 

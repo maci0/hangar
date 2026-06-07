@@ -251,6 +251,11 @@ fn findVirtioWinIsoInto(dest: []u8) ?[]const u8 {
 var virtio_buf: [vm.MAX_PATH + 1]u8 = undefined;
 var virtio_mutex: sync.SpinMutex = .{};
 
+/// QEMU-side socket expected from a separately running gvproxy daemon:
+/// `gvproxy -listen-qemu unix:///tmp/hangar-gvproxy-qemu.sock ...`.
+/// QEMU 7.2+ can connect to it directly with the stream netdev backend.
+const gvproxy_qemu_socket = "/tmp/hangar-gvproxy-qemu.sock";
+
 /// Formatting buffers for QEMU arguments.
 ///
 /// These must outlive the `forkExec` call: `buildArgs` stores slices into
@@ -283,7 +288,7 @@ const ArgBuffers = struct {
     disk2_buf: [vm.MAX_PATH + 64]u8 = undefined,
     extra_disk_bufs: [vm.MAX_EXTRA_DISKS][vm.MAX_PATH + 64]u8 = [_][vm.MAX_PATH + 64]u8{[_]u8{0} ** (vm.MAX_PATH + 64)} ** vm.MAX_EXTRA_DISKS,
     usb_buf: [128]u8 = undefined,
-    nic_dev_buf: [vm.MAX_NICS][128]u8 = [_][128]u8{[_]u8{0} ** 128} ** vm.MAX_NICS,
+    nic_dev_buf: [vm.MAX_NICS][192]u8 = [_][192]u8{[_]u8{0} ** 192} ** vm.MAX_NICS,
     floppy_buf: [vm.MAX_PATH + 64]u8 = undefined,
     disp_buf: [32]u8 = undefined,
 };
@@ -322,6 +327,10 @@ fn appendExtraNic(
         },
         .bridge => {
             const nd = try std.fmt.bufPrint(dev_buf[64..], "bridge,id={s},br=br0", .{id});
+            try args.append(alloc, nd);
+        },
+        .gvproxy => {
+            const nd = try std.fmt.bufPrint(dev_buf[64..], "stream,id={s},addr.type=unix,addr.path={s}", .{ id, gvproxy_qemu_socket });
             try args.append(alloc, nd);
         },
         .none => unreachable, // filtered at function entry above
@@ -662,6 +671,10 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         },
         .bridge => {
             try args.append(alloc, "bridge,id=net0,br=br0");
+        },
+        .gvproxy => {
+            const nd = try std.fmt.bufPrint(&bufs.netdev_user_buf, "stream,id=net0,addr.type=unix,addr.path={s}", .{gvproxy_qemu_socket});
+            try args.append(alloc, nd);
         },
         .none => {},
     }
@@ -1455,6 +1468,15 @@ test "qemu: bridge network + UEFI firmware flags" {
     try expect(has(s, "-bios"));
 }
 
+test "qemu: gvproxy network uses stream unix socket backend" {
+    var cfg = vm.VmConfig{};
+    cfg.nics[0].mode = .gvproxy;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "stream,id=net0,addr.type=unix,addr.path=/tmp/hangar-gvproxy-qemu.sock"));
+    try expect(has(s, "virtio-net-pci,netdev=net0"));
+}
+
 test "qemu: network .none omits -netdev" {
     var cfg = vm.VmConfig{};
     cfg.nics[0].mode = .none;
@@ -1550,12 +1572,13 @@ test "qemu: fuzz isDecimalPort never injects metacharacters" {
 test "qemu: extra NICs add net1/net2 devices" {
     var cfg = vm.VmConfig{};
     cfg.nics[0].mode = .user;
-    cfg.nics[1].mode = .user;
+    cfg.nics[1].mode = .gvproxy;
     cfg.nics[2].mode = .bridge;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(has(s, "net1"));
     try expect(has(s, "net2"));
+    try expect(has(s, "stream,id=net1,addr.type=unix,addr.path=/tmp/hangar-gvproxy-qemu.sock"));
 }
 
 test "qemu: buildCArgv null-terminates and preserves entries" {

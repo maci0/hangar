@@ -1594,7 +1594,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.extra_disks[3].size_gb = 40;
     original.extra_disks[3].format = .qcow2;
     original.setUsbDevice("046d:c52b");
-    original.nics[1].mode = .none;
+    original.nics[1].mode = .gvproxy;
     original.setNic2Mac("02:11:22:33:44:55");
     original.nics[2].mode = .user;
     original.setNic3Mac("02:66:77:88:99:AA");
@@ -1763,7 +1763,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqual(vm.DiskFormat.qcow2, restored.extra_disks[3].format);
     try std.testing.expectEqualStrings("046d:c52b", restored.getUsbDeviceSlice());
     try std.testing.expectEqual(vm.UsbPolicy.usb3, restored.usb_policy);
-    try std.testing.expectEqual(vm.NetworkMode.none, restored.nics[1].mode);
+    try std.testing.expectEqual(vm.NetworkMode.gvproxy, restored.nics[1].mode);
     try std.testing.expectEqualStrings("02:11:22:33:44:55", restored.getNic2MacSlice());
     try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[2].mode);
     try std.testing.expectEqualStrings("02:66:77:88:99:AA", restored.getNic3MacSlice());
@@ -1836,6 +1836,7 @@ test "parseDisplayType: maps strings to enums" {
 test "parseNetworkMode: maps strings to enums" {
     try std.testing.expectEqual(vm.NetworkMode.user, vm.NetworkMode.fromStr("user"));
     try std.testing.expectEqual(vm.NetworkMode.bridge, vm.NetworkMode.fromStr("bridge"));
+    try std.testing.expectEqual(vm.NetworkMode.gvproxy, vm.NetworkMode.fromStr("gvproxy"));
     try std.testing.expectEqual(vm.NetworkMode.none, vm.NetworkMode.fromStr("none"));
     try std.testing.expectEqual(vm.NetworkMode.user, vm.NetworkMode.fromStr("unknown"));
 }
@@ -1978,7 +1979,7 @@ test "emit→parse JSON text round-trip preserves all fields" {
     original.extra_disks[3].format = .qcow2;
     original.setUsbDevice("046d:c52b");
     original.usb_policy = .usb3;
-    original.nics[1].mode = .bridge;
+    original.nics[1].mode = .gvproxy;
     original.setNic2Mac("02:11:22:33:44:55");
     original.nics[2].mode = .user;
     original.setNic3Mac("02:66:77:88:99:AA");
@@ -2070,7 +2071,7 @@ test "emit→parse JSON text round-trip preserves all fields" {
     try std.testing.expectEqual(vm.DiskFormat.qcow2, restored.extra_disks[3].format);
     try std.testing.expectEqualStrings("046d:c52b", restored.getUsbDeviceSlice());
     try std.testing.expectEqual(vm.UsbPolicy.usb3, restored.usb_policy);
-    try std.testing.expectEqual(vm.NetworkMode.bridge, restored.nics[1].mode);
+    try std.testing.expectEqual(vm.NetworkMode.gvproxy, restored.nics[1].mode);
     try std.testing.expectEqualStrings("02:11:22:33:44:55", restored.getNic2MacSlice());
     try std.testing.expectEqual(vm.NetworkMode.user, restored.nics[2].mode);
     try std.testing.expectEqualStrings("02:66:77:88:99:AA", restored.getNic3MacSlice());
