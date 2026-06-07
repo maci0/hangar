@@ -2479,6 +2479,13 @@ fn handleUndo() ![]const u8 {
     if (!appstate.undo_available) return "no undo";
     if (appstate.vm_count >= appstate.MAX_VMS) return "full";
 
+    // undo_idx was captured at delete time; VMs deleted since then may have
+    // shrunk vm_count below it. Clamp to the current end so the restore inserts
+    // at a valid position — otherwise the shift loop is skipped and the write
+    // would land past the live range, promoting a stale slot and dropping the
+    // restored VM (then persisting the corruption).
+    if (appstate.undo_idx > appstate.vm_count) appstate.undo_idx = appstate.vm_count;
+
     // Shift VMs down from undo_idx to make room.
     var i = appstate.vm_count;
     while (i > appstate.undo_idx) {
@@ -6410,6 +6417,41 @@ test "handleDelete: idx out of range returns 'invalid idx'" {
     }
     const result = try handleDelete("POST /api/vms/0/delete HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "handleUndo: clamps a stale undo_idx instead of corrupting the list" {
+    // Isolate the persist write to a temp dir so the test never touches the real
+    // ~/.config/hangar/vms.json.
+    _ = setenv("HANGAR_CONFIG_HOME", "/tmp/hangar-undo-test", 1);
+    defer _ = unsetenv("HANGAR_CONFIG_HOME");
+
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    const prev_undo = appstate.undo_available;
+    appstate.vm_count = 2;
+    appstate.vms[0] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[0].setName("a");
+    appstate.vms[1] = std.mem.zeroes(vm.VmConfig);
+    appstate.vms[1].setName("b");
+    appstate.undo_vm = std.mem.zeroes(vm.VmConfig);
+    appstate.undo_vm.setName("restored");
+    appstate.undo_idx = 5; // stale: greater than the current vm_count
+    appstate.undo_available = true;
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.undo_available = prev_undo;
+        appstate.vms_mutex.unlock();
+    }
+
+    _ = handleUndo() catch {};
+
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    // Inserted at the clamped end (index 2), count grew by one, no stale slot.
+    try std.testing.expectEqual(@as(usize, 3), appstate.vm_count);
+    try std.testing.expectEqualStrings("restored", appstate.vms[2].getNameSlice());
 }
 
 test "handleReorder: missing from/to returns error" {
