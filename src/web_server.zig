@@ -6248,23 +6248,13 @@ pub fn main(init: std.process.Init) !void {
         logErr(std.fmt.bufPrint(&ebuf, "spawn autoprotectTicker failed: {s}", .{@errorName(e)}) catch "spawn autoprotectTicker failed");
     }
 
-    while (true) {
-        const conn = c.accept(sock, null, null);
-        if (conn < 0) {
-            // The TCP listener is gone — the daemon stops serving and main()
-            // returns. Mirror acceptLoop and surface it so an operator can tell
-            // a clean shutdown from a silent listener death.
-            logErr("main: TCP accept() failed, daemon exiting");
-            break;
-        }
-        const th = std.Thread.spawn(std.Thread.SpawnConfig{}, serveHtml, .{conn}) catch {
-            // Thread exhaustion drops this request; log so load-shedding is visible.
-            logErr("main: thread spawn failed, dropping TCP connection");
-            _ = c.close(conn);
-            continue;
-        };
-        th.detach();
-    }
+    // Serve the TCP listener on the main thread via the shared acceptLoop, which
+    // applies the connection cap + per-connection accounting + TCP_NODELAY. (The
+    // Unix listener runs the same acceptLoop on its own thread above.) Using the
+    // shared loop is essential: an inline loop that spawned serveHtml without the
+    // matching active_connections increment would underflow the counter on every
+    // TCP connection.
+    acceptLoop(sock);
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
