@@ -72,7 +72,7 @@ Never commit a real `KV_API_KEY`. For any non-local deployment, set a strong `KV
 - VMs: `~/.config/hangar/vms.json` (override via `HANGAR_CONFIG_HOME`).
 - Virtual networks: `~/.config/hangar/networks.json` (owned by `vnet.zig`).
 - Only configuration is persisted. Runtime state (`status`, `pid`, ...) is never written.
-- When adding fields to `VmConfig`, also update `VmJson`, `emitVmJson`, `fromVmJson` / `parseVmObject` in `persist.zig`, and add parser tests.
+- When adding fields to `VmConfig`, also update `VmJson`, `emitVmJson`, `fromVmJson` / `parseVmObject` in `persist.zig`, and add parser tests. Large string fields (e.g. `cloud_init`, 8 KB) also need the `parseVmObject` `str_buf`, the create/save `val_buf`, and the VM-detail render buffer sized to hold them.
 
 ## Testing
 
