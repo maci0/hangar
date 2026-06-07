@@ -182,6 +182,12 @@ test('cloud-init user-data saves and round-trips through the detail API', async 
     expect(detail.cloud_init).toContain('- htop');
 });
 
+test('guestinfo returns empty IPs for a stopped VM (needs a running guest agent)', async ({ page }) => {
+    const idx = await createVm(page, 'wf-gi');
+    const r = await page.evaluate(async (i) => (await (await fetch(`/api/vms/${i}/guestinfo`, { headers: { 'X-API-Key': 'hangar' } })).json()), idx);
+    expect(r.ips).toBe('');
+});
+
 test('write-action without the API key is rejected (401)', async ({ page }) => {
     const idx = await createVm(page, 'wf-auth');
     const r = await page.evaluate(async (i) => {

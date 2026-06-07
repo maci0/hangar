@@ -86,6 +86,7 @@ accepted in loopback mode). GET reads are exempt except `disk2/download`,
 | GET | `/api/vms/<id>/framebuffer` | Current framebuffer (BMP) |
 | GET | `/api/vms/<id>/diskinfo` | Primary disk virtual + actual byte sizes |
 | GET | `/api/vms/<id>/screenshot` | Running guest display as PNG (QMP screendump) |
+| GET | `/api/vms/<id>/guestinfo` | Guest IPv4 addresses (qemu-guest-agent) |
 | POST | `/api/vms/<id>/disk/resize` | Grow the primary disk (stopped, grow-only) |
 | POST | `/api/vms/<id>/cdrom` · `/api/vms/<id>/cdrom/eject` | Change / eject CD-ISO (live via QMP, or stopped) |
 | GET | `/api/vms/<id>/disk2/download` · POST `/api/vms/<id>/disk2` | Download / upload (streamed) secondary disk |
