@@ -107,4 +107,18 @@ pub fn build(b: *std.Build) !void {
 
     // Include the Playwright e2e suite in the umbrella test step.
     test_step.dependOn(&web_e2e_cmd.step);
+
+    // ── Shell integration tests (standalone; not in the umbrella) ──
+    // They spawn a real daemon on a temp port + $HOME and exercise the HTTP API
+    // and the vmrun CLI end to end. Kept out of `test` so the umbrella stays
+    // fast/deterministic, but exposed as build steps so they don't rot.
+    const api_test = b.step("test-api", "HTTP API integration test (tests/test_web_api.sh)");
+    const api_cmd = b.addSystemCommand(&.{ "bash", "tests/test_web_api.sh" });
+    api_cmd.step.dependOn(&install_web_exe.step);
+    api_test.dependOn(&api_cmd.step);
+
+    const vmrun_test = b.step("test-vmrun", "vmrun CLI integration test (tests/test_vmrun.sh)");
+    const vmrun_cmd = b.addSystemCommand(&.{ "bash", "tests/test_vmrun.sh" });
+    vmrun_cmd.step.dependOn(&install_web_exe.step);
+    vmrun_test.dependOn(&vmrun_cmd.step);
 }
