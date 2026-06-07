@@ -99,7 +99,18 @@ pub fn resolveAccel(accel: vm.VmAccel, checkAvail: *const fn (Accelerator) bool)
     };
 }
 
-/// The Vmm interface that every hypervisor backend must implement.
+/// The Vmm interface a hypervisor backend implements.
+///
+/// Intentionally minimal: it covers only PROCESS lifecycle (spawn / force-stop /
+/// liveness / reap / linked-clone / teardown), which is the part that genuinely
+/// differs between backends. Guest CONTROL (pause/resume/shutdown/reset/cdrom/
+/// migrate/screenshot) and offline disk ops (create/resize/convert/snapshot) are
+/// driven directly from the request handlers — for QEMU via QMP over a fresh
+/// connection (web_server.vmQmpByName) and via qemu-img — because routing them
+/// through the dispatch added a second QEMU-specific code path with no benefit
+/// while a single backend exists. When a real second backend lands, extend this
+/// interface with the control/disk members it needs (history: the prior 23-member
+/// table had 17 entries nothing ever dispatched).
 pub const Vmm = struct {
     /// Backend identifier.
     backend: Backend,
@@ -111,12 +122,6 @@ pub const Vmm = struct {
     /// The `config` pointer is an opaque VM config (VmConfig from vm.zig).
     startFn: *const fn (ctx: VmmHandle, config: *anyopaque) VmmError!void,
 
-    /// Send graceful shutdown (ACPI power button via QMP or equivalent).
-    shutdownFn: *const fn (ctx: VmmHandle) VmmError!void,
-
-    /// Send hard reset (QMP system_reset or equivalent).
-    resetFn: *const fn (ctx: VmmHandle) VmmError!void,
-
     /// Force-kill the VM process (SIGKILL or equivalent).
     forceStopFn: *const fn (ctx: VmmHandle) void,
 
@@ -126,48 +131,8 @@ pub const Vmm = struct {
     /// Block until the VM process exits, then reap it.
     reapFn: *const fn (ctx: VmmHandle) void,
 
-    /// Pause the VM (QMP `stop` or equivalent).
-    pauseFn: *const fn (ctx: VmmHandle) VmmError!void,
-
-    /// Resume a paused VM (QMP `cont` or equivalent).
-    resumeFn: *const fn (ctx: VmmHandle) VmmError!void,
-
-    /// Start live migration to a destination URI.
-    liveMigrateFn: *const fn (ctx: VmmHandle, dest_uri: []const u8) VmmError!void,
-
-    /// Query live migration status. Returns "active", "completed", "failed", etc.
-    queryMigrateStatusFn: *const fn (ctx: VmmHandle, out: []u8) VmmError![]const u8,
-
-    /// Cancel an active live migration.
-    cancelMigrateFn: *const fn (ctx: VmmHandle) VmmError!void,
-
-    /// Get the display port for VNC/SPICE connection, if applicable.
-    getDisplayPortFn: *const fn (ctx: VmmHandle) ?u16,
-
-    /// Get the serial socket path, if applicable.
-    getSerialSocketFn: *const fn (ctx: VmmHandle) ?[]const u8,
-
-    /// Create a disk image for this VM.
-    /// The `config` pointer is an opaque VM config.
-    createDiskFn: *const fn (ctx: VmmHandle, config: *anyopaque, alloc: std.mem.Allocator) VmmError!void,
-
-    /// Resize an existing disk image.
-    resizeDiskFn: *const fn (ctx: VmmHandle, disk_path: []const u8, new_size_gb: u32, alloc: std.mem.Allocator) VmmError!void,
-
-    /// Create a linked clone disk.
+    /// Create a linked clone disk (backing-file overlay).
     createLinkedCloneFn: *const fn (ctx: VmmHandle, dest: []const u8, backing: []const u8, backing_fmt: u32, alloc: std.mem.Allocator) VmmError!void,
-
-    /// Convert a disk image to a different format (e.g. qcow2 → vmdk).
-    convertDiskFn: *const fn (ctx: VmmHandle, src_path: []const u8, dst_path: []const u8, src_fmt: u32, dst_fmt: u32, alloc: std.mem.Allocator) VmmError!void,
-
-    /// Snapshot operations (offline, via qemu-img or equivalent).
-    snapshotCreateFn: *const fn (ctx: VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) VmmError!void,
-    snapshotApplyFn: *const fn (ctx: VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) VmmError!void,
-    snapshotDeleteFn: *const fn (ctx: VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) VmmError!void,
-    snapshotListFn: *const fn (ctx: VmmHandle, disk_path: []const u8, out: []u8, alloc: std.mem.Allocator) VmmError!usize,
-
-    /// Generate the command-line script for this VM.
-    buildScriptFn: *const fn (ctx: VmmHandle, config: *anyopaque, alloc: std.mem.Allocator) VmmError![]const u8,
 
     /// Free backend-specific resources.
     deinitFn: *const fn (ctx: VmmHandle) void,

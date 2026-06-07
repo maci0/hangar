@@ -40,27 +40,10 @@ pub fn createVmm(accel: vm.VmAccel) hv.Vmm {
         .backend = .qemu,
         .accelerator = resolved,
         .startFn = &start,
-        .shutdownFn = &shutdown,
-        .resetFn = &resetVm,
         .forceStopFn = &forceStop,
         .isAliveFn = &isAlive,
         .reapFn = &reap,
-        .pauseFn = &pause,
-        .resumeFn = &resumeVm,
-        .liveMigrateFn = &liveMigrateVmm,
-        .queryMigrateStatusFn = &queryMigrateStatusVmm,
-        .cancelMigrateFn = &cancelMigrateVmm,
-        .getDisplayPortFn = &getDisplayPort,
-        .getSerialSocketFn = &getSerialSocket,
-        .createDiskFn = &createDisk,
-        .resizeDiskFn = &resizeDisk,
         .createLinkedCloneFn = &createLinkedClone,
-        .convertDiskFn = &convertDisk,
-        .snapshotCreateFn = &snapshotCreate,
-        .snapshotApplyFn = &snapshotApply,
-        .snapshotDeleteFn = &snapshotDelete,
-        .snapshotListFn = &snapshotList,
-        .buildScriptFn = &buildScript,
         .deinitFn = &deinit,
     };
 }
@@ -108,27 +91,6 @@ fn start(ctx: hv.VmmHandle, cfg_opaque: *anyopaque) hv.VmmError!void {
     qemu.startVm(cfg, qv.allocator) catch return error.SpawnFailed;
 }
 
-fn shutdown(ctx: hv.VmmHandle) hv.VmmError!void {
-    const qv = getQv(ctx);
-    if (qv.config.pid == null) return;
-    // Try graceful ACPI shutdown via QMP first.
-    ensureQmp(qv) catch {
-        // Can't connect QMP — fall back to SIGTERM.
-        qemu.stopVm(qv.config);
-        return;
-    };
-    qv.qmp_client.powerdown() catch {
-        qemu.stopVm(qv.config);
-    };
-}
-
-fn resetVm(ctx: hv.VmmHandle) hv.VmmError!void {
-    const qv = getQv(ctx);
-    if (qv.config.pid == null) return;
-    ensureQmp(qv) catch return error.QmpConnectFailed;
-    qv.qmp_client.systemReset() catch return error.BackendError;
-}
-
 fn forceStop(ctx: hv.VmmHandle) void {
     const qv = getQv(ctx);
     qemu.forceStopVm(qv.config);
@@ -144,105 +106,10 @@ fn reap(ctx: hv.VmmHandle) void {
     qemu.reapVm(qv.config);
 }
 
-fn pause(ctx: hv.VmmHandle) hv.VmmError!void {
-    const qv = getQv(ctx);
-    ensureQmp(qv) catch return error.BackendError;
-    qv.qmp_client.pause() catch return error.BackendError;
-    qv.config.status = .paused;
-}
-
-fn resumeVm(ctx: hv.VmmHandle) hv.VmmError!void {
-    const qv = getQv(ctx);
-    ensureQmp(qv) catch return error.BackendError;
-    qv.qmp_client.cont() catch return error.BackendError;
-    qv.config.status = .running;
-}
-
-fn liveMigrateVmm(ctx: hv.VmmHandle, dest_uri: []const u8) hv.VmmError!void {
-    const qv = getQv(ctx);
-    ensureQmp(qv) catch return error.BackendError;
-    qv.qmp_client.liveMigrate(dest_uri) catch return error.BackendError;
-}
-
-fn queryMigrateStatusVmm(ctx: hv.VmmHandle, out: []u8) hv.VmmError![]const u8 {
-    const qv = getQv(ctx);
-    ensureQmp(qv) catch return error.BackendError;
-    return qv.qmp_client.queryMigrateStatus(out) catch return error.BackendError;
-}
-
-fn cancelMigrateVmm(ctx: hv.VmmHandle) hv.VmmError!void {
-    const qv = getQv(ctx);
-    ensureQmp(qv) catch return error.BackendError;
-    qv.qmp_client.cancelMigrate() catch return error.BackendError;
-}
-
-fn ensureQmp(qv: *QemuVm) !void {
-    if (qv.qmp_client.connected) return;
-    var buf: [256]u8 = undefined;
-    const path = qmp.socketPath(qv.config.getNameSlice(), &buf) orelse return error.BackendError;
-    try qv.qmp_client.connect(path);
-}
-
-fn getDisplayPort(ctx: hv.VmmHandle) ?u16 {
-    const qv = getQv(ctx);
-    return if (qv.config.embed_display)
-        if (qv.config.display == .spice) qv.config.spice_port else qv.config.vnc_port
-    else
-        null;
-}
-
-fn getSerialSocket(ctx: hv.VmmHandle) ?[]const u8 {
-    const qv = getQv(ctx);
-    if (!qv.config.enable_serial or !qv.config.hasName()) return null;
-    // Socket path is /tmp/hangar-serial-<name>.sock — computed at runtime.
-    return null; // Caller should use serialpath.serialSocketPath
-}
-
-fn createDisk(ctx: hv.VmmHandle, cfg_opaque: *anyopaque, alloc: std.mem.Allocator) hv.VmmError!void {
-    _ = ctx;
-    const cfg: *const vm.VmConfig = @ptrCast(@alignCast(cfg_opaque));
-    qemu.createDiskImage(cfg.getDiskPathSlice(), cfg.disk_size_gb, cfg.disk_format, alloc) catch return error.BackendError;
-}
-
-fn resizeDisk(ctx: hv.VmmHandle, disk_path: []const u8, new_size_gb: u32, alloc: std.mem.Allocator) hv.VmmError!void {
-    _ = ctx;
-    _ = qemu.resizeDiskImage(disk_path, new_size_gb, alloc) catch return error.BackendError;
-}
-
 fn createLinkedClone(ctx: hv.VmmHandle, dest: []const u8, backing: []const u8, backing_fmt_u32: u32, alloc: std.mem.Allocator) hv.VmmError!void {
     _ = ctx;
     const backing_fmt: vm.DiskFormat = @enumFromInt(@as(u8, @intCast(backing_fmt_u32)));
     qemu.createLinkedClone(dest, backing, backing_fmt, alloc) catch return error.BackendError;
-}
-
-fn convertDisk(ctx: hv.VmmHandle, src_path: []const u8, dst_path: []const u8, src_fmt_u32: u32, dst_fmt_u32: u32, alloc: std.mem.Allocator) hv.VmmError!void {
-    _ = ctx;
-    const src_fmt: vm.DiskFormat = @enumFromInt(@as(u8, @intCast(src_fmt_u32)));
-    const dst_fmt: vm.DiskFormat = @enumFromInt(@as(u8, @intCast(dst_fmt_u32)));
-    qemu.convertDiskImage(src_path, src_fmt, dst_path, dst_fmt, alloc) catch return error.BackendError;
-}
-
-fn snapshotCreate(ctx: hv.VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) hv.VmmError!void {
-    _ = ctx;
-    qemu.snapshotCreate(disk_path, name, alloc) catch return error.BackendError;
-}
-fn snapshotApply(ctx: hv.VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) hv.VmmError!void {
-    _ = ctx;
-    qemu.snapshotApply(disk_path, name, alloc) catch return error.BackendError;
-}
-fn snapshotDelete(ctx: hv.VmmHandle, disk_path: []const u8, name: []const u8, alloc: std.mem.Allocator) hv.VmmError!void {
-    _ = ctx;
-    qemu.snapshotDelete(disk_path, name, alloc) catch return error.BackendError;
-}
-fn snapshotList(ctx: hv.VmmHandle, disk_path: []const u8, out: []u8, alloc: std.mem.Allocator) hv.VmmError!usize {
-    _ = ctx;
-    return qemu.snapshotList(disk_path, out, alloc) catch return error.BackendError;
-}
-
-fn buildScript(ctx: hv.VmmHandle, cfg_opaque: *anyopaque, alloc: std.mem.Allocator) hv.VmmError![]const u8 {
-    _ = ctx;
-    const cfg: *const vm.VmConfig = @ptrCast(@alignCast(cfg_opaque));
-    return qemu.buildScriptStr(cfg, alloc) catch return error.BackendError;
 }
 
 fn deinit(ctx: hv.VmmHandle) void {
@@ -308,7 +175,7 @@ test "qemu_backend fuzz: createVmm with random VmAccel never panics" {
         const vmm = createVmm(accel);
         // Invariants: Vmm struct is fully populated with non-null function pointers.
         try std.testing.expect(@intFromPtr(vmm.startFn) != 0);
-        try std.testing.expect(@intFromPtr(vmm.shutdownFn) != 0);
+        try std.testing.expect(@intFromPtr(vmm.forceStopFn) != 0);
         try std.testing.expect(@intFromPtr(vmm.deinitFn) != 0);
         try std.testing.expect(vmm.backend == .qemu);
     }
@@ -322,32 +189,6 @@ test "qemu_backend: createHandle + deinit lifecycle" {
     // deinit via the vmm table from createVmm
     const vmm = createVmm(.tcg);
     vmm.deinitFn(handle);
-}
-
-test "qemu_backend: getDisplayPort returns null when embed_display is false" {
-    var cfg = vm.VmConfig{};
-    cfg.setName("test-nodisplay");
-    cfg.embed_display = false;
-    const handle = try createHandle(&cfg, .tcg, std.testing.allocator);
-    defer {
-        const vmm = createVmm(.tcg);
-        vmm.deinitFn(handle);
-    }
-    const port = getDisplayPort(handle);
-    try std.testing.expect(port == null);
-}
-
-test "qemu_backend: getSerialSocket returns null when serial disabled" {
-    var cfg = vm.VmConfig{};
-    cfg.setName("test-noserial");
-    cfg.enable_serial = false;
-    const handle = try createHandle(&cfg, .tcg, std.testing.allocator);
-    defer {
-        const vmm = createVmm(.tcg);
-        vmm.deinitFn(handle);
-    }
-    const sock = getSerialSocket(handle);
-    try std.testing.expect(sock == null);
 }
 
 test "qemu_backend: create convenience function returns valid vmm+handle" {
