@@ -79,10 +79,25 @@ pub fn writeUpgradeResponse(fd: c.fd_t, accept_key: [29]u8) !void {
 /// fixed-size header reads below must accumulate rather than demand the
 /// full count in one syscall — otherwise a split header is misread as a
 /// protocol error and the connection is dropped spuriously.
+/// read() that retries on EINTR and on a recv timeout (EAGAIN). The WebSocket
+/// fd inherits the HTTP connection's 30s SO_RCVTIMEO, but an idle viewer that
+/// sends no frames is healthy — a timeout must not be mistaken for EOF and tear
+/// the connection down (a mid-frame timeout would also drop a live stream).
+/// Returns the byte count (>0), 0 on EOF, or -1 on a genuine error.
+fn readRetry(fd: c.fd_t, dst: [*]u8, len: usize) isize {
+    while (true) {
+        const n = c.read(fd, dst, len);
+        if (n >= 0) return n;
+        const e = c._errno().*;
+        if (e == @intFromEnum(c.E.INTR) or e == @intFromEnum(c.E.AGAIN)) continue;
+        return -1;
+    }
+}
+
 fn readFull(fd: c.fd_t, dst: []u8) bool {
     var got: usize = 0;
     while (got < dst.len) {
-        const n = c.read(fd, dst.ptr + got, dst.len - got);
+        const n = readRetry(fd, dst.ptr + got, dst.len - got);
         if (n <= 0) return false;
         got += @intCast(n);
     }
@@ -145,7 +160,7 @@ pub fn readFramePayload(fd: c.fd_t, buf: []u8, header: FrameHeader) ?usize {
     // Read and unmask the payload in a single pass.
     var total_read: usize = 0;
     while (total_read < len) {
-        const n = c.read(fd, buf.ptr + total_read, len - total_read);
+        const n = readRetry(fd, buf.ptr + total_read, len - total_read);
         if (n <= 0) return null;
         const chunk_end = total_read + @as(usize, @intCast(n));
         if (header.mask) {
@@ -162,7 +177,7 @@ pub fn readFramePayload(fd: c.fd_t, buf: []u8, header: FrameHeader) ?usize {
         var remaining: u64 = header.payload_len - len;
         while (remaining > 0) {
             const to_read: usize = @intCast(@min(remaining, drain.len));
-            const n = c.read(fd, &drain, to_read);
+            const n = readRetry(fd, &drain, to_read);
             if (n <= 0) return null;
             remaining -= @intCast(n);
         }
