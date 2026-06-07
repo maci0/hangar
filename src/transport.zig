@@ -135,29 +135,49 @@ pub const Url = struct {
 };
 
 /// Shared-memory channel layout (mmap'd region).
-/// Single-producer single-consumer request/response protocol.
 /// A bidirectional transport connection to the daemon.
 pub const Connection = struct {
     proto: Proto,
     fd: c.fd_t = -1,
     host: [128]u8 = [_]u8{0} ** 128,
     host_len: usize = 0,
+    /// The parsed URL, retained so each request can redial: the daemon answers
+    /// with `Connection: close`, so a socket is single-use. A CLI command that
+    /// issues more than one request (e.g. resolve-name then act) must open a
+    /// fresh socket per request or the second one writes to a closed peer.
+    url: Url = .{ .proto = .tcp },
 
-    /// Connect to a daemon at the given URL.
+    /// Connect to a daemon at the given URL. The returned connection holds a
+    /// live socket for the first request; subsequent requests redial.
     pub fn connect(url: *const Url) ?Connection {
-        var conn = Connection{ .proto = url.proto };
+        var conn = Connection{ .proto = url.proto, .url = url.* };
         conn.host_len = url.host_len;
         std.mem.copyForwards(u8, &conn.host, url.host[0..url.host_len]);
-        conn.fd = switch (url.proto) {
-            .unix => connectUnixFd(url),
-            .tcp => connectTcpFd(url),
-        };
+        conn.fd = dial(&conn.url);
         if (conn.fd < 0) return null;
         return conn;
     }
 
-    /// Send a request and read the response body.
+    fn dial(url: *const Url) c.fd_t {
+        return switch (url.proto) {
+            .unix => connectUnixFd(url),
+            .tcp => connectTcpFd(url),
+        };
+    }
+
+    /// Send a request and read the response body. Uses the socket from connect()
+    /// for the first call, then redials a fresh socket for each subsequent call
+    /// (the daemon closes the connection after every response). The socket is
+    /// closed after the exchange so the next call always starts clean.
     pub fn request(self: *Connection, method: []const u8, path: []const u8, body: ?[]const u8, out: []u8) usize {
+        if (self.fd < 0) {
+            self.fd = dial(&self.url);
+            if (self.fd < 0) return 0;
+        }
+        defer {
+            _ = c.close(self.fd);
+            self.fd = -1;
+        }
         return switch (self.proto) {
             .tcp => httpRequest(self.fd, self.host[0..self.host_len], method, path, body, out),
             // The daemon accepts Unix-socket connections through the same HTTP
@@ -498,6 +518,58 @@ test "Connection.connect + request: TCP round-trip via localhost" {
     const n = conn.request("GET", "/api/status", null, &resp);
     try std.testing.expect(n > 0);
     try std.testing.expect(std.mem.indexOf(u8, resp[0..n], "{\"ok\":true}") != null);
+
+    th.join();
+}
+
+test "Connection.request redials for a second request (Connection: close)" {
+    // The daemon answers with Connection: close, so each request needs a fresh
+    // socket. A resolve-then-act CLI command issues 2+ requests on one
+    // Connection; this guards that the second one redials instead of writing to
+    // the closed first socket. The mock server therefore accepts TWICE.
+    const lfd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
+    if (lfd < 0) return error.SkipZigTest;
+    defer _ = c.close(lfd);
+    var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
+    addr.family = c.AF.INET;
+    addr.addr = std.mem.nativeToBig(u32, 0x7F_00_00_01);
+    addr.port = 0;
+    if (c.bind(lfd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) != 0) return error.SkipZigTest;
+    if (c.listen(lfd, 4) != 0) return error.SkipZigTest;
+    var addrlen: c.socklen_t = @sizeOf(c.sockaddr.in);
+    _ = c.getsockname(lfd, @ptrCast(&addr), &addrlen);
+    const port = std.mem.bigToNative(u16, addr.port);
+
+    const ServerCtx = struct {
+        lfd: c.fd_t,
+        fn run(ctx: @This()) void {
+            // Serve exactly two one-shot HTTP responses, then stop.
+            var i: usize = 0;
+            while (i < 2) : (i += 1) {
+                const cfd = c.accept(ctx.lfd, null, null);
+                if (cfd < 0) return;
+                var dump: [512]u8 = undefined;
+                _ = c.read(cfd, &dump, dump.len);
+                const resp = "HTTP/1.0 200 OK\r\n\r\n{\"ok\":true}";
+                _ = c.write(cfd, resp, resp.len);
+                _ = c.close(cfd);
+            }
+        }
+    };
+    const th = try std.Thread.spawn(std.Thread.SpawnConfig{}, ServerCtx.run, .{ServerCtx{ .lfd = lfd }});
+
+    var host_buf: [32]u8 = undefined;
+    const host = try std.fmt.bufPrint(&host_buf, "http://127.0.0.1:{d}", .{port});
+    const url = Url.parse(host) orelse return error.ParseFailed;
+    var conn = Connection.connect(&url) orelse return error.ConnectFailed;
+    defer conn.close();
+
+    var resp: [256]u8 = undefined;
+    const n1 = conn.request("GET", "/api/vms", null, &resp);
+    try std.testing.expect(n1 > 0 and std.mem.indexOf(u8, resp[0..n1], "{\"ok\":true}") != null);
+    // Second request on the same Connection must succeed by redialing.
+    const n2 = conn.request("GET", "/api/vms/0", null, &resp);
+    try std.testing.expect(n2 > 0 and std.mem.indexOf(u8, resp[0..n2], "{\"ok\":true}") != null);
 
     th.join();
 }
