@@ -68,7 +68,7 @@ pub fn build(b: *std.Build) !void {
     b.getInstallStep().dependOn(&install_vmrun_exe.step);
 
     // ── Unit tests ──
-    const test_step = b.step("test", "Run unit + fuzz tests and the Playwright web E2E suite");
+    const test_step = b.step("test", "Run the hermetic unit + fuzz test suite");
     const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "serial_console", "serialpath", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "remote", "filter", "vmlist", "urlencode", "spice_client", "vnc_client", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "vnet_label", "appstate", "appstate_test", "webui_app" };
     for (test_mods) |mod| {
         const src_path = b.fmt("src/{s}.zig", .{mod});
