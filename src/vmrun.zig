@@ -61,6 +61,7 @@ const usage =
     \\  import      <disk-path>  Import a VM from disk image
     \\  export      <name|idx>   Export VM as OVF+VMDK
     \\  log         <name|idx>   Show the VM's QEMU stderr log
+    \\  info        <name|idx>   Show VM details
     \\  status                  Show server health
     \\
     \\Server URL formats:
@@ -257,6 +258,8 @@ fn run(init: std.process.Init) !void {
             return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/cad", "cad", init.io);
         } else if (std.mem.eql(u8, command, "log")) {
             return cmdLog(allocator, &conn, idx, init.io);
+        } else if (std.mem.eql(u8, command, "info")) {
+            return cmdInfo(allocator, &conn, idx, init.io);
         } else {
             return cmdExport(allocator, &conn, idx, init.io);
         }
@@ -272,6 +275,7 @@ fn commandArity(command: []const u8) ?usize {
         "import",       "start", "stop",     "restart", "clone",
         "linked-clone", "delete", "suspend", "pause",   "resume",
         "shutdown",     "reset", "cad",      "export",  "log",
+        "info",
     };
     for (zero) |k| if (std.mem.eql(u8, command, k)) return 0;
     for (one) |k| if (std.mem.eql(u8, command, k)) return 1;
@@ -587,6 +591,25 @@ fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, id
     }
 }
 
+/// GET a VM's detail object and print a readable summary.
+fn cmdInfo(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
+    _ = io;
+    var path_buf: [48]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}", .{idx});
+    const obj = try sendRequest(allocator, conn, "GET", path, null);
+    defer allocator.free(obj);
+    const name = extractJsonString(obj, "name") orelse "?";
+    const status = extractJsonString(obj, "status") orelse "?";
+    const os = extractJsonString(obj, "os") orelse "?";
+    const net = extractJsonString(obj, "net") orelse "?";
+    const mem = extractJsonInt(obj, "mem") orelse 0;
+    const cpu = extractJsonInt(obj, "cpu") orelse 0;
+    const disk = extractJsonInt(obj, "disk") orelse 0;
+    var buf: [512]u8 = undefined;
+    const out = try std.fmt.bufPrint(&buf, "VM [{d}] {s}\n  Status:  {s}\n  Guest:   {s}\n  Memory:  {d} MB\n  CPU:     {d} cores\n  Disk:    {d} GB\n  Network: {s}\n", .{ idx, name, status, os, mem, cpu, disk, net });
+    fdWrite(c.STDOUT_FILENO, out);
+}
+
 /// GET the tail of a VM's QEMU stderr log and print it. Useful for diagnosing a
 /// "start err" from the CLI without opening the web UI.
 fn cmdLog(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
@@ -881,6 +904,7 @@ test "commandArity: single-target commands" {
         "import",       "start", "stop",     "restart", "clone",
         "linked-clone", "delete", "suspend", "pause",   "resume",
         "shutdown",     "reset", "cad",      "export",  "log",
+        "info",
     };
     for (one) |cmd| {
         try std.testing.expectEqual(@as(?usize, 1), commandArity(cmd));
