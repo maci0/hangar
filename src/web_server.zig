@@ -744,7 +744,7 @@ fn serveHtml(conn: c.fd_t) void {
     var content_type: []const u8 = "text/html";
     var status: u16 = HTTP_OK;
     var json_buf: [32768]u8 = undefined;
-    var detail_buf: [49152]u8 = undefined; // large enough for cloud-init user-data (8 KB, escaped)
+    var detail_buf: [vm.MAX_CLOUD_INIT * 6]u8 = undefined; // holds cloud-init user-data JSON-escaped (~6x)
     var snap_buf: [4096]u8 = undefined;
     var response_alloc: ?[]u8 = null;
     defer if (response_alloc) |bytes| std.heap.page_allocator.free(bytes);
@@ -1727,7 +1727,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 
     // cloud-init user-data can be multi-KB and contain quotes/newlines — escape
     // it into its own buffer. This part closes the JSON object.
-    var ci_esc: [24576]u8 = undefined;
+    var ci_esc: [vm.MAX_CLOUD_INIT * 3]u8 = undefined;
     const ci_e = if (v.hasCloudInit()) escapeJson(&ci_esc, v.getCloudInitSlice(), "cloud_init") else "";
     const part2e = std.fmt.bufPrint(buf[w..], ",\"cloud_init\":\"{s}\"}}", .{ci_e}) catch return error.RenderFailed;
     w += part2e.len;
@@ -2123,7 +2123,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     var cfg = vm.VmConfig{};
-    var val_buf: [24576]u8 = undefined; // fits URL-encoded cloud-init user-data (8 KB decoded)
+    var val_buf: [vm.MAX_CLOUD_INIT * 3]u8 = undefined; // fits URL-encoded cloud-init user-data
     var has_autoprotect: bool = false;
     var has_mac: bool = false;
     var has_vnc_port: bool = false;
@@ -2559,53 +2559,60 @@ fn cleanupVmTempFiles(name: []const u8) void {
 }
 
 fn handleDelete(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    logAudit("delete", appstate.vms[idx].getNameSlice());
-    // Save undo state before deleting.
-    appstate.undo_vm = appstate.vms[idx];
-    appstate.undo_idx = idx;
-    appstate.undo_available = true;
-    // Force-stop a running VM before tearing it down. destroyVmmHandle only frees
-    // the dispatch handle / disconnects QMP — it does NOT kill the process — so
-    // deleting a running VM would otherwise orphan a detached QEMU that keeps the
-    // qcow2 write-locked (re-creating the VM with that disk then fails) and holds
-    // RAM/ports. Mirrors handlePower's stop path.
+    // Snapshot what the post-unlock teardown needs: a copy of the VM (carries the
+    // pid for kill/reap) and its name (for temp-file cleanup). The blocking reap
+    // (waitpid) + unlink syscalls must NOT run under vms_mutex — a QEMU stuck in
+    // uninterruptible sleep would otherwise pin the lock and freeze the daemon.
+    var dead_copy: vm.VmConfig = undefined;
+    var was_alive = false;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var name_len: usize = 0;
     {
-        const v = &appstate.vms[idx];
-        if (v.isAlive()) {
-            if (appstate.getVmmHandle(idx)) |h| {
-                appstate.g_vmm.forceStopFn(h);
-                appstate.g_vmm.reapFn(h);
-            } else {
-                qemu.forceStopVm(v);
-                qemu.reapVm(v);
-            }
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+
+        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
+        if (idx >= appstate.vm_count) return "invalid idx";
+        logAudit("delete", appstate.vms[idx].getNameSlice());
+        // Save undo state before deleting.
+        appstate.undo_vm = appstate.vms[idx];
+        appstate.undo_idx = idx;
+        appstate.undo_available = true;
+        dead_copy = appstate.vms[idx];
+        was_alive = appstate.vms[idx].isAlive();
+        const nm = appstate.vms[idx].getNameSlice();
+        name_len = @min(nm.len, name_buf.len);
+        @memcpy(name_buf[0..name_len], nm[0..name_len]);
+
+        // destroyVmmHandle disconnects QMP / frees the dispatch handle; it does
+        // NOT kill the process — we SIGKILL the captured copy after unlocking.
+        appstate.destroyVmmHandle(idx);
+        // Shift remaining.
+        var i = idx;
+        while (i + 1 < appstate.vm_count) : (i += 1) {
+            appstate.vms[i] = appstate.vms[i + 1];
+            appstate.g_vmm_handles[i] = appstate.g_vmm_handles[i + 1];
+            rebindVmmHandleLocked(i);
+            appstate.vm_started[i] = appstate.vm_started[i + 1];
         }
+        appstate.g_vmm_handles[appstate.vm_count - 1] = null;
+        appstate.vm_started[appstate.vm_count - 1] = 0;
+        appstate.vm_count -= 1;
+        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+            logSaveErr("", e);
+            return "save failed";
+        };
     }
-    // Remove the VM's leftover temp/runtime artifacts (cloud-init seed, NVRAM,
-    // sockets, log) now that it is stopped — prevents leaks and stale reuse by a
-    // future same-named VM. Name is still valid at vms[idx] before the shift.
-    cleanupVmTempFiles(appstate.vms[idx].getNameSlice());
-    appstate.destroyVmmHandle(idx);
-    // Shift remaining
-    var i = idx;
-    while (i + 1 < appstate.vm_count) : (i += 1) {
-        appstate.vms[i] = appstate.vms[i + 1];
-        appstate.g_vmm_handles[i] = appstate.g_vmm_handles[i + 1];
-        rebindVmmHandleLocked(i);
-        appstate.vm_started[i] = appstate.vm_started[i + 1];
+
+    // Lock released. Kill + reap the now-removed VM (SIGKILL so the qcow2 write
+    // lock releases promptly) and remove its leftover temp/runtime artifacts
+    // (cloud-init seed, NVRAM, sockets, log) so they don't leak or get reused by
+    // a future same-named VM.
+    if (was_alive) {
+        qemu.forceStopVm(&dead_copy);
+        qemu.reapVm(&dead_copy);
     }
-    appstate.g_vmm_handles[appstate.vm_count - 1] = null;
-    appstate.vm_started[appstate.vm_count - 1] = 0;
-    appstate.vm_count -= 1;
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-        logSaveErr("", e);
-        return "save failed";
-    };
+    cleanupVmTempFiles(name_buf[0..name_len]);
     return "ok";
 }
 
@@ -2716,7 +2723,7 @@ fn handleSave(req: []const u8) ![]const u8 {
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     const v = &appstate.vms[idx];
-    var val_buf: [24576]u8 = undefined; // fits URL-encoded cloud-init user-data (8 KB decoded)
+    var val_buf: [vm.MAX_CLOUD_INIT * 3]u8 = undefined; // fits URL-encoded cloud-init user-data
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
         var kv = std.mem.splitScalar(u8, pair, '=');

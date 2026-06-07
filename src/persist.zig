@@ -845,8 +845,8 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
     cur = cur[1..];
 
     var key_buf: [64]u8 = undefined;
-    // Sized for the largest string field (cloud_init user-data, 8 KB).
-    var str_buf: [8192]u8 = undefined;
+    // Sized for the largest string field (cloud_init user-data).
+    var str_buf: [vm.MAX_CLOUD_INIT]u8 = undefined;
 
     while (cur.len > 0) {
         cur = skipWs(cur);

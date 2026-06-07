@@ -22,6 +22,11 @@ pub const MAX_NAME: usize = 255;
 /// Maximum length of a file-system path (bytes, not including sentinel).
 pub const MAX_PATH: usize = 4095;
 
+/// Maximum cloud-init user-data size (bytes). The single source of truth for the
+/// VmConfig field and every buffer that must hold it raw, URL-encoded (×3), or
+/// JSON-escaped in the detail render (×6) — see persist.zig / web_server.zig.
+pub const MAX_CLOUD_INIT: usize = 8192;
+
 // ── Disk Format ──────────────────────────────────────────────────────
 
 /// Supported virtual disk image formats.
@@ -1051,7 +1056,7 @@ pub const VmConfig = struct {
 
     // ── cloud-init user-data (NoCloud). When non-empty, a seed ISO is built and
     //    attached so a cloud-init guest auto-configures on first boot. ──
-    cloud_init_buf: [8192]u8 = [_]u8{0} ** 8192,
+    cloud_init_buf: [MAX_CLOUD_INIT]u8 = [_]u8{0} ** MAX_CLOUD_INIT,
     cloud_init_len: u16 = 0,
 
     // ── Port Forwarding ──────────────────────────────────────────

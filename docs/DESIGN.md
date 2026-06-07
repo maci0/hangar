@@ -3,17 +3,18 @@
 ## Architecture Overview
 
 ```
-                   ┌─ Pure Modules (shared) ─┐
-                   │ vm.zig  persist.zig     │
+                   ┌─ Shared Modules ────────┐
+                   │ vm.zig  appstate.zig    │
                    │ qemu.zig qmp.zig        │
-                   │ vnc_client.zig          │
+                   │ persist.zig vnet.zig    │  (persist/vnet use
+                   │ vnc_client.zig          │   appstate path helpers)
                    │ spice_client.zig        │
                    │ ringbuf.zig termfilter  │
                    │ fbmath.zig uimath.zig   │
                    │ snapparse.zig ovf.zig   │
-                   │ autoprotect.zig vnet    │
+                   │ autoprotect.zig         │
                    │ sync.zig usock.zig      │
-                   │ appio.zig               │
+                   │ appio.zig transport.zig │
                    │ hv/interface.zig        │
                    │ hv/qemu_backend.zig     │
                    └──────────┬──────────────┘
@@ -66,8 +67,9 @@ Handled in the web UI (`src/web/app.js`); press `?` in the app for the full list
 
 Resource-rooted under `/api`. State-changing requests require the `X-API-Key`
 header (the bundled UI and `vmrun` send it; the built-in default `hangar` is
-accepted in loopback mode). GET reads are exempt except `disk2/download`,
-`framebuffer`, and migrate status.
+accepted in loopback mode). GET reads are exempt except the sensitive ones,
+which still require auth: `disk2/download`, `framebuffer`, `screenshot`,
+`guestinfo`, and migrate status.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
