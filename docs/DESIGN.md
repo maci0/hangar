@@ -94,6 +94,32 @@ accepted in loopback mode). GET reads are exempt except `disk2/download`,
 WebSocket proxies (not under `/api`): `/ws/vnc/<id>`, `/ws/spice/<id>`,
 `/ws/serial/<id>`.
 
+## vmrun CLI
+
+`vmrun <server-url> <command> [args]` drives the daemon over the same API.
+Server URL is `http://host:port` (default port 9080) or `unix:///path`. The
+daemon answers `Connection: close`, so vmrun redials a fresh socket per
+request. Write commands send the `X-API-Key` (the built-in default in loopback
+mode, or `KV_API_KEY` if set). A VM is addressed by name or list index.
+
+| Command | Purpose |
+| --- | --- |
+| `list` | List VMs (index, name, status, mem, cpu) |
+| `status` | Daemon health |
+| `create <name> <mem-mb> <cpu> <disk-gb>` | Create a VM |
+| `info <name\|idx>` | Show VM details |
+| `log <name\|idx>` | Show the VM's QEMU stderr log |
+| `start` / `stop` / `restart` `<name\|idx>` | Power control (idempotent) |
+| `suspend` / `pause` / `resume` `<name\|idx>` | Execution state |
+| `shutdown` / `reset` / `cad` `<name\|idx>` | ACPI shutdown / hard reset / Ctrl-Alt-Del |
+| `clone` / `linked-clone` `<name\|idx>` | Clone (full / qcow2 backing) |
+| `rename <name\|idx> <new-name>` | Rename |
+| `delete <name\|idx>` | Delete |
+| `snapshot list\|take\|revert\|delete <name\|idx> [tag]` | Snapshots |
+| `import <disk-path>` | Import an existing disk image |
+| `export <name\|idx>` | Export as OVF+VMDK |
+| `migrate <name\|idx> <host> <port>` | Start a live migration |
+
 ## Persistence
 
 VM configs stored in `~/.config/hangar/vms.json`; virtual networks in
