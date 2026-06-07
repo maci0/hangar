@@ -270,10 +270,26 @@ fn findOvmfVarsTemplate() ?[]const u8 {
     return findFirstExisting(&ovmf_vars_template_paths);
 }
 
-/// Deterministic per-VM OVMF VARS (NVRAM) path. The VM name has no comma (name
-/// validation rejects it), so this is safe in a `-drive file=` property.
+/// Config home (HANGAR_CONFIG_HOME or HOME), empty treated as unset. Duplicated
+/// from appstate because qemu.zig can't import it (would cycle).
+fn hangarConfigHome() ?[]const u8 {
+    if (appio.getenv("HANGAR_CONFIG_HOME")) |v| {
+        if (v.len > 0) return v;
+    }
+    if (appio.getenv("HOME")) |v| {
+        if (v.len > 0) return v;
+    }
+    return null;
+}
+
+/// Deterministic per-VM OVMF VARS (NVRAM) path. Lives under the user-owned config
+/// dir (NOT world-writable /tmp): NVRAM is persistent VM state, and a predictable
+/// /tmp path let another local user pre-plant a crafted NVRAM (Secure Boot
+/// bypass) or symlink. The VM name has no comma (name validation rejects it), so
+/// it is safe in a `-drive file=` property. Null if no config home is set.
 pub fn secbootVarsPath(name: []const u8, buf: []u8) ?[:0]const u8 {
-    return std.fmt.bufPrintZ(buf, "/tmp/hangar-ovmf-vars-{s}.fd", .{name}) catch null;
+    const home = hangarConfigHome() orelse return null;
+    return std.fmt.bufPrintZ(buf, "{s}/.config/hangar/nvram/{s}.fd", .{ home, name }) catch null;
 }
 
 /// Emit the split-pflash drives for Secure Boot: read-only CODE (unit 0) and a
@@ -293,10 +309,14 @@ fn buildSecureBootDrives(args: *std.ArrayList([]const u8), alloc: std.mem.Alloca
 /// Best-effort: caller boots without Secure Boot pflash if this fails.
 pub fn generateSecureBootVars(config: *const vm.VmConfig, allocator: std.mem.Allocator) !void {
     if (!config.secure_boot or !config.hasName()) return error.NoSecureBoot;
-    var vp_buf: [128]u8 = undefined;
+    var vp_buf: [512]u8 = undefined;
     const vars = secbootVarsPath(config.getNameSlice(), &vp_buf) orelse return error.PathTooLong;
     if (std.Io.Dir.cwd().access(appio.io(), vars, .{})) |_| return else |_| {}
     const tmpl = findOvmfVarsTemplate() orelse return QemuError.OvmfNotFound;
+    const home = hangarConfigHome() orelse return error.PathTooLong;
+    var dir_buf: [512]u8 = undefined;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/.config/hangar/nvram", .{home}) catch return error.PathTooLong;
+    runWait(&.{ "mkdir", "-p", dir }, allocator, null) catch {};
     try runWait(&.{ "cp", tmpl, vars }, allocator, null);
 }
 
@@ -835,7 +855,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         var used_pflash = false;
         if (config.secure_boot and config.hasName()) {
             if (findSecbootCode()) |code| {
-                var vp_buf: [128]u8 = undefined;
+                var vp_buf: [512]u8 = undefined;
                 if (secbootVarsPath(config.getNameSlice(), &vp_buf)) |vars| {
                     if (std.Io.Dir.cwd().access(appio.io(), vars, .{})) |_| {
                         try buildSecureBootDrives(args, alloc, bufs, code, vars);
@@ -1119,6 +1139,13 @@ pub fn generateCloudInitSeed(config: *const vm.VmConfig, allocator: std.mem.Allo
     const ud_path = std.fmt.bufPrintZ(&ud_buf, "/tmp/hangar-ci-ud-{s}", .{name}) catch return error.PathTooLong;
     const md_path = std.fmt.bufPrintZ(&md_buf, "/tmp/hangar-ci-md-{s}", .{name}) catch return error.PathTooLong;
     const seed = cloudInitSeedPath(name, &seed_buf) orelse return error.PathTooLong;
+
+    // Remove any pre-existing entry (incl. a symlink a local attacker could plant
+    // at these predictable /tmp paths) before writing, so writeFile/cloud-localds
+    // create fresh files instead of following a symlink to a victim path (CWE-59).
+    _ = std.c.unlink(ud_path);
+    _ = std.c.unlink(md_path);
+    _ = std.c.unlink(seed);
 
     try std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ud_path, .data = config.getCloudInitSlice() });
     var md_content: [256]u8 = undefined;

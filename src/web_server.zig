@@ -2518,6 +2518,34 @@ fn handleClone(req: []const u8) ![]const u8 {
     return "ok";
 }
 
+/// Remove a VM's name-derived runtime/temp artifacts. Without this they leak in
+/// /tmp and — worse — a later VM created with the same name would silently reuse
+/// the stale cloud-init seed or Secure Boot NVRAM. Caller must ensure the VM is
+/// stopped (sockets in use otherwise). Best-effort; missing files are ignored.
+fn cleanupVmTempFiles(name: []const u8) void {
+    if (name.len == 0 or name.len > vm.MAX_NAME) return;
+    var pbuf: [600]u8 = undefined;
+    const transient = [_][]const u8{
+        "/tmp/hangar-ci-{s}.iso",
+        "/tmp/hangar-ci-ud-{s}",
+        "/tmp/hangar-ci-md-{s}",
+        "/tmp/hangar-serial-{s}.sock",
+        "/tmp/hangar-ga-{s}.sock",
+        "/tmp/hangar-qmp-{s}.sock",
+        "/var/tmp/hangar-vm-{s}.log",
+    };
+    inline for (transient) |fmt| {
+        if (std.fmt.bufPrintZ(&pbuf, fmt, .{name})) |p| {
+            _ = c.unlink(p);
+        } else |_| {}
+    }
+    // Persistent Secure Boot NVRAM (under the config dir).
+    var nv_buf: [512]u8 = undefined;
+    if (qemu.secbootVarsPath(name, &nv_buf)) |nv| {
+        _ = c.unlink(nv);
+    }
+}
+
 fn handleDelete(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
@@ -2546,6 +2574,10 @@ fn handleDelete(req: []const u8) ![]const u8 {
             }
         }
     }
+    // Remove the VM's leftover temp/runtime artifacts (cloud-init seed, NVRAM,
+    // sockets, log) now that it is stopped — prevents leaks and stale reuse by a
+    // future same-named VM. Name is still valid at vms[idx] before the shift.
+    cleanupVmTempFiles(appstate.vms[idx].getNameSlice());
     appstate.destroyVmmHandle(idx);
     // Shift remaining
     var i = idx;
@@ -3053,6 +3085,17 @@ fn handleRename(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "name")) {
             if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
             if (!vm.isValidVmName(val)) return "invalid name";
+            // Drop the old name's temp artifacts so they don't leak / get reused by
+            // a future same-named VM. Only when stopped — a running VM's sockets are
+            // still in use under the old name.
+            if (!appstate.vms[idx].isAlive()) {
+                var on_buf: [vm.MAX_NAME]u8 = undefined;
+                const on = appstate.vms[idx].getNameSlice();
+                if (on.len <= on_buf.len and !std.mem.eql(u8, on, val)) {
+                    @memcpy(on_buf[0..on.len], on);
+                    cleanupVmTempFiles(on_buf[0..on.len]);
+                }
+            }
             appstate.vms[idx].setName(val);
             persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
                 logSaveErr("", e);
@@ -3401,6 +3444,9 @@ fn handleScreenshot(conn: c.fd_t, req: []const u8) void {
             return;
         };
         defer client.disconnect();
+        // Drop any pre-planted entry (e.g. an attacker symlink at this path)
+        // before QEMU's screendump writes it, so it can't be redirected (CWE-59).
+        _ = c.unlink(png_path);
         client.screenshotPng(png_path) catch |e| {
             logOpErr("screenshot", e, name_buf[0..name_len]);
             writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"screenshot failed\"}");
@@ -7011,6 +7057,18 @@ test "parseGuestIpv4s: joins multiple IPv4s with commas" {
     ;
     var out: [64]u8 = undefined;
     try std.testing.expectEqualStrings("192.168.1.5,10.1.1.2", parseGuestIpv4s(sample, &out));
+}
+
+test "cleanupVmTempFiles removes name-derived temp artifacts" {
+    const nm = "cleanuptestvm";
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = "/tmp/hangar-ci-cleanuptestvm.iso", .data = "x" }) catch {};
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = "/tmp/hangar-ga-cleanuptestvm.sock", .data = "x" }) catch {};
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = "/tmp/hangar-ci-ud-cleanuptestvm", .data = "x" }) catch {};
+    cleanupVmTempFiles(nm);
+    const gone1 = if (std.Io.Dir.cwd().access(appio.io(), "/tmp/hangar-ci-cleanuptestvm.iso", .{})) |_| false else |_| true;
+    const gone2 = if (std.Io.Dir.cwd().access(appio.io(), "/tmp/hangar-ga-cleanuptestvm.sock", .{})) |_| false else |_| true;
+    const gone3 = if (std.Io.Dir.cwd().access(appio.io(), "/tmp/hangar-ci-ud-cleanuptestvm", .{})) |_| false else |_| true;
+    try std.testing.expect(gone1 and gone2 and gone3);
 }
 
 test "shouldAutostart: requires the flag and a disk" {
