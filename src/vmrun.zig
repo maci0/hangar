@@ -54,6 +54,7 @@ const usage =
     \\  shutdown    <name|idx>  Graceful ACPI shutdown
     \\  reset       <name|idx>  Hard reset guest
     \\  rename      <name|idx> <new-name>  Rename a VM
+    \\  resize      <name|idx> <new-gb>    Grow the primary disk (stopped VM)
     \\  set         <name|idx> <field> <value>  Set a config field
     \\              (field: mem|cpu|cpu_sockets|network|notes|boot_order|vnc_port|spice_port)
     \\  cad         <name|idx>  Send Ctrl+Alt+Del to guest
@@ -231,6 +232,10 @@ fn run(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "rename")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdRename(allocator, &conn, idx, args[1], init.io);
+    } else if (std.mem.eql(u8, command, "resize")) {
+        _ = std.fmt.parseInt(u32, args[1], 10) catch return error.InvalidSize;
+        const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
+        return cmdResize(allocator, &conn, idx, args[1], init.io);
     } else if (std.mem.eql(u8, command, "migrate")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdMigrate(allocator, &conn, idx, args[1], args[2], init.io);
@@ -298,6 +303,7 @@ fn commandArity(command: []const u8) ?usize {
     for (zero) |k| if (std.mem.eql(u8, command, k)) return 0;
     for (one) |k| if (std.mem.eql(u8, command, k)) return 1;
     if (std.mem.eql(u8, command, "rename")) return 2;
+    if (std.mem.eql(u8, command, "resize")) return 2; // target new-gb
     if (std.mem.eql(u8, command, "migrate")) return 3; // target host port
     if (std.mem.eql(u8, command, "set")) return 3; // target field value
     if (std.mem.eql(u8, command, "create")) return 4; // name mem cpu disk
@@ -576,6 +582,20 @@ fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx
 
 fn cmdDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
     return cmdSimple(allocator, conn, idx, "/api/vms/{d}/delete", "delete", io);
+}
+
+/// Grow a VM's primary disk to `new_gb` GiB (POST /api/vms/<id>/disk/resize).
+fn cmdResize(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, new_gb: []const u8, io: std.Io) !void {
+    _ = io;
+    var path_buf: [40]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/disk/resize", .{idx});
+    var body_buf: [32]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "size={s}", .{new_gb});
+    const resp = try sendRequest(allocator, conn, "POST", path, body);
+    defer allocator.free(resp);
+    var buf: [128]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "resize VM [{d}] -> {s} GB: {s}\n", .{ idx, new_gb, resp });
+    fdWrite(c.STDOUT_FILENO, line);
 }
 
 fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, new_name: []const u8, io: std.Io) !void {
@@ -1062,6 +1082,10 @@ test "commandArity: create takes four args" {
 
 test "commandArity: migrate takes three args" {
     try std.testing.expectEqual(@as(?usize, 3), commandArity("migrate"));
+}
+
+test "commandArity: resize takes two args" {
+    try std.testing.expectEqual(@as(?usize, 2), commandArity("resize"));
 }
 
 test "commandArity: set takes three args" {

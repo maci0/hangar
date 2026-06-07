@@ -929,6 +929,9 @@ fn serveHtml(conn: c.fd_t) void {
         response = try handleCad(req);
         content_type = "text/plain";
         // Snapshots: longer suffixes before the bare `/snapshots`.
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/disk/resize") != null) {
+        response = try handleResizeDisk(req);
+        content_type = "text/plain";
     } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/snapshots/revert") != null) {
         response = try handleSnapshotRevert(req);
         content_type = "text/plain";
@@ -3063,6 +3066,68 @@ fn handleReset(req: []const u8) ![]const u8 {
         };
     }
     logAudit("reset", v.getNameSlice());
+    return "ok";
+}
+
+/// Grow a VM's primary disk image (qemu-img resize). Stopped VMs only (resizing
+/// a live qcow2 risks corruption), grow-only (shrinking a qcow2 truncates guest
+/// data). Validates + copies the disk path under the lock, runs qemu-img with the
+/// lock released, then records the new size.
+fn handleResizeDisk(req: []const u8) ![]const u8 {
+    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var disk_len: usize = 0;
+    var name_len: usize = 0;
+    var idx_saved: usize = 0;
+    var new_gb: u32 = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
+        if (idx >= appstate.vm_count) return "invalid idx";
+        const v = &appstate.vms[idx];
+        if (!v.hasDisk()) return "no disk";
+        if (v.isAlive()) return "vm running";
+        const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
+        const body = req[body_start + 4 ..];
+        var size_str: []const u8 = "";
+        var pairs = std.mem.splitScalar(u8, body, '&');
+        while (pairs.next()) |pair| {
+            var kv = std.mem.splitScalar(u8, pair, '=');
+            const key = kv.next() orelse continue;
+            const val = kv.next() orelse continue;
+            if (std.mem.eql(u8, key, "size")) size_str = val;
+        }
+        const parsed = std.fmt.parseInt(u32, size_str, 10) catch return "bad size";
+        new_gb = vm.clampDiskSize(parsed);
+        if (new_gb <= v.disk_size_gb) return "shrink not allowed"; // grow only
+        const dp = v.getDiskPathSlice();
+        if (dp.len == 0 or dp.len >= disk_buf.len) return "resize err";
+        @memcpy(disk_buf[0..dp.len], dp);
+        disk_len = dp.len;
+        const nm = v.getNameSlice();
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
+        idx_saved = idx;
+    }
+
+    qemu.resizeDiskImage(disk_buf[0..disk_len], new_gb, std.heap.page_allocator) catch |e| {
+        logOpErr("disk resize", e, name_buf[0..name_len]);
+        return "resize err";
+    };
+
+    // Record the new size, re-validating the VM didn't move/disappear while
+    // unlocked. If it did, the image is already grown — report success.
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx_saved < appstate.vm_count and std.mem.eql(u8, appstate.vms[idx_saved].getNameSlice(), name_buf[0..name_len])) {
+        appstate.vms[idx_saved].disk_size_gb = new_gb;
+        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+            logSaveErr("handleResizeDisk: ", e);
+            return "save failed";
+        };
+    }
+    logAudit("disk resize", name_buf[0..name_len]);
     return "ok";
 }
 
