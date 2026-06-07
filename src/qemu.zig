@@ -480,12 +480,16 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     // dangerous launch.
     if (config.hasName() and !vm.isValidVmName(config.getNameSlice())) return error.UnsafeVmName;
 
-    const accel_flag = config.accel.toStr();
+    // QEMU's `accel=` takes a concrete accelerator (kvm/tcg/hvf/whpx) or a
+    // colon-separated fallback list — NOT the literal "auto" (which QEMU rejects
+    // with "invalid accelerator auto", so the VM exits immediately on launch).
+    // Map our stored `.auto` to "kvm:tcg" (use KVM if available, else TCG).
+    const accel_cli: []const u8 = if (config.accel == .auto) "kvm:tcg" else std.mem.span(config.accel.toStr());
     try args.append(alloc, "-machine");
     const mach_str = if (config.secure_boot)
-        try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,smm=on,accel={s}", .{std.mem.span(accel_flag)})
+        try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,smm=on,accel={s}", .{accel_cli})
     else
-        try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,accel={s}", .{std.mem.span(accel_flag)});
+        try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,accel={s}", .{accel_cli});
     try args.append(alloc, mach_str);
     try args.append(alloc, "-cpu");
     if (config.hyperv_enlightenments) {
@@ -2036,6 +2040,37 @@ test "fuzz: process-control quartet on our own short-lived children" {
     }
 }
 
+test "startVm: default accel (auto) yields a QEMU that doesn't immediately exit" {
+    // Regression guard for `accel=auto`: QEMU rejects the literal "auto"
+    // ("invalid accelerator auto") and exits instantly, so the VM never runs.
+    // Arg-string tests can't catch this — only spawning QEMU and checking it
+    // survives a moment does. Skip cleanly if qemu-system-x86_64 is unavailable.
+    const alloc = std.heap.page_allocator;
+    runWait(&.{ "qemu-system-x86_64", "--version" }, alloc, null) catch return;
+
+    var cfg = vm.VmConfig{};
+    cfg.setName("acceldefaulttest");
+    cfg.display = .none;
+    cfg.embed_display = false;
+    cfg.firmware = .bios;
+    cfg.memory_mb = 64;
+    cfg.cpu_cores = 1;
+    cfg.cpu_sockets = 1;
+    // accel left at its default (.auto) — the exact config that failed.
+    startVm(&cfg, alloc) catch return;
+    defer {
+        forceStopVm(&cfg);
+        reapVm(&cfg);
+    }
+    try std.testing.expect(cfg.pid != null);
+    // Give a bad command line time to make QEMU exit; a valid one keeps idling at
+    // firmware ("no bootable device") and stays alive.
+    appio.sleepMs(500);
+    // isVmAlive uses a non-blocking waitpid: false => QEMU already exited (the
+    // accel=auto regression), true => still running as expected.
+    try std.testing.expect(isVmAlive(&cfg));
+}
+
 test "fuzz: startVm spawns real QEMU (headless/TCG) then stops + reaps" {
     const alloc = std.heap.page_allocator;
     // Probe: skip if qemu-system-x86_64 is unavailable.
@@ -2223,6 +2258,14 @@ test "qemu: buildScriptStr with KVM disabled uses TCG" {
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(has(s, "accel=tcg"));
+}
+
+test "qemu: default accel maps to kvm:tcg, never the invalid literal auto" {
+    var cfg = vm.VmConfig{}; // accel defaults to .auto
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "accel=kvm:tcg"));
+    try expect(!has(s, "accel=auto")); // QEMU rejects "auto"
 }
 
 test "qemu: buildScriptStr with all NICs disabled" {
