@@ -62,8 +62,17 @@ const AF_UNIX: c_uint = 1;
 const SOL_SOCKET: c_int = 1;
 const SO_REUSEADDR: c_int = 2;
 const SO_RCVTIMEO: c_int = 20;
+const SO_SNDTIMEO: c_int = 21;
 const SHUT_RDWR: c_int = 2;
 const IPPROTO_IPV6: c_int = 41;
+
+/// Cap on concurrent client connections. Each accepted connection spends a
+/// thread plus a 64 KB request buffer (and a WebSocket relay spends two more
+/// threads), so without a bound a flood of connections — including ones that
+/// stall mid-request or never read their response — would exhaust host threads
+/// and memory. New connections past the cap are dropped (cheap close).
+const MAX_CONNECTIONS: u32 = 256;
+var active_connections: u32 = 0;
 const IPV6_V6ONLY: c_int = 26;
 const IPPROTO_TCP: c_int = 6;
 const TCP_NODELAY: c_int = 1;
@@ -573,9 +582,20 @@ fn acceptLoop(fd: c.fd_t) void {
         // latency to every response and every relayed display frame on remote
         // (non-loopback) connections. No-op on the Unix listener's fds.
         setTcpNoDelay(conn);
+        // Bound concurrent connections. Reserve a slot before spawning; serveHtml
+        // releases it on exit. Shed cheaply (close) when over the cap so a flood
+        // can't exhaust threads/memory.
+        const in_use = @atomicRmw(u32, &active_connections, .Add, 1, .seq_cst) + 1;
+        if (in_use > MAX_CONNECTIONS) {
+            _ = @atomicRmw(u32, &active_connections, .Sub, 1, .seq_cst);
+            logWarn("acceptLoop: connection cap reached, dropping connection");
+            _ = c.close(conn);
+            continue;
+        }
         const th = std.Thread.spawn(std.Thread.SpawnConfig{}, serveHtml, .{conn}) catch {
             // Thread exhaustion drops this request; log so load-shedding is visible.
             logErr("acceptLoop: thread spawn failed, dropping connection");
+            _ = @atomicRmw(u32, &active_connections, .Sub, 1, .seq_cst);
             _ = c.close(conn);
             continue;
         };
@@ -584,11 +604,18 @@ fn acceptLoop(fd: c.fd_t) void {
 }
 
 fn serveHtml(conn: c.fd_t) void {
-    defer _ = c.close(conn);
+    defer {
+        _ = c.close(conn);
+        _ = @atomicRmw(u32, &active_connections, .Sub, 1, .seq_cst);
+    }
 
-    // 30-second receive timeout (SO_RCVTIMEO).
+    // 30-second receive AND send timeout. SO_SNDTIMEO is essential: without it a
+    // client that issues a valid request but never reads the response fills the
+    // socket send buffer and parks this thread in write() forever (slow-read DoS,
+    // reachable unauthenticated on the auth-exempt HTML/api routes).
     const tv: c.timeval = .{ .sec = 30, .usec = 0 };
     _ = c.setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+    _ = c.setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
 
     var buf: [65536]u8 = undefined;
     const n = c.read(conn, &buf, buf.len);
@@ -644,10 +671,19 @@ fn serveHtml(conn: c.fd_t) void {
             // body handlers never see a truncated request.
             if (std.mem.indexOf(u8, req, "\r\n\r\n")) |hdr_end| {
                 const need = hdr_end + 4 + cl;
+                // Total deadline across the whole body read. SO_RCVTIMEO bounds a
+                // single read(), but a slow-loris that dribbles one byte just under
+                // the timeout resets it every read and could hold the thread for
+                // hours. Bound the aggregate read time too.
+                var start_ts: std.c.timespec = undefined;
+                _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &start_ts);
                 while (req_len < need and req_len < buf.len) {
                     const m = c.read(conn, buf[req_len..].ptr, buf.len - req_len);
                     if (m <= 0) break;
                     req_len += @intCast(m);
+                    var now_ts: std.c.timespec = undefined;
+                    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &now_ts);
+                    if (now_ts.sec - start_ts.sec > 30) break;
                 }
                 req = buf[0..req_len];
             }
