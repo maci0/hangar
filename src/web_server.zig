@@ -3069,6 +3069,12 @@ fn handleReset(req: []const u8) ![]const u8 {
     return "ok";
 }
 
+/// Whether a VM should be powered on at daemon startup. Pure so the selection is
+/// unit-testable independent of the QEMU spawn.
+fn shouldAutostart(v: *const vm.VmConfig) bool {
+    return v.host_autostart and v.hasDisk();
+}
+
 /// Grow a VM's primary disk image (qemu-img resize). Stopped VMs only (resizing
 /// a live qcow2 risks corruption), grow-only (shrinking a qcow2 truncates guest
 /// data). Validates + copies the disk path under the lock, runs qemu-img with the
@@ -6154,6 +6160,24 @@ pub fn main(init: std.process.Init) !void {
     appstate.g_vmm = hv_backend.createVmm(.auto);
     appstate.g_vmm_ready = true;
 
+    // Power on VMs flagged host_autostart. Runs single-threaded here, before the
+    // listeners/tickers spawn, so no lock is needed. Best-effort: a failure is
+    // logged and the next VM is still tried. Mirrors handlePower's no-handle
+    // start path. (Previously host_autostart was persisted/shown but never acted
+    // on — an inert checkbox.)
+    {
+        var ai: usize = 0;
+        while (ai < appstate.vm_count) : (ai += 1) {
+            if (!shouldAutostart(&appstate.vms[ai])) continue;
+            qemu.startVm(&appstate.vms[ai], std.heap.page_allocator) catch |e| {
+                logOpErr("autostart", e, appstate.vms[ai].getNameSlice());
+                continue;
+            };
+            appstate.vm_started[ai] = time(null);
+            logAudit("autostart", appstate.vms[ai].getNameSlice());
+        }
+    }
+
     // Allow custom API key via environment variable. Fail fast on an invalid
     // value instead of silently falling back to the weak built-in default —
     // an operator who set KV_API_KEY expects it to take effect.
@@ -6528,6 +6552,17 @@ test "handleDelete: idx out of range returns 'invalid idx'" {
     }
     const result = try handleDelete("POST /api/vms/0/delete HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "shouldAutostart: requires the flag and a disk" {
+    var v = vm.VmConfig{};
+    try std.testing.expect(!shouldAutostart(&v)); // default: off
+    v.host_autostart = true;
+    try std.testing.expect(!shouldAutostart(&v)); // flagged but no disk
+    v.setDiskPath("/tmp/d.qcow2");
+    try std.testing.expect(shouldAutostart(&v)); // flagged + has disk
+    v.host_autostart = false;
+    try std.testing.expect(!shouldAutostart(&v));
 }
 
 test "handleUndo: clamps a stale undo_idx instead of corrupting the list" {
