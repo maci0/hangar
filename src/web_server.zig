@@ -1576,7 +1576,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     w += part2a.len;
 
     const part2b = std.fmt.bufPrint(buf[w..],
-        \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}
+        \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"rtc":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}
     , .{
         if (v.ballooning) "true" else "false",
         if (v.host_autostart) "true" else "false",
@@ -1587,6 +1587,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         v.guest_os.toIndex(),
         v.audio.toIndex(),
         v.boot_order.toIndex(),
+        v.rtc.toIndex(),
         std.mem.span(v.cpu_model.toStr()),
         std.mem.span(v.accel.toStr()),
         if (v.embed_display) "true" else "false",
