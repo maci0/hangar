@@ -79,6 +79,7 @@ Never commit a real `KV_API_KEY`. For any non-local deployment, set a strong `KV
 - Every enum must have tests for: fromIndex round-trip, toIndex inverts fromIndex, toStr values, label values, out-of-range default.
 - `qemu.zig` arg-builder tests must use the `buildScriptStr` / `buildArgs` functions — never by spawning QEMU.
 - The puppeteer web-smoke (`tests/web_smoke.mjs`) is pulled into the umbrella `test` step. It spawns the built binary on a temp port against a temp `$HOME`.
+- **Every user-facing workflow must have an end-to-end Playwright test.** Any web-UI flow — VM create/clone/delete/rename, power on/off, snapshots, settings save, import/export, log viewer, console, vnet editor, preferences — needs a Playwright e2e test that drives the real built binary (temp port + temp `$HOME`, same as the smoke harness) and asserts the observable result. Add or extend the e2e test alongside the feature, never after. A new workflow without a Playwright e2e test is incomplete.
 
 ## Code Style & Conventions
 
