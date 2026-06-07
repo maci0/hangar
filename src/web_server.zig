@@ -1225,6 +1225,9 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
                 const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
                 if (hdr.opcode == .close) break;
                 if (hdr.opcode == .ping) {
+                    // Drain the ping's payload (RFC 6455 allows ≤125 bytes) before
+                    // replying — leaving it on the wire would desync the next frame.
+                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                     ctx_ptr.wmtx.lock();
                     ws.writePong(ctx_ptr.ws_fd) catch {
                         ctx_ptr.wmtx.unlock();
@@ -1233,7 +1236,11 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
                     ctx_ptr.wmtx.unlock();
                     continue;
                 }
-                if (hdr.opcode == .pong) continue;
+                // A pong may also carry a payload; consume it to stay frame-aligned.
+                if (hdr.opcode == .pong) {
+                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
+                    continue;
+                }
                 const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                 if (rlen == 0) continue;
                 if (!writeAll(ctx_ptr.vnc_fd, buf[0..rlen].ptr, rlen)) break;
@@ -1336,6 +1343,9 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
                 const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
                 if (hdr.opcode == .close) break;
                 if (hdr.opcode == .ping) {
+                    // Drain the ping's payload (RFC 6455 allows ≤125 bytes) before
+                    // replying — leaving it on the wire would desync the next frame.
+                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                     ctx_ptr.wmtx.lock();
                     ws.writePong(ctx_ptr.ws_fd) catch {
                         ctx_ptr.wmtx.unlock();
@@ -1344,7 +1354,11 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
                     ctx_ptr.wmtx.unlock();
                     continue;
                 }
-                if (hdr.opcode == .pong) continue;
+                // A pong may also carry a payload; consume it to stay frame-aligned.
+                if (hdr.opcode == .pong) {
+                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
+                    continue;
+                }
                 const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                 if (rlen == 0) continue;
                 if (!writeAll(ctx_ptr.spice_fd, buf[0..rlen].ptr, rlen)) break;
@@ -1445,6 +1459,9 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
                 const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
                 if (hdr.opcode == .close) break;
                 if (hdr.opcode == .ping) {
+                    // Drain the ping's payload (RFC 6455 allows ≤125 bytes) before
+                    // replying — leaving it on the wire would desync the next frame.
+                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                     ctx_ptr.wmtx.lock();
                     ws.writePong(ctx_ptr.ws_fd) catch {
                         ctx_ptr.wmtx.unlock();
@@ -1453,7 +1470,11 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
                     ctx_ptr.wmtx.unlock();
                     continue;
                 }
-                if (hdr.opcode == .pong) continue;
+                // A pong may also carry a payload; consume it to stay frame-aligned.
+                if (hdr.opcode == .pong) {
+                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
+                    continue;
+                }
                 const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                 if (rlen == 0) continue;
                 if (!writeAll(ctx_ptr.serial_fd, buf[0..rlen].ptr, rlen)) break;
@@ -3291,11 +3312,21 @@ fn handleGuestInfo(req: []const u8, out: []u8) []const u8 {
     const tv: c.timeval = .{ .sec = 2, .usec = 0 };
     _ = c.setsockopt(stream.fd, SOL_SOCKET, SO_RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
     _ = stream.write("{\"execute\":\"guest-network-get-interfaces\"}\n") catch return "{\"ips\":\"\"}";
-    var resp: [8192]u8 = undefined;
-    const n = stream.read(&resp) catch return "{\"ips\":\"\"}";
-    if (n == 0) return "{\"ips\":\"\"}";
+    // The reply (newline-terminated QGA JSON) can span multiple reads on a
+    // multi-NIC guest; a single read() would truncate it and silently drop
+    // addresses. Accumulate until the terminating newline, buffer full, or the
+    // 2s read timeout fires.
+    var resp: [16384]u8 = undefined;
+    var total: usize = 0;
+    while (total < resp.len) {
+        const n = stream.read(resp[total..]) catch break;
+        if (n == 0) break;
+        total += n;
+        if (std.mem.indexOfScalar(u8, resp[0..total], '\n') != null) break;
+    }
+    if (total == 0) return "{\"ips\":\"\"}";
     var ip_buf: [512]u8 = undefined;
-    const ips = parseGuestIpv4s(resp[0..n], &ip_buf);
+    const ips = parseGuestIpv4s(resp[0..total], &ip_buf);
     return std.fmt.bufPrint(out, "{{\"ips\":\"{s}\"}}", .{ips}) catch "{\"ips\":\"\"}";
 }
 
