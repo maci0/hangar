@@ -158,6 +158,12 @@ fn forkExec(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[
     if (pid < 0) return error.ForkFailed;
     if (pid == 0) {
         // Child: only async-signal-safe calls until exec.
+        // Tighten the umask before exec so files QEMU/qemu-img create are
+        // owner-only regardless of the operator's umask: the serial and QMP
+        // control sockets (other local users could otherwise connect to the
+        // live guest console or drive the VM) and qemu-img disk images (guest
+        // data at rest). umask() is async-signal-safe.
+        _ = std.c.umask(0o077);
         const devnull = std.c.open("/dev/null", .{ .ACCMODE = .RDWR });
         if (devnull >= 0) {
             _ = std.c.dup2(devnull, 0);
@@ -318,10 +324,7 @@ fn appendExtraNic(
             const nd = try std.fmt.bufPrint(dev_buf[64..], "bridge,id={s},br=br0", .{id});
             try args.append(alloc, nd);
         },
-        .none => {
-            // unreachable: .none is filtered at function entry above.
-            return;
-        },
+        .none => unreachable, // filtered at function entry above
     }
 }
 
@@ -501,7 +504,8 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 
     // GPU device selection.
     const gl_ok = wants_virgl and ((config.embed_display and embedded_spice_gl) or (!config.embed_display and (config.display == .gtk or config.display == .sdl or config.display == .spice)));
-    if (gl_ok and config.gpu_device.needsVirgl()) {
+    // gl_ok already implies wants_virgl, which includes gpu_device.needsVirgl().
+    if (gl_ok) {
         // virgl 3D-accelerated variants: virtio-gpu-gl or virtio-vga-gl
         const dev_str: []const u8 = switch (config.gpu_device) {
             .virtio_gpu_gl => "virtio-gpu-gl",
@@ -2158,16 +2162,18 @@ fn countConvertArgs(src: []const u8, src_fmt: vm.DiskFormat, dst: []const u8, ds
     return args.items.len;
 }
 
-test "qemu: tryReapChild returns null for pid 0 (not a child)" {
-    // waitpid on pid 0 with WNOHANG should return -1/ECHILD (no children)
-    // but expect null or false depending on system state; at least no crash.
+test "qemu: tryReapChild does not crash on pid 0 (process group, not a child)" {
+    // waitpid(0, WNOHANG) targets the caller's process group; the result is
+    // system-state dependent (null when nothing exited, a bool otherwise), so
+    // the only invariant we can assert here is that it returns without crashing.
     const result = tryReapChild(0);
-    _ = result; // just verify no crash
+    _ = result;
 }
 
-test "qemu: tryReapChild returns null or false for pid -1 (no reaped children)" {
-    // waitpid(-1, WNOHANG) may find no exited children → null.
-    // If some background child exited, it returns true/false. Either is fine.
+test "qemu: tryReapChild does not crash on pid -1 (reap any child)" {
+    // waitpid(-1, WNOHANG) may find no exited children (null) or reap a
+    // background child (a bool) — both are valid and ordering-dependent, so we
+    // only assert the call completes without crashing.
     const result = tryReapChild(-1);
-    _ = result; // just verify no crash
+    _ = result;
 }

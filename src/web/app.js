@@ -53,7 +53,7 @@ function announceStatus(s){var a=document.getElementById('statusannounce');if(a)
 function setStatus(s){var el=document.getElementById('statusbar');if(!el)return;el.textContent=s;el.classList.remove('loading');announceStatus(s);}
 function setStatusLoading(s){var el=document.getElementById('statusbar');if(!el)return;el.textContent='⏳ '+s;el.classList.add('loading');announceStatus(s);}
 var toastIcons={success:'✓',error:'✗',info:'ℹ',warn:'⚠'};
-function showToast(msg,type,opts){type=type||'info';var c=document.getElementById('toast-container');if(!c)return;var toasts=c.querySelectorAll('.toast');while(toasts.length>=5){c.removeChild(toasts[0]);toasts=c.querySelectorAll('.toast');}var t=document.createElement('div');t.className='toast '+type;t.setAttribute('role',(type==='error'||type==='warn')?'alert':'status');var icon=toastIcons[type]||toastIcons.info;var inner='<span class=\"toast-icon\">'+icon+'</span><span class=\"toast-msg\">'+escHtml(msg)+'</span>';if(opts&&opts.action){inner+='<button class=\"toast-action\" data-toast-action=\"'+opts.action+'\">UNDO</button>';}t.innerHTML=inner;c.appendChild(t);
+function showToast(msg,type,opts){type=type||'info';var c=document.getElementById('toast-container');if(!c)return;var toasts=c.querySelectorAll('.toast');while(toasts.length>=5){c.removeChild(toasts[0]);toasts=c.querySelectorAll('.toast');}var t=document.createElement('div');t.className='toast '+type;t.setAttribute('role',(type==='error'||type==='warn')?'alert':'status');var icon=toastIcons[type]||toastIcons.info;var inner='<span class=\"toast-icon\" aria-hidden=\"true\">'+icon+'</span><span class=\"toast-msg\">'+escHtml(msg)+'</span>';if(opts&&opts.action){inner+='<button class=\"toast-action\" data-toast-action=\"'+opts.action+'\">UNDO</button>';}t.innerHTML=inner;c.appendChild(t);
 if(opts&&opts.action&&opts.onAction){t.querySelector('.toast-action').addEventListener('click',function(){opts.onAction();c.removeChild(t);});}
 var reducedMotion=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
 var defaultDur=type==='error'?6500:type==='warn'?5000:4000;
@@ -81,10 +81,10 @@ if(btn)btn.setAttribute('aria-expanded',toolbarMoreOpen?'true':'false');
 if(popover){if(toolbarMoreOpen){populateToolbarMore(popover);positionToolbarMore(popover,btn);popover.classList.add('open');}else{popover.classList.remove('open');}}
 }
 function populateToolbarMore(popover){popover.innerHTML='';const tb=document.querySelector('.toolbar');if(!tb)return;const children=tb.querySelectorAll('.btn:not(.keep-mobile):not(.toolbar-more):not(.theme-toggle-btn), .sep');children.forEach(function(el){if(el.classList.contains('sep')){const clone=document.createElement('span');clone.className='sep';popover.appendChild(clone);return;}if(!el.matches('.btn:not(.keep-mobile)'))return;const clone=document.createElement('button');clone.className='btn';if(el.classList.contains('danger-menu'))clone.classList.add('danger');clone.textContent=el.textContent||el.getAttribute('title')||el.getAttribute('aria-label')||'';clone.setAttribute('data-action',el.getAttribute('data-action')||'');['data-menu','data-vm-action','aria-haspopup','aria-controls','aria-expanded'].forEach(function(a){var v=el.getAttribute(a);if(v!==null)clone.setAttribute(a,v);});popover.appendChild(clone);});updateCommandState();}
-function positionToolbarMore(popover,btn){if(!btn)return;var r=btn.getBoundingClientRect();popover.style.top=(r.bottom+4)+'px';popover.style.right=(window.innerWidth-r.right)+'px';popover.style.left='auto';popover.style.bottom='auto';}
+function positionToolbarMore(popover,btn){if(!btn)return;var r=btn.getBoundingClientRect();popover.style.top='0px';popover.style.left='0px';popover.style.right='auto';popover.style.bottom='auto';var base=popover.getBoundingClientRect();var top=r.bottom+6-base.top;var pr=popover.getBoundingClientRect();var desiredLeft=Math.max(8,Math.min(r.right-pr.width,window.innerWidth-pr.width-8));popover.style.top=top+'px';popover.style.left=(desiredLeft-base.left)+'px';}
 function closeToolbarMore(){if(!toolbarMoreOpen)return;toolbarMoreOpen=false;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');if(tb)tb.classList.remove('open-more');if(btn)btn.setAttribute('aria-expanded','false');if(popover)popover.classList.remove('open');}
 function closeActionMenus(){var menus=document.querySelectorAll('.action-menu.open');for(var i=0;i<menus.length;i++)menus[i].classList.remove('open');var btns=document.querySelectorAll('[data-action="toggleActionMenu"]');for(var j=0;j<btns.length;j++)btns[j].setAttribute('aria-expanded','false');openActionMenu=null;}
-function positionActionMenu(menu,btn){if(!menu||!btn)return;var r=btn.getBoundingClientRect();menu.style.top=(r.bottom+5)+'px';menu.style.left=r.left+'px';menu.style.right='auto';var mr=menu.getBoundingClientRect();if(r.left+mr.width>window.innerWidth-8){menu.style.left='auto';menu.style.right='8px';}}
+function positionActionMenu(menu,btn){if(!menu||!btn)return;var r=btn.getBoundingClientRect();menu.style.top='0px';menu.style.left='0px';menu.style.right='auto';var base=menu.getBoundingClientRect();var mr=menu.getBoundingClientRect();var desiredLeft=Math.max(8,Math.min(r.left,window.innerWidth-mr.width-8));menu.style.top=(r.bottom+6-base.top)+'px';menu.style.left=(desiredLeft-base.left)+'px';}
 function toggleActionMenu(btn){if(!btn)return;var id=btn.getAttribute('data-menu');var menu=id?document.getElementById(id):null;if(!menu)return;if(openActionMenu===id){closeActionMenus();return;}closeActionMenus();menu.classList.add('open');btn.setAttribute('aria-expanded','true');openActionMenu=id;positionActionMenu(menu,btn);updateCommandState();}
 function clearSearch(){var s=document.getElementById('search');if(!s)return;s.value='';filterList();}
 var settingsDirty=false;
@@ -143,7 +143,7 @@ async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
 const c=document.getElementById('tabConsole');const nm=document.getElementById('vmname');const tb=document.getElementById('tabBar');
 if(!t||!s||!nm||!tb)return;
-nm.textContent='Select a VM';tb.style.display='none';
+nm.textContent='Select a VM';document.title='Hangar — VM Manager';tb.style.display='none';
 t.style.display='block';s.style.display='none';if(c)c.style.display='none';activeTab='summary';
 t.setAttribute('aria-hidden','false');s.setAttribute('aria-hidden','true');if(c)c.setAttribute('aria-hidden','true');
 var empty='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p><div class="empty-actions"><button class="btn primary" data-action="newVm">＋ New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
@@ -158,7 +158,7 @@ tb.style.display='flex';
 const v=vms[sel];const sc=v.status==='running'?'running':v.status==='paused'?'paused':v.status==='suspended'?'suspended':'stopped';
 if(activeTab==='console'&&!(v.status==='running'&&embeddedDisplayCapable(v)))activeTab='summary';
 syncTabPanels();
-nm.textContent=v.name;
+nm.textContent=v.name;document.title='Hangar — '+v.name;
 var info=displayInfo(v);
 var videoMeta='<span>'+escHtml(info.embedLabel+' '+info.displayLabel)+'</span><span>'+escHtml(info.gpuLabel)+'</span><span>'+escHtml(info.accelLabel)+'</span>';
 if(tc){tc.innerHTML=embeddedDisplayCapable(v)?'<div class="console-empty compact"><strong>Console controls are above the VM header.</strong><span>Use Display Only for full-screen guest interaction.</span></div>':'<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}
@@ -228,7 +228,7 @@ async function takeSnapshotFromDlg(){if(sel===null){showToast('No VM selected','
 var takeBtn=document.querySelector('[data-action="takeSnapshotFromDlg"]');if(takeBtn){takeBtn.disabled=true;takeBtn.textContent='Taking...';}
 const r=await apiPost('/api/snapshot/take/'+sel,'tag='+encodeURIComponent(t));if(r){st.value='';loadSnapshots();setStatus('Snapshot taken: '+t);}
 if(takeBtn){takeBtn.disabled=false;takeBtn.textContent='Take';}}
-async function openSnapshots(){if(sel===null)return;var sd=document.getElementById('snapdlg');if(sd)sd.showModal();loadSnapshots();}
+async function openSnapshots(){if(sel===null)return;var sd=document.getElementById('snapdlg');if(sd)sd.showModal();var sl=document.getElementById('snaplist');if(sl)sl.innerHTML='<div class="snapshot-empty">Loading snapshots…</div>';loadSnapshots();}
 async function loadSnapshots(){if(sel===null)return;const el=document.getElementById('snaplist');if(!el)return;
 var v=selectedVm();var meta=document.getElementById('snapMeta');var running=v&&(v.status==='running'||v.status==='paused');if(meta)meta.innerHTML=v?'<strong>'+escHtml(v.name)+'</strong><span>'+escHtml(statusLabel(v.status))+'</span>'+(running?'<span class="warn-text">Revert and delete require the VM to be powered off.</span>':''):'';
 try{const r=await fetch('/api/snapshot/list/'+sel);if(!r.ok){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';return;}const t=(await r.text()).trim();
@@ -250,7 +250,7 @@ var migPollTimer=null;
 var migIdx=null;
 var migPollFails=0;
 var MIG_POLL_MAX_FAILS=5;
-function showMigProgress(){migPollFails=0;var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar&&info){bar.style.display='block';bar.setAttribute('aria-valuenow','0');info.style.display='inline';info.textContent='Migration in progress...';var fill=bar.firstElementChild;if(fill)fill.style.width='0%';}if(cancel)cancel.style.display='inline';}
+function showMigProgress(){migPollFails=0;var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar&&info){bar.style.display='block';bar.removeAttribute('aria-valuenow');info.style.display='inline';info.textContent='Migration in progress...';var fill=bar.firstElementChild;if(fill)fill.style.width='0%';}if(cancel)cancel.style.display='inline';}
 function hideMigProgress(){migrating=false;migIdx=null;migPollFails=0;if(migPollTimer){clearTimeout(migPollTimer);migPollTimer=null;}var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar)bar.style.display='none';if(info)info.style.display='none';if(cancel)cancel.style.display='none';}
 async function pollMigStatus(){if(migIdx===null){hideMigProgress();return;}
 var t='';try{var ctl=new AbortController();var tid=setTimeout(function(){ctl.abort();},10000);var resp=await fetch('/api/migrate/status/'+migIdx,{signal:ctl.signal});clearTimeout(tid);t=await resp.text();}catch(e){}
@@ -292,16 +292,20 @@ function updateCommandState(){updatePowerBtn();var v=selectedVm();var nodes=docu
 var tabBar=document.getElementById('tabBar');if(tabBar&&v){var consoleBtn=tabBar.querySelector('[data-tab="console"]');if(consoleBtn){consoleBtn.disabled=!(v.status==='running'&&embeddedDisplayCapable(v));consoleBtn.title=consoleBtn.disabled?'Console requires a running embedded VNC or SPICE display':'Open VM console';}}}
 function newVm(){['n_name','n_mem','n_cpu','n_disk'].forEach(function(id){var e=document.getElementById('err_'+id);if(e)e.textContent='';var f=document.getElementById(id);if(f)f.classList.remove('invalid');});var d=document.getElementById('newdlg');if(d)d.showModal();}
 function setNewVmError(id,msg){var err=document.getElementById('err_'+id);var f=document.getElementById(id);if(err)err.textContent=msg||'';if(f){f.classList.toggle('invalid',!!msg);if(msg){f.setAttribute('aria-invalid','true');f.setAttribute('aria-describedby','err_'+id);}else{f.removeAttribute('aria-invalid');f.removeAttribute('aria-describedby');}}}
+function validateNewVm(show){var nn=document.getElementById('n_name');var nm=document.getElementById('n_mem');var nc=document.getElementById('n_cpu');var nd=document.getElementById('n_disk');if(!nn||!nm||!nc||!nd)return false;
+var n=nn.value.trim();var m=parseInt(nm.value,10);var c=parseInt(nc.value,10);var d=parseInt(nd.value,10);
+var ok=true;function fail(id,msg){ok=false;if(show)setNewVmError(id,msg);}function clr(id){if(show)setNewVmError(id,'');}
+clr('n_name');clr('n_mem');clr('n_cpu');clr('n_disk');
+if(!n)fail('n_name','Name is required.');
+if(!Number.isFinite(m)||m<128||m>65536)fail('n_mem','Memory must be 128-65536 MB.');
+if(!Number.isFinite(c)||c<1||c>256)fail('n_cpu','CPU cores must be 1-256.');
+if(!Number.isFinite(d)||d<1||d>65536)fail('n_disk','Disk size must be 1-65536 GB.');
+return ok;}
 async function createVm(){const nn=document.getElementById('n_name');const nm=document.getElementById('n_mem');const nc=document.getElementById('n_cpu');const nd=document.getElementById('n_disk');
 if(!nn||!nm||!nc||!nd)return;
 const n=nn.value.trim();const m=parseInt(nm.value,10)||0;
 const c=parseInt(nc.value,10)||0;const d=parseInt(nd.value,10)||0;
-var ok=true;setNewVmError('n_name','');setNewVmError('n_mem','');setNewVmError('n_cpu','');setNewVmError('n_disk','');
-if(!n){setNewVmError('n_name','Name is required.');ok=false;}
-if(m<128||m>65536){setNewVmError('n_mem','Memory must be 128-65536 MB.');ok=false;}
-if(c<1||c>256){setNewVmError('n_cpu','CPU cores must be 1-256.');ok=false;}
-if(d<1||d>65536){setNewVmError('n_disk','Disk size must be 1-65536 GB.');ok=false;}
-if(!ok){var bad=document.querySelector('#newdlg .invalid');if(bad)bad.focus();showToast('Fix highlighted fields before creating the VM.','error');return;}
+if(!validateNewVm(true)){var bad=document.querySelector('#newdlg .invalid');if(bad)bad.focus();showToast('Fix highlighted fields before creating the VM.','error');return;}
 const r=await apiPost('/api/new','name='+encodeURIComponent(n)+'&mem='+m+'&cpu='+c+'&disk='+d);if(r){var ndlg=document.getElementById('newdlg');if(ndlg)ndlg.close();await refresh();var ni=vms.findIndex(function(x){return x.name===n;});if(ni>=0)await select(ni);setStatus('VM created.');}}
 async function deleteVm(){if(sel===null)return;var deleted=vms[sel];if(!deleted)return;if(!(await showConfirmDialog('Delete VM "'+deleted.name+'"?',{danger:true,okLabel:'Delete'})))return;var r=await apiPost('/api/delete/'+sel);if(r){sel=null;var delName=deleted.name;await refresh();toastUndo('Deleted "'+delName+'"',async function(){await apiPost('/api/undo');await refresh();});}}
 function reorderVm(from,to){var oldFrom=from,oldTo=to,oldSel=sel;
@@ -436,13 +440,13 @@ e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
 	else{out+=`<input id="${id}" data-field="${id}" type="${type}" value="${escHtml(String(val))}" ${attrs}>`;}
 	out+='<div class="field-error" id="err_'+id+'" aria-live="polite"></div></div>';return out;}
 	let h='<div class="settings-shell"><nav class="settings-nav" aria-label="Settings categories">';
-	for(const sec of sections){h+=`<button type="button" class="settings-nav-item${sec.id===settingsCategory?' active':''}" data-action="setSettingsCategory" data-settings-category="${sec.id}"><span>${sec.title}</span><small>${escHtml(sectionNotes[sec.id]||'Configure this virtual hardware group.')}</small></button>`;}
+	for(const sec of sections){h+=`<button type="button" class="settings-nav-item${sec.id===settingsCategory?' active':''}"${sec.id===settingsCategory?' aria-current="page"':''} data-action="setSettingsCategory" data-settings-category="${sec.id}"><span>${sec.title}</span><small>${escHtml(sectionNotes[sec.id]||'Configure this virtual hardware group.')}</small></button>`;}
 	h+='</nav><div class="settings-detail">';
 	for(const sec of sections){h+=`<section class="settings-panel${sec.id===settingsCategory?' active':''}" data-settings-panel="${sec.id}"${sec.id===settingsCategory?'':' style="display:none"'}><div class="settings-panel-head"><h3>${sec.title}</h3><p>${escHtml(sectionNotes[sec.id]||'Configure this virtual hardware group.')}</p></div><div class="settings-form">`;for(const f of sec.fields)h+=renderField(f);h+='</div></section>';}
 	h+='</div></div><div class="settings-actions"><button type="button" class="btn" data-action="switchTab" data-tab="summary">Cancel</button><button id="savevmbtn" type="button" class="btn primary" data-action="saveVm" title="Save VM settings">Save Changes</button></div>';
 	var ts=document.getElementById('tabSettings');if(ts)ts.innerHTML=h;settingsDirty=false;}
 function setSettingsCategory(cat){settingsCategory=cat;var panels=document.querySelectorAll('.settings-panel');for(var i=0;i<panels.length;i++){var on=panels[i].getAttribute('data-settings-panel')===cat;panels[i].classList.toggle('active',on);panels[i].style.display=on?'block':'none';}
-var items=document.querySelectorAll('.settings-nav-item');for(var j=0;j<items.length;j++)items[j].classList.toggle('active',items[j].getAttribute('data-settings-category')===cat);}
+var items=document.querySelectorAll('.settings-nav-item');for(var j=0;j<items.length;j++){var on=items[j].getAttribute('data-settings-category')===cat;items[j].classList.toggle('active',on);if(on)items[j].setAttribute('aria-current','page');else items[j].removeAttribute('aria-current');}}
 function setFieldError(id,msg,kind){var el=document.getElementById('err_'+id);var field=document.getElementById(id);if(el){el.textContent=msg||'';el.classList.toggle('warning',kind==='warn');}if(field){var bad=!!msg&&kind!=='warn';field.classList.toggle('invalid',bad);if(bad){field.setAttribute('aria-invalid','true');field.setAttribute('aria-describedby','err_'+id);}else{field.removeAttribute('aria-invalid');if(field.getAttribute('aria-describedby')==='err_'+id)field.removeAttribute('aria-describedby');}}}
 function validateSettings(show){var ok=true;function fail(id,msg){ok=false;if(show)setFieldError(id,msg);}function clear(id){if(show)setFieldError(id,'');}
 var nameEl=document.getElementById('e_name');if(nameEl){clear('e_name');if(!nameEl.value.trim())fail('e_name','Name is required.');}
@@ -546,6 +550,8 @@ function releaseFocus(dlg){var handler=dlg._trapFocusHandler;if(handler){dlg.rem
 ['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','catalogdlg','migratedlg','logdlg','shortcutsdlg','confirmdlg','promptdlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};var origClose=dlg.close;dlg.close=function(){if(dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
 // ── Enter in a dialog input triggers its primary action ──
 [{id:'newdlg',fn:createVm},{id:'migratedlg',fn:doMigrate},{id:'snapdlg',fn:takeSnapshotFromDlg},{id:'prefsdlg',fn:savePrefs}].forEach(function(o){var d=document.getElementById(o.id);if(!d)return;d.addEventListener('keydown',function(e){if(e.key!=='Enter')return;var t=e.target;if(t&&t.tagName==='INPUT'&&t.type!=='button'&&!t.readOnly){e.preventDefault();o.fn();}});});
+// ── New VM dialog: live inline validation (mirrors the Settings form) ──
+(function(){var d=document.getElementById('newdlg');if(!d)return;d.addEventListener('input',function(e){var t=e.target;if(t&&(t.id==='n_name'||t.id==='n_mem'||t.id==='n_cpu'||t.id==='n_disk'))validateNewVm(true);});})();
 // ── Sidebar Overlay Click-to-Close ──
 document.body.addEventListener('click',function(e){if(document.body.classList.contains('sidebar-overlay')&&!e.target.closest('aside')){closeSidebar();}});
 // ── Migrate dialog close cleanup ──

@@ -25,14 +25,26 @@ test_guest_os
 .qwen/
 
 # Editor / tool caches
+.claude/
 .codegraph/
 .opencode/
 .ruff_cache/
 .review-loop.lock
 ~
+*~
+.DS_Store
+*.swp
+*.swo
+
+# Logs / temporary files
+*.log
+*.tmp
+tmp/
+.tmp/
 
 # Test sandbox
 test_home/
+coverage/
 
 # Archives
 *.tar.gz

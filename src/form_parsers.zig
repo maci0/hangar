@@ -368,19 +368,21 @@ test "fuzz: all parsers consistency — never panic, return valid enum indices" 
         for (buf[0..n]) |*b| b.* = rnd.int(u8);
         const s = buf[0..n];
 
-        // All return values must be valid enum indices.
-        _ = @intFromEnum(parseDiskFormat(s));
-        _ = @intFromEnum(diskFormatFromExtension(s));
-        _ = @intFromEnum(parseNicMode(s));
-        _ = @intFromEnum(parseGuestOs(s));
-        _ = @intFromEnum(parseBootOrder(s));
-        _ = @intFromEnum(parseDisplay(s));
-        _ = @intFromEnum(parseDisplayResolution(s));
-        _ = @intFromEnum(parseFirmware(s));
-        _ = @intFromEnum(parseGpuDevice(s));
-        _ = @intFromEnum(parseAudio(s));
-        _ = @intFromEnum(parseAccel(s));
-        _ = @intFromEnum(themeFromIndex(@intCast(rnd.uintLessThan(u8, 4))));
+        // Every parser must return an in-range variant (index < count) for
+        // arbitrary input — a parser that fell back to an out-of-range
+        // @enumFromInt would corrupt config silently, so assert it here.
+        try std.testing.expect(@intFromEnum(parseDiskFormat(s)) < vm.DiskFormat.count);
+        try std.testing.expect(@intFromEnum(diskFormatFromExtension(s)) < vm.DiskFormat.count);
+        try std.testing.expect(@intFromEnum(parseNicMode(s)) < vm.NetworkMode.count);
+        try std.testing.expect(@intFromEnum(parseGuestOs(s)) < vm.GuestOs.count);
+        try std.testing.expect(@intFromEnum(parseBootOrder(s)) < vm.BootOrder.count);
+        try std.testing.expect(@intFromEnum(parseDisplay(s)) < vm.DisplayType.count);
+        try std.testing.expect(@intFromEnum(parseDisplayResolution(s)) < vm.DisplayResolution.count);
+        try std.testing.expect(@intFromEnum(parseFirmware(s)) < vm.BootFirmware.count);
+        try std.testing.expect(@intFromEnum(parseGpuDevice(s)) < vm.GpuDevice.count);
+        try std.testing.expect(@intFromEnum(parseAudio(s)) < vm.AudioDevice.count);
+        try std.testing.expect(@intFromEnum(parseAccel(s)) < vm.VmAccel.count);
+        try std.testing.expect(@intFromEnum(themeFromIndex(@intCast(rnd.uintLessThan(u8, 4)))) < vm.Theme.count);
         _ = parseU32OrDefault(s, rnd.int(u32));
     }
 }

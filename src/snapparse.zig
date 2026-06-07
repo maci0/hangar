@@ -95,14 +95,28 @@ test "fuzz: snapparse never panics and stays bounded" {
     var prng = std.Random.DefaultPrng.init(0x5A0F5A0F);
     const rnd = prng.random();
     var buf: [1024]u8 = undefined;
+    // Half the rounds use a table-shaped alphabet (to reach the data-row code
+    // paths) and half use the full byte range (control chars, high bytes, NUL)
+    // so the digit/whitespace boundaries are probed with arbitrary input too.
     const alphabet = "0123456789 \tABCabc-\nID Snapshot TAG";
     var iter: usize = 0;
     while (iter < 6000) : (iter += 1) {
         const len = rnd.uintLessThan(usize, buf.len);
-        for (buf[0..len]) |*c| c.* = alphabet[rnd.uintLessThan(usize, alphabet.len)];
+        const structured = (iter & 1) == 0;
+        for (buf[0..len]) |*c| {
+            c.* = if (structured) alphabet[rnd.uintLessThan(usize, alphabet.len)] else rnd.int(u8);
+        }
         const n = parse(buf[0..len]);
         try t.expect(n.count <= MAX_SNAP_NODES);
-        for (0..n.count) |k| try t.expect(n.name_len[k] < SNAP_NAME_CAP);
+        // Exercise the nameSlice accessor on every parsed node — a regression in
+        // parse that recorded name_len >= SNAP_NAME_CAP would index out of the
+        // fixed buffer here, which a count/len-only check would miss.
+        for (0..n.count) |k| {
+            try t.expect(n.name_len[k] < SNAP_NAME_CAP);
+            const name = n.nameSlice(k);
+            try t.expect(name.len < SNAP_NAME_CAP);
+            try t.expect(name.len == n.name_len[k]);
+        }
     }
 }
 

@@ -1679,6 +1679,14 @@ pub fn clampDiskSize(gb: u32) u32 {
     return std.math.clamp(gb, 1, 65536);
 }
 
+/// Clamp a secondary/optional disk size: 0 GB means "no such disk", otherwise
+/// cap at 64 TB. Unlike `clampDiskSize` this preserves 0 so the
+/// disabled-disk state survives, but still bounds attacker-supplied form input
+/// (a raw u32 disk size would otherwise request an exabyte-scale image).
+pub fn clampOptionalDiskSize(gb: u32) u32 {
+    return @min(gb, 65536);
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 // -- Name / path round-trips --
@@ -2853,6 +2861,27 @@ test "clampDiskSize: bounds large and small values" {
     try std.testing.expectEqual(@as(u32, 20), clampDiskSize(20));
     try std.testing.expectEqual(@as(u32, 65536), clampDiskSize(65536));
     try std.testing.expectEqual(@as(u32, 65536), clampDiskSize(999999));
+}
+
+test "clampOptionalDiskSize: preserves 0 and caps the upper bound" {
+    try std.testing.expectEqual(@as(u32, 0), clampOptionalDiskSize(0)); // 0 = no disk, kept
+    try std.testing.expectEqual(@as(u32, 20), clampOptionalDiskSize(20));
+    try std.testing.expectEqual(@as(u32, 65536), clampOptionalDiskSize(65536));
+    try std.testing.expectEqual(@as(u32, 65536), clampOptionalDiskSize(999999));
+    try std.testing.expectEqual(@as(u32, 65536), clampOptionalDiskSize(std.math.maxInt(u32)));
+}
+
+test "fuzz: clampOptionalDiskSize stays in range for arbitrary input" {
+    var prng = std.Random.DefaultPrng.init(0xD15C_0002);
+    const rnd = prng.random();
+    var i: usize = 0;
+    while (i < 8000) : (i += 1) {
+        const in = rnd.int(u32);
+        const out = clampOptionalDiskSize(in);
+        try std.testing.expect(out <= 65536);
+        if (in == 0) try std.testing.expectEqual(@as(u32, 0), out);
+        if (in >= 1 and in <= 65536) try std.testing.expectEqual(in, out);
+    }
 }
 
 test "fuzz: isValidVmName never crashes on arbitrary input" {

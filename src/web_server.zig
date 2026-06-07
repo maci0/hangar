@@ -24,7 +24,6 @@ const path_helpers = @import("path_helpers.zig");
 const transport = @import("transport.zig");
 
 extern fn time(t: ?*c_long) c_long;
-extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
 
 // HTTP status codes
 const HTTP_OK: u16 = 200;
@@ -63,10 +62,7 @@ const AF_UNIX: c_uint = 1;
 const SOL_SOCKET: c_int = 1;
 const SO_REUSEADDR: c_int = 2;
 const SO_RCVTIMEO: c_int = 20;
-const SHUT_WR: c_int = 1;
 const SHUT_RDWR: c_int = 2;
-const F_SETFL: c_int = 4;
-const O_NONBLOCK: c_int = 2048;
 const IPPROTO_IPV6: c_int = 41;
 const IPV6_V6ONLY: c_int = 26;
 const IPPROTO_TCP: c_int = 6;
@@ -242,7 +238,8 @@ fn validApiKey(key: []const u8) bool {
 /// Validate the request's `Host` header against the loopback allowlist.
 ///
 /// Only enforced in loopback mode (no custom `KV_API_KEY`), where the daemon
-/// binds `::1`/`127.0.0.1` and accepts the publicly-known built-in key. Without
+/// binds the IPv4-mapped loopback (`::ffff:127.0.0.1`) and accepts the
+/// publicly-known built-in key. Without
 /// this, a DNS-rebinding attack defeats the same-origin/CORS protection: a page
 /// the victim visits rebinds its own hostname to `127.0.0.1`, becomes
 /// same-origin with the daemon (so no CORS preflight blocks a custom header),
@@ -496,7 +493,7 @@ fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8
     append(&hbuf, &hlen, "Content-Type: ");
     append(&hbuf, &hlen, ct);
     append(&hbuf, &hlen, "\r\nServer: hangar");
-    if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
+    if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null or std.mem.indexOf(u8, ct, "image/svg+xml") != null) {
         append(&hbuf, &hlen, "\r\nCache-Control: public, max-age=86400");
     } else {
         // Dynamic responses (API JSON, errors) carry auth-gated VM state — disk
@@ -790,7 +787,11 @@ fn serveHtml(conn: c.fd_t) void {
                 if (appstate.vms[i].status == .running) running += 1;
             }
         }
-        response = std.fmt.bufPrint(&snap_buf, "{{\"status\":\"ok\",\"version\":\"1.0\",\"vms\":{d},\"running\":{d}}}", .{ total, running }) catch "{\"status\":\"ok\",\"version\":\"1.0\"}";
+        // Report a degraded status when persistence is disabled (unreadable or
+        // newer vms.json) so a probe sees a service that accepts requests but
+        // silently drops every config change, instead of a flat "ok".
+        const health_status = if (persist.loadDegraded()) "degraded" else "ok";
+        response = std.fmt.bufPrint(&snap_buf, "{{\"status\":\"{s}\",\"version\":\"1.0\",\"vms\":{d},\"running\":{d},\"persist\":\"{s}\"}}", .{ health_status, total, running, health_status }) catch "{\"status\":\"ok\",\"version\":\"1.0\"}";
         content_type = "application/json; charset=utf-8";
     } else if (routeExact(req, "GET /api/config")) {
         content_type = "application/json; charset=utf-8";
@@ -1944,6 +1945,41 @@ fn handleVmLog(conn: c.fd_t, req: []const u8) !void {
     logAudit("vm log read", name_buf[0..name_len]);
 }
 
+/// Best-effort: create the primary disk image for a freshly-configured VM and
+/// point its `disk_path` at it.
+///
+/// VM creation (`/api/new`, `/api/quickstart`) collects a "Disk Size (GB)" but
+/// no disk path — the path is derived here as `$HOME/VMs/<name>.<ext>`, matching
+/// the clone flow. Without this the size was stored but no image was ever
+/// created and `disk_path` stayed empty, so the VM booted with no hard disk and
+/// `disk_size_gb` had no effect.
+///
+/// Best-effort by design: if `qemu-img` is missing or the write fails, the
+/// failure is logged and `disk_path` is left empty (so no broken `-drive` is
+/// emitted and VM creation still succeeds, exactly as before this wiring). An
+/// existing image at the target path is adopted, never recreated, so a name
+/// collision can't destroy on-disk guest data.
+fn ensurePrimaryDisk(cfg: *vm.VmConfig) void {
+    if (cfg.hasDisk()) return; // path already set (import/clone path)
+    if (cfg.disk_size_gb == 0 or !cfg.hasName()) return;
+    const home = appio.getenv("HOME") orelse "/tmp";
+    var dir_buf: [vm.MAX_PATH]u8 = undefined;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/VMs", .{home}) catch return;
+    std.Io.Dir.cwd().createDirPath(appio.io(), dir) catch {};
+    var path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "{s}/VMs/{s}.{s}", .{ home, cfg.getNameSlice(), std.mem.span(cfg.disk_format.toStr()) }) catch return;
+    // Adopt an existing image rather than letting qemu-img recreate (destroy) it.
+    if (std.Io.Dir.cwd().access(appio.io(), path, .{})) |_| {
+        cfg.setDiskPath(path);
+        return;
+    } else |_| {}
+    qemu.createDiskImage(path, cfg.disk_size_gb, cfg.disk_format, std.heap.page_allocator) catch |e| {
+        logOpErr("create disk", e, cfg.getNameSlice());
+        return; // leave disk_path empty: no -drive emitted, same as before
+    };
+    cfg.setDiskPath(path);
+}
+
 fn handleNewVm(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
@@ -2008,7 +2044,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setDisk2Path(val);
         }
-        if (std.mem.eql(u8, key, "disk2_size")) cfg.disk2_size_gb = std.fmt.parseInt(u32, val, 10) catch cfg.disk2_size_gb;
+        if (std.mem.eql(u8, key, "disk2_size")) cfg.disk2_size_gb = vm.clampOptionalDiskSize(std.fmt.parseInt(u32, val, 10) catch cfg.disk2_size_gb);
         if (std.mem.eql(u8, key, "disk2_format")) cfg.disk2_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk2_format.toIndex());
         if (std.mem.eql(u8, key, "floppy")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
@@ -2091,25 +2127,25 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setExtraDiskPath(0, val);
         }
-        if (std.mem.eql(u8, key, "extra0_size")) cfg.extra_disks[0].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra0_size")) cfg.extra_disks[0].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
         if (std.mem.eql(u8, key, "extra0_format")) cfg.extra_disks[0].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[0].format.toIndex());
         if (std.mem.eql(u8, key, "extra1_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setExtraDiskPath(1, val);
         }
-        if (std.mem.eql(u8, key, "extra1_size")) cfg.extra_disks[1].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra1_size")) cfg.extra_disks[1].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
         if (std.mem.eql(u8, key, "extra1_format")) cfg.extra_disks[1].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[1].format.toIndex());
         if (std.mem.eql(u8, key, "extra2_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setExtraDiskPath(2, val);
         }
-        if (std.mem.eql(u8, key, "extra2_size")) cfg.extra_disks[2].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra2_size")) cfg.extra_disks[2].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
         if (std.mem.eql(u8, key, "extra2_format")) cfg.extra_disks[2].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[2].format.toIndex());
         if (std.mem.eql(u8, key, "extra3_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setExtraDiskPath(3, val);
         }
-        if (std.mem.eql(u8, key, "extra3_size")) cfg.extra_disks[3].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra3_size")) cfg.extra_disks[3].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
         if (std.mem.eql(u8, key, "extra3_format")) cfg.extra_disks[3].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[3].format.toIndex());
     }
 
@@ -2126,11 +2162,11 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     }
     if (!has_vnc_port) cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     if (!has_spice_port) cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+    ensurePrimaryDisk(&cfg);
     appstate.vms[appstate.vm_count] = cfg;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-        var ebuf: [64]u8 = undefined;
-        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        logSaveErr("", e);
         return "save failed";
     };
     logAudit("create", cfg.getNameSlice());
@@ -2224,12 +2260,12 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
     cfg.setMacAddress(std.mem.span(mac));
     cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+    ensurePrimaryDisk(&cfg);
 
     appstate.vms[appstate.vm_count] = cfg;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-        var ebuf: [64]u8 = undefined;
-        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        logSaveErr("", e);
         return "save failed";
     };
     // Match the audit trail of the other VM-creation paths (handleNewVm,
@@ -2285,9 +2321,15 @@ fn handleClone(req: []const u8) ![]const u8 {
     if (do_linked) {
         const disk_path: []const u8 = std.mem.span(disk_path_z);
         if (vmm_handle) |h| {
-            appstate.g_vmm.createLinkedCloneFn(h, disk_path, src_disk, @intFromEnum(src_fmt), std.heap.page_allocator) catch return "linkerr";
+            appstate.g_vmm.createLinkedCloneFn(h, disk_path, src_disk, @intFromEnum(src_fmt), std.heap.page_allocator) catch |e| {
+                logOpErr("clone (linked)", e, clone.getNameSlice());
+                return "linkerr";
+            };
         } else {
-            qemu.createLinkedClone(disk_path, src_disk, src_fmt, std.heap.page_allocator) catch return "linkerr";
+            qemu.createLinkedClone(disk_path, src_disk, src_fmt, std.heap.page_allocator) catch |e| {
+                logOpErr("clone (linked)", e, clone.getNameSlice());
+                return "linkerr";
+            };
         }
         clone.setDiskPath(disk_path);
         clone.disk_format = .qcow2;
@@ -2299,8 +2341,7 @@ fn handleClone(req: []const u8) ![]const u8 {
     appstate.vms[appstate.vm_count] = clone;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-        var ebuf: [64]u8 = undefined;
-        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        logSaveErr("", e);
         return "save failed";
     };
     logAudit("clone", clone.getNameSlice());
@@ -2331,8 +2372,7 @@ fn handleDelete(req: []const u8) ![]const u8 {
     appstate.vm_started[appstate.vm_count - 1] = 0;
     appstate.vm_count -= 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-        var ebuf: [64]u8 = undefined;
-        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        logSaveErr("", e);
         return "save failed";
     };
     return "ok";
@@ -2360,8 +2400,7 @@ fn handleUndo() ![]const u8 {
     appstate.undo_available = false;
 
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-        var ebuf: [64]u8 = undefined;
-        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        logSaveErr("", e);
         return "save failed";
     };
     // Restoring a deleted VM is the inverse of the audited "delete"; log it so
@@ -2484,7 +2523,7 @@ fn handleSave(req: []const u8) ![]const u8 {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setDisk2Path(val);
         }
-        if (std.mem.eql(u8, key, "disk2_size")) v.disk2_size_gb = std.fmt.parseInt(u32, val, 10) catch v.disk2_size_gb;
+        if (std.mem.eql(u8, key, "disk2_size")) v.disk2_size_gb = vm.clampOptionalDiskSize(std.fmt.parseInt(u32, val, 10) catch v.disk2_size_gb);
         if (std.mem.eql(u8, key, "disk2_format")) v.disk2_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk2_format.toIndex());
         if (std.mem.eql(u8, key, "floppy")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
@@ -2561,25 +2600,25 @@ fn handleSave(req: []const u8) ![]const u8 {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setExtraDiskPath(0, val);
         }
-        if (std.mem.eql(u8, key, "extra0_size")) v.extra_disks[0].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra0_size")) v.extra_disks[0].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
         if (std.mem.eql(u8, key, "extra0_format")) v.extra_disks[0].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[0].format.toIndex());
         if (std.mem.eql(u8, key, "extra1_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setExtraDiskPath(1, val);
         }
-        if (std.mem.eql(u8, key, "extra1_size")) v.extra_disks[1].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra1_size")) v.extra_disks[1].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
         if (std.mem.eql(u8, key, "extra1_format")) v.extra_disks[1].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[1].format.toIndex());
         if (std.mem.eql(u8, key, "extra2_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setExtraDiskPath(2, val);
         }
-        if (std.mem.eql(u8, key, "extra2_size")) v.extra_disks[2].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra2_size")) v.extra_disks[2].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
         if (std.mem.eql(u8, key, "extra2_format")) v.extra_disks[2].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[2].format.toIndex());
         if (std.mem.eql(u8, key, "extra3_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setExtraDiskPath(3, val);
         }
-        if (std.mem.eql(u8, key, "extra3_size")) v.extra_disks[3].size_gb = form_parsers.parseU32OrDefault(val, 0);
+        if (std.mem.eql(u8, key, "extra3_size")) v.extra_disks[3].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
         if (std.mem.eql(u8, key, "extra3_format")) v.extra_disks[3].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[3].format.toIndex());
     }
     // Settings edits change disk paths, NIC modes, and display ports — data
@@ -2799,8 +2838,7 @@ fn handleRename(req: []const u8) ![]const u8 {
             if (!vm.isValidVmName(val)) return "invalid name";
             appstate.vms[idx].setName(val);
             persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-                var ebuf: [64]u8 = undefined;
-                logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+                logSaveErr("", e);
                 return "save failed";
             };
             logAudit("rename", val);
@@ -3078,8 +3116,7 @@ fn handleImport(req: []const u8) ![]const u8 {
     appstate.vms[appstate.vm_count] = cfg;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-        var ebuf: [64]u8 = undefined;
-        logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
+        logSaveErr("", e);
         return "save failed";
     };
     logAudit("import", cfg.getNameSlice());
@@ -3420,7 +3457,13 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
     }
 
     // Heavy I/O outside the lock — an uploaded disk image can be many GB.
-    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch |e| {
+        // A multi-GB write can fail on a full disk (NoSpaceLeft) or a read-only
+        // VM dir (AccessDenied). Without this the daemon log stays silent and an
+        // operator only sees "write err" in the browser with no cause.
+        logOpErr("disk import write", e, name_buf[0..name_len]);
+        return "write err";
+    };
 
     // Re-acquire to record the new disk2 path, re-validating that the VM didn't
     // move or disappear while unlocked (a concurrent delete compacts the array).
@@ -4498,7 +4541,10 @@ test "fuzz: validApiKey never panics and only accepts printable in-range keys" {
 }
 
 test "checkAuth: accepts correct default API key" {
-    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: hangar\r\n\r\n";
+    // X-API-Key is followed by another header, so its value is terminated by
+    // the CR scan in findHeader (the common case, distinct from the
+    // end-of-headers branch covered by the "key at end" test below).
+    const req = "GET /api/vms HTTP/1.1\r\nX-API-Key: hangar\r\nHost: localhost\r\n\r\n";
     try std.testing.expect(checkAuth(req));
 }
 
@@ -4520,7 +4566,9 @@ test "checkAuth: accepts correct custom auth token" {
         @memset(&auth_token, 0);
     }
 
-    const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: secret\r\n\r\n";
+    // X-API-Key precedes another header → value terminated by the CR scan,
+    // not by end-of-headers (that case is the "custom token at end" test).
+    const req = "GET /api/vms HTTP/1.1\r\nX-API-Key: secret\r\nHost: localhost\r\n\r\n";
     try std.testing.expect(checkAuth(req));
 }
 
@@ -5624,11 +5672,12 @@ pub fn main(init: std.process.Init) !void {
 
     const port: u16 = if (appio.getenv("KV_PORT")) |env| blk: {
         const p = std.fmt.parseInt(u16, env, 10) catch {
-            logErr("KV_PORT is not a valid port number — refusing to start");
+            var pbuf: [128]u8 = undefined;
+            logErr(std.fmt.bufPrint(&pbuf, "KV_PORT '{s}' is not a valid port number (expected 1-65535) — refusing to start", .{env}) catch "KV_PORT is not a valid port number — refusing to start");
             std.process.exit(1);
         };
         if (p == 0) {
-            logErr("KV_PORT must be 1-65535 — refusing to start");
+            logErr("KV_PORT must be 1-65535 (got 0) — refusing to start");
             std.process.exit(1);
         }
         break :blk p;
@@ -5668,11 +5717,13 @@ pub fn main(init: std.process.Init) !void {
     }
     // When expose_all, addr.addr stays zero-initialized (in6addr_any).
     if (c.bind(sock, @ptrCast(&addr), @sizeOf(c.sockaddr.in6)) != 0) {
-        logErr("Failed to bind TCP port — already in use");
+        var bbuf: [160]u8 = undefined;
+        logErr(std.fmt.bufPrint(&bbuf, "Failed to bind TCP port {d} (already in use, or permission denied for a privileged port) — set KV_PORT to a free port and retry", .{port}) catch "Failed to bind TCP port — refusing to start");
         std.process.exit(1);
     }
     if (c.listen(sock, 10) != 0) {
-        logErr("Failed to listen on TCP port");
+        var lbuf: [96]u8 = undefined;
+        logErr(std.fmt.bufPrint(&lbuf, "Failed to listen on TCP port {d} — refusing to start", .{port}) catch "Failed to listen on TCP port");
         std.process.exit(1);
     }
 
@@ -5720,8 +5771,13 @@ pub fn main(init: std.process.Init) !void {
     // humans, but log aggregators need a leveled record confirming the daemon
     // came up and which interface scope it bound to.
     {
-        var sb: [128]u8 = undefined;
-        logAt(.info, std.fmt.bufPrint(&sb, "daemon started: port={d} bind={s}", .{ port, if (expose_all) "all" else "loopback" }) catch "daemon started");
+        var sb: [160]u8 = undefined;
+        // Include the loaded VM count and whether persistence is degraded so an
+        // operator can spot a daemon that came up "healthy" but is refusing to
+        // save (unreadable/newer vms.json) — otherwise that only surfaces on the
+        // first failed save, long after the cause is gone from view.
+        logAt(.info, std.fmt.bufPrint(&sb, "daemon started: port={d} bind={s} vms={d} persist={s}", .{ port, if (expose_all) "all" else "loopback", appstate.vm_count, if (persist.loadDegraded()) "degraded" else "ok" }) catch "daemon started");
+        if (persist.loadDegraded()) logErr("persistence degraded: vms.json unreadable or written by a newer Hangar — saves are disabled until restart with a readable file");
     }
 
     // Spawn thread to accept Unix socket connections

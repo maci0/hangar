@@ -33,6 +33,14 @@ pub const CONFIG_VERSION: u32 = 2;
 /// clobber the user's real config. A restart with a readable file clears it.
 var load_read_failed: bool = false;
 
+/// True when an existing config could not be read or is newer than this build,
+/// so `save` is currently refusing to overwrite vms.json. Lets the daemon
+/// surface "up but persisting is disabled" at startup instead of only when the
+/// first save fails. See `load_read_failed`.
+pub fn loadDegraded() bool {
+    return @atomicLoad(bool, &load_read_failed, .seq_cst);
+}
+
 // ── JSON-friendly intermediate struct ───────────────────────────────
 
 /// Flat VM config — used as an intermediate representation for the
@@ -719,28 +727,31 @@ fn parseJsonIntGeneric(comptime T: type, s: []const u8) ?struct { value: T, rest
     return .{ .value = val, .rest = s[i..] };
 }
 
-/// Parse a signed JSON integer (decimal, optional leading '-'). Returns i32.
-/// Needed for fields that legitimately hold negative values (e.g. window
-/// coordinates on multi-monitor layouts), which `parseJsonInt` rejects.
-fn parseJsonIntSigned(s: []const u8) ?struct { value: i32, rest: []const u8 } {
+/// Generic signed JSON integer parser (decimal, optional leading '-').
+/// Returns null on a lone minus, no digits, or overflow of `T`.
+fn parseJsonIntSignedGeneric(comptime T: type, s: []const u8) ?struct { value: T, rest: []const u8 } {
     var i: usize = 0;
     if (s.len > 0 and s[0] == '-') i += 1;
     while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
     if (i == 0 or (i == 1 and s[0] == '-')) return null;
-    const val = std.fmt.parseInt(i32, s[0..i], 10) catch return null;
+    const val = std.fmt.parseInt(T, s[0..i], 10) catch return null;
     return .{ .value = val, .rest = s[i..] };
+}
+
+/// Parse a signed JSON integer (decimal, optional leading '-'). Returns i32.
+/// Needed for fields that legitimately hold negative values (e.g. window
+/// coordinates on multi-monitor layouts), which `parseJsonInt` rejects.
+fn parseJsonIntSigned(s: []const u8) ?struct { value: i32, rest: []const u8 } {
+    const r = parseJsonIntSignedGeneric(i32, s) orelse return null;
+    return .{ .value = r.value, .rest = r.rest };
 }
 
 /// Parse a signed JSON integer as i64. Mirrors `parseJsonIntSigned` for fields
 /// that are stored as i64 and may legitimately hold negative values (e.g.
 /// `autoprotect_last_epoch`), which the unsigned `parseJsonInt64` rejects.
 fn parseJsonIntSigned64(s: []const u8) ?struct { value: i64, rest: []const u8 } {
-    var i: usize = 0;
-    if (s.len > 0 and s[0] == '-') i += 1;
-    while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
-    if (i == 0 or (i == 1 and s[0] == '-')) return null;
-    const val = std.fmt.parseInt(i64, s[0..i], 10) catch return null;
-    return .{ .value = val, .rest = s[i..] };
+    const r = parseJsonIntSignedGeneric(i64, s) orelse return null;
+    return .{ .value = r.value, .rest = r.rest };
 }
 
 /// Parse a JSON boolean value.
@@ -1423,8 +1434,12 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
         // read — make it visible, because returning 0 here lets the next save()
         // overwrite vms.json with an empty list and destroy the user's VMs.
         if (e != error.FileNotFound) {
-            const msg = "persist: load failed to read vms.json (existing config not loaded)\n";
-            _ = std.c.write(2, msg, msg.len);
+            // Include the error name so an operator can tell apart a permissions
+            // problem (AccessDenied), an I/O error, and an oversize file from the
+            // log alone — saves are about to be refused, so the cause matters.
+            var ebuf: [160]u8 = undefined;
+            const msg = std.fmt.bufPrint(&ebuf, "persist: load failed to read vms.json ({s}) — existing config not loaded, saves disabled until restart\n", .{@errorName(e)}) catch "persist: load failed to read vms.json (existing config not loaded)\n";
+            _ = std.c.write(2, msg.ptr, msg.len);
             // Block save() from overwriting the unreadable-but-present file
             // with our empty in-memory list and destroying the user's VMs.
             @atomicStore(bool, &load_read_failed, true, .seq_cst);
@@ -1506,13 +1521,15 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
             // Enforce model invariants at the deserialization trust boundary.
             // A hand-edited or corrupted vms.json must not inject out-of-range
             // sizing that bypasses the form-parse and QEMU-build clamps. These
-            // mirror the bounds applied on the HTTP create/edit path; sentinel
-            // "0 == absent" fields (disk2/extra-disk sizes) are intentionally
-            // left untouched.
+            // mirror the bounds applied on the HTTP create/edit path; the
+            // optional disk sizes use clampOptionalDiskSize so the "0 == absent"
+            // sentinel survives while still bounding the upper end.
             cfg.memory_mb = vm.clampMemory(cfg.memory_mb);
             cfg.cpu_cores = vm.clampCpuCores(cfg.cpu_cores);
             cfg.cpu_sockets = vm.clampCpuCores(cfg.cpu_sockets);
             cfg.disk_size_gb = vm.clampDiskSize(cfg.disk_size_gb);
+            cfg.disk2_size_gb = vm.clampOptionalDiskSize(cfg.disk2_size_gb);
+            for (&cfg.extra_disks) |*ed| ed.size_gb = vm.clampOptionalDiskSize(ed.size_gb);
             cfg.num_displays = std.math.clamp(cfg.num_displays, 1, vm.MAX_DISPLAYS);
             cfg.autoprotect_interval_min = std.math.clamp(cfg.autoprotect_interval_min, vm.PREF_AUTOPROTECT_INTERVAL_MIN, vm.PREF_AUTOPROTECT_INTERVAL_MAX);
             cfg.autoprotect_max = std.math.clamp(cfg.autoprotect_max, vm.PREF_AUTOPROTECT_MAX_MIN, vm.PREF_AUTOPROTECT_MAX_MAX);
@@ -2882,7 +2899,7 @@ test "loadFromSlice: out-of-range sizing is clamped at the load boundary" {
     var vms: [MAX_VMS]vm.VmConfig = undefined;
     var prefs: vm.Prefs = .{};
     const json =
-        \\{"version":2,"vms":[{"name":"bad","cpu_cores":0,"cpu_sockets":0,"memory_mb":0,"disk_size_gb":0,"num_displays":9999,"autoprotect_interval_min":0,"autoprotect_max":99999}]}
+        \\{"version":2,"vms":[{"name":"bad","cpu_cores":0,"cpu_sockets":0,"memory_mb":0,"disk_size_gb":0,"disk2_size_gb":4294967295,"extra_disk_0_size_gb":4294967295,"num_displays":9999,"autoprotect_interval_min":0,"autoprotect_max":99999}]}
     ;
     const n = loadFromSlice(&vms, json, &prefs);
     try std.testing.expectEqual(@as(usize, 1), n);
@@ -2890,6 +2907,9 @@ test "loadFromSlice: out-of-range sizing is clamped at the load boundary" {
     try std.testing.expectEqual(vm.clampCpuCores(0), vms[0].cpu_cores);
     try std.testing.expectEqual(vm.clampCpuCores(0), vms[0].cpu_sockets);
     try std.testing.expectEqual(vm.clampDiskSize(0), vms[0].disk_size_gb);
+    // Optional disk sizes are capped but keep their non-sentinel meaning.
+    try std.testing.expectEqual(vm.clampOptionalDiskSize(std.math.maxInt(u32)), vms[0].disk2_size_gb);
+    try std.testing.expectEqual(vm.clampOptionalDiskSize(std.math.maxInt(u32)), vms[0].extra_disks[0].size_gb);
     try std.testing.expectEqual(vm.MAX_DISPLAYS, vms[0].num_displays);
     try std.testing.expectEqual(vm.PREF_AUTOPROTECT_INTERVAL_MIN, vms[0].autoprotect_interval_min);
     try std.testing.expectEqual(vm.PREF_AUTOPROTECT_MAX_MAX, vms[0].autoprotect_max);

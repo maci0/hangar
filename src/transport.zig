@@ -339,15 +339,21 @@ fn writeAll(fd: c.fd_t, data: []const u8) void {
 /// authenticated request in loopback mode with no test catching it).
 pub const DEFAULT_API_KEY = "hangar";
 
-/// Resolve the `X-API-Key` value the HTTP client sends. Mirrors the daemon:
-/// an operator-supplied `KV_API_KEY` takes effect, otherwise the built-in
-/// default the daemon falls back to when no custom key is set. An empty or
-/// over-long value is invalid (the daemon refuses to start with one), so we
-/// send the default rather than a header that is guaranteed to be rejected.
+/// Resolve the `X-API-Key` value the HTTP client sends. Mirrors the daemon's
+/// `validApiKey`: an operator-supplied `KV_API_KEY` takes effect, otherwise the
+/// built-in default the daemon falls back to when no custom key is set. A value
+/// the daemon would reject (empty, over-long, or containing a space/control
+/// byte — e.g. the trailing newline from `export KV_API_KEY=$(cat keyfile)`) is
+/// invalid: the daemon refuses to start with one, so we send the default rather
+/// than splice a stray byte into the `X-API-Key:` header and corrupt request
+/// framing.
 fn apiKey() []const u8 {
     const v = std.c.getenv("KV_API_KEY") orelse return DEFAULT_API_KEY;
     const span = std.mem.span(v);
     if (span.len == 0 or span.len > 64) return DEFAULT_API_KEY;
+    for (span) |ch| {
+        if (ch <= 0x20 or ch == 0x7f) return DEFAULT_API_KEY;
+    }
     return span;
 }
 
@@ -523,6 +529,14 @@ test "apiKey: default when unset, honors custom, rejects invalid" {
     @memset(&long, 'x');
     long[79] = 0;
     _ = setenv("KV_API_KEY", @ptrCast(&long), 1); // > 64 bytes → default
+    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+
+    // Trailing newline (the `$(cat keyfile)` footgun) and embedded spaces are
+    // control/space bytes the daemon rejects — the client must too, else the
+    // byte corrupts the X-API-Key header. Falls back to the default.
+    _ = setenv("KV_API_KEY", "secret\n", 1);
+    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+    _ = setenv("KV_API_KEY", "two words", 1);
     try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
 }
 
