@@ -90,17 +90,22 @@ expect_contains "snapshot list shows tag"  'snapA'         "$VMRUN" "$URL" snaps
 expect_contains "snapshot delete"          'ok'            "$VMRUN" "$URL" snapshot delete runVM snapA
 expect_contains "rename"                   'ok'            "$VMRUN" "$URL" rename runVM runVM2
 expect_contains "list shows renamed"       'runVM2'        "$VMRUN" "$URL" list
+# set a field (partial update), then confirm it took via info.
+expect_contains "set mem"                  'ok'            "$VMRUN" "$URL" set runVM2 mem 2048
+expect_contains "info reflects set mem"    'Memory:  2048 MB' "$VMRUN" "$URL" info runVM2
 
 echo ""
 echo "=== vmrun over Unix socket ==="
 expect_contains "unix status"              '"status":"ok"' "$VMRUN" "$UNIX" status
-expect_contains "unix info (2 requests)"   'Memory:  1024 MB' "$VMRUN" "$UNIX" info runVM2
+# Memory is 2048 here: the TCP section's `set mem 2048` ran earlier on this VM.
+expect_contains "unix info (2 requests)"   'Memory:  2048 MB' "$VMRUN" "$UNIX" info runVM2
 
 echo ""
 echo "=== error handling ==="
 expect_fails    "unknown command exits non-zero"  "$VMRUN" "$URL" bogus
 expect_fails    "missing VM not found"            "$VMRUN" "$URL" info nope
 expect_fails    "bad create memory rejected"      "$VMRUN" "$URL" create badVM xx 1 1
+expect_fails    "set unknown field rejected"       "$VMRUN" "$URL" set runVM2 frobnicate 1
 
 # Cleanup the created VM.
 "$VMRUN" "$URL" delete runVM2 >/dev/null 2>&1
