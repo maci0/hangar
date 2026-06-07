@@ -466,7 +466,30 @@ fn resolveVm(allocator: std.mem.Allocator, conn: *transport.Connection, target: 
 
     const json = sendRequest(allocator, conn, "GET", "/api/vms", null) catch return null;
     defer allocator.free(json);
+    // VM names are not unique. Acting on the first match would silently target an
+    // arbitrary VM, so refuse an ambiguous name and tell the user to use the index.
+    if (countVmNameMatches(json, target) > 1) {
+        var b: [192]u8 = undefined;
+        const m = std.fmt.bufPrintZ(&b, "Error: multiple VMs named '{s}'; address it by index (run `list`)\n", .{target}) catch "Error: ambiguous VM name\n";
+        fdWrite(c.STDERR_FILENO, m);
+        std.process.exit(1);
+    }
     return findVmIdxInJson(json, target);
+}
+
+/// Pure helper: count how many VMs in the list JSON have exactly `name`. Uses
+/// the same quoted `"name":"<name>"` pattern as findVmIdxInJson, so it matches
+/// whole names only ("vm1" does not match "vm10").
+fn countVmNameMatches(json: []const u8, name: []const u8) usize {
+    var search_buf: [128]u8 = undefined;
+    const pat = std.fmt.bufPrint(&search_buf, "\"name\":\"{s}\"", .{name}) catch return 0;
+    var n: usize = 0;
+    var rest = json;
+    while (std.mem.indexOf(u8, rest, pat)) |p| {
+        n += 1;
+        rest = rest[p + pat.len ..];
+    }
+    return n;
 }
 
 fn cmdList(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.Io) !void {
@@ -860,6 +883,26 @@ test "extractJsonInt: handles zero value" {
     const obj = "{\"vnc_port\":0,\"spice_port\":5900}";
     const port = extractJsonInt(obj, "vnc_port");
     try std.testing.expectEqual(@as(usize, 0), port.?);
+}
+
+test "countVmNameMatches: counts exact whole-name matches" {
+    const json = "[{\"idx\":0,\"name\":\"web\"},{\"idx\":1,\"name\":\"web10\"},{\"idx\":2,\"name\":\"web\"}]";
+    try std.testing.expectEqual(@as(usize, 2), countVmNameMatches(json, "web"));
+    try std.testing.expectEqual(@as(usize, 1), countVmNameMatches(json, "web10"));
+    try std.testing.expectEqual(@as(usize, 0), countVmNameMatches(json, "db"));
+    try std.testing.expectEqual(@as(usize, 0), countVmNameMatches("", "web"));
+}
+
+test "fuzz: countVmNameMatches never panics on random input" {
+    var prng = std.Random.DefaultPrng.init(0xC0FF_EE42);
+    const rnd = prng.random();
+    var buf: [256]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        _ = countVmNameMatches(buf[0..len], "web");
+    }
 }
 
 test "findVmIdxInJson: finds VM by name in single-element array" {
