@@ -1544,6 +1544,8 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 
     var notes_buf: [4096 * 2]u8 = undefined;
     const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice(), "notes") else "";
+    var tags_buf: [512]u8 = undefined;
+    const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice(), "tags") else "";
 
     var sf_buf: [vm.MAX_PATH]u8 = undefined;
     const sf_e = if (v.hasSharedFolder()) escapeJson(&sf_buf, v.getSharedFolderSlice(), "shared_folder") else "";
@@ -1562,7 +1564,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 
     // First 32 fields
     const part1 = std.fmt.bufPrint(buf[w..],
-        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
+        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}","tags":"{s}"
     , .{
         idx,                                    name_e,                               std.mem.span(v.status.toStr()),       std.mem.span(v.guest_os.label()),
         v.memory_mb,                            v.cpu_cores,                          v.cpu_sockets,                        v.disk_size_gb,
@@ -1571,7 +1573,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         sf_e,                                   usb_e,                                v.usb_policy.toIndex(),               if (v.guest_tools) "true" else "false",
         if (v.autoprotect) "true" else "false", v.autoprotect_interval_min,           v.autoprotect_max,                    if (v.hasDisk2()) "true" else "false",
         v.disk2_size_gb,                        d2_e,                                 v.disk2_format.toIndex(),             if (v.hasFloppy()) "true" else "false",
-        flp_e,                                  pf_e,
+        flp_e,                                  pf_e,                                 tags_e,
     }) catch return error.RenderFailed;
     w += part1.len;
 
@@ -1712,9 +1714,12 @@ fn renderJson(buf: []u8) usize {
         var pf_buf: [1024]u8 = undefined;
         const pf_e = if (v.hasPortForwards()) escapeJson(&pf_buf, v.getPortForwardsSlice(), "port_forwards") else "";
 
-        // First block: up through port_forwards
+        var tags_buf: [512]u8 = undefined;
+        const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice(), "tags") else "";
+
+        // First block: up through tags
         const part1 = std.fmt.bufPrint(buf[w..],
-            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}"
+            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}","tags":"{s}"
         , .{
             i,                                      name_e,                               std.mem.span(v.status.toStr()),       std.mem.span(v.guest_os.label()),
             v.memory_mb,                            v.cpu_cores,                          v.cpu_sockets,                        v.disk_size_gb,
@@ -1723,7 +1728,7 @@ fn renderJson(buf: []u8) usize {
             sf_e,                                   usb_e,                                v.usb_policy.toIndex(),               if (v.guest_tools) "true" else "false",
             if (v.autoprotect) "true" else "false", v.autoprotect_interval_min,           v.autoprotect_max,                    if (v.hasDisk2()) "true" else "false",
             v.disk2_size_gb,                        d2_e,                                 v.disk2_format.toIndex(),             if (v.hasFloppy()) "true" else "false",
-            flp_e,                                  pf_e,
+            flp_e,                                  pf_e,                                 tags_e,
         }) catch {
             w = buf.len;
             break;
@@ -2125,6 +2130,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         }
         if (std.mem.eql(u8, key, "portfw")) cfg.setPortForwards(val);
         if (std.mem.eql(u8, key, "notes")) cfg.setNotes(val);
+        if (std.mem.eql(u8, key, "tags")) cfg.setTags(val);
         if (std.mem.eql(u8, key, "enable_3d")) cfg.enable_3d = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "gpu_device")) cfg.gpu_device = vm.GpuDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.gpu_device.toIndex());
         if (std.mem.eql(u8, key, "display")) cfg.display = vm.DisplayType.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.display.toIndex());
@@ -2674,6 +2680,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         }
         if (std.mem.eql(u8, key, "portfw")) v.setPortForwards(val);
         if (std.mem.eql(u8, key, "notes")) v.setNotes(val);
+        if (std.mem.eql(u8, key, "tags")) v.setTags(val);
         if (std.mem.eql(u8, key, "enable_3d")) v.enable_3d = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "gpu_device")) v.gpu_device = vm.GpuDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.gpu_device.toIndex());
         if (std.mem.eql(u8, key, "display")) v.display = vm.DisplayType.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.display.toIndex());

@@ -619,9 +619,9 @@ fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
 /// keys (handleSave) whose names and semantics are unlikely to drift; keeping
 /// it small avoids the silent no-op a typo'd or server-unknown key would cause.
 const SETTABLE_FIELDS = [_][]const u8{
-    "mem", "cpu", "cpu_sockets", "network", "notes", "boot_order", "vnc_port", "spice_port",
+    "mem", "cpu", "cpu_sockets", "network", "notes", "tags", "boot_order", "vnc_port", "spice_port",
 };
-const SETTABLE_FIELDS_HELP = "mem, cpu, cpu_sockets, network, notes, boot_order, vnc_port, spice_port";
+const SETTABLE_FIELDS_HELP = "mem, cpu, cpu_sockets, network, notes, tags, boot_order, vnc_port, spice_port";
 
 /// Pure: is `field` one this CLI will forward to the daemon's save endpoint?
 fn isSettableField(field: []const u8) bool {
@@ -1096,6 +1096,7 @@ test "isSettableField: allowlist membership" {
     try std.testing.expect(isSettableField("mem"));
     try std.testing.expect(isSettableField("vnc_port"));
     try std.testing.expect(isSettableField("boot_order"));
+    try std.testing.expect(isSettableField("tags"));
     try std.testing.expect(!isSettableField("disk")); // not safely settable post-create
     try std.testing.expect(!isSettableField("name")); // use rename
     try std.testing.expect(!isSettableField(""));

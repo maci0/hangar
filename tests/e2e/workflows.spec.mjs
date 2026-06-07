@@ -121,6 +121,30 @@ test('OVF export streams a non-empty tarball', async ({ page }) => {
     expect(exp.len, 'export tarball should be non-empty').toBeGreaterThan(0);
 });
 
+test('tags save, persist in the list JSON, and drive the sidebar filter', async ({ page }) => {
+    const idx = await createVm(page, 'wf-tags');
+    const r = await api(page, 'POST', `/api/vms/${idx}`, 'tags=prod%2Cweb');
+    expect(r.ok, `save tags: ${r.status} ${r.text}`).toBe(true);
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-tags')].tags).toBe('prod,web');
+    // Sidebar filter matches on tags: filtering by "prod" keeps the tagged VM.
+    await page.fill('#search', 'prod');
+    await expect(page.locator('#vmlist')).toContainText('wf-tags');
+    await page.fill('#search', 'no-such-tag-zzz');
+    await expect(page.locator('#vmlist')).not.toContainText('wf-tags');
+});
+
+test('disk resize grows the primary disk (stopped VM, grow-only)', async ({ page }) => {
+    const idx = await createVm(page, 'wf-resize');
+    const before = (await list(page))[idx].disk;
+    const r = await api(page, 'POST', `/api/vms/${idx}/disk/resize`, 'size=8');
+    expect(r.ok, `resize: ${r.status} ${r.text}`).toBe(true);
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-resize')].disk).toBe(8);
+    expect(8).toBeGreaterThan(before);
+    // Shrink is refused.
+    const s = await api(page, 'POST', `/api/vms/${idx}/disk/resize`, 'size=2');
+    expect(s.text).toContain('shrink not allowed');
+});
+
 test('write-action without the API key is rejected (401)', async ({ page }) => {
     const idx = await createVm(page, 'wf-auth');
     const r = await page.evaluate(async (i) => {

@@ -1045,6 +1045,10 @@ pub const VmConfig = struct {
     notes_buf: [4096]u8 = [_]u8{0} ** 4096,
     notes_len: u16 = 0,
 
+    // ── Tags (free-form, comma-separated, for grouping/filtering) ──
+    tags_buf: [256]u8 = [_]u8{0} ** 256,
+    tags_len: u16 = 0,
+
     // ── Port Forwarding ──────────────────────────────────────────
     // Format: "HOST:GUEST,HOST:GUEST" e.g., "8080:80,2222:22"
     port_fwd_buf: [512]u8 = [_]u8{0} ** 512,
@@ -1279,6 +1283,17 @@ pub const VmConfig = struct {
         @memcpy(self.notes_buf[0..len], s[0..len]);
         self.notes_buf[len] = 0;
         self.notes_len = len;
+    }
+
+    pub fn getTagsSlice(self: *const VmConfig) []const u8 {
+        return self.tags_buf[0..self.tags_len];
+    }
+
+    pub fn setTags(self: *VmConfig, s: []const u8) void {
+        const len: u16 = @intCast(@min(s.len, self.tags_buf.len - 1));
+        @memcpy(self.tags_buf[0..len], s[0..len]);
+        self.tags_buf[len] = 0;
+        self.tags_len = len;
     }
 
     pub fn clearNotes(self: *VmConfig) void {

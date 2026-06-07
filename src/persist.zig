@@ -58,6 +58,7 @@ const VmJson = struct {
     iso_path: []const u8 = "",
     mac_address: []const u8 = "",
     notes: []const u8 = "",
+    tags: []const u8 = "",
     port_forwards: []const u8 = "",
     saved_state_path: []const u8 = "",
     shared_folder: []const u8 = "",
@@ -149,6 +150,7 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.setIsoPath(j.iso_path);
     cfg.setMacAddress(j.mac_address);
     cfg.setNotes(j.notes);
+    cfg.setTags(j.tags);
     cfg.setPortForwards(j.port_forwards);
     cfg.setSavedStatePath(j.saved_state_path);
     cfg.setSharedFolder(j.shared_folder);
@@ -316,6 +318,10 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"notes\": ");
     try emitJsonStr(list, alloc, cfg.getNotesSlice());
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"tags\": ");
+    try emitJsonStr(list, alloc, cfg.getTagsSlice());
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"port_forwards\": ");
@@ -886,6 +892,11 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
         } else if (std.mem.eql(u8, key, "notes")) {
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.setNotes(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "tags")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setTags(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "port_forwards")) {
@@ -1575,6 +1586,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.setIsoPath("/tmp/ubuntu-22.04.iso");
     original.setMacAddress("02:00:11:22:33:44");
     original.setNotes("These are test notes\nfor the VM.");
+    original.setTags("prod,web,critical");
     original.setPortForwards("8080:80,2222:22");
     original.setSavedStatePath("/tmp/state.bin");
     original.setSharedFolder("/srv/share");
@@ -1658,6 +1670,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .iso_path = original.getIsoPathSlice(),
         .mac_address = original.getMacAddressSlice(),
         .notes = original.getNotesSlice(),
+        .tags = original.getTagsSlice(),
         .port_forwards = original.getPortForwardsSlice(),
         .saved_state_path = original.getSavedStatePathSlice(),
         .shared_folder = original.getSharedFolderSlice(),
@@ -1743,6 +1756,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqualStrings("/tmp/ubuntu-22.04.iso", restored.getIsoPathSlice());
     try std.testing.expectEqualStrings("02:00:11:22:33:44", restored.getMacAddressSlice());
     try std.testing.expectEqualStrings("These are test notes\nfor the VM.", restored.getNotesSlice());
+    try std.testing.expectEqualStrings("prod,web,critical", restored.getTagsSlice());
     try std.testing.expectEqualStrings("8080:80,2222:22", restored.getPortForwardsSlice());
     try std.testing.expectEqualStrings("/tmp/state.bin", restored.getSavedStatePathSlice());
     try std.testing.expectEqualStrings("/srv/share", restored.getSharedFolderSlice());
