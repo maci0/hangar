@@ -3666,6 +3666,9 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
         } else {
             dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2", .{ dir, basename }) catch return "path err";
         }
+        // Refuse a filename that resolves to the primary disk — otherwise an
+        // uploaded "disk2" would overwrite the in-use primary qcow2.
+        if (std.mem.eql(u8, dest, primary)) return "name collides with primary disk";
         const nm = v.getNameSlice();
         name_len = @min(nm.len, name_buf.len);
         @memcpy(name_buf[0..name_len], nm[0..name_len]);
@@ -4197,7 +4200,10 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
         const v = bodyVal(body, "default_vm_dir");
         if (v.len > 0) {
             var dir_buf: [vm.MAX_PATH + 1]u8 = undefined;
-            const decoded = if (v.len <= dir_buf.len) urlencode.urlDecode(&dir_buf, v) else v;
+            // urlDecode self-bounds its output to dir_buf.len (decoding only
+            // shrinks), so always decode — the old length guard fell back to the
+            // raw percent-encoded value and stored "%2F.." literally.
+            const decoded = urlencode.urlDecode(&dir_buf, v);
             if (std.mem.indexOf(u8, decoded, "..") != null) return "bad path";
             const n = @min(decoded.len, vm.MAX_PATH);
             @memcpy(appstate.prefs.default_vm_dir_buf[0..n], decoded[0..n]);
