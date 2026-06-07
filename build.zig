@@ -100,13 +100,14 @@ pub fn build(b: *std.Build) !void {
     // tests/e2e. Playwright launches the built binary itself (see
     // playwright.config.mjs); we only need the binary installed first. Requires
     // `npm install` and `npm run e2e:install` (Chromium) to have been run once.
+    // Standalone (not in the umbrella `test` step): Playwright needs `npm
+    // install` + a downloaded Chromium, so depending on it would make the
+    // canonical `zig build test` non-hermetic and fail on a clean checkout. Keep
+    // `zig build test` to the hermetic unit + fuzz suite; run e2e explicitly.
     const web_e2e = b.step("web-e2e", "Web UI end-to-end tests (Playwright)");
     const web_e2e_cmd = b.addSystemCommand(&.{ "npx", "playwright", "test" });
     web_e2e_cmd.step.dependOn(&install_web_exe.step);
     web_e2e.dependOn(&web_e2e_cmd.step);
-
-    // Include the Playwright e2e suite in the umbrella test step.
-    test_step.dependOn(&web_e2e_cmd.step);
 
     // ── Shell integration tests (standalone; not in the umbrella) ──
     // They spawn a real daemon on a temp port + $HOME and exercise the HTTP API
