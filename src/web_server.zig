@@ -3765,6 +3765,22 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
     return "ok";
 }
 
+/// Byte size of a file, or 0 if it can't be stat'd. Used to fill the OVF
+/// descriptor's `ovf:size` from the converted VMDKs (strict importers/ovftool
+/// validate it against the actual file in the OVA).
+fn fileByteSize(path: []const u8) u64 {
+    var pbuf: [vm.MAX_PATH + 1]u8 = undefined;
+    if (path.len >= pbuf.len) return 0;
+    @memcpy(pbuf[0..path.len], path);
+    pbuf[path.len] = 0;
+    const fd = c.open(@ptrCast(&pbuf), .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return 0;
+    defer _ = c.close(fd);
+    const end = c.lseek(fd, 0, 2); // SEEK_END
+    if (end < 0) return 0;
+    return @intCast(end);
+}
+
 /// Create OVF+VMDK export, tar+gzip it, and stream the result as a download.
 fn handleExport(conn: c.fd_t, req: []const u8) !void {
     // Snapshot everything the conversion/tar/stream below needs under the lock,
@@ -3897,7 +3913,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     };
 
     var tar_buf: [160]u8 = undefined;
-    const tar_path = std.fmt.bufPrintZ(&tar_buf, "/tmp/ovf_export.{d}.{d}.tar.gz", .{ idx, std.c.getpid() }) catch return;
+    const tar_path = std.fmt.bufPrintZ(&tar_buf, "/tmp/ovf_export.{d}.{d}.{d}.tar.gz", .{ idx, std.c.getpid(), ts.nsec }) catch return;
     var tar_cleanup: bool = false;
     defer if (tar_cleanup) {
         _ = c.unlink(tar_path);
@@ -3919,10 +3935,13 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
             return error.ExportFailed;
         };
     }
+    // Capture the converted size now — path_buf is reused for disk2 below.
+    const vmdk1_size = fileByteSize(vmdk_path);
 
     // Convert disk2 if present
     var disk2_href: []const u8 = "";
     var disk2_cap: u64 = 0;
+    var disk2_size: u64 = 0;
     if (has_disk2) {
         disk2_href = "disk2.vmdk";
         disk2_cap = @as(u64, disk2_size_gb) * 1024 * 1024 * 1024;
@@ -3938,6 +3957,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
                 return error.ExportFailed;
             };
         }
+        disk2_size = fileByteSize(d2_path);
     }
 
     // Build OVF descriptor after all conversions
@@ -3948,11 +3968,11 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         .memory_mb = memory_mb,
         .disk_capacity_bytes = disk_cap,
         .vmdk_href = vmdk_name,
-        .vmdk_size_bytes = 0,
+        .vmdk_size_bytes = vmdk1_size,
         .has_network = has_network,
         .disk2_href = disk2_href,
         .disk2_capacity_bytes = disk2_cap,
-        .disk2_size_bytes = 0,
+        .disk2_size_bytes = disk2_size,
     };
     var ovf_buf: [ovf.max_descriptor_len]u8 = undefined;
     const xml = ovf.buildDescriptor(spec, &ovf_buf) catch {
