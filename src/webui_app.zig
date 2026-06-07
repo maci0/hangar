@@ -69,6 +69,30 @@ fn findBackendBinary(buf: []u8) ![:0]const u8 {
 
 /// Spawn the hangar-web backend process and wait until it accepts connections
 /// on `port` (the port the child binds via inherited KV_PORT).
+/// Open `url` in the system default browser via xdg-open (fire-and-forget).
+/// Used when the native WebView backend is unavailable, instead of webui's own
+/// browser-show path, which drives the GTK/webkit loop and crashes on some hosts.
+fn openInBrowser(url: [:0]const u8) !void {
+    const pid = std.c.fork();
+    if (pid < 0) return error.ForkFailed;
+    if (pid == 0) {
+        const prog: [*:0]const u8 = "xdg-open";
+        const argv: [3:null]?[*:0]const u8 = .{ prog, url.ptr, null };
+        _ = execvp(prog, @ptrCast(&argv));
+        std.c._exit(1);
+    }
+    // Parent doesn't track xdg-open: it returns promptly after launching.
+}
+
+/// Block until the spawned backend exits (used when running in browser-fallback
+/// mode, where there's no webui window to wait on). Keeps the daemon serving.
+fn waitForBackend() void {
+    if (g_child_pid <= 0) return;
+    var status: c_int = 0;
+    _ = waitpid(g_child_pid, &status, 0);
+    g_child_pid = -1;
+}
+
 fn spawnBackend(port: u16) !void {
     const pid = std.c.fork();
     if (pid < 0) return error.ForkFailed;
@@ -240,17 +264,21 @@ pub fn main(init: std.process.Init) !void {
 
     // Show the window using WebView for a native desktop experience.
     w.showWv(url) catch {
-        // Fall back to browser-based window if WebView fails.
-        w.show(url) catch {
-            // Both window backends failed: report on stderr, tear down the
-            // spawned backend (std.process.exit skips the deferred stopBackend),
-            // and exit 1 — the documented runtime-error code. A bare `return`
-            // here would have exited 0 and orphaned the child process.
+        // The embedded WebView is unavailable on this host. Do NOT fall back to
+        // webui's own browser-show: it drives the same GTK/webkit event loop and
+        // segfaults on some webkit2gtk builds (a null webView in the title-change
+        // signal handler). Open the system browser directly and keep the daemon
+        // alive until it exits, so the UI still works.
+        openInBrowser(url) catch {
             const msg = "Error: failed to open hangar-webui window\n";
             _ = std.c.write(2, msg.ptr, msg.len);
             stopBackend();
             std.process.exit(1);
         };
+        const note = "hangar-webui: native WebView unavailable; opened the UI in your browser.\nPress Ctrl-C to stop.\n";
+        _ = std.c.write(2, note.ptr, note.len);
+        waitForBackend();
+        return;
     };
 
     // Block until the window is closed.
