@@ -1970,32 +1970,44 @@ fn handleVmLog(conn: c.fd_t, req: []const u8) !void {
 /// emitted and VM creation still succeeds, exactly as before this wiring). An
 /// existing image at the target path is adopted, never recreated, so a name
 /// collision can't destroy on-disk guest data.
-fn ensurePrimaryDisk(cfg: *vm.VmConfig) void {
-    if (cfg.hasDisk()) return; // path already set (import/clone path)
-    if (cfg.disk_size_gb == 0 or !cfg.hasName()) return;
+/// Returns true only when a NEW image was created by this call (so the caller
+/// can safely delete it on rollback). Adopting a pre-existing image or any
+/// no-op/failure returns false — those must never be deleted.
+fn ensurePrimaryDisk(cfg: *vm.VmConfig) bool {
+    if (cfg.hasDisk()) return false; // path already set (import/clone path)
+    if (cfg.disk_size_gb == 0 or !cfg.hasName()) return false;
     const home = appio.getenv("HOME") orelse "/tmp";
     var dir_buf: [vm.MAX_PATH]u8 = undefined;
-    const dir = std.fmt.bufPrint(&dir_buf, "{s}/VMs", .{home}) catch return;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/VMs", .{home}) catch return false;
     std.Io.Dir.cwd().createDirPath(appio.io(), dir) catch {};
     var path_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/VMs/{s}.{s}", .{ home, cfg.getNameSlice(), std.mem.span(cfg.disk_format.toStr()) }) catch return;
+    const path = std.fmt.bufPrintZ(&path_buf, "{s}/VMs/{s}.{s}", .{ home, cfg.getNameSlice(), std.mem.span(cfg.disk_format.toStr()) }) catch return false;
     // Adopt an existing image rather than letting qemu-img recreate (destroy) it.
     if (std.Io.Dir.cwd().access(appio.io(), path, .{})) |_| {
         cfg.setDiskPath(path);
-        return;
+        return false; // adopted, not created — caller must not delete it
     } else |_| {}
     qemu.createDiskImage(path, cfg.disk_size_gb, cfg.disk_format, std.heap.page_allocator) catch |e| {
         logOpErr("create disk", e, cfg.getNameSlice());
-        return; // leave disk_path empty: no -drive emitted, same as before
+        return false; // leave disk_path empty: no -drive emitted, same as before
     };
     cfg.setDiskPath(path);
+    return true;
 }
 
 fn handleNewVm(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-
-    if (appstate.vm_count >= appstate.MAX_VMS) return "full";
+    // Build + validate the config without touching shared state, then take the
+    // lock only to read prefs / assign ports. `ensurePrimaryDisk` forks
+    // `qemu-img create` (a blocking runWait), so it must run with the lock
+    // released — holding vms_mutex across it would freeze every other handler
+    // and the liveness/autoprotect tickers (project rule: never hold a lock
+    // across I/O). After the disk is created we re-acquire the lock, RE-CHECK
+    // capacity (the table may have filled while unlocked), then commit.
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        if (appstate.vm_count >= appstate.MAX_VMS) return "full";
+    }
     // Parse body: name=...&mem=...&cpu=...&disk=... plus all advanced fields (for undo restore)
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
@@ -2160,20 +2172,39 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "extra3_format")) cfg.extra_disks[3].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[3].format.toIndex());
     }
 
-    // Apply defaults for fields not explicitly provided
-    if (!has_autoprotect) {
-        cfg.autoprotect = appstate.prefs.autoprotect_enabled_default;
-        cfg.autoprotect_interval_min = appstate.prefs.autoprotect_interval_min_default;
-        cfg.autoprotect_max = appstate.prefs.autoprotect_max_default;
+    // Apply defaults for fields not explicitly provided. Reading prefs/ports
+    // needs the lock; port assignment is recomputed after the disk is created
+    // (below) in case the table changed while unlocked.
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        if (!has_autoprotect) {
+            cfg.autoprotect = appstate.prefs.autoprotect_enabled_default;
+            cfg.autoprotect_interval_min = appstate.prefs.autoprotect_interval_min_default;
+            cfg.autoprotect_max = appstate.prefs.autoprotect_max_default;
+        }
     }
     if (!has_mac) {
         var mac_buf: [18]u8 = undefined;
         const mac = vm.generateMacAddress(&mac_buf);
         cfg.setMacAddress(std.mem.span(mac));
     }
+
+    // Create the primary disk image with the lock released — this forks
+    // `qemu-img create` (blocking). Best-effort: on failure disk_path stays
+    // empty, exactly as before.
+    const disk_created = ensurePrimaryDisk(&cfg);
+
+    // Re-acquire the lock to assign ports and commit. RE-CHECK capacity: the
+    // array may have filled while we were creating the disk unlocked.
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (appstate.vm_count >= appstate.MAX_VMS) {
+        if (disk_created) cleanupCreatedDisk(&cfg);
+        return "full";
+    }
     if (!has_vnc_port) cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     if (!has_spice_port) cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
-    ensurePrimaryDisk(&cfg);
     appstate.vms[appstate.vm_count] = cfg;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
@@ -2182,6 +2213,19 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     };
     logAudit("create", cfg.getNameSlice());
     return "ok";
+}
+
+/// Delete a disk image `ensurePrimaryDisk` just created when the VM ends up not
+/// being committed (the table filled while the lock was released). Only call
+/// this when `ensurePrimaryDisk` returned true (it newly created the image) so a
+/// pre-existing/adopted image is never destroyed. Best-effort.
+fn cleanupCreatedDisk(cfg: *const vm.VmConfig) void {
+    const dp = cfg.getDiskPathSlice();
+    if (dp.len == 0 or dp.len >= vm.MAX_PATH) return;
+    var path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    @memcpy(path_buf[0..dp.len], dp);
+    path_buf[dp.len] = 0;
+    _ = c.unlink(@ptrCast(&path_buf));
 }
 
 const CatalogEntry = struct {
@@ -2239,12 +2283,7 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
     const slug = rest[0..end];
 
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-
-    if (appstate.vm_count >= appstate.MAX_VMS) return "full";
-
-    // Find the matching catalog entry.
+    // Find the matching catalog entry (no shared state — needs no lock).
     var template: ?CatalogEntry = null;
     for (catalog) |entry| {
         if (std.mem.eql(u8, entry.id, slug)) {
@@ -2261,17 +2300,36 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
     cfg.disk_size_gb = tmpl.disk_size_gb;
     cfg.guest_os = vm.GuestOs.fromIndex(tmpl.guest_os);
 
-    // Apply sensible defaults.
-    cfg.autoprotect = appstate.prefs.autoprotect_enabled_default;
-    cfg.autoprotect_interval_min = appstate.prefs.autoprotect_interval_min_default;
-    cfg.autoprotect_max = appstate.prefs.autoprotect_max_default;
-
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     cfg.setMacAddress(std.mem.span(mac));
+
+    // Take the lock only to check capacity and read prefs. `ensurePrimaryDisk`
+    // (below) forks `qemu-img create`, a blocking call that must not run under
+    // the lock (project rule: never hold a lock across I/O).
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        if (appstate.vm_count >= appstate.MAX_VMS) return "full";
+        // Apply sensible defaults.
+        cfg.autoprotect = appstate.prefs.autoprotect_enabled_default;
+        cfg.autoprotect_interval_min = appstate.prefs.autoprotect_interval_min_default;
+        cfg.autoprotect_max = appstate.prefs.autoprotect_max_default;
+    }
+
+    // Create the primary disk image with the lock released.
+    const disk_created = ensurePrimaryDisk(&cfg);
+
+    // Re-acquire the lock to assign ports and commit. RE-CHECK capacity: the
+    // array may have filled while we were creating the disk unlocked.
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (appstate.vm_count >= appstate.MAX_VMS) {
+        if (disk_created) cleanupCreatedDisk(&cfg);
+        return "full";
+    }
     cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
-    ensurePrimaryDisk(&cfg);
 
     appstate.vms[appstate.vm_count] = cfg;
     appstate.vm_count += 1;
@@ -3295,27 +3353,48 @@ fn handleMigrateCancel(req: []const u8) ![]const u8 {
 
 /// Stream the disk2 image file to the client as a download.
 fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    // Reply with a real HTTP status on every failure path. A bare `return` here
-    // closes the socket with no response, so the client sees an empty reply it
-    // cannot tell apart from a network drop instead of a 400/404/500.
-    const idx = parseIdx(req, "GET /api/vms/") orelse {
-        writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
-        return;
-    };
-    if (idx >= appstate.vm_count) {
-        writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
-        return;
-    }
-    const v = &appstate.vms[idx];
-    if (!v.hasDisk2()) {
-        writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no disk2\"}");
-        return;
+    // Snapshot the disk path + name under the lock, then release it before any
+    // filesystem I/O. Streaming a multi-GB disk image while holding vms_mutex
+    // would freeze every other handler and the liveness/autoprotect tickers for
+    // the whole transfer (project rule: never hold a lock across I/O).
+    var path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var name_len: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        // Reply with a real HTTP status on every failure path. A bare `return`
+        // here closes the socket with no response, so the client sees an empty
+        // reply it cannot tell apart from a network drop instead of a 400/404.
+        const idx = parseIdx(req, "GET /api/vms/") orelse {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
+            return;
+        };
+        if (idx >= appstate.vm_count) {
+            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
+            return;
+        }
+        const v = &appstate.vms[idx];
+        if (!v.hasDisk2()) {
+            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no disk2\"}");
+            return;
+        }
+        const dp = std.mem.span(v.getDisk2Path());
+        if (dp.len == 0 or dp.len >= path_buf.len) {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"bad disk2 path\"}");
+            return;
+        }
+        @memcpy(path_buf[0..dp.len], dp);
+        path_buf[dp.len] = 0;
+        const nm = v.getNameSlice();
+        if (nm.len <= name_buf.len) {
+            @memcpy(name_buf[0..nm.len], nm);
+            name_len = nm.len;
+        }
     }
 
-    const disk2_path = v.getDisk2Path();
-    const fd = c.open(@ptrCast(disk2_path), .{ .ACCMODE = .RDONLY });
+    const disk2_path: [*:0]const u8 = @ptrCast(&path_buf);
+    const fd = c.open(disk2_path, .{ .ACCMODE = .RDONLY });
     if (fd < 0) {
         // The disk2 file is recorded on the VM but cannot be opened (deleted out
         // from under us, permissions, bad path). Without this line a failed
@@ -3323,7 +3402,7 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
         // explains why.
         var nb: [vm.MAX_NAME]u8 = undefined;
         var eb: [256]u8 = undefined;
-        logErr(std.fmt.bufPrint(&eb, "disk2 download: open failed vm=\"{s}\"", .{sanitizeLogName(&nb, v.getNameSlice())}) catch "disk2 download: open failed");
+        logErr(std.fmt.bufPrint(&eb, "disk2 download: open failed vm=\"{s}\"", .{sanitizeLogName(&nb, name_buf[0..name_len])}) catch "disk2 download: open failed");
         writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"disk2 open failed\"}");
         return;
     }
@@ -3364,7 +3443,7 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
     }
 
     // Audit the completed secondary-disk download: a VM disk image left the host.
-    logAudit("disk2 download", v.getNameSlice());
+    logAudit("disk2 download", name_buf[0..name_len]);
 }
 
 /// Accept a multipart/form-data file upload for disk2.
@@ -3517,42 +3596,114 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
 
 /// Create OVF+VMDK export, tar+gzip it, and stream the result as a download.
 fn handleExport(conn: c.fd_t, req: []const u8) !void {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    // Client-input failures get a real HTTP status; a bare `return` would close
-    // the socket with no response (an empty reply indistinguishable from a drop).
-    const idx = parseIdx(req, "POST /api/vms/") orelse {
-        writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
-        return;
-    };
-    if (idx >= appstate.vm_count) {
-        writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
-        return;
-    }
-    const v = &appstate.vms[idx];
-
-    // The name field is optional, so a request without a body is valid and must
-    // fall back to the VM's own name rather than silently abort.
-    const body: []const u8 = if (std.mem.indexOf(u8, req, "\r\n\r\n")) |bs| req[bs + 4 ..] else "";
-    var raw_name: []const u8 = "";
-    var pairs = std.mem.splitScalar(u8, body, '&');
-    while (pairs.next()) |pair| {
-        var kv = std.mem.splitScalar(u8, pair, '=');
-        const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
-        if (std.mem.eql(u8, key, "name")) {
-            raw_name = val;
+    // Snapshot everything the conversion/tar/stream below needs under the lock,
+    // then release it before any qemu-img/tar/filesystem I/O. A multi-GB export
+    // runs for minutes; holding vms_mutex across it would freeze every other
+    // handler and the liveness/autoprotect tickers for the whole transfer
+    // (project rule: never hold a lock across I/O).
+    var disk1_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var disk1_path_len: usize = 0;
+    var disk2_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var disk2_path_len: usize = 0;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var name_len: usize = 0;
+    var export_name_buf: [vm.MAX_NAME]u8 = undefined;
+    var export_name_len: usize = 0;
+    var disk_format: vm.DiskFormat = undefined;
+    var disk2_format: vm.DiskFormat = undefined;
+    var disk_size_gb: u32 = 0;
+    var disk2_size_gb: u32 = 0;
+    var has_disk2: bool = false;
+    var has_network: bool = false;
+    var cpu_cores: u32 = 0;
+    var memory_mb: u32 = 0;
+    var idx: usize = 0;
+    var vmm_handle: ?@import("hv/interface.zig").VmmHandle = null;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        // Client-input failures get a real HTTP status; a bare `return` would close
+        // the socket with no response (an empty reply indistinguishable from a drop).
+        idx = parseIdx(req, "POST /api/vms/") orelse {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
+            return;
+        };
+        if (idx >= appstate.vm_count) {
+            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
+            return;
         }
-    }
-    var name_decode_buf: [vm.MAX_NAME]u8 = undefined;
-    const export_name: []const u8 = if (raw_name.len > 0) blk: {
-        const decoded = urlencode.urlDecode(&name_decode_buf, raw_name);
-        if (!vm.isValidVmName(decoded) or std.mem.indexOf(u8, decoded, "..") != null) {
+        const v = &appstate.vms[idx];
+
+        // The name field is optional, so a request without a body is valid and must
+        // fall back to the VM's own name rather than silently abort.
+        const body: []const u8 = if (std.mem.indexOf(u8, req, "\r\n\r\n")) |bs| req[bs + 4 ..] else "";
+        var raw_name: []const u8 = "";
+        var pairs = std.mem.splitScalar(u8, body, '&');
+        while (pairs.next()) |pair| {
+            var kv = std.mem.splitScalar(u8, pair, '=');
+            const key = kv.next() orelse continue;
+            const val = kv.next() orelse continue;
+            if (std.mem.eql(u8, key, "name")) {
+                raw_name = val;
+            }
+        }
+        var name_decode_buf: [vm.MAX_NAME]u8 = undefined;
+        const export_name: []const u8 = if (raw_name.len > 0) blk: {
+            const decoded = urlencode.urlDecode(&name_decode_buf, raw_name);
+            if (!vm.isValidVmName(decoded) or std.mem.indexOf(u8, decoded, "..") != null) {
+                writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
+                return;
+            }
+            break :blk decoded;
+        } else v.getNameSlice();
+        if (export_name.len > export_name_buf.len) {
             writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
             return;
         }
-        break :blk decoded;
-    } else v.getNameSlice();
+        @memcpy(export_name_buf[0..export_name.len], export_name);
+        export_name_len = export_name.len;
+
+        // Capture disk paths into local buffers — `v` is dangling after unlock.
+        const d1 = v.getDiskPathSlice();
+        if (d1.len > disk1_path_buf.len - 1) {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"bad disk path\"}");
+            return;
+        }
+        @memcpy(disk1_path_buf[0..d1.len], d1);
+        disk1_path_len = d1.len;
+
+        has_disk2 = v.hasDisk2();
+        if (has_disk2) {
+            const d2 = v.getDisk2PathSlice();
+            if (d2.len > disk2_path_buf.len - 1) {
+                writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"bad disk2 path\"}");
+                return;
+            }
+            @memcpy(disk2_path_buf[0..d2.len], d2);
+            disk2_path_len = d2.len;
+        }
+
+        const nm = v.getNameSlice();
+        if (nm.len <= name_buf.len) {
+            @memcpy(name_buf[0..nm.len], nm);
+            name_len = nm.len;
+        }
+
+        disk_format = v.disk_format;
+        disk2_format = v.disk2_format;
+        disk_size_gb = v.disk_size_gb;
+        disk2_size_gb = v.disk2_size_gb;
+        has_network = v.nics[0].mode != .none;
+        cpu_cores = v.cpu_cores;
+        memory_mb = v.memory_mb;
+        // Capture the handle pointer under the lock; there is no in-place struct
+        // mutation that needs the lock held across the conversion (unlike clone).
+        vmm_handle = appstate.getVmmHandle(idx);
+    }
+
+    const disk1_path: []const u8 = disk1_path_buf[0..disk1_path_len];
+    const disk2_path: []const u8 = disk2_path_buf[0..disk2_path_len];
+    const export_name: []const u8 = export_name_buf[0..export_name_len];
 
     // Per-export unique directory to avoid races with concurrent exports.
     var ts: std.c.timespec = undefined;
@@ -3586,13 +3737,13 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return;
 
     // Convert disk1 to VMDK
-    if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
+    if (vmm_handle) |h| {
+        appstate.g_vmm.convertDiskFn(h, disk1_path, vmdk_path, @intFromEnum(disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
             logErr("export: disk1 conversion (VMM) failed");
             return error.ExportFailed;
         };
     } else {
-        qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch {
+        qemu.convertDiskImage(disk1_path, disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch {
             logErr("export: disk1 conversion (qemu) failed");
             return error.ExportFailed;
         };
@@ -3601,17 +3752,17 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     // Convert disk2 if present
     var disk2_href: []const u8 = "";
     var disk2_cap: u64 = 0;
-    if (v.hasDisk2()) {
+    if (has_disk2) {
         disk2_href = "disk2.vmdk";
-        disk2_cap = @as(u64, v.disk2_size_gb) * 1024 * 1024 * 1024;
+        disk2_cap = @as(u64, disk2_size_gb) * 1024 * 1024 * 1024;
         const d2_path = std.fmt.bufPrint(&path_buf, "{s}/disk2.vmdk", .{dir_path}) catch return;
-        if (appstate.getVmmHandle(idx)) |h2| {
-            appstate.g_vmm.convertDiskFn(h2, v.getDisk2PathSlice(), d2_path, @intFromEnum(v.disk2_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
+        if (vmm_handle) |h2| {
+            appstate.g_vmm.convertDiskFn(h2, disk2_path, d2_path, @intFromEnum(disk2_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
                 logErr("export: disk2 conversion (VMM) failed");
                 return error.ExportFailed;
             };
         } else {
-            qemu.convertDiskImage(v.getDisk2PathSlice(), v.disk2_format, d2_path, .vmdk, std.heap.page_allocator) catch {
+            qemu.convertDiskImage(disk2_path, disk2_format, d2_path, .vmdk, std.heap.page_allocator) catch {
                 logErr("export: disk2 conversion (qemu) failed");
                 return error.ExportFailed;
             };
@@ -3619,15 +3770,15 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     }
 
     // Build OVF descriptor after all conversions
-    const disk_cap = @as(u64, v.disk_size_gb) * 1024 * 1024 * 1024;
+    const disk_cap = @as(u64, disk_size_gb) * 1024 * 1024 * 1024;
     const spec = ovf.Spec{
         .name = export_name,
-        .cpu_cores = v.cpu_cores,
-        .memory_mb = v.memory_mb,
+        .cpu_cores = cpu_cores,
+        .memory_mb = memory_mb,
         .disk_capacity_bytes = disk_cap,
         .vmdk_href = vmdk_name,
         .vmdk_size_bytes = 0,
-        .has_network = v.nics[0].mode != .none,
+        .has_network = has_network,
         .disk2_href = disk2_href,
         .disk2_capacity_bytes = disk2_cap,
         .disk2_size_bytes = 0,
@@ -3704,7 +3855,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
 
     // Audit the completed export: a full VM disk left the host. Without this the
     // exfiltration of a multi-GB image is invisible in the daemon log.
-    logAudit("export", v.getNameSlice());
+    logAudit("export", name_buf[0..name_len]);
 }
 
 /// Parse Content-Length header value from an HTTP request. Returns null if not found.

@@ -112,7 +112,9 @@ expect_body() {
 expect_post() {
     local desc="$1" url="$2" data="$3" expected_body="$4"
     local resp body actual
-    resp=$(curl -s -X POST --max-time 3 -w "\n%{http_code}" -d "$data" "$url" 2>/dev/null || printf "\n000")
+    # Write-actions require the X-API-Key. On loopback with no KV_API_KEY set the
+    # daemon accepts the built-in default key ("hangar"); send it like the UI does.
+    resp=$(curl -s -X POST --max-time 3 -w "\n%{http_code}" -H "X-API-Key: hangar" -d "$data" "$url" 2>/dev/null || printf "\n000")
     actual="${resp##*$'\n'}"
     body="${resp%$'\n'*}"
     if [ "$actual" = "200" ] && echo "$body" | grep -qF "$expected_body"; then
@@ -165,19 +167,23 @@ sleep 0.2
 echo ""
 echo "=== API: Network Save ==="
 expect_post "Network save" "$BASE/api/networks" \
-    '[{"name":"VMnet0","type":"nat","subnet":"10.0.2.0","mask":"255.255.255.0","dhcp":true,"gateway":"10.0.2.2","dhcp_start":"10.0.2.128","dhcp_end":"10.0.2.254","host_iface":""}]' \
+    '{"networks":[{"name":"VMnet0","type":"nat","subnet":"10.0.2.0","mask":"255.255.255.0","dhcp":true,"gateway":"10.0.2.2","dhcp_start":"10.0.2.128","dhcp_end":"10.0.2.254","host_iface":""}]}' \
     "ok"
 
 echo ""
 echo "=== API: Error Handling ==="
 expect_status "Invalid VM detail" "$BASE/api/vms/99" 404
 expect_status "Invalid power" "$BASE/api/vms/99/power" 404
-expect_status "Unknown path falls through to index.html" "$BASE/api/nonexistent" 200
+# Unknown API path is rejected, not silently 200. Unauthenticated GET to an
+# unmatched /api/* route returns 401 (the auth gate runs before routing).
+expect_status "Unknown API path rejected" "$BASE/api/nonexistent" 401
 
 echo ""
 echo "=== Static Resources ==="
 expect_body "index.html title" "$BASE/" "Hangar"
-expect_status "favicon 404" "$BASE/favicon.ico" 404
+# /favicon.ico is not an API route; it is served the SPA shell (HTTP 200) by the
+# client-routing fallback rather than 404.
+expect_status "favicon served via SPA fallback" "$BASE/favicon.ico" 200
 
 echo ""
 echo "=== Config Save ==="

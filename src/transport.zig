@@ -185,7 +185,12 @@ pub const Connection = struct {
     pub fn request(self: *Connection, method: []const u8, path: []const u8, body: ?[]const u8, out: []u8) usize {
         return switch (self.proto) {
             .tcp => httpRequest(self.fd, self.host[0..self.host_len], method, path, body, out),
-            .unix => rawRequest(self.fd, method, path, body, out),
+            // The daemon accepts Unix-socket connections through the same HTTP
+            // accept loop as TCP, so a Unix client must speak real HTTP (Host +
+            // X-API-Key + CRLFCRLF). Reuse httpRequest with a loopback Host that
+            // hostHeaderOk accepts; the previous bespoke "METHOD /path" framing
+            // produced "//api/..." with no headers and the server rejected it.
+            .unix => httpRequest(self.fd, "localhost", method, path, body, out),
             .shm => shmRequest(self, method, path, body, out),
         };
     }
@@ -388,26 +393,6 @@ fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u
         const body_bytes = out[body_start..total];
         std.mem.copyForwards(u8, out, body_bytes);
         return body_bytes.len;
-    }
-    return total;
-}
-
-fn rawRequest(fd: c.fd_t, method: []const u8, path: []const u8, body: ?[]const u8, out: []u8) usize {
-    // Simple line-based protocol for Unix/shared memory:
-    // "METHOD /path\r\n" + optional body, then read response
-    var req_buf: [512]u8 = undefined;
-    const req = std.fmt.bufPrintZ(&req_buf, "{s} /{s}\r\n", .{ method, path }) catch return 0;
-    writeAll(fd, req.ptr[0..req.len]);
-    if (body) |b| {
-        writeAll(fd, b);
-        writeAll(fd, "\r\n");
-    }
-
-    var total: usize = 0;
-    while (total < out.len) {
-        const n = c.read(fd, out[total..].ptr, out.len - total);
-        if (n <= 0) break;
-        total += @intCast(n);
     }
     return total;
 }
