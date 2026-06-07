@@ -10,6 +10,8 @@ zig build web          # Build + launch web backend (HTTP on :9080; also the rem
 zig build webui        # Build + launch native WebView desktop wrapper
 zig build test         # Run ALL unit + fuzz tests + Playwright web E2E (umbrella step)
 zig build web-e2e      # Web UI end-to-end tests only (Playwright)
+zig build test-api     # HTTP API integration test (spawns a real daemon)
+zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 ```
 
 All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`.
