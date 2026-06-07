@@ -1,1 +1,14 @@
-{"name":"hangar","version":"0.0.0","private":true,"type":"module","devDependencies":{"puppeteer":"^24.43.1"}}
+{
+  "name": "hangar",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "playwright test",
+    "e2e:install": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "puppeteer": "^24.43.1"
+  }
+}

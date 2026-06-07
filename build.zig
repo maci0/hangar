@@ -103,4 +103,17 @@ pub fn build(b: *std.Build) !void {
 
     // ── Include web-smoke in the umbrella test step ──
     test_step.dependOn(&web_smoke_cmd.step);
+
+    // ── Web UI E2E tests (Playwright) ──
+    // Per AGENTS.md, every user-facing workflow has a Playwright e2e test in
+    // tests/e2e. Playwright launches the built binary itself (see
+    // playwright.config.mjs); we only need the binary installed first. Requires
+    // `npm install` and `npm run e2e:install` (Chromium) to have been run once.
+    const web_e2e = b.step("web-e2e", "Web UI end-to-end tests (Playwright)");
+    const web_e2e_cmd = b.addSystemCommand(&.{ "npx", "playwright", "test" });
+    web_e2e_cmd.step.dependOn(&install_web_exe.step);
+    web_e2e.dependOn(&web_e2e_cmd.step);
+
+    // Include the Playwright e2e suite in the umbrella test step.
+    test_step.dependOn(&web_e2e_cmd.step);
 }

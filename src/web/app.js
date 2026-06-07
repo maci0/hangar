@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
-(function(){
-const DEBUG=false;
+// These must live at global script scope: the API helpers (apiPost, setBusy,
+// loadLogInto, ...) below reference them, and they are NOT inside the theme IIFE.
+var DEBUG=false;
 // Built-in default X-API-Key. The bundled UI is same-origin and only fully
 // functional under the daemon's default key (loopback). Setting KV_API_KEY to a
 // strong secret exposes the daemon on all interfaces for vmrun/remote use, and
 // browser write-actions then return 401 — that path is intentionally CLI-only.
-const API_KEY='hangar';
-const logDebug=DEBUG?function(t,a){console.warn(t,a);}:function(){};
+var API_KEY='hangar';
+var logDebug=DEBUG?function(t,a){console.warn(t,a);}:function(){};
+(function(){
 const saved=localStorage.getItem('hangar-theme')||'system';
 window.hangarTheme=saved;
 window.applyTheme=function(t){
