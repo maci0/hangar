@@ -68,7 +68,7 @@ pub fn build(b: *std.Build) !void {
     b.getInstallStep().dependOn(&install_vmrun_exe.step);
 
     // ── Unit tests ──
-    const test_step = b.step("test", "Run unit + fuzz tests and the web E2E smoke test");
+    const test_step = b.step("test", "Run unit + fuzz tests and the Playwright web E2E suite");
     const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "serial_console", "serialpath", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "remote", "filter", "vmlist", "urlencode", "spice_client", "vnc_client", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "vnet_label", "appstate", "appstate_test", "webui_app" };
     for (test_mods) |mod| {
         const src_path = b.fmt("src/{s}.zig", .{mod});
@@ -94,15 +94,6 @@ pub fn build(b: *std.Build) !void {
     // @import("../vm.zig") inside hv/interface.zig resolves within
     // the module root (src/).
     // Already covered by hv_interface_test in test_mods above.
-
-    // ── Web UI E2E smoke test (Node/Puppeteer, headless Chromium) ──
-    const web_smoke = b.step("web-smoke", "Web UI end-to-end smoke test");
-    const web_smoke_cmd = b.addSystemCommand(&.{ "node", "tests/web_smoke.mjs" });
-    web_smoke_cmd.step.dependOn(&install_web_exe.step);
-    web_smoke.dependOn(&web_smoke_cmd.step);
-
-    // ── Include web-smoke in the umbrella test step ──
-    test_step.dependOn(&web_smoke_cmd.step);
 
     // ── Web UI E2E tests (Playwright) ──
     // Per AGENTS.md, every user-facing workflow has a Playwright e2e test in

@@ -8,8 +8,8 @@ Zig 0.16.0. No libvirt.
 ```bash
 zig build web          # Build + launch web backend (HTTP on :9080; also the remote daemon)
 zig build webui        # Build + launch native WebView desktop wrapper
-zig build test         # Run ALL unit + fuzz tests + web-smoke E2E (umbrella step)
-zig build web-smoke    # Web UI end-to-end smoke only (puppeteer)
+zig build test         # Run ALL unit + fuzz tests + Playwright web E2E (umbrella step)
+zig build web-e2e      # Web UI end-to-end tests only (Playwright)
 ```
 
 All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`.
@@ -59,7 +59,7 @@ Runtime config is read once in `web_server.main`. All variables are optional.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `KV_API_KEY` | `hangar` (built-in) | X-API-Key secret. **Setting it also opts the daemon into binding all interfaces (`::`).** With no key set, the daemon binds **loopback only** (`::1`) so the weak default is never reachable off-host. Must be 1–64 bytes; an invalid value aborts startup. Setting it to the built-in default value (`hangar`) is treated as unset — the daemon stays loopback-only rather than exposing all interfaces behind the known default. |
+| `KV_API_KEY` | `hangar` (built-in) | X-API-Key secret. **Setting it also opts the daemon into binding all interfaces (`::`).** With no key set, the daemon binds **loopback only** (`::ffff:127.0.0.1`, the IPv4-mapped loopback on its dual-stack socket) so the weak default is never reachable off-host. Must be 1–64 bytes; an invalid value aborts startup. Setting it to the built-in default value (`hangar`) is treated as unset — the daemon stays loopback-only rather than exposing all interfaces behind the known default. |
 | `KV_PORT` | `9080` | TCP listen port. Must parse as a non-zero `u16`; otherwise startup aborts. |
 | `HANGAR_CONFIG_HOME` | `$HOME` | Base dir for `~/.config/hangar/*` state (see Persistence). |
 
@@ -78,7 +78,7 @@ Never commit a real `KV_API_KEY`. For any non-local deployment, set a strong `KV
 - Fuzz tests are deterministic PRNG harnesses (fixed seed) and are ordinary `zig build test` entries. They cover parsers, setters, arg builders, and pure helpers.
 - Every enum must have tests for: fromIndex round-trip, toIndex inverts fromIndex, toStr values, label values, out-of-range default.
 - `qemu.zig` arg-builder tests must use the `buildScriptStr` / `buildArgs` functions — never by spawning QEMU.
-- The puppeteer web-smoke (`tests/web_smoke.mjs`) is pulled into the umbrella `test` step. It spawns the built binary on a temp port against a temp `$HOME`.
+- The Playwright e2e suite (`tests/e2e/`, config `playwright.config.mjs`) is pulled into the umbrella `test` step. Playwright launches the built binary on a dedicated port against a temp `$HOME`. Run `npm install` and `npm run e2e:install` (Chromium) once before the first run.
 - **Every user-facing workflow must have an end-to-end Playwright test.** Any web-UI flow — VM create/clone/delete/rename, power on/off, snapshots, settings save, import/export, log viewer, console, vnet editor, preferences — needs a Playwright e2e test that drives the real built binary (temp port + temp `$HOME`, same as the smoke harness) and asserts the observable result. Add or extend the e2e test alongside the feature, never after. A new workflow without a Playwright e2e test is incomplete.
 
 ## Code Style & Conventions

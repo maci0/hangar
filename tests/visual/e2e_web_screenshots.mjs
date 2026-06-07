@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Web UI visual end-to-end test — screenshots every view + modal.
-// Requires: puppeteer, a running hangar-web binary.
+// Requires: @playwright/test (Chromium via `npm run e2e:install`), a running hangar-web binary.
 // Usage: node tests/visual/e2e_web_screenshots.mjs [--port PORT]
 
-import puppeteer from 'puppeteer';
+import { chromium } from '@playwright/test';
 import { spawn } from 'child_process';
 import { mkdirSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
@@ -163,12 +163,12 @@ async function run() {
     }
     console.log('Server ready.\n');
 
-    const browser = await puppeteer.launch({
+    const browser = await chromium.launch({
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--window-size=1280,800'],
     });
     const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
+    await page.setViewportSize({ width: 1280, height: 800 });
 
     // Handle native dialogs (alert/confirm/prompt)
     page.on('dialog', async dialog => {
@@ -188,7 +188,7 @@ async function run() {
     try {
         // ── 1. Home page (empty) ──
         console.log('--- 1. Home page (empty) ---');
-        await page.goto(BASE, { waitUntil: 'networkidle2', timeout: 10000 });
+        await page.goto(BASE, { waitUntil: 'networkidle', timeout: 10000 });
         result(await pageLoaded(page), 'home page loads');
         if (pageErrors.length > 0) {
             console.log(`  JS errors: ${pageErrors.join('; ')}`);
