@@ -84,7 +84,9 @@ accepted in loopback mode). GET reads are exempt except `disk2/download`,
 | POST | `/api/vms/<id>/{power,pause,resume,suspend,shutdown,reset,cad,clone,rename}` | Lifecycle actions |
 | GET | `/api/vms/<id>/log` | Tail of the QEMU stderr log |
 | GET | `/api/vms/<id>/framebuffer` | Current framebuffer (BMP) |
-| GET | `/api/vms/<id>/disk2/download` · POST `/api/vms/<id>/disk2` | Download / upload secondary disk |
+| GET | `/api/vms/<id>/diskinfo` | Primary disk virtual + actual byte sizes |
+| POST | `/api/vms/<id>/disk/resize` | Grow the primary disk (stopped, grow-only) |
+| GET | `/api/vms/<id>/disk2/download` · POST `/api/vms/<id>/disk2` | Download / upload (streamed) secondary disk |
 | POST | `/api/vms/<id>/export` | Export OVF (streamed tarball) |
 | GET | `/api/vms/<id>/snapshots` · POST same | List / take snapshot |
 | POST | `/api/vms/<id>/snapshots/{revert,delete}` | Revert / delete snapshot (tag in body) |
@@ -114,7 +116,8 @@ mode, or `KV_API_KEY` if set). A VM is addressed by name or list index.
 | `shutdown` / `reset` / `cad` `<name\|idx>` | ACPI shutdown / hard reset / Ctrl-Alt-Del |
 | `clone` / `linked-clone` `<name\|idx>` | Clone (full / qcow2 backing) |
 | `rename <name\|idx> <new-name>` | Rename |
-| `set <name\|idx> <field> <value>` | Set one config field (mem, cpu, cpu_sockets, network, notes, boot_order, vnc_port, spice_port) |
+| `resize <name\|idx> <new-gb>` | Grow the primary disk (stopped VM) |
+| `set <name\|idx> <field> <value>` | Set one config field (mem, cpu, cpu_sockets, network, notes, tags, boot_order, vnc_port, spice_port) |
 | `delete <name\|idx>` | Delete |
 | `snapshot list\|take\|revert\|delete <name\|idx> [tag]` | Snapshots |
 | `import <disk-path>` | Import an existing disk image |
