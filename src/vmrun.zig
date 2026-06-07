@@ -63,6 +63,7 @@ const usage =
     \\  export      <name|idx>   Export VM as OVF+VMDK
     \\  log         <name|idx>   Show the VM's QEMU stderr log
     \\  info        <name|idx>   Show VM details
+    \\  migrate     <name|idx> <host> <port>  Live-migrate to another host
     \\  status                  Show server health
     \\
     \\Server URL formats:
@@ -228,6 +229,9 @@ fn run(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "rename")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdRename(allocator, &conn, idx, args[1], init.io);
+    } else if (std.mem.eql(u8, command, "migrate")) {
+        const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
+        return cmdMigrate(allocator, &conn, idx, args[1], args[2], init.io);
     } else {
         // Single-target VM operations: start/stop/restart/clone/linked-clone/
         // delete/suspend/pause/resume/shutdown/reset/cad/export.
@@ -283,6 +287,7 @@ fn commandArity(command: []const u8) ?usize {
     for (zero) |k| if (std.mem.eql(u8, command, k)) return 0;
     for (one) |k| if (std.mem.eql(u8, command, k)) return 1;
     if (std.mem.eql(u8, command, "rename")) return 2;
+    if (std.mem.eql(u8, command, "migrate")) return 3; // target host port
     if (std.mem.eql(u8, command, "create")) return 4; // name mem cpu disk
     return null;
 }
@@ -552,6 +557,29 @@ fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "rename VM [{d}] -> {s}: {s}\n", .{ idx, new_name, resp });
+    fdWrite(c.STDOUT_FILENO, line);
+}
+
+/// Start a live migration of VM `idx` to `host`:`port`. Mirrors the web UI,
+/// which posts `dest=tcp:<host>:<port>`. The daemon kicks off the migration and
+/// replies `{"status":"started"}`; poll `info`/the web UI for progress.
+fn cmdMigrate(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, host: []const u8, port: []const u8, io: std.Io) !void {
+    _ = io;
+    const port_num = std.fmt.parseInt(u16, port, 10) catch return error.InvalidPort;
+    if (port_num == 0) return error.InvalidPort;
+    var path_buf: [48]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/migrate", .{idx});
+    // dest=tcp:<host>:<port>, percent-encoded so the daemon's URL-decode rebuilds it.
+    var dest_buf: [320]u8 = undefined;
+    const dest = try std.fmt.bufPrint(&dest_buf, "tcp:{s}:{d}", .{ host, port_num });
+    var enc_buf: [960]u8 = undefined;
+    const enc = try urlencode.percentEncode(&enc_buf, dest);
+    var body_buf: [1024]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "dest={s}", .{enc});
+    const resp = try sendRequest(allocator, conn, "POST", path, body);
+    defer allocator.free(resp);
+    var buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "migrate VM [{d}] -> {s}: {s}\n", .{ idx, dest, resp });
     fdWrite(c.STDOUT_FILENO, line);
 }
 
@@ -941,6 +969,10 @@ test "commandArity: rename takes two args" {
 
 test "commandArity: create takes four args" {
     try std.testing.expectEqual(@as(?usize, 4), commandArity("create"));
+}
+
+test "commandArity: migrate takes three args" {
+    try std.testing.expectEqual(@as(?usize, 3), commandArity("migrate"));
 }
 
 test "commandArity: snapshot is not covered (subcommand-dependent)" {
