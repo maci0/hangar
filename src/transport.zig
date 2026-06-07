@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Hangar — Transport Abstraction Layer
-//! Supports Unix sockets, TCP/HTTP, and shared memory for client↔daemon communication.
+//! Supports Unix sockets and TCP/HTTP for client↔daemon communication.
 const std = @import("std");
 const c = std.c;
 
@@ -72,7 +72,6 @@ fn connectWithTimeout(fd: c.fd_t, addr: *const c.sockaddr, addrlen: c.socklen_t,
 pub const Proto = enum {
     unix, // unix:///path/to/socket — AF_UNIX same-machine
     tcp, // http://host:port — HTTP over TCP (local or remote)
-    shm, // shm:///name — POSIX shared memory (fastest same-machine)
 };
 
 /// Parsed connection URL.
@@ -91,9 +90,6 @@ pub const Url = struct {
         if (std.mem.startsWith(u8, s, "unix://")) {
             u.proto = .unix;
             rest = s["unix://".len..];
-        } else if (std.mem.startsWith(u8, s, "shm://")) {
-            u.proto = .shm;
-            rest = s["shm://".len..];
         } else if (std.mem.startsWith(u8, s, "http://")) {
             u.proto = .tcp;
             rest = s["http://".len..];
@@ -108,7 +104,7 @@ pub const Url = struct {
             u.proto = .tcp;
         }
 
-        if (u.proto == .unix or u.proto == .shm) {
+        if (u.proto == .unix) {
             u.path_len = @min(rest.len, u.path.len);
             std.mem.copyForwards(u8, &u.path, rest[0..u.path_len]);
             return u;
@@ -140,44 +136,23 @@ pub const Url = struct {
 
 /// Shared-memory channel layout (mmap'd region).
 /// Single-producer single-consumer request/response protocol.
-const ShmChannel = extern struct {
-    /// Request: client writes data, sets len (release).
-    req_len: u32 align(4) = 0,
-    _pad1: [60]u8 = [_]u8{0} ** 60, // pad to cache line
-    req_data: [4096]u8 = [_]u8{0} ** 4096,
-
-    /// Response: server writes data, sets len (release).
-    resp_len: u32 align(4) = 0,
-    _pad2: [60]u8 = [_]u8{0} ** 60,
-    resp_data: [4096]u8 = [_]u8{0} ** 4096,
-};
-
 /// A bidirectional transport connection to the daemon.
 pub const Connection = struct {
     proto: Proto,
     fd: c.fd_t = -1,
     host: [128]u8 = [_]u8{0} ** 128,
     host_len: usize = 0,
-    /// For SHM: pointer to the mapped shared memory channel.
-    shm: ?*volatile ShmChannel = null,
 
     /// Connect to a daemon at the given URL.
     pub fn connect(url: *const Url) ?Connection {
         var conn = Connection{ .proto = url.proto };
         conn.host_len = url.host_len;
         std.mem.copyForwards(u8, &conn.host, url.host[0..url.host_len]);
-        if (url.proto == .shm) {
-            conn.shm = connectShm(url);
-            if (conn.shm == null) return null;
-            conn.fd = -1;
-        } else {
-            conn.fd = switch (url.proto) {
-                .unix => connectUnixFd(url),
-                .tcp => connectTcpFd(url),
-                .shm => -1, // handled above
-            };
-            if (conn.fd < 0) return null;
-        }
+        conn.fd = switch (url.proto) {
+            .unix => connectUnixFd(url),
+            .tcp => connectTcpFd(url),
+        };
+        if (conn.fd < 0) return null;
         return conn;
     }
 
@@ -191,16 +166,11 @@ pub const Connection = struct {
             // hostHeaderOk accepts; the previous bespoke "METHOD /path" framing
             // produced "//api/..." with no headers and the server rejected it.
             .unix => httpRequest(self.fd, "localhost", method, path, body, out),
-            .shm => shmRequest(self, method, path, body, out),
         };
     }
 
     /// Close the connection.
     pub fn close(self: *Connection) void {
-        if (self.shm) |shm| {
-            _ = c.munmap(@ptrCast(@alignCast(@volatileCast(shm))), @sizeOf(ShmChannel));
-            self.shm = null;
-        }
         if (self.fd >= 0) {
             _ = c.close(self.fd);
             self.fd = -1;
@@ -264,68 +234,6 @@ fn connectTcpFd(url: *const Url) c.fd_t {
         return -1;
     }
     return sock;
-}
-
-fn connectShm(url: *const Url) ?*volatile ShmChannel {
-    // Open a named POSIX shared memory region.
-    var shm_name_buf: [260]u8 = undefined;
-    const name = std.fmt.bufPrintZ(&shm_name_buf, "/{s}", .{url.path[0..url.path_len]}) catch return null;
-    const fd = c.shm_open(name, 2, 0o600);
-    if (fd < 0) return null;
-    // PROT_READ|PROT_WRITE = 3, MAP_SHARED = 1
-    const prot: c.PROT = @bitCast(@as(u32, 3));
-    const flags: c.MAP = @bitCast(@as(u32, 1));
-    const ptr = c.mmap(null, @sizeOf(ShmChannel), prot, flags, fd, 0);
-    _ = c.close(fd);
-    if (ptr == @as(?*anyopaque, @ptrFromInt(@as(usize, @bitCast(@as(isize, -1)))))) return null;
-    return @ptrCast(@alignCast(ptr));
-}
-
-fn shmRequest(conn: *Connection, method: []const u8, path: []const u8, body: ?[]const u8, out: []u8) usize {
-    const shm = conn.shm orelse return 0;
-
-    // Build the raw request: "METHOD /path\r\n" + optional body.
-    var req_buf: [512]u8 = undefined;
-    const req = std.fmt.bufPrintZ(&req_buf, "{s} /{s}\r\n", .{ method, path }) catch return 0;
-    const req_total: usize = if (body) |b| req.len + b.len + 2 else req.len;
-    if (req_total > shm.req_data.len) return 0;
-
-    @memcpy(shm.req_data[0..req.len], req[0..req.len]);
-    if (body) |b| {
-        @memcpy(shm.req_data[req.len..][0..b.len], b);
-        @memcpy(shm.req_data[req.len + b.len ..][0..2], "\r\n");
-    }
-    // Publish request length (release store so server sees the data).
-    @atomicStore(u32, &shm.req_len, @intCast(req_total), .release);
-
-    // Fast path: tight busy-spin first so a same-machine server that answers in
-    // microseconds is observed without paying a full 1ms sleep quantum.
-    var spins: u32 = 4096;
-    while (spins > 0) : (spins -= 1) {
-        if (@atomicLoad(u32, &shm.resp_len, .acquire) > 0) break;
-        std.atomic.spinLoopHint();
-    }
-
-    // Spin-wait for response (with bounded retries to avoid infinite hang).
-    var retries: u32 = 1000;
-    while (retries > 0) : (retries -= 1) {
-        const resp_len = @atomicLoad(u32, &shm.resp_len, .acquire);
-        if (resp_len > 0) {
-            const n = @min(resp_len, @as(u32, @intCast(out.len)));
-            @memcpy(out[0..n], shm.resp_data[0..n]);
-            // Reset for next request.
-            @atomicStore(u32, &shm.resp_len, 0, .release);
-            @atomicStore(u32, &shm.req_len, 0, .release);
-            return n;
-        }
-        // Busy-wait with a brief pause (nanosleep 1ms) — simpler than
-        // pulling in eventfd, and adequate for same-machine SHM IPC.
-        const ts = c.timespec{ .sec = 0, .nsec = 1_000_000 };
-        _ = c.nanosleep(&ts, null);
-    }
-    // Timeout: reset request so server doesn't process stale data.
-    @atomicStore(u32, &shm.req_len, 0, .release);
-    return 0;
 }
 
 /// Write all bytes, looping until complete or error.
@@ -411,10 +319,10 @@ test "Url parse: unix" {
     try std.testing.expectEqualStrings("/var/run/hangar.sock", u.path[0..u.path_len]);
 }
 
-test "Url parse: shm" {
-    const u = Url.parse("shm:///hangar").?;
-    try std.testing.expectEqual(Proto.shm, u.proto);
-    try std.testing.expectEqualStrings("/hangar", u.path[0..u.path_len]);
+test "Url parse: unsupported scheme rejected" {
+    // shm:// was removed (it was never served); a leftover shm:// URL must be
+    // rejected like any other unknown scheme, not silently treated as TCP.
+    try std.testing.expect(Url.parse("shm:///hangar") == null);
 }
 
 test "Url parse: no scheme defaults to tcp" {
@@ -470,10 +378,9 @@ test "Connection.close: no-op when fd already -1" {
     try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
 }
 
-test "Connection.close: no-op when shm is null and fd is -1" {
-    var conn = Connection{ .proto = .shm, .fd = -1, .shm = null };
+test "Connection.close: no-op when fd is -1" {
+    var conn = Connection{ .proto = .unix, .fd = -1 };
     conn.close();
-    try std.testing.expect(conn.shm == null);
     try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
 }
 
@@ -664,7 +571,7 @@ test "fuzz: Url.parse never panics on random inputs" {
         for (buf[0..n]) |*b| b.* = rnd.int(u8);
         if (Url.parse(buf[0..n])) |u| {
             // Invariants: the result must always be self-consistent.
-            try std.testing.expect(u.proto == .tcp or u.proto == .unix or u.proto == .shm);
+            try std.testing.expect(u.proto == .tcp or u.proto == .unix);
             try std.testing.expect(u.host_len <= u.host.len);
             try std.testing.expect(u.path_len <= u.path.len);
         }

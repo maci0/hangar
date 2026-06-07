@@ -65,7 +65,6 @@ const usage =
     \\Server URL formats:
     \\  http://host:port   HTTP over TCP (port defaults to 9080)
     \\  unix:///path       Unix domain socket
-    \\  shm:///name        POSIX shared memory (same-machine, fastest)
     \\
     \\Global (accepted in any position):
     \\  help, -h, --help     Show this help and exit
@@ -187,7 +186,7 @@ fn run(init: std.process.Init) !void {
 
     const url = transport.Url.parse(server_url) orelse {
         var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrintZ(&buf, "Error: invalid server URL '{s}' (expected http://host:port, unix:///path, or shm:///name)\n", .{server_url}) catch "Error: invalid server URL\n";
+        const msg = std.fmt.bufPrintZ(&buf, "Error: invalid server URL '{s}' (expected http://host:port or unix:///path)\n", .{server_url}) catch "Error: invalid server URL\n";
         fdWrite(c.STDERR_FILENO, msg);
         std.process.exit(EXIT_USAGE);
     };
