@@ -3041,6 +3041,7 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
     var name_buf: [vm.MAX_NAME]u8 = undefined;
     var disk_len: usize = 0;
     var name_len: usize = 0;
+    var was_alive = false;
     var decoded: []const u8 = "";
     {
         appstate.vms_mutex.lock();
@@ -3049,7 +3050,6 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
         if (idx >= appstate.vm_count) return "invalid idx";
         const v = &appstate.vms[idx];
         if (!v.hasDisk()) return "no disk";
-        if (v.isAlive()) return "vm running";
         const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
         const body = req[body_start + 4 ..];
         var tag: []const u8 = "";
@@ -3064,34 +3064,44 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
         decoded = urlencode.urlDecode(&decode_buf, tag);
         if (!validateSnapshotTag(decoded)) return "no name";
         const nm = v.getNameSlice();
-        if (nm.len <= name_buf.len) {
-            @memcpy(name_buf[0..nm.len], nm);
-            name_len = nm.len;
+        if (nm.len > name_buf.len) return "create err";
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
+        was_alive = v.isAlive();
+        if (was_alive) {
+            // Live VM: snapshot through its running QMP monitor (savevm) — the
+            // qcow2 is write-locked, so offline qemu-img would fail. Name must be
+            // QMP-socket-safe.
+            if (!qmp.isPathSafeName(nm)) return "create err";
+        } else {
+            const dp = v.getDiskPathSlice();
+            if (dp.len == 0 or dp.len >= disk_buf.len) return "create err";
+            @memcpy(disk_buf[0..dp.len], dp);
+            disk_len = dp.len;
         }
-        // A non-alive VM has no live VMM handle (stop/suspend destroys it), so the
-        // create runs via offline qemu-img below — outside the lock. Keep the rare
-        // handle path (fast QMP) under the lock to avoid a use-after-free if a
-        // concurrent delete frees the config the handle points at.
-        if (appstate.getVmmHandle(idx)) |h| {
-            appstate.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
-                logOpErr("snapshot take", e, name_buf[0..name_len]);
-                return "create err";
-            };
-            logAudit("snapshot take", name_buf[0..name_len]);
-            return "ok";
-        }
-        const dp = v.getDiskPathSlice();
-        if (dp.len == 0 or dp.len >= disk_buf.len) return "create err";
-        @memcpy(disk_buf[0..dp.len], dp);
-        disk_len = dp.len;
     }
 
-    // Offline snapshot via qemu-img with the lock released — it can take seconds
-    // on a large image and must not stall every other handler / the poll thread.
-    qemu.snapshotCreate(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
-        logOpErr("snapshot take", e, name_buf[0..name_len]);
-        return "create err";
-    };
+    // I/O with the lock released — it can take seconds and must not stall every
+    // other handler / the poll thread.
+    if (was_alive) {
+        var client = qmp.QmpClient{};
+        var sock_buf: [256]u8 = undefined;
+        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse return "create err";
+        client.connect(sock) catch |e| {
+            logOpErr("snapshot take", e, name_buf[0..name_len]);
+            return "create err";
+        };
+        defer client.disconnect();
+        client.saveSnapshot(decoded) catch |e| {
+            logOpErr("snapshot take", e, name_buf[0..name_len]);
+            return "create err";
+        };
+    } else {
+        qemu.snapshotCreate(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
+            logOpErr("snapshot take", e, name_buf[0..name_len]);
+            return "create err";
+        };
+    }
     logAudit("snapshot take", name_buf[0..name_len]);
     return "ok";
 }
@@ -3216,6 +3226,7 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
     var name_buf: [vm.MAX_NAME]u8 = undefined;
     var disk_len: usize = 0;
     var name_len: usize = 0;
+    var was_alive = false;
     var decoded: []const u8 = "";
     {
         appstate.vms_mutex.lock();
@@ -3224,7 +3235,6 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
         if (idx >= appstate.vm_count) return "invalid idx";
         const v = &appstate.vms[idx];
         if (!v.hasDisk()) return "no disk";
-        if (v.isAlive()) return "vm running";
         const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
         const body = req[body_start + 4 ..];
         var tag: []const u8 = "";
@@ -3239,29 +3249,40 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
         decoded = urlencode.urlDecode(&decode_buf, tag);
         if (!validateSnapshotTag(decoded)) return "no name";
         const nm = v.getNameSlice();
-        if (nm.len <= name_buf.len) {
-            @memcpy(name_buf[0..nm.len], nm);
-            name_len = nm.len;
+        if (nm.len > name_buf.len) return "delete err";
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
+        was_alive = v.isAlive();
+        if (was_alive) {
+            // Live VM: delete via QMP delvm (qcow2 is write-locked).
+            if (!qmp.isPathSafeName(nm)) return "delete err";
+        } else {
+            const dp = v.getDiskPathSlice();
+            if (dp.len == 0 or dp.len >= disk_buf.len) return "delete err";
+            @memcpy(disk_buf[0..dp.len], dp);
+            disk_len = dp.len;
         }
-        // See handleSnapshotTake: handle path (rare) under lock, qemu-img unlocked.
-        if (appstate.getVmmHandle(idx)) |h| {
-            appstate.g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
-                logOpErr("snapshot delete", e, name_buf[0..name_len]);
-                return "delete err";
-            };
-            logAudit("snapshot delete", name_buf[0..name_len]);
-            return "ok";
-        }
-        const dp = v.getDiskPathSlice();
-        if (dp.len == 0 or dp.len >= disk_buf.len) return "delete err";
-        @memcpy(disk_buf[0..dp.len], dp);
-        disk_len = dp.len;
     }
 
-    qemu.snapshotDelete(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
-        logOpErr("snapshot delete", e, name_buf[0..name_len]);
-        return "delete err";
-    };
+    if (was_alive) {
+        var client = qmp.QmpClient{};
+        var sock_buf: [256]u8 = undefined;
+        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse return "delete err";
+        client.connect(sock) catch |e| {
+            logOpErr("snapshot delete", e, name_buf[0..name_len]);
+            return "delete err";
+        };
+        defer client.disconnect();
+        client.deleteSnapshot(decoded) catch |e| {
+            logOpErr("snapshot delete", e, name_buf[0..name_len]);
+            return "delete err";
+        };
+    } else {
+        qemu.snapshotDelete(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
+            logOpErr("snapshot delete", e, name_buf[0..name_len]);
+            return "delete err";
+        };
+    }
     logAudit("snapshot delete", name_buf[0..name_len]);
     return "ok";
 }
