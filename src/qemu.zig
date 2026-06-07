@@ -338,6 +338,24 @@ fn appendExtraNic(
     }
 }
 
+/// Build a GPU `-device` value: `<base>` plus `,xres=,yres=` when a fixed
+/// resolution is set and `,max_outputs=N` when more than one display head is
+/// requested (the correct way to drive multi-monitor on one virtio/qxl device).
+fn gpuDeviceStr(buf: []u8, base: []const u8, res: vm.DisplayResolution, heads: u32) ![]const u8 {
+    var p: usize = 0;
+    const b = try std.fmt.bufPrint(buf[p..], "{s}", .{base});
+    p += b.len;
+    if (res != .auto) {
+        const r = try std.fmt.bufPrint(buf[p..], ",xres={d},yres={d}", .{ res.xres(), res.yres() });
+        p += r.len;
+    }
+    if (heads > 1) {
+        const m = try std.fmt.bufPrint(buf[p..], ",max_outputs={d}", .{heads});
+        p += m.len;
+    }
+    return buf[0..p];
+}
+
 /// Populates an ArrayList with QEMU arguments.
 fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc: std.mem.Allocator, bufs: *ArgBuffers) !void {
     try args.append(alloc, "qemu-system-x86_64");
@@ -537,7 +555,10 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         }
     }
 
-    // GPU device selection.
+    // GPU device selection. Multi-monitor is done with max_outputs=N on the
+    // SINGLE GPU device (so the guest sees one GPU with N scanouts) — not by
+    // adding N separate GPU devices, which presents N independent GPUs.
+    const heads = std.math.clamp(config.num_displays, 1, vm.MAX_DISPLAYS);
     const gl_ok = wants_virgl and ((config.embed_display and embedded_spice_gl) or (!config.embed_display and (config.display == .gtk or config.display == .sdl or config.display == .spice)));
     // gl_ok already implies wants_virgl, which includes gpu_device.needsVirgl().
     if (gl_ok) {
@@ -547,52 +568,34 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
             .virtio_vga_gl => "virtio-vga-gl",
             else => unreachable,
         };
-        if (config.display_resolution == .auto) {
-            try args.append(alloc, "-device");
-            try args.append(alloc, dev_str);
-        } else {
-            const vga_str = try std.fmt.bufPrint(&bufs.vga_buf, "{s},xres={d},yres={d}", .{ dev_str, config.display_resolution.xres(), config.display_resolution.yres() });
-            try args.append(alloc, "-device");
-            try args.append(alloc, vga_str);
-        }
+        try args.append(alloc, "-device");
+        try args.append(alloc, try gpuDeviceStr(&bufs.vga_buf, dev_str, config.display_resolution, heads));
     } else switch (config.gpu_device) {
         .virtio_gpu, .virtio_gpu_gl => {
-            if (config.display_resolution == .auto) {
-                try args.append(alloc, "-device");
-                try args.append(alloc, "virtio-gpu");
-            } else {
-                const vga_str = try std.fmt.bufPrint(&bufs.vga_buf, "virtio-gpu,xres={d},yres={d}", .{ config.display_resolution.xres(), config.display_resolution.yres() });
-                try args.append(alloc, "-device");
-                try args.append(alloc, vga_str);
-            }
+            try args.append(alloc, "-device");
+            try args.append(alloc, try gpuDeviceStr(&bufs.vga_buf, "virtio-gpu", config.display_resolution, heads));
         },
         .virtio_vga, .virtio_vga_gl => {
-            if (config.display_resolution == .auto) {
+            // The `-vga virtio` shorthand can't take max_outputs; use the explicit
+            // -device form when a resolution or extra heads are requested.
+            if (config.display_resolution == .auto and heads == 1) {
                 try args.append(alloc, "-vga");
                 try args.append(alloc, "virtio");
             } else {
-                const vga_str = try std.fmt.bufPrint(&bufs.vga_buf, "virtio-vga,xres={d},yres={d}", .{ config.display_resolution.xres(), config.display_resolution.yres() });
                 try args.append(alloc, "-device");
-                try args.append(alloc, vga_str);
+                try args.append(alloc, try gpuDeviceStr(&bufs.vga_buf, "virtio-vga", config.display_resolution, heads));
             }
         },
         .qxl => {
             try args.append(alloc, "-device");
-            try args.append(alloc, "qxl");
+            // qxl takes max_outputs (resolution is set by the guest driver).
+            try args.append(alloc, try gpuDeviceStr(&bufs.vga_buf, "qxl", .auto, heads));
         },
         .std_vga => {
+            // std VGA has no multihead support; single head only.
             try args.append(alloc, "-vga");
             try args.append(alloc, "std");
         },
-    }
-
-    // Additional displays for multi-monitor support.  Clamp here so a value
-    // loaded from a hand-edited vms.json cannot explode the device list.
-    const display_count = std.math.clamp(config.num_displays, 1, vm.MAX_DISPLAYS);
-    var disp_n: u32 = 1;
-    while (disp_n < display_count) : (disp_n += 1) {
-        try args.append(alloc, "-device");
-        try args.append(alloc, "virtio-gpu");
     }
 
     if (config.enable_serial and config.hasName()) {
@@ -1478,6 +1481,26 @@ test "qemu: disk path with comma is rejected (arg injection guard)" {
     cfg.setDiskPath("/tmp/disk.qcow2,readonly=on,if=none");
     cfg.nics[0].mode = .user;
     try std.testing.expectError(error.UnsafeDiskPath, buildScriptStr(&cfg, talloc));
+}
+
+test "qemu: multi-monitor uses max_outputs on one device, not N devices" {
+    var cfg = vm.VmConfig{};
+    cfg.gpu_device = .virtio_gpu;
+    cfg.num_displays = 3;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "virtio-gpu,max_outputs=3"));
+    // Must NOT add separate extra GPU devices.
+    try expect(!has(s, "-device virtio-gpu -device virtio-gpu"));
+}
+
+test "qemu: single display omits max_outputs" {
+    var cfg = vm.VmConfig{};
+    cfg.gpu_device = .virtio_gpu;
+    cfg.num_displays = 1;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(!has(s, "max_outputs"));
 }
 
 test "qemu: malformed MAC is dropped rather than embedded" {
