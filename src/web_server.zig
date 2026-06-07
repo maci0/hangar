@@ -4161,10 +4161,14 @@ fn autoprotectTicker() void {
     while (true) {
         appio.sleepMs(30_000);
 
-        // Collect work items under the lock, release before I/O
+        // Collect work items under the lock, release before I/O. AutoProtect
+        // targets RUNNING VMs, whose qcow2 is write-locked by the live QEMU, so
+        // offline `qemu-img snapshot` cannot touch it — snapshots must go through
+        // the running monitor (QMP savevm/delvm). We capture the VM name (to
+        // reach its QMP socket) rather than the disk path.
         const SnapWork = struct {
-            disk_path: [512]u8,
-            disk_path_len: usize,
+            vm_name: [vm.MAX_NAME]u8,
+            vm_name_len: usize,
             snap_name: [40]u8,
             snap_name_len: usize,
             autoprotect_max: u32,
@@ -4180,6 +4184,10 @@ fn autoprotectTicker() void {
             if (!v.autoprotect or v.status != .running or !v.hasDisk()) continue;
             if (!autoprotect.due(true, v.autoprotect_interval_min, v.autoprotect_last_epoch, now)) continue;
 
+            // Need a QMP-socket-safe name; skip (without burning a seq) if unusable.
+            const vname = v.getNameSlice();
+            if (vname.len == 0 or vname.len > vm.MAX_NAME or !qmp.isPathSafeName(vname)) continue;
+
             const seq = v.autoprotect_last_seq;
             v.autoprotect_last_seq = seq +% 1; // wrapping add
             v.autoprotect_last_epoch = now;
@@ -4187,14 +4195,12 @@ fn autoprotectTicker() void {
             var name_buf: [40]u8 = undefined;
             const snap_name = autoprotect.snapName(&name_buf, seq);
 
-            const disk_path = v.getDiskPathSlice();
-            var dp_buf: [512]u8 = undefined;
-            if (disk_path.len > dp_buf.len) continue;
-            @memcpy(dp_buf[0..disk_path.len], disk_path);
+            var nm_buf: [vm.MAX_NAME]u8 = undefined;
+            @memcpy(nm_buf[0..vname.len], vname);
 
             work_items[work_count] = .{
-                .disk_path = dp_buf,
-                .disk_path_len = disk_path.len,
+                .vm_name = nm_buf,
+                .vm_name_len = vname.len,
                 .snap_name = name_buf,
                 .snap_name_len = snap_name.len,
                 .autoprotect_max = v.autoprotect_max,
@@ -4203,58 +4209,60 @@ fn autoprotectTicker() void {
         }
         appstate.vms_mutex.unlock();
 
-        // Perform snapshot I/O outside the lock
+        // Perform snapshot I/O outside the lock, through each VM's live QMP
+        // monitor (savevm/info snapshots/delvm). qemu-img is unusable here: the
+        // running QEMU holds a write lock on the qcow2.
         var wi: usize = 0;
         while (wi < work_count) : (wi += 1) {
             const w = &work_items[wi];
-            const dp = w.disk_path[0..w.disk_path_len];
+            const name = w.vm_name[0..w.vm_name_len];
             const sn = w.snap_name[0..w.snap_name_len];
 
-            // Disk path is config-controlled, so sanitize before logging to keep
-            // the background-job error lines single-line and injection-safe.
-            var dp_log_buf: [256]u8 = undefined;
-            const dp_safe = sanitizeLogName(&dp_log_buf, dp);
+            // VM name is config-controlled; sanitize before logging.
+            var nlog: [vm.MAX_NAME]u8 = undefined;
+            const name_safe = sanitizeLogName(&nlog, name);
 
-            qemu.snapshotCreate(dp, sn, std.heap.page_allocator) catch |e| {
+            var client = qmp.QmpClient{};
+            var sock_buf: [256]u8 = undefined;
+            const sock = qmp.socketPath(name, &sock_buf) orelse continue;
+            client.connect(sock) catch |e| {
                 var ebuf: [320]u8 = undefined;
-                logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s} disk=\"{s}\" snap=\"{s}\"", .{ @errorName(e), dp_safe, sn }) catch "autoprotect snapshotCreate failed");
+                logErr(std.fmt.bufPrint(&ebuf, "autoprotect qmp connect failed: {s} vm=\"{s}\"", .{ @errorName(e), name_safe }) catch "autoprotect qmp connect failed");
+                continue;
+            };
+            defer client.disconnect();
+
+            client.saveSnapshot(sn) catch |e| {
+                var ebuf: [320]u8 = undefined;
+                logErr(std.fmt.bufPrint(&ebuf, "autoprotect savevm failed: {s} vm=\"{s}\" snap=\"{s}\"", .{ @errorName(e), name_safe, sn }) catch "autoprotect savevm failed");
                 continue;
             };
 
-            // Prune excess AutoProtect snapshots
+            // Prune excess AutoProtect snapshots via the same monitor. Best
+            // effort: a failed list/delete just leaves snapshots in place.
             var list_buf: [4096]u8 = undefined;
-            const list_n = qemu.snapshotList(dp, &list_buf, std.heap.page_allocator) catch |e| {
-                var ebuf: [320]u8 = undefined;
-                logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotList failed: {s} disk=\"{s}\"", .{ @errorName(e), dp_safe }) catch "autoprotect snapshotList failed");
-                continue;
-            };
+            const list_out = client.listSnapshots(&list_buf) catch continue;
+            const nodes = snapparse.parse(list_out);
 
-            if (list_n == 0 or list_n > list_buf.len) continue;
-            const list_str = list_buf[0..list_n];
-
-            var auto_names: [32][]const u8 = undefined;
-            var auto_count: usize = 0;
-            var lines = std.mem.splitSequence(u8, list_str, "\n");
-            while (lines.next()) |line| {
-                const trimmed = std.mem.trim(u8, line, " \r");
-                if (trimmed.len == 0) continue;
-                const space = std.mem.indexOfScalar(u8, trimmed, ' ') orelse continue;
-                const name = trimmed[0..space];
-                if (autoprotect.isAutoName(name)) {
-                    if (auto_count < auto_names.len) {
-                        auto_names[auto_count] = name;
-                    }
-                    auto_count += 1;
-                }
+            var auto_total: usize = 0;
+            var ni: usize = 0;
+            while (ni < nodes.count) : (ni += 1) {
+                if (autoprotect.isAutoName(nodes.nameSlice(ni))) auto_total += 1;
             }
+            const excess = autoprotect.pruneExcess(auto_total, w.autoprotect_max);
 
-            const excess = autoprotect.pruneExcess(auto_count, w.autoprotect_max);
-            var d: usize = 0;
-            while (d < excess and d < auto_names.len) : (d += 1) {
-                qemu.snapshotDelete(dp, auto_names[d], std.heap.page_allocator) catch |e| {
+            // Delete the oldest auto snapshots first (parse preserves order).
+            var deleted: usize = 0;
+            ni = 0;
+            while (ni < nodes.count and deleted < excess) : (ni += 1) {
+                const nm = nodes.nameSlice(ni);
+                if (!autoprotect.isAutoName(nm)) continue;
+                client.deleteSnapshot(nm) catch |e| {
                     var ebuf: [320]u8 = undefined;
-                    logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s} disk=\"{s}\"", .{ @errorName(e), dp_safe }) catch "autoprotect snapshotDelete failed");
+                    logErr(std.fmt.bufPrint(&ebuf, "autoprotect delvm failed: {s} vm=\"{s}\"", .{ @errorName(e), name_safe }) catch "autoprotect delvm failed");
+                    continue;
                 };
+                deleted += 1;
             }
         }
 
