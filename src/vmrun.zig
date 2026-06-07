@@ -244,17 +244,17 @@ fn run(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, command, "delete")) {
             return cmdDelete(allocator, &conn, idx, init.io);
         } else if (std.mem.eql(u8, command, "suspend")) {
-            return cmdSimple(allocator, &conn, idx, "/api/suspend/{d}", "suspend", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/suspend", "suspend", init.io);
         } else if (std.mem.eql(u8, command, "pause")) {
-            return cmdSimple(allocator, &conn, idx, "/api/pause/{d}", "pause", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/pause", "pause", init.io);
         } else if (std.mem.eql(u8, command, "resume")) {
-            return cmdSimple(allocator, &conn, idx, "/api/resume/{d}", "resume", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/resume", "resume", init.io);
         } else if (std.mem.eql(u8, command, "shutdown")) {
-            return cmdSimple(allocator, &conn, idx, "/api/shutdown/{d}", "shutdown", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/shutdown", "shutdown", init.io);
         } else if (std.mem.eql(u8, command, "reset")) {
-            return cmdSimple(allocator, &conn, idx, "/api/reset/{d}", "reset", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/reset", "reset", init.io);
         } else if (std.mem.eql(u8, command, "cad")) {
-            return cmdSimple(allocator, &conn, idx, "/api/cad/{d}", "cad", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/cad", "cad", init.io);
         } else {
             return cmdExport(allocator, &conn, idx, init.io);
         }
@@ -483,7 +483,7 @@ fn cmdStatus(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.
 
 fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, action: []const u8, io: std.Io) !void {
     _ = io;
-    // The daemon's /api/power endpoint is a toggle (start if off, stop if on).
+    // The daemon's /api/vms/<id>/power endpoint is a toggle (start if off, stop if on).
     // The CLI exposes explicit `start`/`stop` verbs, so issuing the toggle
     // blindly inverts the user's intent: `stop` on an already-off VM would
     // power it ON, and `start` on a running VM would power it OFF. Query the
@@ -501,7 +501,7 @@ fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usiz
     }
 
     var path_buf: [32]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/power/{d}", .{idx});
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/power", .{idx});
     const resp = try sendRequest(allocator, conn, "POST", path, null);
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
@@ -510,13 +510,13 @@ fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usiz
 }
 
 fn cmdClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    return cmdSimple(allocator, conn, idx, "/api/clone/{d}", "clone", io);
+    return cmdSimple(allocator, conn, idx, "/api/vms/{d}/clone", "clone", io);
 }
 
 fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
     _ = io;
     var path_buf: [32]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/clone/{d}", .{idx});
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/clone", .{idx});
     const resp = try sendRequest(allocator, conn, "POST", path, "linked=1");
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
@@ -525,13 +525,13 @@ fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx
 }
 
 fn cmdDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    return cmdSimple(allocator, conn, idx, "/api/delete/{d}", "delete", io);
+    return cmdSimple(allocator, conn, idx, "/api/vms/{d}/delete", "delete", io);
 }
 
 fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, new_name: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [32]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/rename/{d}", .{idx});
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/rename", .{idx});
     // Percent-encode the name so values containing &, =, %, +, or spaces reach
     // the daemon intact (it URL-decodes form values, exactly like the web UI).
     var name_enc_buf: [vm.MAX_NAME * 3]u8 = undefined;
@@ -553,7 +553,7 @@ fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_pat
     const enc_path = try urlencode.percentEncode(&path_enc_buf, disk_path);
     var body_buf: [vm.MAX_PATH * 3 + 16]u8 = undefined;
     const body = try std.fmt.bufPrint(&body_buf, "path={s}", .{enc_path});
-    const resp = try sendRequest(allocator, conn, "POST", "/api/import", body);
+    const resp = try sendRequest(allocator, conn, "POST", "/api/vms/import", body);
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "import {s}: {s}\n", .{ disk_path, resp });
@@ -563,7 +563,7 @@ fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_pat
 fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
     _ = io;
     var path_buf: [32]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/export/{d}", .{idx});
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/export", .{idx});
     const resp = try sendRequest(allocator, conn, "POST", path, null);
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
@@ -574,7 +574,7 @@ fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
 fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
     _ = io;
     var path_buf: [48]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/list/{d}", .{idx});
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/snapshots", .{idx});
     const resp = try sendRequest(allocator, conn, "GET", path, null);
     defer allocator.free(resp);
     if (resp.len == 0 or std.mem.eql(u8, resp, "(none)")) {
@@ -585,12 +585,18 @@ fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, id
     }
 }
 
-/// POST /api/snapshot/{action}/{idx} with a `tag=` body. `action` is one of
+/// POST snapshot op with a `tag=` body. `action` is one of
 /// "take", "revert", "delete".
 fn cmdSnapshotOp(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, comptime action: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [48]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/" ++ action ++ "/{d}", .{idx});
+    const path_fmt = comptime if (std.mem.eql(u8, action, "take"))
+        "/api/vms/{d}/snapshots"
+    else if (std.mem.eql(u8, action, "revert"))
+        "/api/vms/{d}/snapshots/revert"
+    else
+        "/api/vms/{d}/snapshots/delete";
+    const path = try std.fmt.bufPrint(&path_buf, path_fmt, .{idx});
     // Percent-encode the tag so the daemon's URL-decode reproduces it exactly.
     var tag_enc_buf: [768]u8 = undefined;
     const enc_tag = try urlencode.percentEncode(&tag_enc_buf, tag);
@@ -603,7 +609,7 @@ fn cmdSnapshotOp(allocator: std.mem.Allocator, conn: *transport.Connection, idx:
     fdWrite(c.STDOUT_FILENO, line);
 }
 
-/// Generic POST to /api/{action}/{idx} with no body.
+/// Generic POST to /api/vms/{idx}/{action} with no body.
 fn cmdSimple(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, action: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [48]u8 = undefined;

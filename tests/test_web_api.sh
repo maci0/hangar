@@ -136,12 +136,12 @@ echo "=== API: VM List & Config ==="
 expect_status "VM list GET" "$BASE/api/vms" 200
 expect_body  "VM list is JSON array" "$BASE/api/vms" '['
 expect_status "Config GET" "$BASE/api/config" 200
-expect_status "VNet list GET" "$BASE/api/vnets" 200
+expect_status "Network list GET" "$BASE/api/networks" 200
 
 echo ""
 echo "=== API: VM CRUD ==="
 # Create a VM
-expect_post "Create VM" "$BASE/api/new" \
+expect_post "Create VM" "$BASE/api/vms" \
     "name=TestVM&memory=1024&cpu=2&os=ubuntu64&disk=qcow2&net=user&display=gtk&firmware=bios&audio=ac97&boot=cd" \
     "ok"
 
@@ -149,29 +149,29 @@ expect_post "Create VM" "$BASE/api/new" \
 expect_body "New VM in list" "$BASE/api/vms" "TestVM"
 
 # Save VM
-expect_post "Save VM" "$BASE/api/save/0" \
+expect_post "Save VM" "$BASE/api/vms/0" \
     "name=TestVM-renamed&memory=2048&cpu=4&guest_os=ubuntu64&disk_format=qcow2&nic0_mode=user&display_type=gtk&firmware=bios&audio_device=ac97&boot_order=cd" \
     "ok"
 expect_body "Renamed VM in list" "$BASE/api/vms" "TestVM-renamed"
 
 # Clone VM
-expect_post "Clone VM" "$BASE/api/clone/0" "" "ok"
+expect_post "Clone VM" "$BASE/api/vms/0/clone" "" "ok"
 expect_body "Cloned VM in list" "$BASE/api/vms" "TestVM-renamed (clone)"
 
 # Delete cloned VM
-expect_post "Delete VM" "$BASE/api/delete/1" "" "ok"
+expect_post "Delete VM" "$BASE/api/vms/1/delete" "" "ok"
 sleep 0.2
 
 echo ""
-echo "=== API: VNet Save ==="
-expect_post "VNet save" "$BASE/api/vnets/save" \
+echo "=== API: Network Save ==="
+expect_post "Network save" "$BASE/api/networks" \
     '[{"name":"VMnet0","type":"nat","subnet":"10.0.2.0","mask":"255.255.255.0","dhcp":true,"gateway":"10.0.2.2","dhcp_start":"10.0.2.128","dhcp_end":"10.0.2.254","host_iface":""}]' \
     "ok"
 
 echo ""
 echo "=== API: Error Handling ==="
-expect_status "Invalid VM detail" "$BASE/api/vm/99" 404
-expect_status "Invalid power" "$BASE/api/power/99" 404
+expect_status "Invalid VM detail" "$BASE/api/vms/99" 404
+expect_status "Invalid power" "$BASE/api/vms/99/power" 404
 expect_status "Unknown path falls through to index.html" "$BASE/api/nonexistent" 200
 
 echo ""
@@ -187,7 +187,7 @@ expect_post "Config save" "$BASE/api/config" \
 
 echo ""
 echo "=== Cleanup after test ==="
-expect_post "Delete test VM" "$BASE/api/delete/0" "" "ok"
+expect_post "Delete test VM" "$BASE/api/vms/0/delete" "" "ok"
 
 echo ""
 echo "============================================"

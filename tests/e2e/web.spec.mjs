@@ -60,7 +60,7 @@ test('new VMs default to the VNC display (web-usable, not GTK)', async ({ page }
     // index is VNC (3), not GTK (0) — GTK opens a host-native window the browser
     // cannot show and disables the embedded console.
     const detail = await page.evaluate(async (key) => {
-        const r = await fetch('/api/vm/0', { headers: { 'X-API-Key': key } });
+        const r = await fetch('/api/vms/0', { headers: { 'X-API-Key': key } });
         return r.ok ? r.json() : null;
     }, API_KEY);
     expect(detail).not.toBeNull();
@@ -125,7 +125,7 @@ test('theme workflow applies light then dark', async ({ page }) => {
 
 test('reorder API returns ok for a no-op reorder', async ({ page }) => {
     const res = await page.evaluate(async (key) => {
-        const r = await fetch('/api/reorder', {
+        const r = await fetch('/api/vms/reorder', {
             method: 'POST',
             headers: { 'X-API-Key': key },
             body: 'from=0&to=0',

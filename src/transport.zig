@@ -497,8 +497,8 @@ extern fn unsetenv(name: [*:0]const u8) c_int;
 
 test "buildHttpRequest: includes X-API-Key and core headers" {
     var buf: [512]u8 = undefined;
-    const req = buildHttpRequest(&buf, "POST", "/api/power/0", "127.0.0.1:9080", "secret", 0).?;
-    try std.testing.expect(std.mem.startsWith(u8, req, "POST /api/power/0 HTTP/1.0\r\n"));
+    const req = buildHttpRequest(&buf, "POST", "/api/vms/0/power", "127.0.0.1:9080", "secret", 0).?;
+    try std.testing.expect(std.mem.startsWith(u8, req, "POST /api/vms/0/power HTTP/1.0\r\n"));
     try std.testing.expect(std.mem.indexOf(u8, req, "\r\nX-API-Key: secret\r\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, req, "\r\nHost: 127.0.0.1:9080\r\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, req, "\r\nContent-Length: 0\r\n") != null);
@@ -507,7 +507,7 @@ test "buildHttpRequest: includes X-API-Key and core headers" {
 
 test "buildHttpRequest: returns null when buffer too small" {
     var buf: [8]u8 = undefined;
-    try std.testing.expect(buildHttpRequest(&buf, "POST", "/api/power/0", "host", "key", 0) == null);
+    try std.testing.expect(buildHttpRequest(&buf, "POST", "/api/vms/0/power", "host", "key", 0) == null);
 }
 
 test "apiKey: default when unset, honors custom, rejects invalid" {

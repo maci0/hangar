@@ -152,19 +152,26 @@ fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/api/capabilities")) return true;
     if (std.mem.eql(u8, path, "/api/health")) return true;
     if (std.mem.eql(u8, path, "/api/config")) return true;
-    if (std.mem.eql(u8, path, "/api/vnets")) return true;
+    if (std.mem.eql(u8, path, "/api/catalog")) return true;
+    if (std.mem.eql(u8, path, "/api/networks")) return true;
     // Prefix paths — ensure the prefix ends at a path boundary
-    if (std.mem.startsWith(u8, path, "/api/vm/")) {
+    if (std.mem.startsWith(u8, path, "/api/vms/")) {
+        // Strip any query string so suffix checks match regardless of `?...`.
+        const p = if (std.mem.indexOfScalar(u8, path, '?')) |q| path[0..q] else path;
         // The disk-image download streams raw guest disk bytes (filesystems,
         // credentials, ...). It must never be exempt: when KV_API_KEY is set the
         // daemon binds all interfaces, so exempting it would let an
         // unauthenticated remote client exfiltrate the disk image.
-        if (std.mem.endsWith(u8, path, "/disk2/download")) return false;
+        if (std.mem.endsWith(u8, p, "/disk2/download")) return false;
+        // The framebuffer and migrate-status read endpoints stay auth-required,
+        // matching the pre-refactor posture.
+        if (std.mem.endsWith(u8, p, "/framebuffer")) return false;
+        if (std.mem.endsWith(u8, p, "/migrate")) return false;
+        // Detail, /log, and /snapshots are read-only and exempt.
         return true;
     }
-    if (std.mem.startsWith(u8, path, "/api/snapshot/list/")) return true;
-    if (std.mem.eql(u8, path, "/api/catalog")) return true;
-    // /api/quickstart/ creates a VM (state-changing) — it must require auth.
+    // POST /api/vms/quickstart/ creates a VM (state-changing) — it must require
+    // auth. Since it is POST, the early return above already covers it.
     return false;
 }
 
@@ -609,7 +616,7 @@ fn serveHtml(conn: c.fd_t) void {
 
     // Extract the URL path from the request line for precise matching.
     // Avoids path-traversal auth bypass via stitched prefixes (e.g.
-    // "GET /api/vm/../../api/save/0" matched the exempt "GET /api/vm/").
+    // "GET /api/vms/../../api/vms/0" matched the exempt "GET /api/vms/").
     const req_path = if (std.mem.indexOfScalar(u8, req, ' ')) |sp1| blk: {
         const after_sp = req[sp1 + 1 ..];
         const sp2 = std.mem.indexOfAny(u8, after_sp, " ?") orelse after_sp.len;
@@ -697,7 +704,7 @@ fn serveHtml(conn: c.fd_t) void {
     }
 
     // ── File download (streaming) routes — handled after auth ──
-    if (parseVmIdxSuffix(req, "GET /api/vm/", "/disk2/download") != null) {
+    if (parseVmIdxSuffix(req, "GET /api/vms/", "/disk2/download") != null) {
         handleDisk2Download(conn, req) catch |e| {
             logReqErr("disk2 download failed", e, req);
             // Error path uses the unified JSON envelope like the rest of the API,
@@ -707,7 +714,7 @@ fn serveHtml(conn: c.fd_t) void {
         };
         return;
     }
-    if (parseVmIdxSuffix(req, "POST /api/vm/", "/upload-disk") != null) {
+    if (parseVmIdxSuffix(req, "POST /api/vms/", "/disk2") != null) {
         const resp = handleUploadDisk(req) catch |e| blk: {
             logReqErr("disk upload failed", e, req);
             break :blk "upload err";
@@ -728,14 +735,14 @@ fn serveHtml(conn: c.fd_t) void {
         }
         return;
     }
-    if (parseVmIdxSuffix(req, "GET /api/vm/", "/log") != null) {
+    if (parseVmIdxSuffix(req, "GET /api/vms/", "/log") != null) {
         handleVmLog(conn, req) catch |e| {
             logReqErr("vm log read failed", e, req);
             writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"log read failed\"}");
         };
         return;
     }
-    if (std.mem.startsWith(u8, req, "POST /api/export/")) {
+    if (parseVmIdxSuffix(req, "POST /api/vms/", "/export") != null) {
         handleExport(conn, req) catch |e| {
             logReqErr("export failed", e, req);
             // Unified JSON error envelope, consistent with the central mapper and
@@ -804,13 +811,117 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (routeExact(req, "GET /api/catalog")) {
         content_type = "application/json; charset=utf-8";
         response = handleCatalog(&snap_buf);
-    } else if (std.mem.startsWith(u8, req, "POST /api/quickstart/")) {
+    } else if (std.mem.startsWith(u8, req, "POST /api/vms/quickstart/")) {
         // State-changing (creates and persists a VM), so it must be POST — a GET
         // here would let prefetchers/crawlers/caches silently create VMs and make
         // repeated requests non-idempotent. The web UI already POSTs this route.
         response = try handleQuickstart(req);
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "GET /api/vm/")) {
+    } else if (routeExact(req, "POST /api/vms")) {
+        // Create a VM (collection POST).
+        response = try handleNewVm(req);
+        content_type = "text/plain";
+    } else if (routeExact(req, "POST /api/vms/import")) {
+        response = try handleImport(req);
+        content_type = "text/plain";
+    } else if (routeExact(req, "POST /api/vms/reorder")) {
+        response = try handleReorder(req);
+        content_type = "text/plain";
+    } else if (routeExact(req, "POST /api/vms/undo")) {
+        response = try handleUndo();
+        content_type = "text/plain";
+    } else if (routeExact(req, "POST /api/vms/save")) {
+        // Save-all (persist the whole library).
+        response = "saved";
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+            logSaveErr("", e);
+            response = "save failed";
+        };
+        content_type = "text/plain";
+        // ── Item sub-action routes (longest suffix first where ambiguous) ──
+    } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/framebuffer") != null) {
+        if (std.heap.page_allocator.alloc(u8, FB_BMP_BUF_SIZE)) |bytes| {
+            response_alloc = bytes;
+            response = try renderFramebuffer(req, bytes);
+        } else |_| {
+            response = "no fb";
+        }
+        // renderFramebuffer returns BMP bytes on success or a short error token
+        // ("no vm", "off", "no vnc", ...) on failure. Only label real image
+        // bytes as image/bmp; let error tokens fall through as text/plain so the
+        // central status mapper turns them into proper 4xx/5xx JSON instead of a
+        // 200 "image" the browser silently renders as broken.
+        content_type = if (std.mem.startsWith(u8, response, "BM")) "image/bmp" else "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/power") != null) {
+        response = try handlePower(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/delete") != null) {
+        response = try handleDelete(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/clone") != null) {
+        response = try handleClone(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/rename") != null) {
+        response = try handleRename(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/suspend") != null) {
+        response = try handleSuspend(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/pause") != null) {
+        response = try handlePause(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/resume") != null) {
+        response = try handleResume(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/shutdown") != null) {
+        response = try handleShutdown(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/reset") != null) {
+        response = try handleReset(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/cad") != null) {
+        response = try handleCad(req);
+        content_type = "text/plain";
+        // Snapshots: longer suffixes before the bare `/snapshots`.
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/snapshots/revert") != null) {
+        response = try handleSnapshotRevert(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/snapshots/delete") != null) {
+        response = try handleSnapshotDelete(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/snapshots") != null) {
+        response = try handleSnapshotTake(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/snapshots") != null) {
+        response = handleSnapshotList(req, &snap_buf);
+        content_type = "text/plain";
+        // Migrate: `/migrate/cancel` before `/migrate`.
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/migrate/cancel") != null) {
+        response = try handleMigrateCancel(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/migrate") != null) {
+        response = handleMigrateStatus(req, &snap_buf);
+        content_type = "application/json; charset=utf-8";
+        // The status payload is JSON, so it bypasses the central text/plain error
+        // mapper. Surface its error states as real HTTP codes — otherwise a bad
+        // index or a failed QMP query both return 200 OK, indistinguishable from a
+        // live migration to a programmatic client. The body is unchanged and the
+        // web UI reads it regardless of status code, so this is non-breaking.
+        status = migrateStatusHttpCode(response);
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/migrate") != null) {
+        response = try handleMigrate(req);
+        // The success body is a JSON object ({"status":"started"}); label it as
+        // such for strict clients. Error returns are bare tokens ("no dest",
+        // "qmp err", ...) kept on text/plain so the central error mapper turns
+        // them into 4xx/5xx JSON envelopes.
+        content_type = if (std.mem.startsWith(u8, response, "{"))
+            "application/json; charset=utf-8"
+        else
+            "text/plain";
+        // ── Bare item routes (no trailing segment) — matched LAST. ──
+    } else if (parseVmIdxExact(req, "GET /api/vms/") != null) {
         content_type = "application/json; charset=utf-8";
         response = renderVmDetail(req, &detail_buf) catch blk: {
             // A render failure (detail buffer overflow on a VM with very long
@@ -830,119 +941,19 @@ fn serveHtml(conn: c.fd_t) void {
             status = HTTP_NOT_FOUND;
             response = "{\"error\":\"no vm\"}";
         }
-    } else if (std.mem.startsWith(u8, req, "POST /api/power/")) {
-        response = try handlePower(req);
-        content_type = "text/plain";
-    } else if (routeExact(req, "POST /api/new")) {
-        response = try handleNewVm(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/delete/")) {
-        response = try handleDelete(req);
-        content_type = "text/plain";
-    } else if (routeExact(req, "POST /api/undo")) {
-        response = try handleUndo();
-        content_type = "text/plain";
-    } else if (routeExact(req, "POST /api/reorder")) {
-        response = try handleReorder(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "GET /api/fb/")) {
-        if (std.heap.page_allocator.alloc(u8, FB_BMP_BUF_SIZE)) |bytes| {
-            response_alloc = bytes;
-            response = try renderFramebuffer(req, bytes);
-        } else |_| {
-            response = "no fb";
-        }
-        // renderFramebuffer returns BMP bytes on success or a short error token
-        // ("no vm", "off", "no vnc", ...) on failure. Only label real image
-        // bytes as image/bmp; let error tokens fall through as text/plain so the
-        // central status mapper turns them into proper 4xx/5xx JSON instead of a
-        // 200 "image" the browser silently renders as broken.
-        content_type = if (std.mem.startsWith(u8, response, "BM")) "image/bmp" else "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/clone/")) {
-        response = try handleClone(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/save/")) {
+    } else if (parseVmIdxExact(req, "POST /api/vms/") != null) {
+        // Update VM settings (bare POST on the item).
         response = try handleSave(req);
         content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/rename/")) {
-        response = try handleRename(req);
-        content_type = "text/plain";
-    } else if (routeExact(req, "POST /api/save")) {
-        response = "saved";
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-            logSaveErr("", e);
-            response = "save failed";
-        };
-        content_type = "text/plain";
-    } else if (routeExact(req, "POST /api/create")) {
-        response = try handleNewVm(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/suspend/")) {
-        response = try handleSuspend(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/pause/")) {
-        response = try handlePause(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/resume/")) {
-        response = try handleResume(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/shutdown/")) {
-        response = try handleShutdown(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/reset/")) {
-        response = try handleReset(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/snapshot/take/")) {
-        response = try handleSnapshotTake(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "GET /api/snapshot/list/")) {
-        response = handleSnapshotList(req, &snap_buf);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/snapshot/revert/")) {
-        response = try handleSnapshotRevert(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/snapshot/delete/")) {
-        response = try handleSnapshotDelete(req);
-        content_type = "text/plain";
-    } else if (routeExact(req, "POST /api/import")) {
-        response = try handleImport(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/cad/")) {
-        response = try handleCad(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "GET /api/migrate/status/")) {
-        response = handleMigrateStatus(req, &snap_buf);
-        content_type = "application/json; charset=utf-8";
-        // The status payload is JSON, so it bypasses the central text/plain error
-        // mapper. Surface its error states as real HTTP codes — otherwise a bad
-        // index or a failed QMP query both return 200 OK, indistinguishable from a
-        // live migration to a programmatic client. The body is unchanged and the
-        // web UI reads it regardless of status code, so this is non-breaking.
-        status = migrateStatusHttpCode(response);
-    } else if (std.mem.startsWith(u8, req, "POST /api/migrate/cancel/")) {
-        response = try handleMigrateCancel(req);
-        content_type = "text/plain";
-    } else if (std.mem.startsWith(u8, req, "POST /api/migrate/")) {
-        response = try handleMigrate(req);
-        // The success body is a JSON object ({"status":"started"}); label it as
-        // such for strict clients. Error returns are bare tokens ("no dest",
-        // "qmp err", ...) kept on text/plain so the central error mapper turns
-        // them into 4xx/5xx JSON envelopes.
-        content_type = if (std.mem.startsWith(u8, response, "{"))
-            "application/json; charset=utf-8"
-        else
-            "text/plain";
-    } else if (routeExact(req, "GET /api/vnets")) {
+    } else if (routeExact(req, "GET /api/networks")) {
         content_type = "application/json; charset=utf-8";
         response = handleVnetsJson(&snap_buf);
-    } else if (routeExact(req, "POST /api/vnets/save")) {
+    } else if (routeExact(req, "POST /api/networks")) {
         response = handleVnetsSave(req) catch |e| blk: {
             // Surface a failed networks.json write: without this the browser
             // gets "save err" but the daemon log stays silent, so an operator
             // can't tell a full disk from a permissions problem.
-            logReqErr("vnets save failed", e, req);
+            logReqErr("networks save failed", e, req);
             break :blk "save err";
         };
         content_type = "text/plain";
@@ -1400,8 +1411,8 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
 }
 
 fn renderFramebuffer(req: []const u8, out: []u8) ![]const u8 {
-    // GET /api/fb/N — return the framebuffer for VM N as a valid BMP image
-    const idx = parseIdx(req, "GET /api/fb/") orelse return "invalid";
+    // GET /api/vms/N/framebuffer — return the framebuffer for VM N as a valid BMP image
+    const idx = parseIdx(req, "GET /api/vms/") orelse return "invalid";
     appstate.vms_mutex.lock();
     if (idx >= appstate.vm_count) {
         appstate.vms_mutex.unlock();
@@ -1473,7 +1484,7 @@ fn renderFramebuffer(req: []const u8, out: []u8) ![]const u8 {
 }
 
 fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
-    const idx = parseIdx(req, "GET /api/vm/") orelse return error.RenderFailed;
+    const idx = parseIdx(req, "GET /api/vms/") orelse return error.RenderFailed;
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
     if (idx >= appstate.vm_count) return "{}";
@@ -1799,7 +1810,7 @@ fn handlePower(req: []const u8) ![]const u8 {
     // QMP I/O this way.
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/power/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     const was_alive = v.isAlive();
@@ -1901,7 +1912,7 @@ fn readLogTail(path: [*:0]const u8, out: []u8) []const u8 {
 }
 
 /// Serve the tail of a VM's QEMU stderr log (`/var/tmp/hangar-vm-<name>.log`)
-/// as text/plain for diagnostics. Auth-gated like the rest of `/api/vm/*`; the
+/// as text/plain for diagnostics. Auth-gated like the rest of `/api/vms/*`; the
 /// VM name is copied out under the lock so no filesystem I/O runs while held.
 fn handleVmLog(conn: c.fd_t, req: []const u8) !void {
     var name_buf: [vm.MAX_NAME]u8 = undefined;
@@ -1909,7 +1920,7 @@ fn handleVmLog(conn: c.fd_t, req: []const u8) !void {
     {
         appstate.vms_mutex.lock();
         defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "GET /api/vm/") orelse {
+        const idx = parseIdx(req, "GET /api/vms/") orelse {
             writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
             return;
         };
@@ -1948,7 +1959,7 @@ fn handleVmLog(conn: c.fd_t, req: []const u8) !void {
 /// Best-effort: create the primary disk image for a freshly-configured VM and
 /// point its `disk_path` at it.
 ///
-/// VM creation (`/api/new`, `/api/quickstart`) collects a "Disk Size (GB)" but
+/// VM creation (`POST /api/vms`, `/api/vms/quickstart`) collects a "Disk Size (GB)" but
 /// no disk path — the path is derived here as `$HOME/VMs/<name>.<ext>`, matching
 /// the clone flow. Without this the size was stored but no image was ever
 /// created and `disk_path` stayed empty, so the VM booted with no hard disk and
@@ -2222,7 +2233,7 @@ fn handleCatalog(buf: []u8) []const u8 {
 
 fn handleQuickstart(req: []const u8) ![]const u8 {
     // Match the path independent of method so the parser is agnostic to GET/POST.
-    const prefix = "/api/quickstart/";
+    const prefix = "/api/vms/quickstart/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
@@ -2283,7 +2294,7 @@ fn handleClone(req: []const u8) ![]const u8 {
     // (it only stamps a qcow2 backing file, so it is cheap).
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/clone/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
     var clone = appstate.vms[idx];
     const src = &appstate.vms[idx];
@@ -2352,7 +2363,7 @@ fn handleDelete(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
 
-    const idx = parseIdx(req, "POST /api/delete/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     logAudit("delete", appstate.vms[idx].getNameSlice());
     // Save undo state before deleting.
@@ -2413,7 +2424,7 @@ fn handleReorder(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
 
-    const prefix = "POST /api/reorder";
+    const prefix = "POST /api/vms/reorder";
     _ = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
@@ -2473,7 +2484,7 @@ fn handleSave(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
 
-    const idx = parseIdx(req, "POST /api/save/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
@@ -2658,8 +2669,8 @@ fn parseIdx(req: []const u8, prefix: []const u8) ?usize {
 }
 
 /// Parse a VM index from the URL and verify the path suffix after the index.
-/// E.g. `parseVmIdxSuffix(req, "GET /api/vm/", "/disk2/download")` for URL
-/// `GET /api/vm/0/disk2/download`. Returns null on mismatch — safer than
+/// E.g. `parseVmIdxSuffix(req, "GET /api/vms/", "/disk2/download")` for URL
+/// `GET /api/vms/0/disk2/download`. Returns null on mismatch — safer than
 /// substring search which might match ambiguous segments.
 fn parseVmIdxSuffix(req: []const u8, prefix: []const u8, suffix: []const u8) ?usize {
     const start = std.mem.indexOf(u8, req, prefix) orelse return null;
@@ -2677,12 +2688,33 @@ fn parseVmIdxSuffix(req: []const u8, prefix: []const u8, suffix: []const u8) ?us
     return idx;
 }
 
+/// Parse a VM index from a BARE item path with no trailing `/segment`.
+/// E.g. `parseVmIdxExact(req, "GET /api/vms/")` matches `GET /api/vms/12 HTTP/1.1`
+/// (and `?query`) but returns null for `GET /api/vms/12/log` — that has an action
+/// suffix and must be routed by `parseVmIdxSuffix`. Returns the index only when
+/// the character following the digits is a space, `?`, or end of input.
+fn parseVmIdxExact(req: []const u8, prefix: []const u8) ?usize {
+    const start = std.mem.indexOf(u8, req, prefix) orelse return null;
+    const rest = req[start + prefix.len ..];
+    var end: usize = rest.len;
+    for ([_]u8{ ' ', '/', '?' }) |term| {
+        if (std.mem.indexOfScalar(u8, rest, term)) |i| {
+            if (i < end) end = i;
+        }
+    }
+    if (end == 0) return null;
+    // The char that terminated the digits must NOT be '/': a trailing segment
+    // means this is an action route, not a bare item path.
+    if (end < rest.len and rest[end] == '/') return null;
+    return std.fmt.parseInt(usize, rest[0..end], 10) catch null;
+}
+
 fn handleSuspend(req: []const u8) ![]const u8 {
     // Lock only long enough to validate idx, copy the VM name, and check liveness.
     // The QMP migration I/O below can take many seconds — we must not hold the
     // mutex across it or every other API call blocks.
     appstate.vms_mutex.lock();
-    const idx = parseIdx(req, "POST /api/suspend/") orelse {
+    const idx = parseIdx(req, "POST /api/vms/") orelse {
         appstate.vms_mutex.unlock();
         return "invalid";
     };
@@ -2762,7 +2794,7 @@ fn handleSuspend(req: []const u8) ![]const u8 {
 fn handlePause(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/pause/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
@@ -2792,7 +2824,7 @@ fn handlePause(req: []const u8) ![]const u8 {
 fn handleResume(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/resume/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isPaused()) return "not paused";
@@ -2822,7 +2854,7 @@ fn handleResume(req: []const u8) ![]const u8 {
 fn handleRename(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/rename/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
@@ -2851,7 +2883,7 @@ fn handleRename(req: []const u8) ![]const u8 {
 fn handleShutdown(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/shutdown/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
@@ -2881,7 +2913,7 @@ fn handleShutdown(req: []const u8) ![]const u8 {
 fn handleReset(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/reset/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
@@ -2923,7 +2955,7 @@ fn validateSnapshotTag(tag: []const u8) bool {
 fn handleSnapshotTake(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/snapshot/take/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
@@ -2962,7 +2994,7 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
 fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "GET /api/snapshot/list/") orelse return "invalid";
+    const idx = parseIdx(req, "GET /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
@@ -2997,7 +3029,7 @@ fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
 fn handleSnapshotRevert(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/snapshot/revert/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
@@ -3036,7 +3068,7 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
 fn handleSnapshotDelete(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/snapshot/delete/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
@@ -3126,7 +3158,7 @@ fn handleImport(req: []const u8) ![]const u8 {
 fn handleCad(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/cad/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
@@ -3167,7 +3199,7 @@ fn isValidMigrateDest(dest: []const u8) bool {
 fn handleMigrate(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/migrate/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
@@ -3219,7 +3251,7 @@ fn migrateStatusHttpCode(body: []const u8) u16 {
 fn handleMigrateStatus(req: []const u8, buf: []u8) []const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "GET /api/migrate/status/") orelse return "{\"status\":\"error\",\"error\":\"invalid idx\"}";
+    const idx = parseIdx(req, "GET /api/vms/") orelse return "{\"status\":\"error\",\"error\":\"invalid idx\"}";
     if (idx >= appstate.vm_count) return "{\"status\":\"error\",\"error\":\"bad idx\"}";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "{\"status\":\"error\",\"error\":\"not running\"}";
@@ -3240,7 +3272,7 @@ fn handleMigrateStatus(req: []const u8, buf: []u8) []const u8 {
 fn handleMigrateCancel(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/migrate/cancel/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
@@ -3268,7 +3300,7 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
     // Reply with a real HTTP status on every failure path. A bare `return` here
     // closes the socket with no response, so the client sees an empty reply it
     // cannot tell apart from a network drop instead of a 400/404/500.
-    const idx = parseIdx(req, "GET /api/vm/") orelse {
+    const idx = parseIdx(req, "GET /api/vms/") orelse {
         writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
         return;
     };
@@ -3342,7 +3374,7 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
     // later to record the result — never across the (potentially multi-GB)
     // writeFile, which would otherwise freeze every other handler and the
     // liveness/autoprotect tickers for the whole upload.
-    const idx = parseIdx(req, "POST /api/vm/") orelse return "invalid";
+    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
 
     // Parse multipart boundary from Content-Type header (case-insensitive per RFC 7230).
     const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
@@ -3489,7 +3521,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     defer appstate.vms_mutex.unlock();
     // Client-input failures get a real HTTP status; a bare `return` would close
     // the socket with no response (an empty reply indistinguishable from a drop).
-    const idx = parseIdx(req, "POST /api/export/") orelse {
+    const idx = parseIdx(req, "POST /api/vms/") orelse {
         writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
         return;
     };
@@ -4137,34 +4169,34 @@ test "isServerErrToken: does not flag data containing 'err'" {
 }
 
 test "parseIdx: extracts numeric index from URL path" {
-    const req = "GET /api/power/42 HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    const idx = parseIdx(req, "/api/power/");
+    const req = "POST /api/vms/42/power HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const idx = parseIdx(req, "POST /api/vms/");
     try std.testing.expect(idx != null);
     try std.testing.expectEqual(@as(usize, 42), idx.?);
 }
 
 test "parseIdx: returns null when prefix not found" {
     const req = "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    const idx = parseIdx(req, "/api/power/");
+    const idx = parseIdx(req, "POST /api/vms/");
     try std.testing.expect(idx == null);
 }
 
 test "parseIdx: handles multi-digit index" {
-    const req = "GET /api/save/12345 HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    const idx = parseIdx(req, "/api/save/");
+    const req = "POST /api/vms/12345 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const idx = parseIdx(req, "POST /api/vms/");
     try std.testing.expectEqual(@as(usize, 12345), idx.?);
 }
 
 test "parseIdx: returns null on non-numeric index" {
-    const req = "GET /api/power/abc HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    const idx = parseIdx(req, "/api/power/");
+    const req = "POST /api/vms/abc/power HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const idx = parseIdx(req, "POST /api/vms/");
     try std.testing.expect(idx == null);
 }
 
 test "routeExact: matches exact route with trailing space" {
     try std.testing.expect(routeExact("GET /api/vms HTTP/1.1\r\n", "GET /api/vms"));
     try std.testing.expect(routeExact("GET /api/health HTTP/1.1\r\n", "GET /api/health"));
-    try std.testing.expect(routeExact("POST /api/save HTTP/1.1\r\n", "POST /api/save"));
+    try std.testing.expect(routeExact("POST /api/vms/save HTTP/1.1\r\n", "POST /api/vms/save"));
 }
 
 test "routeExact: matches exact route with query string" {
@@ -4176,7 +4208,7 @@ test "routeExact: rejects longer path at same prefix" {
     try std.testing.expect(!routeExact("GET /api/vms/3 HTTP/1.1\r\n", "GET /api/vms"));
     try std.testing.expect(!routeExact("GET /api/vmsblah HTTP/1.1\r\n", "GET /api/vms"));
     try std.testing.expect(!routeExact("GET /api/healthcheck HTTP/1.1\r\n", "GET /api/health"));
-    try std.testing.expect(!routeExact("POST /api/news HTTP/1.1\r\n", "POST /api/new"));
+    try std.testing.expect(!routeExact("POST /api/vmss HTTP/1.1\r\n", "POST /api/vms"));
 }
 
 test "routeExact: rejects prefix not found" {
@@ -4189,7 +4221,7 @@ test "routeExact: rejects request shorter than prefix" {
 }
 
 test "getBody: extracts body after double CRLF" {
-    const req = "GET /api/save/0 HTTP/1.1\r\nHost: localhost\r\n\r\nname=foo&mem=2048";
+    const req = "POST /api/vms/0 HTTP/1.1\r\nHost: localhost\r\n\r\nname=foo&mem=2048";
     const body = getBody(req);
     try std.testing.expect(body != null);
     try std.testing.expectEqualStrings("name=foo&mem=2048", body.?);
@@ -4202,7 +4234,7 @@ test "getBody: returns null when no body separator found" {
 }
 
 test "getBody: empty body after double CRLF" {
-    const req = "GET /api/power/0 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const req = "POST /api/vms/0/power HTTP/1.1\r\nHost: localhost\r\n\r\n";
     const body = getBody(req);
     try std.testing.expect(body != null);
     try std.testing.expectEqualStrings("", body.?);
@@ -4360,7 +4392,7 @@ test "fuzz: parseIdx never panics on random URL-like input" {
     const rnd = prng.random();
     var buf: [512]u8 = undefined;
 
-    const prefixes = [_][]const u8{ "/api/power/", "/api/save/", "/api/delete/", "/api/clone/" };
+    const prefixes = [_][]const u8{ "POST /api/vms/", "GET /api/vms/" };
     var iter: usize = 0;
     while (iter < 4000) : (iter += 1) {
         const len = rnd.uintLessThan(usize, buf.len + 1);
@@ -4411,12 +4443,45 @@ test "fuzz: tailSlice never panics and returns a valid suffix" {
 }
 
 test "parseVmIdxSuffix: matches the /log route" {
-    try std.testing.expectEqual(@as(?usize, 0), parseVmIdxSuffix("GET /api/vm/0/log HTTP/1.1", "GET /api/vm/", "/log"));
-    try std.testing.expectEqual(@as(?usize, 12), parseVmIdxSuffix("GET /api/vm/12/log HTTP/1.1", "GET /api/vm/", "/log"));
+    try std.testing.expectEqual(@as(?usize, 0), parseVmIdxSuffix("GET /api/vms/0/log HTTP/1.1", "GET /api/vms/", "/log"));
+    try std.testing.expectEqual(@as(?usize, 12), parseVmIdxSuffix("GET /api/vms/12/log HTTP/1.1", "GET /api/vms/", "/log"));
     // Partial-segment guard: "/logs" must not match "/log".
-    try std.testing.expectEqual(@as(?usize, null), parseVmIdxSuffix("GET /api/vm/0/logs HTTP/1.1", "GET /api/vm/", "/log"));
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxSuffix("GET /api/vms/0/logs HTTP/1.1", "GET /api/vms/", "/log"));
     // The plain detail route has no suffix and must not match.
-    try std.testing.expectEqual(@as(?usize, null), parseVmIdxSuffix("GET /api/vm/0 HTTP/1.1", "GET /api/vm/", "/log"));
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxSuffix("GET /api/vms/0 HTTP/1.1", "GET /api/vms/", "/log"));
+}
+
+test "parseVmIdxExact: matches bare item path only" {
+    // Bare detail / update paths return the index.
+    try std.testing.expectEqual(@as(?usize, 0), parseVmIdxExact("GET /api/vms/0 HTTP/1.1", "GET /api/vms/"));
+    try std.testing.expectEqual(@as(?usize, 12), parseVmIdxExact("POST /api/vms/12 HTTP/1.1", "POST /api/vms/"));
+    // Query string after the id is allowed.
+    try std.testing.expectEqual(@as(?usize, 3), parseVmIdxExact("GET /api/vms/3?full=1 HTTP/1.1", "GET /api/vms/"));
+    // A trailing action segment must NOT match the bare item route.
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxExact("POST /api/vms/0/power HTTP/1.1", "POST /api/vms/"));
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxExact("GET /api/vms/0/log HTTP/1.1", "GET /api/vms/"));
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxExact("POST /api/vms/0/snapshots/revert HTTP/1.1", "POST /api/vms/"));
+    // Non-numeric id is rejected.
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxExact("GET /api/vms/abc HTTP/1.1", "GET /api/vms/"));
+    // Prefix not present.
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxExact("GET /api/health HTTP/1.1", "GET /api/vms/"));
+}
+
+test "dispatch disambiguation: snapshots/revert is not the bare /snapshots take route" {
+    // The longer suffix must win: a revert request must not be swallowed by the
+    // /snapshots (take) matcher, and must not be seen as a bare item route.
+    try std.testing.expect(parseVmIdxSuffix("POST /api/vms/0/snapshots/revert HTTP/1.1", "POST /api/vms/", "/snapshots/revert") != null);
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxExact("POST /api/vms/0/snapshots/revert HTTP/1.1", "POST /api/vms/"));
+    // The bare /snapshots matcher does still match the take request itself.
+    try std.testing.expect(parseVmIdxSuffix("POST /api/vms/0/snapshots HTTP/1.1", "POST /api/vms/", "/snapshots") != null);
+}
+
+test "dispatch disambiguation: bare item path matches no action route" {
+    // A bare /api/vms/0 must not be matched by any /<action> suffix matcher.
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxSuffix("POST /api/vms/0 HTTP/1.1", "POST /api/vms/", "/power"));
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxSuffix("POST /api/vms/0 HTTP/1.1", "POST /api/vms/", "/delete"));
+    // ...but the exact matcher accepts it.
+    try std.testing.expectEqual(@as(?usize, 0), parseVmIdxExact("POST /api/vms/0 HTTP/1.1", "POST /api/vms/"));
 }
 
 test "fuzz: findHeader never panics and returns a sub-slice of headers" {
@@ -4456,7 +4521,7 @@ test "fuzz: parseVmIdxSuffix never panics on random request-like input" {
     const rnd = prng.random();
     var buf: [512]u8 = undefined;
 
-    const prefixes = [_][]const u8{ "GET /api/vm/", "POST /api/vm/" };
+    const prefixes = [_][]const u8{ "GET /api/vms/", "POST /api/vms/" };
     const suffixes = [_][]const u8{ "/disk2/download", "/serial", "/screenshot" };
     var iter: usize = 0;
     while (iter < 4000) : (iter += 1) {
@@ -4692,23 +4757,23 @@ test "parseContentLength: no header returns null" {
 }
 
 test "parseContentLength: negative value returns null" {
-    const req = "POST /api/save/0 HTTP/1.1\r\nContent-Length: -1\r\n\r\n";
+    const req = "POST /api/vms/0 HTTP/1.1\r\nContent-Length: -1\r\n\r\n";
     try std.testing.expect(parseContentLength(req) == null);
 }
 
 test "parseContentLength: overflow value returns null" {
-    const req = "POST /api/save/0 HTTP/1.1\r\nContent-Length: 99999999999999999999\r\n\r\n";
+    const req = "POST /api/vms/0 HTTP/1.1\r\nContent-Length: 99999999999999999999\r\n\r\n";
     try std.testing.expect(parseContentLength(req) == null);
 }
 
 test "parseContentLength: valid value extracted" {
-    const req = "POST /api/save/0 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 42\r\n\r\nname=test";
+    const req = "POST /api/vms/0 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 42\r\n\r\nname=test";
     const cl = parseContentLength(req);
     try std.testing.expectEqual(@as(usize, 42), cl.?);
 }
 
 test "parseContentLength: zero is valid" {
-    const req = "POST /api/save/0 HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
+    const req = "POST /api/vms/0 HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
     try std.testing.expectEqual(@as(usize, 0), parseContentLength(req).?);
 }
 
@@ -4761,15 +4826,15 @@ test "fuzz: serveHtml routing never panics on random method/URL input" {
         "GET /",
         "GET /api/vms",
         "GET /api/health",
-        "GET /api/fb/",
+        "GET /api/vms/0/framebuffer",
         "GET /api/config",
-        "GET /api/vnets",
-        "GET /api/vm/",
-        "GET /api/snapshot/list/",
+        "GET /api/networks",
+        "GET /api/vms/0",
+        "GET /api/vms/0/snapshots",
         "GET /api/capabilities",
         "GET /api/catalog",
-        "POST /api/quickstart/",
-        "GET /api/migrate/status/",
+        "POST /api/vms/quickstart/",
+        "GET /api/vms/0/migrate",
         "GET /ws/vnc/",
         "GET /ws/spice/",
         "GET /ws/serial/",
@@ -4778,32 +4843,31 @@ test "fuzz: serveHtml routing never panics on random method/URL input" {
         "GET /novnc.js",
         "GET /spice.js",
         "GET /favicon",
-        "POST /api/power/",
-        "POST /api/save/",
-        "POST /api/save",
-        "POST /api/suspend/",
-        "POST /api/pause/",
-        "POST /api/resume/",
-        "POST /api/shutdown/",
-        "POST /api/reset/",
-        "POST /api/delete/",
-        "POST /api/clone/",
-        "POST /api/new",
-        "POST /api/create",
-        "POST /api/rename/",
-        "POST /api/snapshot/take/",
-        "POST /api/snapshot/revert/",
-        "POST /api/snapshot/delete/",
-        "POST /api/import",
-        "POST /api/cad/",
-        "POST /api/export/",
-        "POST /api/vm/",
-        "POST /api/vnets/save",
+        "POST /api/vms/0/power",
+        "POST /api/vms/0",
+        "POST /api/vms/save",
+        "POST /api/vms/0/suspend",
+        "POST /api/vms/0/pause",
+        "POST /api/vms/0/resume",
+        "POST /api/vms/0/shutdown",
+        "POST /api/vms/0/reset",
+        "POST /api/vms/0/delete",
+        "POST /api/vms/0/clone",
+        "POST /api/vms",
+        "POST /api/vms/0/rename",
+        "POST /api/vms/0/snapshots",
+        "POST /api/vms/0/snapshots/revert",
+        "POST /api/vms/0/snapshots/delete",
+        "POST /api/vms/import",
+        "POST /api/vms/0/cad",
+        "POST /api/vms/0/export",
+        "POST /api/vms/0/disk2",
+        "POST /api/networks",
         "POST /api/config",
-        "POST /api/undo",
-        "POST /api/reorder",
-        "POST /api/migrate/",
-        "POST /api/migrate/cancel/",
+        "POST /api/vms/undo",
+        "POST /api/vms/reorder",
+        "POST /api/vms/0/migrate",
+        "POST /api/vms/0/migrate/cancel",
         "OPTIONS ",
         "PUT /api/vms",
         "DELETE /api/vms",
@@ -4835,7 +4899,7 @@ test "fuzz: serveHtml routing never panics on random method/URL input" {
                     }
                     // Check for download/upload sub-routes
                     _ = std.mem.indexOf(u8, buf[0..len], "/disk2/download");
-                    _ = std.mem.indexOf(u8, buf[0..len], "/upload-disk");
+                    _ = std.mem.indexOf(u8, buf[0..len], "/disk2");
                     break;
                 }
             }
@@ -4872,15 +4936,15 @@ test "fuzz: routeExact rejects boundary-confusable requests" {
 
     // Routes that must match exactly (no suffix)
     const exact_routes = [_][]const u8{
-        "GET /api/vms",         "GET /api/health",
-        "GET /api/config",      "GET /api/catalog",
-        "GET /api/vnets",       "GET /api/capabilities",
-        "POST /api/new",        "POST /api/save",
-        "POST /api/create",     "POST /api/undo",
-        "POST /api/reorder",    "POST /api/import",
-        "POST /api/vnets/save", "POST /api/config",
-        "GET /app.css",         "GET /app.js",
-        "GET /novnc.js",        "GET /spice.js",
+        "GET /api/vms",          "GET /api/health",
+        "GET /api/config",       "GET /api/catalog",
+        "GET /api/networks",     "GET /api/capabilities",
+        "POST /api/vms",         "POST /api/vms/save",
+        "POST /api/vms/undo",    "POST /api/vms/reorder",
+        "POST /api/vms/import",  "POST /api/networks",
+        "POST /api/config",      "GET /app.css",
+        "GET /app.js",           "GET /novnc.js",
+        "GET /spice.js",
     };
 
     var buf: [256]u8 = undefined;
@@ -5106,7 +5170,7 @@ test "fuzz: isAuthExempt never panics and never exempts protected surfaces" {
     while (iter < 6000) : (iter += 1) {
         const len = rnd.uintLessThan(usize, buf.len + 1);
         // Mix random bytes with a bias toward the literal path characters so the
-        // fuzzer reaches boundary-confusable prefixes (e.g. "/api/vm/...").
+        // fuzzer reaches boundary-confusable prefixes (e.g. "/api/vms/...").
         for (buf[0..len]) |*b| {
             b.* = if (rnd.boolean())
                 alphabet[rnd.uintLessThan(usize, alphabet.len)]
@@ -5217,17 +5281,17 @@ test "handleCatalog: tiny buffer that overflows mid-write returns []" {
 }
 
 test "handleQuickstart: missing space after slug returns 'invalid'" {
-    const result = try handleQuickstart("GET /api/quickstart/ubuntu2404");
+    const result = try handleQuickstart("POST /api/vms/quickstart/ubuntu2404");
     try std.testing.expectEqualStrings("invalid", result);
 }
 
 test "handleQuickstart: empty slug returns 'not found'" {
-    const result = try handleQuickstart("GET /api/quickstart/ HTTP/1.1");
+    const result = try handleQuickstart("POST /api/vms/quickstart/ HTTP/1.1");
     try std.testing.expectEqualStrings("not found", result);
 }
 
 test "handleQuickstart: unknown slug returns 'not found'" {
-    const result = try handleQuickstart("GET /api/quickstart/nonexistent HTTP/1.1");
+    const result = try handleQuickstart("POST /api/vms/quickstart/nonexistent HTTP/1.1");
     try std.testing.expectEqualStrings("not found", result);
 }
 
@@ -5235,7 +5299,7 @@ test "handleQuickstart: full VM array returns 'full'" {
     const prev_count = appstate.vm_count;
     appstate.vm_count = appstate.MAX_VMS;
     defer appstate.vm_count = prev_count;
-    const result = try handleQuickstart("GET /api/quickstart/ubuntu2404 HTTP/1.1");
+    const result = try handleQuickstart("POST /api/vms/quickstart/ubuntu2404 HTTP/1.1");
     try std.testing.expectEqualStrings("full", result);
 }
 
@@ -5319,23 +5383,26 @@ test "isAuthExempt: API read endpoints are exempt for GET" {
     try std.testing.expect(isAuthExempt(true, "/api/vms"));
     try std.testing.expect(isAuthExempt(true, "/api/health"));
     try std.testing.expect(isAuthExempt(true, "/api/config"));
-    try std.testing.expect(isAuthExempt(true, "/api/vnets"));
+    try std.testing.expect(isAuthExempt(true, "/api/networks"));
     try std.testing.expect(isAuthExempt(true, "/api/catalog"));
 }
 
 test "isAuthExempt: prefix paths are exempt for GET" {
-    try std.testing.expect(isAuthExempt(true, "/api/vm/0"));
-    try std.testing.expect(isAuthExempt(true, "/api/vm/5/snapshot"));
-    // /api/fb/ is no longer exempt — framebuffer snapshots require auth
-    try std.testing.expect(!isAuthExempt(true, "/api/fb/0"));
-    try std.testing.expect(!isAuthExempt(true, "/api/fb/0?quality=50"));
-    try std.testing.expect(isAuthExempt(true, "/api/snapshot/list/0"));
-    // /api/quickstart/ creates a VM (state-changing) — it must require auth.
-    try std.testing.expect(!isAuthExempt(true, "/api/quickstart/ubuntu2404"));
+    try std.testing.expect(isAuthExempt(true, "/api/vms/0"));
+    try std.testing.expect(isAuthExempt(true, "/api/vms/5/snapshots"));
+    try std.testing.expect(isAuthExempt(true, "/api/vms/5/log"));
+    // The framebuffer read still requires auth.
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/0/framebuffer"));
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/0/framebuffer?quality=50"));
+    // Migrate-status read still requires auth.
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/0/migrate"));
+    // POST /api/vms/quickstart/ creates a VM (state-changing) — it must require
+    // auth (covered by the non-GET early return).
+    try std.testing.expect(!isAuthExempt(false, "/api/vms/quickstart/ubuntu2404"));
     // Disk-image download streams raw guest bytes — must require auth even
-    // though it lives under the otherwise-exempt /api/vm/ prefix.
-    try std.testing.expect(!isAuthExempt(true, "/api/vm/0/disk2/download"));
-    try std.testing.expect(!isAuthExempt(true, "/api/vm/12/disk2/download"));
+    // though it lives under the otherwise-exempt /api/vms/ prefix.
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/0/disk2/download"));
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/12/disk2/download"));
 }
 
 test "sanitizeSlug: strips shell-unsafe characters" {
@@ -5372,23 +5439,26 @@ test "sanitizeSlug: fuzz output is always shell-safe" {
 }
 
 test "isAuthExempt: non-exempt paths are rejected for GET" {
-    try std.testing.expect(!isAuthExempt(true, "/api/save"));
-    try std.testing.expect(!isAuthExempt(true, "/api/power/0"));
-    try std.testing.expect(!isAuthExempt(true, "/api/delete/0"));
-    try std.testing.expect(!isAuthExempt(true, "/api/clone/0"));
+    // These are POST routes; even probed with GET they must not be exempt
+    // (only /framebuffer, /migrate, /disk2/download under /api/vms/ are the
+    // explicit non-exempt GETs, the rest of /api/vms/ being read-only).
+    try std.testing.expect(!isAuthExempt(true, "/api/configX"));
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/0/framebuffer"));
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/0/disk2/download"));
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/0/migrate"));
 }
 
 test "isAuthExempt: all non-GET methods are non-exempt" {
     try std.testing.expect(!isAuthExempt(false, "/"));
     try std.testing.expect(!isAuthExempt(false, "/app.js"));
     try std.testing.expect(!isAuthExempt(false, "/api/vms"));
-    try std.testing.expect(!isAuthExempt(false, "/api/vm/0"));
+    try std.testing.expect(!isAuthExempt(false, "/api/vms/0"));
 }
 
 test "isAuthExempt: path traversal does not bypass prefix match" {
-    try std.testing.expect(isAuthExempt(true, "/api/vm/../../../etc/passwd"));
-    // /api/fb/ is no longer exempt — path traversal on it must also fail
-    try std.testing.expect(!isAuthExempt(true, "/api/fb/../../../../root/.ssh/id_rsa"));
+    try std.testing.expect(isAuthExempt(true, "/api/vms/../../../etc/passwd"));
+    // A traversal that ends in a non-exempt suffix must still require auth.
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/0/../../../../root/.ssh/disk2/download"));
 }
 
 // ── clampPref ──
@@ -5530,20 +5600,20 @@ test "handleVnetsSave: saves valid vnet JSON" {
     const json =
         \\{"networks":[{"name":"VMnet0","type":"bridge","subnet":"","mask":"","dhcp":false,"dhcp_start":"","dhcp_end":"","host_iface":"","gateway":"","port_forwards":""}]}
     ;
-    const body = try std.fmt.allocPrint(std.testing.allocator, "POST /api/vnets/save HTTP/1.1\r\nHost: localhost\r\n\r\n{s}", .{json});
+    const body = try std.fmt.allocPrint(std.testing.allocator, "POST /api/networks HTTP/1.1\r\nHost: localhost\r\n\r\n{s}", .{json});
     defer std.testing.allocator.free(body);
     const result = try handleVnetsSave(body);
     try std.testing.expectEqualStrings("ok", result);
 }
 
 test "handleVnetsSave: empty body returns 'no body'" {
-    const req = "POST /api/vnets/save HTTP/1.1\r\nHost: localhost";
+    const req = "POST /api/networks HTTP/1.1\r\nHost: localhost";
     const result = try handleVnetsSave(req);
     try std.testing.expectEqualStrings("no body", result);
 }
 
 test "handleVnetsSave: malformed JSON returns parse error" {
-    const req = "POST /api/vnets/save HTTP/1.1\r\nHost: localhost\r\n\r\n{not valid json}";
+    const req = "POST /api/networks HTTP/1.1\r\nHost: localhost\r\n\r\n{not valid json}";
     const result = try handleVnetsSave(req);
     try std.testing.expectEqualStrings("parse error", result);
 }
@@ -5552,7 +5622,7 @@ test "handleVnetsSave: empty JSON object returns defaults (ok)" {
     var cfg_home = try TestConfigHome.init("vnets-empty");
     defer cfg_home.deinit();
 
-    const req = "POST /api/vnets/save HTTP/1.1\r\nHost: localhost\r\n\r\n{}";
+    const req = "POST /api/networks HTTP/1.1\r\nHost: localhost\r\n\r\n{}";
     const result = try handleVnetsSave(req);
     // Empty object is body.len == 2, so the "parse error" guard (body.len > 2)
     // does not trip: an empty network set is saved and "ok" is returned.
@@ -5939,7 +6009,7 @@ test "handlePower: missing prefix returns 'invalid'" {
 }
 
 test "handlePower: non-numeric idx returns 'invalid'" {
-    const result = try handlePower("POST /api/power/abc HTTP/1.1");
+    const result = try handlePower("POST /api/vms/abc/power HTTP/1.1");
     try std.testing.expectEqualStrings("invalid", result);
 }
 
@@ -5947,7 +6017,7 @@ test "handlePower: idx out of range returns 'invalid idx'" {
     const prev_count = appstate.vm_count;
     appstate.vm_count = 0;
     defer appstate.vm_count = prev_count;
-    const result = try handlePower("POST /api/power/0 HTTP/1.1");
+    const result = try handlePower("POST /api/vms/0/power HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -5961,12 +6031,12 @@ test "handleNewVm: full VM array returns 'full'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleNewVm("POST /api/new\r\n\r\nname=test");
+    const result = try handleNewVm("POST /api/vms\r\n\r\nname=test");
     try std.testing.expectEqualStrings("full", result);
 }
 
 test "handleNewVm: missing body returns 'no body'" {
-    const result = try handleNewVm("POST /api/new");
+    const result = try handleNewVm("POST /api/vms");
     try std.testing.expectEqualStrings("no body", result);
 }
 
@@ -5980,7 +6050,7 @@ test "handleNewVm: invalid name chars returns error" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleNewVm("POST /api/new\r\n\r\nname=evil<script>");
+    const result = try handleNewVm("POST /api/vms\r\n\r\nname=evil<script>");
     try std.testing.expectEqualStrings("invalid name", result);
 }
 
@@ -5994,7 +6064,7 @@ test "handleNewVm: empty name returns error" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleNewVm("POST /api/new\r\n\r\nname=");
+    const result = try handleNewVm("POST /api/vms\r\n\r\nname=");
     try std.testing.expectEqualStrings("invalid name", result);
 }
 
@@ -6024,17 +6094,17 @@ test "handleDelete: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleDelete("POST /api/delete/0 HTTP/1.1");
+    const result = try handleDelete("POST /api/vms/0/delete HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
 test "handleReorder: missing from/to returns error" {
-    const result = try handleReorder("POST /api/reorder\r\n\r\nfrom=0");
+    const result = try handleReorder("POST /api/vms/reorder\r\n\r\nfrom=0");
     try std.testing.expectEqualStrings("missing from/to", result);
 }
 
 test "handleReorder: no body returns 'no body'" {
-    const result = try handleReorder("POST /api/reorder");
+    const result = try handleReorder("POST /api/vms/reorder");
     try std.testing.expectEqualStrings("no body", result);
 }
 
@@ -6053,7 +6123,7 @@ test "handleReorder: same from and to returns 'ok' (no-op)" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleReorder("POST /api/reorder\r\n\r\nfrom=0&to=0");
+    const result = try handleReorder("POST /api/vms/reorder\r\n\r\nfrom=0&to=0");
     try std.testing.expectEqualStrings("ok", result);
 }
 
@@ -6074,7 +6144,7 @@ test "handleReorder: valid reorder produces 'ok'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleReorder("POST /api/reorder\r\n\r\nfrom=0&to=1");
+    const result = try handleReorder("POST /api/vms/reorder\r\n\r\nfrom=0&to=1");
     try std.testing.expectEqualStrings("ok", result);
     try std.testing.expectEqualStrings("second", appstate.vms[0].getNameSlice());
     try std.testing.expectEqualStrings("first", appstate.vms[1].getNameSlice());
@@ -6095,7 +6165,7 @@ test "handleSave: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSave("POST /api/save/0 HTTP/1.1");
+    const result = try handleSave("POST /api/vms/0 HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6111,7 +6181,7 @@ test "handleSave: no body returns 'no body'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSave("POST /api/save/0 HTTP/1.1");
+    const result = try handleSave("POST /api/vms/0 HTTP/1.1");
     try std.testing.expectEqualStrings("no body", result);
 }
 
@@ -6127,7 +6197,7 @@ test "handleSave: path traversal in iso_path returns 'bad path'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSave("POST /api/save/0 HTTP/1.1\r\n\r\niso_path=../../etc/passwd");
+    const result = try handleSave("POST /api/vms/0 HTTP/1.1\r\n\r\niso_path=../../etc/passwd");
     try std.testing.expectEqualStrings("bad path", result);
 }
 
@@ -6147,7 +6217,7 @@ test "handleSave: valid fields produce 'ok'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSave("POST /api/save/0 HTTP/1.1\r\n\r\nmem=2048&cpu=4");
+    const result = try handleSave("POST /api/vms/0 HTTP/1.1\r\n\r\nmem=2048&cpu=4");
     try std.testing.expectEqualStrings("ok", result);
     try std.testing.expectEqual(@as(u32, 2048), appstate.vms[0].memory_mb);
     try std.testing.expectEqual(@as(u32, 4), appstate.vms[0].cpu_cores);
@@ -6168,7 +6238,7 @@ test "handleRename: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleRename("POST /api/rename/0 HTTP/1.1");
+    const result = try handleRename("POST /api/vms/0/rename HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6187,7 +6257,7 @@ test "handleSuspend: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSuspend("POST /api/suspend/0 HTTP/1.1");
+    const result = try handleSuspend("POST /api/vms/0/suspend HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6206,7 +6276,7 @@ test "handlePause: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handlePause("POST /api/pause/0 HTTP/1.1");
+    const result = try handlePause("POST /api/vms/0/pause HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6225,7 +6295,7 @@ test "handleResume: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleResume("POST /api/resume/0 HTTP/1.1");
+    const result = try handleResume("POST /api/vms/0/resume HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6244,7 +6314,7 @@ test "handleShutdown: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleShutdown("POST /api/shutdown/0 HTTP/1.1");
+    const result = try handleShutdown("POST /api/vms/0/shutdown HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6263,7 +6333,7 @@ test "handleReset: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleReset("POST /api/reset/0 HTTP/1.1");
+    const result = try handleReset("POST /api/vms/0/reset HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6282,7 +6352,7 @@ test "handleSnapshotTake: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSnapshotTake("POST /api/snapshot/take/0 HTTP/1.1");
+    const result = try handleSnapshotTake("POST /api/vms/0/snapshots HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6303,7 +6373,7 @@ test "handleSnapshotList: idx out of range returns error" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = handleSnapshotList("GET /api/snapshot/list/0 HTTP/1.1", &buf);
+    const result = handleSnapshotList("GET /api/vms/0/snapshots HTTP/1.1", &buf);
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6322,7 +6392,7 @@ test "handleSnapshotRevert: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSnapshotRevert("POST /api/snapshot/revert/0 HTTP/1.1");
+    const result = try handleSnapshotRevert("POST /api/vms/0/snapshots/revert HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6341,12 +6411,12 @@ test "handleSnapshotDelete: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSnapshotDelete("POST /api/snapshot/delete/0 HTTP/1.1");
+    const result = try handleSnapshotDelete("POST /api/vms/0/snapshots/delete HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
 test "handleImport: missing body returns 'no body'" {
-    const result = try handleImport("POST /api/import");
+    const result = try handleImport("POST /api/vms/import");
     try std.testing.expectEqualStrings("no body", result);
 }
 
@@ -6365,7 +6435,7 @@ test "handleCad: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleCad("POST /api/cad/0 HTTP/1.1");
+    const result = try handleCad("POST /api/vms/0/cad HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6381,7 +6451,7 @@ test "handleMigrate: VM not running returns 'not running'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleMigrate("POST /api/migrate/0 HTTP/1.1");
+    const result = try handleMigrate("POST /api/vms/0/migrate HTTP/1.1");
     // The handler checks isAlive() before body parse, so this hits "not running".
     try std.testing.expectEqualStrings("not running", result);
 }
@@ -6396,7 +6466,7 @@ test "handleMigrate: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleMigrate("POST /api/migrate/0 HTTP/1.1\r\n\r\ndummy=1");
+    const result = try handleMigrate("POST /api/vms/0/migrate HTTP/1.1\r\n\r\ndummy=1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6452,7 +6522,7 @@ test "handleMigrateStatus: idx out of range returns error JSON" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = handleMigrateStatus("GET /api/migrate/status/0 HTTP/1.1", &buf);
+    const result = handleMigrateStatus("GET /api/vms/0/migrate HTTP/1.1", &buf);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"error\"") != null);
 }
 
@@ -6506,7 +6576,7 @@ test "handleMigrateCancel: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleMigrateCancel("POST /api/migrate/cancel/0 HTTP/1.1");
+    const result = try handleMigrateCancel("POST /api/vms/0/migrate/cancel HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -6533,7 +6603,7 @@ test "handleClone: idx out of range or full returns 'full'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleClone("POST /api/clone/0 HTTP/1.1");
+    const result = try handleClone("POST /api/vms/0/clone HTTP/1.1");
     try std.testing.expectEqualStrings("full", result);
 }
 
@@ -6547,7 +6617,7 @@ test "handleClone: full array returns 'full'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleClone("POST /api/clone/0 HTTP/1.1");
+    const result = try handleClone("POST /api/vms/0/clone HTTP/1.1");
     try std.testing.expectEqualStrings("full", result);
 }
 
@@ -6668,7 +6738,7 @@ test "fuzz: handleVmLog never panics on random request-like input" {
 }
 
 test "fuzz: handleUploadDisk multipart parser never panics on structured input" {
-    // Random bytes alone die at the `POST /api/vm/<idx>` prefix check, so they
+    // Random bytes alone die at the `POST /api/vms/<idx>` prefix check, so they
     // never reach the multipart parser. This harness keeps a valid request line
     // and Content-Type boundary, then mutates the boundary marker, part headers,
     // filename token, and body framing — the slicing-heavy code that backs up
@@ -6700,7 +6770,7 @@ test "fuzz: handleUploadDisk multipart parser never panics on structured input" 
 
         const quoted = rnd.boolean();
         const msg = std.fmt.bufPrint(&buf,
-            "POST /api/vm/0 HTTP/1.1\r\nContent-Type: multipart/form-data; boundary={s}\r\n\r\n" ++
+            "POST /api/vms/0/disk2 HTTP/1.1\r\nContent-Type: multipart/form-data; boundary={s}\r\n\r\n" ++
             "--{s}\r\nContent-Disposition: form-data; name=\"file\"; filename={s}{s}{s}\r\n\r\n" ++
             "PAYLOAD-BYTES\r\n--{s}--\r\n", .{
             bnd[0..bnd_len],
@@ -6710,7 +6780,7 @@ test "fuzz: handleUploadDisk multipart parser never panics on structured input" 
             if (quoted) "\"" else "",
             bnd[0..bnd_len],
         }) catch {
-            _ = handleUploadDisk("POST /api/vm/0 HTTP/1.1\r\n\r\n") catch {};
+            _ = handleUploadDisk("POST /api/vms/0/disk2 HTTP/1.1\r\n\r\n") catch {};
             continue;
         };
 
@@ -6730,8 +6800,8 @@ test "fuzz: handleUploadDisk multipart parser never panics on structured input" 
 
 test "requestLine: stops at CRLF and keeps method+path" {
     var out: [128]u8 = undefined;
-    const line = requestLine("POST /api/power/3 HTTP/1.1\r\nHost: x\r\n", &out);
-    try std.testing.expectEqualStrings("POST /api/power/3 HTTP/1.1", line);
+    const line = requestLine("POST /api/vms/3/power HTTP/1.1\r\nHost: x\r\n", &out);
+    try std.testing.expectEqualStrings("POST /api/vms/3/power HTTP/1.1", line);
 }
 
 test "requestLine: sanitizes control bytes to '?'" {
@@ -6761,7 +6831,7 @@ test "logReqErr: emits without crashing on normal and edge inputs" {
     logReqErr("VNC proxy failed", error.ConnectionRefused, "GET /ws/vnc/3 HTTP/1.1\r\n");
     logReqErr("", error.BrokenPipe, "");
     // Control bytes in the request line must not break the single-line invariant.
-    logReqErr("export failed", error.AccessDenied, "POST /api/export/9\t\x01\r\nHost: x");
+    logReqErr("export failed", error.AccessDenied, "POST /api/vms/9/export\t\x01\r\nHost: x");
     // Overlong context still returns (falls back to the static context string).
     const long_ctx = "x" ** 400;
     logReqErr(long_ctx, error.OutOfMemory, "GET /a");
