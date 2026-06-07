@@ -172,6 +172,16 @@ test('screenshot on a stopped VM returns 409 (needs a running guest)', async ({ 
     expect(r.status, `screenshot on stopped VM: ${r.text}`).toBe(409);
 });
 
+test('cloud-init user-data saves and round-trips through the detail API', async ({ page }) => {
+    const idx = await createVm(page, 'wf-ci');
+    const ud = '#cloud-config\npackages:\n  - htop\n';
+    const r = await api(page, 'POST', `/api/vms/${idx}`, 'cloud_init=' + encodeURIComponent(ud));
+    expect(r.ok, `save cloud-init: ${r.status} ${r.text}`).toBe(true);
+    const detail = await page.evaluate(async (i) => (await (await fetch(`/api/vms/${i}`)).json()), idx);
+    expect(detail.cloud_init).toContain('packages:');
+    expect(detail.cloud_init).toContain('- htop');
+});
+
 test('write-action without the API key is rejected (401)', async ({ page }) => {
     const idx = await createVm(page, 'wf-auth');
     const r = await page.evaluate(async (i) => {

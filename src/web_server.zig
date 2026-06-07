@@ -741,7 +741,7 @@ fn serveHtml(conn: c.fd_t) void {
     var content_type: []const u8 = "text/html";
     var status: u16 = HTTP_OK;
     var json_buf: [32768]u8 = undefined;
-    var detail_buf: [4096]u8 = undefined;
+    var detail_buf: [49152]u8 = undefined; // large enough for cloud-init user-data (8 KB, escaped)
     var snap_buf: [4096]u8 = undefined;
     var response_alloc: ?[]u8 = null;
     defer if (response_alloc) |bytes| std.heap.page_allocator.free(bytes);
@@ -1668,7 +1668,7 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     const ex3_e = if (v.hasExtraDisk(3)) escapeJson(&ex3_buf, v.getExtraDiskPathSlice(3), "extra3_path") else "";
 
     const part2d = std.fmt.bufPrint(buf[w..],
-        \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d}}}
+        \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d}
     , .{
         ex0_e,
         v.extra_disks[0].size_gb,
@@ -1684,6 +1684,13 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         v.extra_disks[3].format.toIndex(),
     }) catch return error.RenderFailed;
     w += part2d.len;
+
+    // cloud-init user-data can be multi-KB and contain quotes/newlines — escape
+    // it into its own buffer. This part closes the JSON object.
+    var ci_esc: [24576]u8 = undefined;
+    const ci_e = if (v.hasCloudInit()) escapeJson(&ci_esc, v.getCloudInitSlice(), "cloud_init") else "";
+    const part2e = std.fmt.bufPrint(buf[w..], ",\"cloud_init\":\"{s}\"}}", .{ci_e}) catch return error.RenderFailed;
+    w += part2e.len;
 
     return buf[0..w];
 }
@@ -2076,7 +2083,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     var cfg = vm.VmConfig{};
-    var val_buf: [2048]u8 = undefined;
+    var val_buf: [24576]u8 = undefined; // fits URL-encoded cloud-init user-data (8 KB decoded)
     var has_autoprotect: bool = false;
     var has_mac: bool = false;
     var has_vnc_port: bool = false;
@@ -2148,6 +2155,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "portfw")) cfg.setPortForwards(val);
         if (std.mem.eql(u8, key, "notes")) cfg.setNotes(val);
         if (std.mem.eql(u8, key, "tags")) cfg.setTags(val);
+        if (std.mem.eql(u8, key, "cloud_init")) cfg.setCloudInit(val);
         if (std.mem.eql(u8, key, "enable_3d")) cfg.enable_3d = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "gpu_device")) cfg.gpu_device = vm.GpuDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.gpu_device.toIndex());
         if (std.mem.eql(u8, key, "display")) cfg.display = vm.DisplayType.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.display.toIndex());
@@ -2636,7 +2644,7 @@ fn handleSave(req: []const u8) ![]const u8 {
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
     const v = &appstate.vms[idx];
-    var val_buf: [2048]u8 = undefined;
+    var val_buf: [24576]u8 = undefined; // fits URL-encoded cloud-init user-data (8 KB decoded)
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
         var kv = std.mem.splitScalar(u8, pair, '=');
@@ -2698,6 +2706,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "portfw")) v.setPortForwards(val);
         if (std.mem.eql(u8, key, "notes")) v.setNotes(val);
         if (std.mem.eql(u8, key, "tags")) v.setTags(val);
+        if (std.mem.eql(u8, key, "cloud_init")) v.setCloudInit(val);
         if (std.mem.eql(u8, key, "enable_3d")) v.enable_3d = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "gpu_device")) v.gpu_device = vm.GpuDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.gpu_device.toIndex());
         if (std.mem.eql(u8, key, "display")) v.display = vm.DisplayType.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.display.toIndex());

@@ -386,7 +386,7 @@ const fields=[
 ['Extra 3 Path','e_extra3_path','text',v.extra3_path||''],['Extra 3 Size','e_extra3_size','number',v.extra3_size||0,'min="0" max="65536" step="1"'],
 ['Extra 3 Format','e_extra3_format','select',v.extra3_format||0],
 ['Floppy','e_floppy','text',v.floppy_path||''],
-['Favorite','e_favorite','select',v.favorite==='true'?'1':'0'],['Notes','e_notes','text',v.notes||''],['Tags','e_tags','text',v.tags||'','placeholder="comma-separated, e.g. prod, web"'],
+['Favorite','e_favorite','select',v.favorite==='true'?'1':'0'],['Notes','e_notes','text',v.notes||''],['Tags','e_tags','text',v.tags||'','placeholder="comma-separated, e.g. prod, web"'],['Cloud-Init User-Data','e_cloud_init','textarea',v.cloud_init||'','placeholder="#cloud-config&#10;… (NoCloud user-data; attached as a seed ISO)"'],
 {s:'QEMU Capabilities'},
 ['Guest Agent','e_guest_agent','select',v.guest_agent==='true'?'1':'0'],
 ['virtio-rng Entropy','e_virtio_rng','select',v.virtio_rng==='true'?'1':'0'],
@@ -448,7 +448,8 @@ e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
 	if(type==='disk2actions'){out+='<span class="inline-actions"><button type="button" class="btn" data-action="resizeDisk">Resize Primary Disk</button><button type="button" class="btn" data-action="disk2upload">Upload Disk 2</button><button type="button" class="btn" data-action="disk2download">Download Disk 2</button></span>';}
 	if(type==='cdactions'){out+='<span class="inline-actions"><button type="button" class="btn" data-action="changeCd">Change CD/ISO</button><button type="button" class="btn" data-action="ejectCd">Eject CD/ISO</button></span>';}
 	else if(type==='select'&&selects[id]){out+=`<select id="${id}" data-field="${id}">`;for(const[ov,ol]of selects[id])out+=`<option value="${ov}"${ov===String(val)?' selected':''}>${ol}</option>`;out+='</select>';}
-	else{out+=`<input id="${id}" data-field="${id}" type="${type}" value="${escHtml(String(val))}" ${attrs}>`;}
+	else if(type==='textarea'){out+=`<textarea id="${id}" data-field="${id}" rows="6" spellcheck="false" ${attrs}>${escHtml(String(val))}</textarea>`;}
+		else{out+=`<input id="${id}" data-field="${id}" type="${type}" value="${escHtml(String(val))}" ${attrs}>`;}
 	out+='<div class="field-error" id="err_'+id+'" aria-live="polite"></div></div>';return out;}
 	let h='<div class="settings-shell"><nav class="settings-nav" aria-label="Settings categories">';
 	for(const sec of sections){h+=`<button type="button" class="settings-nav-item${sec.id===settingsCategory?' active':''}"${sec.id===settingsCategory?' aria-current="page"':''} data-action="setSettingsCategory" data-settings-category="${sec.id}"><span>${sec.title}</span><small>${escHtml(sectionNotes[sec.id]||'Configure this virtual hardware group.')}</small></button>`;}
@@ -473,7 +474,7 @@ if(!validateSettings(true)){var bad=document.querySelector('#tabSettings .invali
 saveInFlight=true;
 const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
 const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
-'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','extra0_path','extra0_size','extra0_format','extra1_path','extra1_size','extra1_format','extra2_path','extra2_size','extra2_format','extra3_path','extra3_size','extra3_format','floppy','nic2','nic2_mac','nic3','nic3_mac','nic4','nic4_mac','nic5','nic5_mac','nic6','nic6_mac','nic7','nic7_mac','nic8','nic8_mac','portfw','notes','tags',
+'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','extra0_path','extra0_size','extra0_format','extra1_path','extra1_size','extra1_format','extra2_path','extra2_size','extra2_format','extra3_path','extra3_size','extra3_format','floppy','nic2','nic2_mac','nic3','nic3_mac','nic4','nic4_mac','nic5','nic5_mac','nic6','nic6_mac','nic7','nic7_mac','nic8','nic8_mac','portfw','notes','tags','cloud_init',
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order',
 'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
 'guest_agent','virtio_rng','tpm','secure_boot','hyperv_enlightenments','hugepages','watchdog','ballooning','host_autostart',

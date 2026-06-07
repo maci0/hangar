@@ -1049,6 +1049,11 @@ pub const VmConfig = struct {
     tags_buf: [256]u8 = [_]u8{0} ** 256,
     tags_len: u16 = 0,
 
+    // ── cloud-init user-data (NoCloud). When non-empty, a seed ISO is built and
+    //    attached so a cloud-init guest auto-configures on first boot. ──
+    cloud_init_buf: [8192]u8 = [_]u8{0} ** 8192,
+    cloud_init_len: u16 = 0,
+
     // ── Port Forwarding ──────────────────────────────────────────
     // Format: "HOST:GUEST,HOST:GUEST" e.g., "8080:80,2222:22"
     port_fwd_buf: [512]u8 = [_]u8{0} ** 512,
@@ -1294,6 +1299,21 @@ pub const VmConfig = struct {
         @memcpy(self.tags_buf[0..len], s[0..len]);
         self.tags_buf[len] = 0;
         self.tags_len = len;
+    }
+
+    pub fn getCloudInitSlice(self: *const VmConfig) []const u8 {
+        return self.cloud_init_buf[0..self.cloud_init_len];
+    }
+
+    pub fn setCloudInit(self: *VmConfig, s: []const u8) void {
+        const len: u16 = @intCast(@min(s.len, self.cloud_init_buf.len - 1));
+        @memcpy(self.cloud_init_buf[0..len], s[0..len]);
+        self.cloud_init_buf[len] = 0;
+        self.cloud_init_len = len;
+    }
+
+    pub fn hasCloudInit(self: *const VmConfig) bool {
+        return self.cloud_init_len > 0;
     }
 
     pub fn clearNotes(self: *VmConfig) void {

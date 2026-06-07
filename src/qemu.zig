@@ -317,6 +317,7 @@ const ArgBuffers = struct {
     floppy_buf: [vm.MAX_PATH + 64]u8 = undefined,
     disp_buf: [32]u8 = undefined,
     watchdog_buf: [32]u8 = undefined,
+    cloudinit_buf: [192]u8 = undefined,
 };
 
 /// Append an additional network adapter ("netN") for `mode`. `.none` is a
@@ -504,6 +505,21 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         const fd_str = try std.fmt.bufPrint(&bufs.floppy_buf, "file={s},if=floppy,format=raw", .{config.getFloppyPathSlice()});
         try args.append(alloc, "-drive");
         try args.append(alloc, fd_str);
+    }
+
+    // cloud-init NoCloud seed: attach the generated CIDATA ISO read-only so a
+    // cloud-init guest auto-configures on first boot. Only attach if the seed was
+    // actually built (startVm runs generateCloudInitSeed best-effort first) —
+    // referencing a missing file would make QEMU refuse to start.
+    if (config.hasCloudInit() and config.hasName()) {
+        var seed_buf: [128]u8 = undefined;
+        if (cloudInitSeedPath(config.getNameSlice(), &seed_buf)) |seed| {
+            if (std.Io.Dir.cwd().access(appio.io(), seed, .{})) |_| {
+                const ci_str = try std.fmt.bufPrint(&bufs.cloudinit_buf, "file={s},if=virtio,format=raw,readonly=on", .{seed});
+                try args.append(alloc, "-drive");
+                try args.append(alloc, ci_str);
+            } else |_| {}
+        }
     }
 
     // Use an explicit ide-cd device with a stable id ("ide2-cd0") so that
@@ -865,6 +881,13 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 /// QEMU stderr is written to /var/tmp/hangar-vm-<name>.log for diagnostics
 /// when the VM has a name; otherwise it is discarded (/dev/null).
 pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
+    // Build the cloud-init seed before assembling args so buildArgs can attach it
+    // (it only attaches when the seed file exists). Best-effort: a missing
+    // cloud-localds or a generation error just means the guest boots without it.
+    if (config.hasCloudInit()) {
+        generateCloudInitSeed(config, allocator) catch {};
+    }
+
     var args: std.ArrayList([]const u8) = .empty;
     defer args.deinit(allocator);
 
@@ -987,6 +1010,34 @@ pub fn reapVm(config: *vm.VmConfig) void {
     _ = std.c.waitpid(@intCast(pid), null, 0);
     config.pid = null;
     config.status = .stopped;
+}
+
+/// Deterministic per-VM cloud-init seed ISO path. The VM name has no comma
+/// (name validation rejects it), so this is safe in a `-drive file=` property.
+pub fn cloudInitSeedPath(name: []const u8, buf: []u8) ?[:0]const u8 {
+    return std.fmt.bufPrintZ(buf, "/tmp/hangar-ci-{s}.iso", .{name}) catch null;
+}
+
+/// Build a NoCloud cloud-init seed ISO (volume label CIDATA) from the VM's
+/// user-data via `cloud-localds`. meta-data carries instance-id + hostname from
+/// the VM name. Best-effort: the caller logs failure and boots without it (e.g.
+/// when cloud-localds isn't installed). Returns once the seed exists on disk.
+pub fn generateCloudInitSeed(config: *const vm.VmConfig, allocator: std.mem.Allocator) !void {
+    if (!config.hasCloudInit() or !config.hasName()) return error.NoCloudInit;
+    const name = config.getNameSlice();
+    var ud_buf: [128]u8 = undefined;
+    var md_buf: [128]u8 = undefined;
+    var seed_buf: [128]u8 = undefined;
+    const ud_path = std.fmt.bufPrintZ(&ud_buf, "/tmp/hangar-ci-ud-{s}", .{name}) catch return error.PathTooLong;
+    const md_path = std.fmt.bufPrintZ(&md_buf, "/tmp/hangar-ci-md-{s}", .{name}) catch return error.PathTooLong;
+    const seed = cloudInitSeedPath(name, &seed_buf) orelse return error.PathTooLong;
+
+    try std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ud_path, .data = config.getCloudInitSlice() });
+    var md_content: [256]u8 = undefined;
+    const md = std.fmt.bufPrint(&md_content, "instance-id: {s}\nlocal-hostname: {s}\n", .{ name, name }) catch return error.PathTooLong;
+    try std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = md_path, .data = md });
+
+    try runWait(&.{ "cloud-localds", seed, ud_path, md_path }, allocator, null);
 }
 
 /// Create a new disk image using `qemu-img`.
@@ -1506,6 +1557,40 @@ test "qemu: disk path with comma is rejected (arg injection guard)" {
     cfg.setDiskPath("/tmp/disk.qcow2,readonly=on,if=none");
     cfg.nics[0].mode = .user;
     try std.testing.expectError(error.UnsafeDiskPath, buildScriptStr(&cfg, talloc));
+}
+
+test "qemu: generateCloudInitSeed builds a seed ISO from user-data" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("citestseed");
+    cfg.setCloudInit("#cloud-config\npackages:\n  - vim\n");
+    // cloud-localds may be absent in some environments; skip cleanly if so.
+    generateCloudInitSeed(&cfg, talloc) catch return;
+    var sb: [128]u8 = undefined;
+    const seed = cloudInitSeedPath("citestseed", &sb).?;
+    defer std.Io.Dir.cwd().deleteFile(appio.io(), seed) catch {};
+    // A successful run leaves a readable seed ISO at the deterministic path.
+    try std.Io.Dir.cwd().access(appio.io(), seed, .{});
+}
+
+test "qemu: cloud-init seed is attached only when the seed file exists" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("ciattach");
+    cfg.setCloudInit("#cloud-config\n");
+    // No seed file yet → must not attach (would make QEMU fail to open the drive).
+    {
+        const s = try buildScriptStr(&cfg, talloc);
+        defer talloc.free(s);
+        try expect(!has(s, "hangar-ci-ciattach.iso"));
+    }
+    // With the seed present → attached read-only.
+    var sb: [128]u8 = undefined;
+    const seed = cloudInitSeedPath("ciattach", &sb).?;
+    try std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = seed, .data = "seed" });
+    defer std.Io.Dir.cwd().deleteFile(appio.io(), seed) catch {};
+    const s2 = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s2);
+    try expect(has(s2, "hangar-ci-ciattach.iso"));
+    try expect(has(s2, "readonly=on"));
 }
 
 test "qemu: parseJsonU64 extracts integer fields from qemu-img json" {
