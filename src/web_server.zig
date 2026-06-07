@@ -459,7 +459,8 @@ fn isServerErrToken(response: []const u8) bool {
         "apply err", "bd err",    "cad err",  "cancel err",
         "create err", "delete err", "linkerr",  "migrate err",
         "nameerr",   "path err",  "qmp err",  "sock err",
-        "write err",
+        "write err", "change err", "eject err", "resize err",
+        "upload err", "save failed",
     };
     for (tokens) |t| {
         if (std.mem.eql(u8, response, t)) return true;
@@ -787,7 +788,18 @@ fn serveHtml(conn: c.fd_t) void {
     }
     if (parseVmIdxSuffix(req, "GET /api/vms/", "/diskinfo") != null) {
         var di_buf: [160]u8 = undefined;
-        writeHttpResponse(conn, HTTP_OK, "application/json; charset=utf-8", handleDiskInfo(req, &di_buf));
+        const body = handleDiskInfo(req, &di_buf);
+        // The body is already a JSON object; pick a status that matches it rather
+        // than always 200 (an error body served as 200 is misleading to clients).
+        const di_status: u16 = if (!std.mem.startsWith(u8, body, "{\"error\""))
+            HTTP_OK
+        else if (std.mem.indexOf(u8, body, "unavailable") != null)
+            HTTP_INTERNAL_ERROR
+        else if (std.mem.indexOf(u8, body, "invalid idx") != null)
+            HTTP_NOT_FOUND
+        else
+            HTTP_BAD_REQUEST;
+        writeHttpResponse(conn, di_status, "application/json; charset=utf-8", body);
         return;
     }
     if (parseVmIdxSuffix(req, "GET /api/vms/", "/screenshot") != null) {
@@ -1072,14 +1084,14 @@ fn serveHtml(conn: c.fd_t) void {
         const err_status: ?u16 = blk: {
             if (anyEql(response, &.{ "invalid", "invalid idx", "not found", "no undo", "no vm" })) {
                 break :blk HTTP_NOT_FOUND;
-            } else if (anyEql(response, &.{ "not running", "off", "not paused", "vm running", "full" })) {
+            } else if (anyEql(response, &.{ "not running", "off", "not paused", "vm running", "full", "shrink not allowed" })) {
                 // The resource is in a state incompatible with the request
                 // (running VM that must be off, off VM that must be running, table
                 // at capacity, ...). 409 lets clients distinguish a transient state
                 // conflict — retriable after changing VM state — from a malformed
                 // request (400).
                 break :blk HTTP_CONFLICT;
-            } else if (anyEql(response, &.{ "no disk", "no body", "invalid name", "bad path", "no name", "no path", "bad ext", "no file", "bad name", "no dest", "bad dest", "missing from/to", "parse error" })) {
+            } else if (anyEql(response, &.{ "no disk", "no body", "invalid name", "bad path", "no name", "no path", "bad ext", "no file", "bad name", "no dest", "bad dest", "missing from/to", "parse error", "bad size", "no primary disk", "name collides with primary disk", "no filename", "bad filename", "no content-length", "no boundary", "no headers end", "no boundary in body" })) {
                 break :blk HTTP_BAD_REQUEST;
             } else if (anyEql(response, &.{ "no vnc", "no spice", "save failed", "save err", "no fb" }) or isServerErrToken(response)) {
                 break :blk HTTP_INTERNAL_ERROR;
@@ -3644,19 +3656,14 @@ fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
             @memcpy(name_buf[0..nm.len], nm);
             name_len = nm.len;
         }
-        if (appstate.getVmmHandle(idx)) |h| {
-            // Live VM: QMP list under the lock (fast; handle must not outlive lock).
-            n = appstate.g_vmm.snapshotListFn(h, v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch |e| blk: {
-                logOpErr("snapshot list", e, name_buf[0..name_len]);
-                break :blk 0;
-            };
-        } else {
-            // Stopped VM: defer the qemu-img read until after unlock.
-            const dp = v.getDiskPathSlice();
-            if (dp.len == 0 or dp.len >= disk_buf.len) return "no disk";
-            @memcpy(disk_buf[0..dp.len], dp);
-            disk_len = dp.len;
-        }
+        // Capture the disk path and run qemu-img with the lock RELEASED for both
+        // running and stopped VMs — qemu-img is a blocking subprocess and must
+        // never run under vms_mutex (it would freeze every handler + the tickers).
+        // `-U` (in qemu.snapshotList) lets it read a running VM's locked image.
+        const dp = v.getDiskPathSlice();
+        if (dp.len == 0 or dp.len >= disk_buf.len) return "no disk";
+        @memcpy(disk_buf[0..dp.len], dp);
+        disk_len = dp.len;
     }
 
     // Offline qemu-img list with the lock released (it reads the image header).
@@ -3717,15 +3724,12 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
             @memcpy(name_buf[0..nm.len], nm);
             name_len = nm.len;
         }
-        // See handleSnapshotTake: handle path (rare) under lock, qemu-img unlocked.
-        if (appstate.getVmmHandle(idx)) |h| {
-            appstate.g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
-                logOpErr("snapshot revert", e, name_buf[0..name_len]);
-                return "apply err";
-            };
-            logAudit("snapshot revert", name_buf[0..name_len]);
-            return "ok";
-        }
+        // The VM is guaranteed stopped (guarded above), so revert is always the
+        // offline qemu-img path. Capture the disk path and run it with the lock
+        // RELEASED — qemu-img is a blocking subprocess and must not run under
+        // vms_mutex (it would freeze the daemon). (The previous getVmmHandle
+        // branch ran qemu-img under the lock, since the handle is lazily created
+        // even for a stopped VM.)
         const dp = v.getDiskPathSlice();
         if (dp.len == 0 or dp.len >= disk_buf.len) return "apply err";
         @memcpy(disk_buf[0..dp.len], dp);
@@ -4359,7 +4363,6 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var cpu_cores: u32 = 0;
     var memory_mb: u32 = 0;
     var idx: usize = 0;
-    var vmm_handle: ?@import("hv/interface.zig").VmmHandle = null;
     {
         appstate.vms_mutex.lock();
         defer appstate.vms_mutex.unlock();
@@ -4437,9 +4440,6 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         has_network = v.nics[0].mode != .none;
         cpu_cores = v.cpu_cores;
         memory_mb = v.memory_mb;
-        // Capture the handle pointer under the lock; there is no in-place struct
-        // mutation that needs the lock held across the conversion (unlike clone).
-        vmm_handle = appstate.getVmmHandle(idx);
     }
 
     const disk1_path: []const u8 = disk1_path_buf[0..disk1_path_len];
@@ -4477,18 +4477,14 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var path_buf: [vm.MAX_PATH]u8 = undefined;
     const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return;
 
-    // Convert disk1 to VMDK
-    if (vmm_handle) |h| {
-        appstate.g_vmm.convertDiskFn(h, disk1_path, vmdk_path, @intFromEnum(disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
-            logErr("export: disk1 conversion (VMM) failed");
-            return error.ExportFailed;
-        };
-    } else {
-        qemu.convertDiskImage(disk1_path, disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch {
-            logErr("export: disk1 conversion (qemu) failed");
-            return error.ExportFailed;
-        };
-    }
+    // Convert disk1 to VMDK. Offline qemu-img conversion (lock already released),
+    // so call qemu directly — NOT through a VMM handle captured under the lock,
+    // which a concurrent delete could have freed during this multi-second op
+    // (latent use-after-free). The conversion needs no live handle state.
+    qemu.convertDiskImage(disk1_path, disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch {
+        logErr("export: disk1 conversion failed");
+        return error.ExportFailed;
+    };
     // Capture the converted size now — path_buf is reused for disk2 below.
     const vmdk1_size = fileByteSize(vmdk_path);
 
@@ -4500,17 +4496,10 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         disk2_href = "disk2.vmdk";
         disk2_cap = @as(u64, disk2_size_gb) * 1024 * 1024 * 1024;
         const d2_path = std.fmt.bufPrint(&path_buf, "{s}/disk2.vmdk", .{dir_path}) catch return;
-        if (vmm_handle) |h2| {
-            appstate.g_vmm.convertDiskFn(h2, disk2_path, d2_path, @intFromEnum(disk2_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
-                logErr("export: disk2 conversion (VMM) failed");
-                return error.ExportFailed;
-            };
-        } else {
-            qemu.convertDiskImage(disk2_path, disk2_format, d2_path, .vmdk, std.heap.page_allocator) catch {
-                logErr("export: disk2 conversion (qemu) failed");
-                return error.ExportFailed;
-            };
-        }
+        qemu.convertDiskImage(disk2_path, disk2_format, d2_path, .vmdk, std.heap.page_allocator) catch {
+            logErr("export: disk2 conversion failed");
+            return error.ExportFailed;
+        };
         disk2_size = fileByteSize(d2_path);
     }
 

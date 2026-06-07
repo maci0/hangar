@@ -166,7 +166,9 @@ pub fn snapshotDelete(disk_path: []const u8, name: []const u8, allocator: std.me
     try runWait(&.{ "qemu-img", "snapshot", "-d", name, disk_path }, allocator, null);
 }
 pub fn snapshotList(disk_path: []const u8, out: []u8, allocator: std.mem.Allocator) !usize {
-    return runCapture(&.{ "qemu-img", "snapshot", "-l", disk_path }, out, allocator);
+    // -U (force-share / read-only) so listing also works while the VM is running
+    // and holds the qcow2 write lock; without it qemu-img fails to acquire a lock.
+    return runCapture(&.{ "qemu-img", "snapshot", "-l", "-U", disk_path }, out, allocator);
 }
 
 /// Fork and exec `argv`, redirecting stdin/stdout to /dev/null.
