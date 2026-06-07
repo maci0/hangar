@@ -391,11 +391,23 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         // Throttle options are part of the SAME -drive that defines the disk —
         // a standalone `-drive throttling.*` with no file= makes QEMU reject
         // the command line ("Device needs media, but drive is empty").
-        const base = try std.fmt.bufPrint(&bufs.disk_buf, "file={s},format={s},if=virtio,cache={s}", .{
-            config.getDiskPathSlice(),
-            std.mem.span(config.disk_format.toStr()),
-            std.mem.span(config.disk_cache.toStr()),
-        });
+        // With io_threads, use the split blockdev form so the disk can bind to
+        // the iothread object (an `if=virtio` drive has no way to take iothread=,
+        // leaving the iothread idle). Otherwise keep the simple implicit-device
+        // `if=virtio` form.
+        const use_iothread = config.io_threads > 0;
+        const base = if (use_iothread)
+            try std.fmt.bufPrint(&bufs.disk_buf, "file={s},format={s},if=none,id=hdd0,cache={s}", .{
+                config.getDiskPathSlice(),
+                std.mem.span(config.disk_format.toStr()),
+                std.mem.span(config.disk_cache.toStr()),
+            })
+        else
+            try std.fmt.bufPrint(&bufs.disk_buf, "file={s},format={s},if=virtio,cache={s}", .{
+                config.getDiskPathSlice(),
+                std.mem.span(config.disk_format.toStr()),
+                std.mem.span(config.disk_cache.toStr()),
+            });
         var dpos: usize = base.len;
         if (config.disk_bps_throttle > 0) {
             const chunk = try std.fmt.bufPrint(bufs.disk_buf[dpos..], ",throttling.bps-total={d}", .{config.disk_bps_throttle});
@@ -407,6 +419,10 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         }
         try args.append(alloc, "-drive");
         try args.append(alloc, bufs.disk_buf[0..dpos]);
+        if (use_iothread) {
+            try args.append(alloc, "-device");
+            try args.append(alloc, "virtio-blk-pci,drive=hdd0,iothread=iothread0");
+        }
     }
 
     // Optional second (data) disk, attached as another virtio drive.
@@ -2206,12 +2222,25 @@ test "qemu: buildScriptStr with hugepages emits mem-prealloc" {
     try expect(has(s, "/dev/hugepages"));
 }
 
-test "qemu: buildScriptStr with io_threads emits iothread object" {
+test "qemu: buildScriptStr with io_threads binds the disk to the iothread" {
     var cfg = vm.VmConfig{};
     cfg.io_threads = 1;
+    cfg.setDiskPath("/tmp/d.qcow2");
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(has(s, "iothread,id=iothread0"));
+    // The disk must actually use the iothread, not leave it idle.
+    try expect(has(s, "if=none,id=hdd0"));
+    try expect(has(s, "virtio-blk-pci,drive=hdd0,iothread=iothread0"));
+}
+
+test "qemu: without io_threads the disk uses the simple if=virtio form" {
+    var cfg = vm.VmConfig{};
+    cfg.setDiskPath("/tmp/d.qcow2");
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "if=virtio"));
+    try expect(!has(s, "iothread"));
 }
 
 test "qemu: buildScriptStr with ballooning emits balloon virtio" {
