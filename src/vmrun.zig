@@ -41,6 +41,7 @@ const usage =
     \\
     \\Commands:
     \\  list                    List all VMs
+    \\  create <name> <mem-mb> <cpu> <disk-gb>   Create a VM
     \\  start       <name|idx>  Power on a VM
     \\  stop        <name|idx>  Power off a VM
     \\  restart     <name|idx>  Restart a VM (stop + start)
@@ -209,6 +210,8 @@ fn run(init: std.process.Init) !void {
         return cmdStatus(allocator, &conn, init.io);
     } else if (std.mem.eql(u8, command, "import")) {
         return cmdImport(allocator, &conn, args[0], init.io);
+    } else if (std.mem.eql(u8, command, "create")) {
+        return cmdCreate(allocator, &conn, args[0], args[1], args[2], args[3], init.io);
     } else if (std.mem.eql(u8, command, "snapshot")) {
         const sub = args[0];
         const target = args[1];
@@ -280,6 +283,7 @@ fn commandArity(command: []const u8) ?usize {
     for (zero) |k| if (std.mem.eql(u8, command, k)) return 0;
     for (one) |k| if (std.mem.eql(u8, command, k)) return 1;
     if (std.mem.eql(u8, command, "rename")) return 2;
+    if (std.mem.eql(u8, command, "create")) return 4; // name mem cpu disk
     return null;
 }
 
@@ -548,6 +552,26 @@ fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "rename VM [{d}] -> {s}: {s}\n", .{ idx, new_name, resp });
+    fdWrite(c.STDOUT_FILENO, line);
+}
+
+/// Create a VM: POST /api/vms with name/mem/cpu/disk. Advanced fields take the
+/// daemon's defaults; edit them afterwards via the web UI or a future setter.
+fn cmdCreate(allocator: std.mem.Allocator, conn: *transport.Connection, name: []const u8, mem: []const u8, cpu: []const u8, disk: []const u8, io: std.Io) !void {
+    _ = io;
+    // Validate the numeric fields client-side so a typo fails fast with a clear
+    // message instead of being silently clamped to a default by the daemon.
+    _ = std.fmt.parseInt(u32, mem, 10) catch return error.InvalidMemory;
+    _ = std.fmt.parseInt(u32, cpu, 10) catch return error.InvalidCpu;
+    _ = std.fmt.parseInt(u32, disk, 10) catch return error.InvalidDisk;
+    var name_enc_buf: [vm.MAX_NAME * 3]u8 = undefined;
+    const enc_name = try urlencode.percentEncode(&name_enc_buf, name);
+    var body_buf: [vm.MAX_NAME * 3 + 64]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "name={s}&mem={s}&cpu={s}&disk={s}", .{ enc_name, mem, cpu, disk });
+    const resp = try sendRequest(allocator, conn, "POST", "/api/vms", body);
+    defer allocator.free(resp);
+    var buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "create {s}: {s}\n", .{ name, resp });
     fdWrite(c.STDOUT_FILENO, line);
 }
 
@@ -913,6 +937,10 @@ test "commandArity: single-target commands" {
 
 test "commandArity: rename takes two args" {
     try std.testing.expectEqual(@as(?usize, 2), commandArity("rename"));
+}
+
+test "commandArity: create takes four args" {
+    try std.testing.expectEqual(@as(?usize, 4), commandArity("create"));
 }
 
 test "commandArity: snapshot is not covered (subcommand-dependent)" {
