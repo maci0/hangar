@@ -610,12 +610,15 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, wd_str);
     }
 
-    if (config.tpm) {
-        try args.append(alloc, "-tpmdev");
-        try args.append(alloc, "emulator,id=tpm0,tpm_version=2.0");
-        try args.append(alloc, "-device");
-        try args.append(alloc, "tpm-tis,tpmdev=tpm0");
-    }
+    // TPM: intentionally NOT emitted. The QEMU `emulator` tpmdev backend requires
+    // a chardev wired to a running swtpm process (`-chardev socket,id=chrtpm,
+    // path=<sock> -tpmdev emulator,id=tpm0,chardev=chrtpm -device tpm-tis,
+    // tpmdev=tpm0`). Emitting the tpmdev without that chardev makes QEMU reject
+    // the command line, so a TPM-enabled VM would not boot at all. Until swtpm is
+    // wired in (spawn `swtpm socket --tpm2 --ctrl ... --daemon --terminate` per
+    // VM before launch, gated on swtpm being installed), skip TPM so the VM boots.
+    // config.tpm is still persisted/round-tripped; it's just inert here.
+    // (Was: a bare `-tpmdev emulator,...` that left the VM unbootable.)
 
     // Secure Boot needs no extra args here: SMM is already enabled via
     // -machine q35,smm=on and the Bios/UEFI firmware selection handles pflash.
@@ -2173,13 +2176,16 @@ test "qemu: buildScriptStr with watchdog none omits watchdog args" {
     try expect(!has(s, "-watchdog"));
 }
 
-test "qemu: buildScriptStr with tpm emits tpmdev args" {
+test "qemu: tpm does not emit an unbootable bare tpmdev" {
+    // A bare emulator tpmdev with no swtpm chardev makes QEMU reject the command
+    // line. Until swtpm is wired, TPM is inert and must NOT appear in the args
+    // (so the VM still boots).
     var cfg = vm.VmConfig{};
     cfg.tpm = true;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
-    try expect(has(s, "-tpmdev"));
-    try expect(has(s, "tpm-tis"));
+    try expect(!has(s, "-tpmdev"));
+    try expect(!has(s, "tpm-tis"));
 }
 
 test "qemu: buildScriptStr with secure_boot enables SMM" {
