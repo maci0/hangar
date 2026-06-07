@@ -225,16 +225,79 @@ const ovmf_search_paths = [_][]const u8{
     "/usr/share/qemu/OVMF.fd",
 };
 
-/// Locate an OVMF firmware image on this system.
-///
-/// Returns the first path that exists, or `null` if none was found.
-fn findOvmfPath() ?[]const u8 {
-    for (ovmf_search_paths) |path| {
+/// Secure Boot-enabled OVMF CODE images (read-only firmware with SB enforcement).
+/// Distinct from the plain OVMF above: only these actually enforce Secure Boot.
+const ovmf_secboot_code_paths = [_][]const u8{
+    "/usr/share/OVMF/OVMF_CODE.secboot.fd",
+    "/usr/share/OVMF/x64/OVMF_CODE.secboot.fd",
+    "/usr/share/edk2/x64/OVMF_CODE.secboot.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_CODE.secboot.fd",
+    "/usr/share/qemu/OVMF_CODE.secboot.fd",
+};
+
+/// Writable OVMF VARS templates (per-VM NVRAM is copied from one of these).
+const ovmf_vars_template_paths = [_][]const u8{
+    "/usr/share/OVMF/OVMF_VARS.fd",
+    "/usr/share/OVMF/x64/OVMF_VARS.fd",
+    "/usr/share/edk2/x64/OVMF_VARS.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_VARS.4m.fd",
+    "/usr/share/qemu/OVMF_VARS.fd",
+};
+
+/// First path in `paths` that exists, or null.
+fn findFirstExisting(paths: []const []const u8) ?[]const u8 {
+    for (paths) |path| {
         if (std.Io.Dir.cwd().access(appio.io(), path, .{})) {
             return path;
         } else |_| {}
     }
     return null;
+}
+
+/// Locate a plain OVMF firmware image on this system. Null if none found.
+fn findOvmfPath() ?[]const u8 {
+    return findFirstExisting(&ovmf_search_paths);
+}
+
+/// Locate a Secure Boot-enforcing OVMF CODE image. Null if none installed (the
+/// caller then falls back to plain OVMF — SB won't enforce, but the VM boots).
+fn findSecbootCode() ?[]const u8 {
+    return findFirstExisting(&ovmf_secboot_code_paths);
+}
+
+/// Locate an OVMF VARS template to seed per-VM NVRAM. Null if none found.
+fn findOvmfVarsTemplate() ?[]const u8 {
+    return findFirstExisting(&ovmf_vars_template_paths);
+}
+
+/// Deterministic per-VM OVMF VARS (NVRAM) path. The VM name has no comma (name
+/// validation rejects it), so this is safe in a `-drive file=` property.
+pub fn secbootVarsPath(name: []const u8, buf: []u8) ?[:0]const u8 {
+    return std.fmt.bufPrintZ(buf, "/tmp/hangar-ovmf-vars-{s}.fd", .{name}) catch null;
+}
+
+/// Emit the split-pflash drives for Secure Boot: read-only CODE (unit 0) and a
+/// writable per-VM VARS NVRAM (unit 1). Factored out so the arg construction is
+/// unit-testable with explicit paths independent of the host's firmware.
+fn buildSecureBootDrives(args: *std.ArrayList([]const u8), alloc: std.mem.Allocator, bufs: *ArgBuffers, code: []const u8, vars: []const u8) !void {
+    const code_str = try std.fmt.bufPrint(&bufs.pflash_code_buf, "if=pflash,unit=0,format=raw,readonly=on,file={s}", .{code});
+    try args.append(alloc, "-drive");
+    try args.append(alloc, code_str);
+    const vars_str = try std.fmt.bufPrint(&bufs.pflash_vars_buf, "if=pflash,unit=1,format=raw,file={s}", .{vars});
+    try args.append(alloc, "-drive");
+    try args.append(alloc, vars_str);
+}
+
+/// Seed a per-VM OVMF VARS (NVRAM) file by copying a VARS template, unless it
+/// already exists (preserving enrolled keys / boot entries across reboots).
+/// Best-effort: caller boots without Secure Boot pflash if this fails.
+pub fn generateSecureBootVars(config: *const vm.VmConfig, allocator: std.mem.Allocator) !void {
+    if (!config.secure_boot or !config.hasName()) return error.NoSecureBoot;
+    var vp_buf: [128]u8 = undefined;
+    const vars = secbootVarsPath(config.getNameSlice(), &vp_buf) orelse return error.PathTooLong;
+    if (std.Io.Dir.cwd().access(appio.io(), vars, .{})) |_| return else |_| {}
+    const tmpl = findOvmfVarsTemplate() orelse return QemuError.OvmfNotFound;
+    try runWait(&.{ "cp", tmpl, vars }, allocator, null);
 }
 
 /// Well-known locations for the virtio-win guest tools ISO (distro packages
@@ -318,6 +381,8 @@ const ArgBuffers = struct {
     disp_buf: [32]u8 = undefined,
     watchdog_buf: [32]u8 = undefined,
     cloudinit_buf: [192]u8 = undefined,
+    pflash_code_buf: [vm.MAX_PATH + 64]u8 = undefined,
+    pflash_vars_buf: [192]u8 = undefined,
 };
 
 /// Append an additional network adapter ("netN") for `mode`. `.none` is a
@@ -762,10 +827,28 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try appendExtraNic(args, alloc, &bufs.nic_dev_buf[i], net_id, nic.mode, nic.mac_buf[0..nic.mac_len]);
     }
 
-    if (config.firmware == .uefi) {
-        const ovmf = findOvmfPath() orelse return QemuError.OvmfNotFound;
-        try args.append(alloc, "-bios");
-        try args.append(alloc, ovmf);
+    // Firmware: Secure Boot implies UEFI. Prefer split pflash (SB enforcement +
+    // persistent NVRAM) when a Secure Boot OVMF and the per-VM VARS exist;
+    // otherwise fall back to plain OVMF via -bios so the VM still boots (SB just
+    // won't enforce). startVm seeds the per-VM VARS before launch.
+    if (config.firmware == .uefi or config.secure_boot) {
+        var used_pflash = false;
+        if (config.secure_boot and config.hasName()) {
+            if (findSecbootCode()) |code| {
+                var vp_buf: [128]u8 = undefined;
+                if (secbootVarsPath(config.getNameSlice(), &vp_buf)) |vars| {
+                    if (std.Io.Dir.cwd().access(appio.io(), vars, .{})) |_| {
+                        try buildSecureBootDrives(args, alloc, bufs, code, vars);
+                        used_pflash = true;
+                    } else |_| {}
+                }
+            }
+        }
+        if (!used_pflash) {
+            const ovmf = findOvmfPath() orelse return QemuError.OvmfNotFound;
+            try args.append(alloc, "-bios");
+            try args.append(alloc, ovmf);
+        }
     }
 
     // Audiodev backend: route to the SPICE client when the display is SPICE
@@ -886,6 +969,11 @@ pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
     // cloud-localds or a generation error just means the guest boots without it.
     if (config.hasCloudInit()) {
         generateCloudInitSeed(config, allocator) catch {};
+    }
+    // Seed per-VM Secure Boot NVRAM so buildArgs can wire split pflash; harmless
+    // no-op when SB is off or no firmware is installed.
+    if (config.secure_boot) {
+        generateSecureBootVars(config, allocator) catch {};
     }
 
     var args: std.ArrayList([]const u8) = .empty;
@@ -2358,10 +2446,44 @@ test "qemu: -boot emits the boot order and the interactive boot menu" {
 
 test "qemu: buildScriptStr with secure_boot enables SMM" {
     var cfg = vm.VmConfig{};
+    cfg.setName("sbvm");
     cfg.secure_boot = true;
-    const s = try buildScriptStr(&cfg, talloc);
+    // Secure Boot now implies UEFI firmware; skip if no OVMF is installed.
+    const s = buildScriptStr(&cfg, talloc) catch return;
     defer talloc.free(s);
     try expect(has(s, "smm=on"));
+}
+
+test "qemu: buildSecureBootDrives emits split read-only CODE + writable VARS pflash" {
+    var args: std.ArrayList([]const u8) = .empty;
+    defer args.deinit(talloc);
+    var bufs = ArgBuffers{};
+    try buildSecureBootDrives(&args, talloc, &bufs, "/fw/OVMF_CODE.secboot.fd", "/tmp/hangar-ovmf-vars-x.fd");
+    // Reconstruct the flat command to assert on it.
+    var joined: [512]u8 = undefined;
+    var w: usize = 0;
+    for (args.items) |a| {
+        @memcpy(joined[w .. w + a.len], a);
+        w += a.len;
+        joined[w] = ' ';
+        w += 1;
+    }
+    const s = joined[0..w];
+    try expect(has(s, "if=pflash,unit=0,format=raw,readonly=on,file=/fw/OVMF_CODE.secboot.fd"));
+    try expect(has(s, "if=pflash,unit=1,format=raw,file=/tmp/hangar-ovmf-vars-x.fd"));
+}
+
+test "qemu: secure_boot falls back to plain OVMF when no secboot firmware / VARS" {
+    // With no per-VM VARS seeded (buildScriptStr doesn't run startVm) the build
+    // must NOT emit pflash referencing a missing NVRAM (which would be unbootable);
+    // it falls back to -bios. Skip if the host has no OVMF at all.
+    var cfg = vm.VmConfig{};
+    cfg.setName("sbfallback");
+    cfg.secure_boot = true;
+    const s = buildScriptStr(&cfg, talloc) catch return;
+    defer talloc.free(s);
+    try expect(!has(s, "unit=1,format=raw,file=/tmp/hangar-ovmf-vars-sbfallback.fd"));
+    try expect(has(s, "-bios"));
 }
 
 test "qemu: buildScriptStr with hugepages emits mem-prealloc" {
