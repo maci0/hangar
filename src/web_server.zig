@@ -731,6 +731,13 @@ fn serveHtml(conn: c.fd_t) void {
         }
         return;
     }
+    if (parseVmIdxSuffix(req, "GET /api/vm/", "/log") != null) {
+        handleVmLog(conn, req) catch |e| {
+            logReqErr("vm log read failed", e, req);
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"log read failed\"}");
+        };
+        return;
+    }
     if (std.mem.startsWith(u8, req, "POST /api/export/")) {
         handleExport(conn, req) catch |e| {
             logReqErr("export failed", e, req);
@@ -1048,6 +1055,11 @@ fn serveConfigRawAlloc() ?[]u8 {
 var fb_client: ?*vnc.VncClient = null;
 // Tracks which VM index fb_client is connected to. appstate.MAX_VMS = sentinel (none).
 var fb_vm_idx: usize = appstate.MAX_VMS;
+// VNC port the cached connection points at. A delete/clone can shift the VM
+// table so the same index now maps to a different VM with a different port;
+// keying the cache on index alone would then serve the wrong VM's screen.
+// Reconnecting whenever the port for `idx` changed closes that hole.
+var fb_vnc_port: c_int = -1;
 var fb_mutex: sync.SpinMutex = .{};
 
 /// Handle WebSocket VNC proxy request.
@@ -1410,11 +1422,13 @@ fn renderFramebuffer(req: []const u8, out: []u8) ![]const u8 {
         fb_vm_idx = appstate.MAX_VMS; // not yet connected to any VM
     }
     const vc = fb_client.?;
-    // Reconnect if the VM changed or the connection dropped.
-    if (fb_vm_idx != idx or !vc.isConnected()) {
+    // Reconnect if the VM changed, the port behind this index changed (table
+    // shifted by a delete/clone), or the connection dropped.
+    if (fb_vm_idx != idx or fb_vnc_port != @as(c_int, @intCast(vnc_port)) or !vc.isConnected()) {
         if (fb_vm_idx != appstate.MAX_VMS) vc.disconnect();
         _ = vc.connect("127.0.0.1", @intCast(vnc_port));
         fb_vm_idx = idx;
+        fb_vnc_port = @intCast(vnc_port);
     }
     if (vc.lockFb()) |pixels| {
         defer vc.unlockFb();
@@ -1854,6 +1868,80 @@ fn readStartupLog(path: [*:0]const u8, out: []u8) []const u8 {
     var end: usize = @intCast(n);
     while (end > 0 and (out[end - 1] == '\n' or out[end - 1] == '\r')) end -= 1;
     return out[0..end];
+}
+
+/// Return the last `cap` bytes of `data` (all of it when shorter). Pure helper
+/// so the tail-window math is unit/fuzz testable without touching the filesystem.
+fn tailSlice(data: []const u8, cap: usize) []const u8 {
+    if (data.len <= cap) return data;
+    return data[data.len - cap ..];
+}
+
+/// Read the tail of a log file into `out` (its last `out.len` bytes). Returns
+/// the populated slice, or "" if the file is missing, empty, or unreadable.
+fn readLogTail(path: [*:0]const u8, out: []u8) []const u8 {
+    if (out.len == 0) return "";
+    const fd = std.c.open(path, .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return "";
+    defer _ = std.c.close(fd);
+    const end = std.c.lseek(fd, 0, 2); // SEEK_END = 2
+    if (end <= 0) return "";
+    const size: u64 = @intCast(end);
+    const want: usize = @intCast(@min(size, @as(u64, out.len)));
+    const off: i64 = @intCast(size - want);
+    if (std.c.lseek(fd, off, 0) < 0) return ""; // SEEK_SET = 0
+    var got: usize = 0;
+    while (got < want) {
+        const n = std.c.read(fd, out.ptr + got, want - got);
+        if (n <= 0) break;
+        got += @intCast(n);
+    }
+    return out[0..got];
+}
+
+/// Serve the tail of a VM's QEMU stderr log (`/var/tmp/hangar-vm-<name>.log`)
+/// as text/plain for diagnostics. Auth-gated like the rest of `/api/vm/*`; the
+/// VM name is copied out under the lock so no filesystem I/O runs while held.
+fn handleVmLog(conn: c.fd_t, req: []const u8) !void {
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var name_len: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "GET /api/vm/") orelse {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
+            return;
+        };
+        if (idx >= appstate.vm_count) {
+            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
+            return;
+        }
+        const name = appstate.vms[idx].getNameSlice();
+        // qmp.isPathSafeName rejects '/', '.', and control bytes — the same guard
+        // QMP uses before building socket paths, so a hostile config name cannot
+        // escape /var/tmp via traversal even if it slipped past creation checks.
+        if (name.len == 0 or name.len > name_buf.len or !qmp.isPathSafeName(name)) {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad name\"}");
+            return;
+        }
+        @memcpy(name_buf[0..name.len], name);
+        name_len = name.len;
+    }
+
+    var path_buf: [320]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "/var/tmp/hangar-vm-{s}.log", .{name_buf[0..name_len]}) catch {
+        writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"path err\"}");
+        return;
+    };
+    var log_buf: [65536]u8 = undefined;
+    const body = readLogTail(path, &log_buf);
+    if (body.len == 0) {
+        // No log file yet: the VM never started, or QEMU emitted nothing on stderr.
+        writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no log\"}");
+        return;
+    }
+    writeHttpResponse(conn, HTTP_OK, "text/plain; charset=utf-8", body);
+    logAudit("vm log read", name_buf[0..name_len]);
 }
 
 fn handleNewVm(req: []const u8) ![]const u8 {
@@ -2494,6 +2582,10 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "extra3_size")) v.extra_disks[3].size_gb = form_parsers.parseU32OrDefault(val, 0);
         if (std.mem.eql(u8, key, "extra3_format")) v.extra_disks[3].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[3].format.toIndex());
     }
+    // Settings edits change disk paths, NIC modes, and display ports — data
+    // modifications an operator must be able to reconstruct after the fact. Every
+    // other destructive handler audits; this one persisted silently.
+    logAudit("settings save", v.getNameSlice());
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
         logSaveErr("", e);
         return "save failed";
@@ -3136,10 +3228,22 @@ fn handleMigrateCancel(req: []const u8) ![]const u8 {
 fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "GET /api/vm/") orelse return;
-    if (idx >= appstate.vm_count) return;
+    // Reply with a real HTTP status on every failure path. A bare `return` here
+    // closes the socket with no response, so the client sees an empty reply it
+    // cannot tell apart from a network drop instead of a 400/404/500.
+    const idx = parseIdx(req, "GET /api/vm/") orelse {
+        writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
+        return;
+    };
+    if (idx >= appstate.vm_count) {
+        writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
+        return;
+    }
     const v = &appstate.vms[idx];
-    if (!v.hasDisk2()) return;
+    if (!v.hasDisk2()) {
+        writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no disk2\"}");
+        return;
+    }
 
     const disk2_path = v.getDisk2Path();
     const fd = c.open(@ptrCast(disk2_path), .{ .ACCMODE = .RDONLY });
@@ -3151,6 +3255,7 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
         var nb: [vm.MAX_NAME]u8 = undefined;
         var eb: [256]u8 = undefined;
         logErr(std.fmt.bufPrint(&eb, "disk2 download: open failed vm=\"{s}\"", .{sanitizeLogName(&nb, v.getNameSlice())}) catch "disk2 download: open failed");
+        writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"disk2 open failed\"}");
         return;
     }
     defer _ = c.close(fd);
@@ -3339,13 +3444,21 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
 fn handleExport(conn: c.fd_t, req: []const u8) !void {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/export/") orelse return;
-    if (idx >= appstate.vm_count) return;
+    // Client-input failures get a real HTTP status; a bare `return` would close
+    // the socket with no response (an empty reply indistinguishable from a drop).
+    const idx = parseIdx(req, "POST /api/export/") orelse {
+        writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
+        return;
+    };
+    if (idx >= appstate.vm_count) {
+        writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
+        return;
+    }
     const v = &appstate.vms[idx];
 
-    // Parse optional name field from the request body.
-    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return;
-    const body = req[body_start + 4 ..];
+    // The name field is optional, so a request without a body is valid and must
+    // fall back to the VM's own name rather than silently abort.
+    const body: []const u8 = if (std.mem.indexOf(u8, req, "\r\n\r\n")) |bs| req[bs + 4 ..] else "";
     var raw_name: []const u8 = "";
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
@@ -3359,8 +3472,10 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var name_decode_buf: [vm.MAX_NAME]u8 = undefined;
     const export_name: []const u8 = if (raw_name.len > 0) blk: {
         const decoded = urlencode.urlDecode(&name_decode_buf, raw_name);
-        if (!vm.isValidVmName(decoded)) return;
-        if (std.mem.indexOf(u8, decoded, "..") != null) return;
+        if (!vm.isValidVmName(decoded) or std.mem.indexOf(u8, decoded, "..") != null) {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
+            return;
+        }
         break :blk decoded;
     } else v.getNameSlice();
 
@@ -3375,7 +3490,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     };
     std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
         logErr("failed to create export dir");
-        return;
+        return error.ExportFailed;
     };
     var dir_cleanup: bool = true;
     defer if (dir_cleanup) {
@@ -3399,12 +3514,12 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     if (appstate.getVmmHandle(idx)) |h| {
         appstate.g_vmm.convertDiskFn(h, v.getDiskPathSlice(), vmdk_path, @intFromEnum(v.disk_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
             logErr("export: disk1 conversion (VMM) failed");
-            return;
+            return error.ExportFailed;
         };
     } else {
         qemu.convertDiskImage(v.getDiskPathSlice(), v.disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch {
             logErr("export: disk1 conversion (qemu) failed");
-            return;
+            return error.ExportFailed;
         };
     }
 
@@ -3418,12 +3533,12 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         if (appstate.getVmmHandle(idx)) |h2| {
             appstate.g_vmm.convertDiskFn(h2, v.getDisk2PathSlice(), d2_path, @intFromEnum(v.disk2_format), @intFromEnum(vm.DiskFormat.vmdk), std.heap.page_allocator) catch {
                 logErr("export: disk2 conversion (VMM) failed");
-                return;
+                return error.ExportFailed;
             };
         } else {
             qemu.convertDiskImage(v.getDisk2PathSlice(), v.disk2_format, d2_path, .vmdk, std.heap.page_allocator) catch {
                 logErr("export: disk2 conversion (qemu) failed");
-                return;
+                return error.ExportFailed;
             };
         }
     }
@@ -3445,14 +3560,14 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     var ovf_buf: [ovf.max_descriptor_len]u8 = undefined;
     const xml = ovf.buildDescriptor(spec, &ovf_buf) catch {
         logErr("export: OVF descriptor build failed");
-        return;
+        return error.ExportFailed;
     };
 
     const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, export_name });
     defer std.heap.page_allocator.free(ovf_path);
     std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch {
         logErr("export: failed to write OVF file");
-        return;
+        return error.ExportFailed;
     };
 
     // Tar+gzip the export directory
@@ -3460,7 +3575,7 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         const tar_argv = [_][]const u8{ "tar", "-czf", tar_path, "-C", dir_path, "." };
         qemu.runWait(&tar_argv, std.heap.page_allocator, null) catch {
             logErr("export: tar+gzip failed");
-            return;
+            return error.ExportFailed;
         };
         tar_cleanup = true;
     }
@@ -3713,6 +3828,9 @@ fn handleVnetsSave(req: []const u8) ![]const u8 {
         return "parse error";
     }
     try vnet.save(&set);
+    // Virtual-network topology change — record it so an operator can correlate a
+    // VM losing connectivity with a networks.json rewrite.
+    logAt(.info, "audit: vnets save");
     return "ok";
 }
 
@@ -3758,6 +3876,8 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
         }
     }
 
+    // Daemon-wide preference change (default VM dir, autoprotect defaults, ...).
+    logAt(.info, "audit: config save");
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
         logSaveErr("", e);
         return "save failed";
@@ -4206,6 +4326,54 @@ test "fuzz: parseIdx never panics on random URL-like input" {
             _ = parseIdx(buf[0..len], pfx);
         }
     }
+}
+
+test "tailSlice: returns whole slice when shorter than cap" {
+    const data = "short";
+    try std.testing.expectEqualStrings("short", tailSlice(data, 64));
+    try std.testing.expectEqualStrings("short", tailSlice(data, data.len));
+}
+
+test "tailSlice: returns last cap bytes when longer" {
+    const data = "0123456789";
+    try std.testing.expectEqualStrings("789", tailSlice(data, 3));
+    try std.testing.expectEqualStrings("9", tailSlice(data, 1));
+    try std.testing.expectEqualStrings("", tailSlice(data, 0));
+}
+
+test "tailSlice: empty input yields empty" {
+    try std.testing.expectEqualStrings("", tailSlice("", 0));
+    try std.testing.expectEqualStrings("", tailSlice("", 16));
+}
+
+test "fuzz: tailSlice never panics and returns a valid suffix" {
+    var prng = std.Random.DefaultPrng.init(0x70A1_5EED);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        const cap = rnd.uintLessThan(usize, buf.len + 8);
+        const out = tailSlice(buf[0..len], cap);
+        // Result is always a tail-anchored sub-slice no longer than the input.
+        try std.testing.expect(out.len <= len);
+        try std.testing.expect(out.len <= @max(cap, len));
+        if (out.len > 0) {
+            const expected_start = len - out.len;
+            try std.testing.expectEqualSlices(u8, buf[expected_start..len], out);
+        }
+        if (len <= cap) try std.testing.expectEqual(len, out.len);
+    }
+}
+
+test "parseVmIdxSuffix: matches the /log route" {
+    try std.testing.expectEqual(@as(?usize, 0), parseVmIdxSuffix("GET /api/vm/0/log HTTP/1.1", "GET /api/vm/", "/log"));
+    try std.testing.expectEqual(@as(?usize, 12), parseVmIdxSuffix("GET /api/vm/12/log HTTP/1.1", "GET /api/vm/", "/log"));
+    // Partial-segment guard: "/logs" must not match "/log".
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxSuffix("GET /api/vm/0/logs HTTP/1.1", "GET /api/vm/", "/log"));
+    // The plain detail route has no suffix and must not match.
+    try std.testing.expectEqual(@as(?usize, null), parseVmIdxSuffix("GET /api/vm/0 HTTP/1.1", "GET /api/vm/", "/log"));
 }
 
 test "fuzz: findHeader never panics and returns a sub-slice of headers" {
@@ -6412,6 +6580,34 @@ test "fuzz: idx-gated VM handlers never panic on random request-like input" {
         _ = handleMigrateStatus(req, &out);
     }
     // Table must be untouched: no handler created or removed a VM.
+    try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
+}
+
+test "fuzz: handleVmLog never panics on random request-like input" {
+    // handleVmLog parses an idx out of the untrusted request line and writes its
+    // response straight to the connection fd, so unlike the `![]const u8` handlers
+    // above it can't go through the shared idx-gated harness. Drive it over a fresh
+    // socketpair per iteration (the response end is closed without draining — the
+    // early-exit replies are a few dozen bytes, far below the socket buffer). With
+    // the empty VM table the `idx >= vm_count` guard always fires before any
+    // filesystem read, so this exercises the bad-index / parseIdx path with real
+    // socket I/O and zero side effects.
+    try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
+
+    var prng = std.Random.DefaultPrng.init(0x106_F1E5);
+    const rnd = prng.random();
+    for (0..2000) |_| {
+        var fds: [2]c.fd_t = undefined;
+        if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) continue;
+        defer {
+            _ = c.close(fds[0]);
+            _ = c.close(fds[1]);
+        }
+        var buf: [160]u8 = undefined;
+        for (&buf) |*b| b.* = rnd.int(u8);
+        const req = buf[0..rnd.uintLessThan(usize, buf.len)];
+        handleVmLog(fds[1], req) catch {};
+    }
     try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
 }
 

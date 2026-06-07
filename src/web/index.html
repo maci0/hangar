@@ -324,6 +324,18 @@
   </div>
 </dialog>
 
+<!-- QEMU Log Dialog -->
+<dialog id="logdlg" aria-label="QEMU Log">
+  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">QEMU Log — <span id="log_vmname"></span></h3>
+  <div style="padding:12px 24px">
+    <pre id="logbody" style="margin:0;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono,monospace);font-size:12px;background:var(--bg-elev,#111);color:var(--text,#ddd);padding:12px;border-radius:var(--radius);border:1px solid var(--border)">Loading…</pre>
+  </div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="refreshLog">Refresh</button>
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="logdlg">Close</button>
+  </div>
+</dialog>
+
 <!-- Migrate Dialog -->
 <dialog id="migratedlg" aria-label="Migrate VM">
   <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Migrate Virtual Machine</h3>

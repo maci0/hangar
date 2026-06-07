@@ -104,7 +104,7 @@ if(tab==='settings'&&sel!==null)editVm();}
 var serverDown=false;
 var saveInFlight=false;
 function setServerDown(s){serverDown=s;var b=document.getElementById('connbanner');if(b)b.style.display=s?'flex':'none';if(s)setStatus('Server unreachable — retrying...');}
-async function refresh(){if(refreshBusy)return;if(transitioningIdx!==null||saveInFlight)return;refreshBusy=true;try{var listEl=document.getElementById('vmlist');const prevStatus=(sel!==null&&sel<vms.length)?vms[sel].status:null;const ctl=new AbortController();const t=setTimeout(function(){ctl.abort();},15000);try{const r=await fetch('/api/vms',{signal:ctl.signal});clearTimeout(t);if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
+async function refresh(){if(document.hidden)return;if(refreshBusy)return;if(transitioningIdx!==null||saveInFlight)return;refreshBusy=true;try{var listEl=document.getElementById('vmlist');const prevStatus=(sel!==null&&sel<vms.length)?vms[sel].status:null;const ctl=new AbortController();const t=setTimeout(function(){ctl.abort();},15000);try{const r=await fetch('/api/vms',{signal:ctl.signal});clearTimeout(t);if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
 setServerDown(false);vms=normVmBools(await r.json());if(sel!==null&&sel<vms.length){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);}else{stopFb();stopSerial(true);}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
 function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
@@ -191,8 +191,12 @@ if(v.port_forwards)h+=`<div class="summary-card"><div class="card-label">Port Fo
 if(v.notes)h+=`<div class="summary-card"><div class="card-label">Notes</div><div class="card-value">${escHtml(v.notes)}</div></div>`;
 h+=summaryWarnings(v);
 h+='</div>';
+h+='<div class="summary-actions" style="margin-top:12px;display:flex;gap:8px"><button type="button" class="btn" data-action="viewLog">View QEMU Log</button></div>';
 ts.innerHTML=h;
 updateCommandState();}
+async function loadLogInto(idx){var body=document.getElementById('logbody');if(!body)return;body.textContent='Loading…';try{var r=await fetch('/api/vm/'+idx+'/log',{headers:{'X-API-Key':API_KEY}});if(r.status===404){body.textContent='No log yet — the VM has not been started, or QEMU produced no output.';return;}if(!r.ok){var msg=await r.text().catch(function(){return '';});try{var j=JSON.parse(msg);if(j.error)msg=j.error;}catch(e){}body.textContent='Failed to load log: '+(msg||('HTTP '+r.status));return;}var txt=await r.text();body.textContent=txt&&txt.length?txt:'(log is empty)';body.scrollTop=body.scrollHeight;}catch(ex){body.textContent='Failed to load log: '+(ex&&ex.message?ex.message:'request failed');}}
+function viewLog(){if(sel===null||sel>=vms.length)return;var nm=document.getElementById('log_vmname');if(nm)nm.textContent=vms[sel].name;var dlg=document.getElementById('logdlg');if(dlg)dlg.showModal();loadLogInto(sel);}
+function refreshLog(){if(sel===null)return;loadLogInto(sel);}
 async function powerToggle(){const idx=sel;if(idx===null)return;const v=vms[idx];if(v&&(v.status==='running'||v.status==='paused')){if(!(await showConfirmDialog('Power off VM "'+v.name+'"?\nUnsaved data may be lost.',{danger:true,okLabel:'Power Off'})))return;}
 var btn=document.getElementById('powerbtn');if(btn){btn.disabled=true;btn.textContent='...';btn.setAttribute('aria-busy','true');}
 transitioningIdx=idx;renderList();
@@ -537,7 +541,7 @@ var dialogFocusStack=[];
 var FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 function trapFocus(dlg){if(dlg._trapFocusHandler)return;var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}};dlg._trapFocusHandler=onKey;dlg.addEventListener('keydown',onKey);first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
 function releaseFocus(dlg){var handler=dlg._trapFocusHandler;if(handler){dlg.removeEventListener('keydown',handler);delete dlg._trapFocusHandler;}dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
-['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','catalogdlg','migratedlg','shortcutsdlg','confirmdlg','promptdlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};var origClose=dlg.close;dlg.close=function(){if(dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
+['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','catalogdlg','migratedlg','logdlg','shortcutsdlg','confirmdlg','promptdlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};var origClose=dlg.close;dlg.close=function(){if(dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
 // ── Enter in a dialog input triggers its primary action ──
 [{id:'newdlg',fn:createVm},{id:'migratedlg',fn:doMigrate},{id:'snapdlg',fn:takeSnapshotFromDlg},{id:'prefsdlg',fn:savePrefs}].forEach(function(o){var d=document.getElementById(o.id);if(!d)return;d.addEventListener('keydown',function(e){if(e.key!=='Enter')return;var t=e.target;if(t&&t.tagName==='INPUT'&&t.type!=='button'&&!t.readOnly){e.preventDefault();o.fn();}});});
 // ── Sidebar Overlay Click-to-Close ──
@@ -634,9 +638,14 @@ function enterDisplayOnly(){
   document.body.classList.add('displayonly');
   document.documentElement.requestFullscreen().catch(function(){});
   setStatus('Display-only — F11 or Esc to exit');
+  // Briefly reveal the exit bar so first-time users can find their way out;
+  // it otherwise stays hidden until hover, leaving keyboard-unaware users stuck.
+  var bar=document.querySelector('.displayonly-bar');
+  if(bar){bar.classList.add('reveal');setTimeout(function(){if(document.body.classList.contains('displayonly'))bar.classList.remove('reveal');},3500);}
 }
 function exitDisplayOnly(){
   document.body.classList.remove('displayonly');
+  var bar=document.querySelector('.displayonly-bar');if(bar)bar.classList.remove('reveal');
   if(document.fullscreenElement)document.exitFullscreen();
   setStatus('Exited display-only mode');
 }
@@ -644,6 +653,7 @@ function reconnectDisplay(){if(sel===null||sel>=vms.length)return;stopFb();start
 // ── Periodic Refresh ──
 refresh();
 setInterval(refresh,5000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh();});
 // ── noVNC / SPICE live viewer ──
 var rfb = null; // noVNC RFB client instance
 var spice = null; // SPICE HTML5 client instance
@@ -1011,7 +1021,7 @@ if(idx===null||idx>=vms.length)return;const v=vms[idx];if(v.status!=='running'||
 serialIdx=idx;const term=document.getElementById('serialterm');const sp=document.getElementById('serialpanel');if(!term||!sp)return;sp.style.display='block';sp.classList.add('connected');
 const proto=location.protocol==='https:'?'wss:':'ws:';const ws=new WebSocket(proto+'//'+location.host+'/ws/serial/'+idx);
 serialWs=ws; // reassign before old onclose fires to avoid closing the new socket
-ws.onmessage=e=>{term.value+=e.data;term.scrollTop=term.scrollHeight;};
+ws.onmessage=e=>{var t=term.value+e.data;var SERIAL_MAX=256*1024;if(t.length>SERIAL_MAX)t=t.slice(t.length-SERIAL_MAX);term.value=t;term.scrollTop=term.scrollHeight;};
 ws.onopen=()=>{serialReconnectDelay=1000;sp.classList.add('connected');};
 ws.onclose=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
 ws.onerror=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
@@ -1104,6 +1114,7 @@ var actionHandlers={
  doClone:function(el){doClone(parseInt(el.getAttribute('data-clone-linked'),10));},
  switchTab:function(el){switchTab(el.getAttribute('data-tab')||'summary');},
  closeDlg:function(el){var id=el.getAttribute('data-dialog');if(id){var d=document.getElementById(id);if(d)d.close();}},
+ viewLog:function(){viewLog();},refreshLog:function(){refreshLog();},
  dismissBanner:function(){var b=document.getElementById('connbanner');if(b)b.style.display='none';serverDown=false;setStatus('');},
  cancelMigrate:function(){cancelMigrate();},
  applyTheme:function(el){pendingTheme=el.value;window.applyTheme(el.value);},
@@ -1183,11 +1194,9 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
     if(isNaN(toIdx)||toIdx===dragIdx)return;
     var from=dragIdx,to=toIdx;
     dragIdx=null;
-    // Update sel to track the moved item
-    if(sel===from)sel=to;else if(sel===to)sel=from;
-    apiPost('/api/reorder','from='+from+'&to='+to).then(function(r){
-      if(r)refresh();else{sel=from>to?from+1:from-1;refresh();}
-    }).catch(function(){refresh();});
+    // Route through reorderVm so mouse drag matches keyboard/touch: optimistic
+    // reorder, undo toast, and correct selection tracking on success/failure.
+    if(!saveInFlight)reorderVm(from,to);
   });
 })();
 // ── Touch drag-to-reorder (pointer events fallback for mobile) ──

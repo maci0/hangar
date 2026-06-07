@@ -94,7 +94,9 @@ const VmJson = struct {
     autoprotect_last_epoch: i64 = 0,
     autoprotect_last_seq: u32 = 0,
     floppy_path: []const u8 = "",
-    display: []const u8 = "gtk",
+    // Missing "display" in a config defaults to VNC (web-usable), matching
+    // VmConfig's default — never a host-native GTK window the browser can't show.
+    display: []const u8 = "vnc",
     display_resolution: u32 = 0,
     network: []const u8 = "user",
     firmware: []const u8 = "bios",
@@ -1810,7 +1812,8 @@ test "parseDisplayType: maps strings to enums" {
     try std.testing.expectEqual(vm.DisplayType.spice, vm.DisplayType.fromStr("spice"));
     try std.testing.expectEqual(vm.DisplayType.vnc, vm.DisplayType.fromStr("vnc"));
     try std.testing.expectEqual(vm.DisplayType.none, vm.DisplayType.fromStr("none"));
-    try std.testing.expectEqual(vm.DisplayType.gtk, vm.DisplayType.fromStr("unknown"));
+    // Unknown values fall back to the web-usable default (.vnc), not .gtk.
+    try std.testing.expectEqual(vm.DisplayType.vnc, vm.DisplayType.fromStr("unknown"));
 }
 
 test "parseNetworkMode: maps strings to enums" {

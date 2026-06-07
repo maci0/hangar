@@ -61,7 +61,7 @@ pub fn parseBootOrder(s: []const u8) vm.BootOrder {
 /// Parse a display type label ("sdl", "spice", "vnc", "none", "headless") into a DisplayType enum.
 /// Uses substring matching because the UI dropdown labels can be longer descriptive
 /// strings (e.g. "SPICE (recommended)"). Falls back to DisplayType.fromStr for exact
-/// toStr values. Defaults to .gtk.
+/// toStr values. Unknown input falls back to the web-usable default (.vnc).
 pub fn parseDisplay(s: []const u8) vm.DisplayType {
     if (std.ascii.indexOfIgnoreCase(s, "sdl") != null) return .sdl;
     if (std.ascii.indexOfIgnoreCase(s, "spice") != null) return .spice;
@@ -208,10 +208,12 @@ test "parseDisplay: known displays" {
     try std.testing.expectEqual(vm.DisplayType.none, parseDisplay("Headless"));
 }
 
-test "parseDisplay: defaults to gtk" {
-    try std.testing.expectEqual(vm.DisplayType.gtk, parseDisplay(""));
+test "parseDisplay: explicit GTK, else web-usable default" {
+    // GTK is still honored when explicitly requested.
     try std.testing.expectEqual(vm.DisplayType.gtk, parseDisplay("GTK"));
-    try std.testing.expectEqual(vm.DisplayType.gtk, parseDisplay("unknown"));
+    // Empty/unknown input falls back to .vnc (web-usable), not a native window.
+    try std.testing.expectEqual(vm.DisplayType.vnc, parseDisplay(""));
+    try std.testing.expectEqual(vm.DisplayType.vnc, parseDisplay("unknown"));
 }
 
 test "parseDisplayResolution: known resolutions" {

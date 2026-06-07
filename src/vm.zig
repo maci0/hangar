@@ -306,9 +306,10 @@ pub const DisplayType = enum(u8) {
         return @intFromEnum(self);
     }
 
-    /// Maps a combobox index to a `DisplayType`.  Out-of-range defaults to `.gtk`.
+    /// Maps a combobox index to a `DisplayType`.  Out-of-range defaults to `.vnc`
+    /// — the web-usable default, never a host-native GTK window.
     pub fn fromIndex(i: usize) DisplayType {
-        if (i >= count) return .gtk;
+        if (i >= count) return .vnc;
         return @enumFromInt(@as(u8, @intCast(i)));
     }
 
@@ -342,7 +343,8 @@ pub const DisplayType = enum(u8) {
         }
         // Backward compatibility: old JSON files may have "spice" instead of "spice-app".
         if (std.ascii.eqlIgnoreCase(s, "spice")) return .spice;
-        return .gtk;
+        // Unknown values fall back to the web-usable default, not a native GTK window.
+        return .vnc;
     }
 };
 
@@ -1053,7 +1055,10 @@ pub const VmConfig = struct {
     disk_size_gb: u32 = 20,
     disk_format: DiskFormat = .qcow2,
     disk_cache: DiskCache = .writeback,
-    display: DisplayType = .gtk,
+    // Default to VNC, not GTK: Hangar is a web/remote manager, so a host-native
+    // GTK window is invisible to the browser UI and disables the embedded
+    // console (embeddedDisplayCapable requires VNC/SPICE). VNC embeds via noVNC.
+    display: DisplayType = .vnc,
     display_resolution: DisplayResolution = .auto,
     /// Number of virtual displays (1-`MAX_DISPLAYS`).  QEMU adds a virtio-gpu
     /// device for each.
@@ -1802,7 +1807,7 @@ test "VmConfig: reset restores all defaults" {
     try std.testing.expectEqual(@as(u32, 2048), cfg.memory_mb);
     try std.testing.expectEqual(@as(u32, 20), cfg.disk_size_gb);
     try std.testing.expectEqual(DiskFormat.qcow2, cfg.disk_format);
-    try std.testing.expectEqual(DisplayType.gtk, cfg.display);
+    try std.testing.expectEqual(DisplayType.vnc, cfg.display);
     try std.testing.expectEqual(NetworkMode.user, cfg.nics[0].mode);
     try std.testing.expectEqual(BootFirmware.bios, cfg.firmware);
     try std.testing.expectEqual(VmAccel.auto, cfg.accel);
@@ -1821,7 +1826,7 @@ test "VmConfig: default values" {
     try std.testing.expectEqual(@as(u32, 2048), cfg.memory_mb);
     try std.testing.expectEqual(@as(u32, 20), cfg.disk_size_gb);
     try std.testing.expectEqual(DiskFormat.qcow2, cfg.disk_format);
-    try std.testing.expectEqual(DisplayType.gtk, cfg.display);
+    try std.testing.expectEqual(DisplayType.vnc, cfg.display);
     try std.testing.expectEqual(NetworkMode.user, cfg.nics[0].mode);
     try std.testing.expectEqual(BootFirmware.bios, cfg.firmware);
     try std.testing.expectEqual(VmAccel.auto, cfg.accel);
@@ -2096,7 +2101,8 @@ test "DisplayType: fromIndex round-trip" {
     try std.testing.expectEqual(DisplayType.spice, DisplayType.fromIndex(2));
     try std.testing.expectEqual(DisplayType.vnc, DisplayType.fromIndex(3));
     try std.testing.expectEqual(DisplayType.none, DisplayType.fromIndex(4));
-    try std.testing.expectEqual(DisplayType.gtk, DisplayType.fromIndex(99));
+    // Out-of-range falls back to the web-usable default (.vnc), not .gtk.
+    try std.testing.expectEqual(DisplayType.vnc, DisplayType.fromIndex(99));
 }
 
 test "DisplayType: toIndex inverts fromIndex" {
@@ -3107,8 +3113,8 @@ test "DisplayType: fromStr round-trip" {
         const variant: DisplayType = @enumFromInt(f.value);
         try std.testing.expectEqual(variant, DisplayType.fromStr(std.mem.span(variant.toStr())));
     }
-    try std.testing.expectEqual(DisplayType.gtk, DisplayType.fromStr("unknown"));
-    try std.testing.expectEqual(DisplayType.gtk, DisplayType.fromStr(""));
+    try std.testing.expectEqual(DisplayType.vnc, DisplayType.fromStr("unknown"));
+    try std.testing.expectEqual(DisplayType.vnc, DisplayType.fromStr(""));
 }
 
 test "DisplayType: fromStr backward compat spice" {
