@@ -466,6 +466,50 @@ pub const GuestOs = enum(u8) {
 // ── Boot Order ───────────────────────────────────────────────────────
 
 /// Boot device priority order for the VM.
+/// Hardware clock base for `-rtc`. `utc` is correct for most modern guests;
+/// `localtime` is what Windows expects (else the guest clock is off by the TZ
+/// offset).
+pub const RtcBase = enum(u8) {
+    utc = 0,
+    localtime = 1,
+
+    pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
+
+    pub fn toIndex(self: RtcBase) usize {
+        return @intFromEnum(self);
+    }
+
+    /// Combobox index → RtcBase. Out-of-range defaults to `.utc`.
+    pub fn fromIndex(i: usize) RtcBase {
+        if (i >= count) return .utc;
+        return @enumFromInt(@as(u8, @intCast(i)));
+    }
+
+    /// QEMU `-rtc base=` value.
+    pub fn toStr(self: RtcBase) [*:0]const u8 {
+        return switch (self) {
+            .utc => "utc",
+            .localtime => "localtime",
+        };
+    }
+
+    /// Human-readable label for the UI.
+    pub fn label(self: RtcBase) [*:0]const u8 {
+        return switch (self) {
+            .utc => "UTC",
+            .localtime => "Local time (Windows)",
+        };
+    }
+
+    pub fn fromStr(s: []const u8) RtcBase {
+        inline for (@typeInfo(@This()).@"enum".fields) |f| {
+            const variant: RtcBase = @enumFromInt(f.value);
+            if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
+        }
+        return .utc;
+    }
+};
+
 pub const BootOrder = enum(u8) {
     disk_first = 0,
     cdrom_first = 1,
@@ -1087,6 +1131,7 @@ pub const VmConfig = struct {
     guest_os: GuestOs = .linux,
     audio: AudioDevice = .none,
     boot_order: BootOrder = .disk_first,
+    rtc: RtcBase = .utc,
 
     // ── Display embedding settings ──────────────────────────────
     /// When true, QEMU uses `-display none -vnc localhost:<vnc_port>`
@@ -2299,6 +2344,26 @@ test "BootOrder: label values" {
     try std.testing.expectEqualStrings("Hard Disk", std.mem.span(BootOrder.disk_first.label()));
     try std.testing.expectEqualStrings("CD/DVD", std.mem.span(BootOrder.cdrom_first.label()));
     try std.testing.expectEqualStrings("Network (PXE)", std.mem.span(BootOrder.network_first.label()));
+}
+
+test "RtcBase: fromIndex round-trip + out-of-range default" {
+    try std.testing.expectEqual(RtcBase.utc, RtcBase.fromIndex(0));
+    try std.testing.expectEqual(RtcBase.localtime, RtcBase.fromIndex(1));
+    try std.testing.expectEqual(RtcBase.utc, RtcBase.fromIndex(99));
+}
+
+test "RtcBase: toIndex inverts fromIndex" {
+    for (0..RtcBase.count) |i| {
+        try std.testing.expectEqual(i, RtcBase.fromIndex(i).toIndex());
+    }
+}
+
+test "RtcBase: toStr / label / fromStr" {
+    try std.testing.expectEqualStrings("utc", std.mem.span(RtcBase.utc.toStr()));
+    try std.testing.expectEqualStrings("localtime", std.mem.span(RtcBase.localtime.toStr()));
+    try std.testing.expect(std.mem.span(RtcBase.localtime.label()).len > 0);
+    try std.testing.expectEqual(RtcBase.localtime, RtcBase.fromStr("localtime"));
+    try std.testing.expectEqual(RtcBase.utc, RtcBase.fromStr("nonsense"));
 }
 
 // -- VmStatus (full standard suite) --

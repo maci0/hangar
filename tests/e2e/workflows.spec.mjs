@@ -188,6 +188,14 @@ test('guestinfo returns empty IPs for a stopped VM (needs a running guest agent)
     expect(r.ips).toBe('');
 });
 
+test('RTC clock policy saves and round-trips (localtime for Windows guests)', async ({ page }) => {
+    const idx = await createVm(page, 'wf-rtc');
+    const r = await api(page, 'POST', `/api/vms/${idx}`, 'rtc=1'); // 1 = localtime
+    expect(r.ok, `save rtc: ${r.status} ${r.text}`).toBe(true);
+    const detail = await page.evaluate(async (i) => (await (await fetch(`/api/vms/${i}`)).json()), idx);
+    expect(detail.rtc).toBe(1);
+});
+
 test('write-action without the API key is rejected (401)', async ({ page }) => {
     const idx = await createVm(page, 'wf-auth');
     const r = await page.evaluate(async (i) => {

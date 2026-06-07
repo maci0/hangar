@@ -1744,7 +1744,7 @@ fn renderJson(buf: []u8) usize {
         w += part2a.len;
 
         const part2b = std.fmt.bufPrint(buf[w..],
-            \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}
+            \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"rtc":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}
         , .{
             if (v.ballooning) "true" else "false",
             if (v.host_autostart) "true" else "false",
@@ -1755,6 +1755,7 @@ fn renderJson(buf: []u8) usize {
             v.guest_os.toIndex(),
             v.audio.toIndex(),
             v.boot_order.toIndex(),
+            v.rtc.toIndex(),
             std.mem.span(v.cpu_model.toStr()),
             std.mem.span(v.accel.toStr()),
             if (v.embed_display) "true" else "false",
@@ -2120,6 +2121,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "guest_os")) cfg.guest_os = vm.GuestOs.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.guest_os.toIndex());
         if (std.mem.eql(u8, key, "audio")) cfg.audio = vm.AudioDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.audio.toIndex());
         if (std.mem.eql(u8, key, "boot_order")) cfg.boot_order = vm.BootOrder.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.boot_order.toIndex());
+        if (std.mem.eql(u8, key, "rtc")) cfg.rtc = vm.RtcBase.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.rtc.toIndex());
         if (std.mem.eql(u8, key, "accel")) cfg.accel = form_parsers.parseAccel(val);
         if (std.mem.eql(u8, key, "enable_kvm")) {
             if (std.mem.eql(u8, val, "1")) cfg.accel = .auto else cfg.accel = .tcg;
@@ -2656,6 +2658,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "guest_os")) v.guest_os = vm.GuestOs.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.guest_os.toIndex());
         if (std.mem.eql(u8, key, "audio")) v.audio = vm.AudioDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.audio.toIndex());
         if (std.mem.eql(u8, key, "boot_order")) v.boot_order = vm.BootOrder.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.boot_order.toIndex());
+        if (std.mem.eql(u8, key, "rtc")) v.rtc = vm.RtcBase.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.rtc.toIndex());
         if (std.mem.eql(u8, key, "accel")) v.accel = form_parsers.parseAccel(val);
         if (std.mem.eql(u8, key, "enable_kvm")) {
             if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg;

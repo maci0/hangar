@@ -113,6 +113,7 @@ const VmJson = struct {
     guest_os: []const u8 = "linux",
     audio: []const u8 = "none",
     boot_order: []const u8 = "cdn",
+    rtc: []const u8 = "utc",
     accel: []const u8 = "auto",
     embed_display: bool = true,
     vnc_port: u16 = 5900,
@@ -204,6 +205,7 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.guest_os = vm.GuestOs.fromStr(j.guest_os);
     cfg.audio = vm.AudioDevice.fromStr(j.audio);
     cfg.boot_order = vm.BootOrder.fromStr(j.boot_order);
+    cfg.rtc = vm.RtcBase.fromStr(j.rtc);
     cfg.accel = vm.VmAccel.fromStr(j.accel);
     cfg.embed_display = j.embed_display;
     cfg.vnc_port = j.vnc_port;
@@ -460,6 +462,9 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"boot_order\": ");
     try emitJsonStr(list, alloc, std.mem.span(cfg.boot_order.toStr()));
+    try emit(list, alloc, ",\n");
+    try emit(list, alloc, "      \"rtc\": ");
+    try emitJsonStr(list, alloc, std.mem.span(cfg.rtc.toStr()));
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"accel\": ");
@@ -1176,6 +1181,11 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cfg.boot_order = vm.BootOrder.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "rtc")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.rtc = vm.RtcBase.fromStr(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "cpu_sockets")) {
             if (parseJsonInt(cur)) |r| {
                 cfg.cpu_sockets = r.value;
@@ -1650,6 +1660,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.guest_os = .windows;
     original.audio = .hda;
     original.boot_order = .cdrom_first;
+    original.rtc = .localtime;
     original.accel = .tcg;
     original.embed_display = true;
     original.vnc_port = 5901;
@@ -1736,6 +1747,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .guest_os = std.mem.span(original.guest_os.toStr()),
         .audio = std.mem.span(original.audio.toStr()),
         .boot_order = std.mem.span(original.boot_order.toStr()),
+        .rtc = std.mem.span(original.rtc.toStr()),
         .accel = std.mem.span(original.accel.toStr()),
         .embed_display = original.embed_display,
         .vnc_port = original.vnc_port,
@@ -1823,6 +1835,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqual(vm.GuestOs.windows, restored.guest_os);
     try std.testing.expectEqual(vm.AudioDevice.hda, restored.audio);
     try std.testing.expectEqual(vm.BootOrder.cdrom_first, restored.boot_order);
+    try std.testing.expectEqual(vm.RtcBase.localtime, restored.rtc);
     try std.testing.expectEqual(vm.VmAccel.tcg, restored.accel);
     try std.testing.expect(restored.embed_display);
     try std.testing.expectEqual(@as(u16, 5901), restored.vnc_port);

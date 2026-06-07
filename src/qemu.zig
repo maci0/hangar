@@ -393,6 +393,7 @@ const ArgBuffers = struct {
     // forwards via the `catch break` in the builder below.
     netdev_user_buf: [4096]u8 = undefined,
     boot_buf: [64]u8 = undefined,
+    rtc_buf: [48]u8 = undefined,
     incoming_buf: [vm.MAX_PATH + 64]u8 = undefined,
     shared_buf: [vm.MAX_PATH + 128]u8 = undefined,
     disk2_buf: [vm.MAX_PATH + 64]u8 = undefined,
@@ -640,6 +641,12 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
             try args.append(alloc, tools_str);
         }
     }
+
+    // Hardware clock base: utc (most guests) or localtime (Windows). clock=host
+    // keeps the guest RTC ticking from the host clock.
+    try args.append(alloc, "-rtc");
+    const rtc_str = try std.fmt.bufPrint(&bufs.rtc_buf, "base={s},clock=host", .{std.mem.span(config.rtc.toStr())});
+    try args.append(alloc, rtc_str);
 
     try args.append(alloc, "-boot");
     const boot_str = try std.fmt.bufPrint(&bufs.boot_buf, "order={s},menu=on", .{std.mem.span(config.boot_order.toStr())});
@@ -2505,6 +2512,19 @@ test "qemu: tpm does not emit an unbootable bare tpmdev" {
     defer talloc.free(s);
     try expect(!has(s, "-tpmdev"));
     try expect(!has(s, "tpm-tis"));
+}
+
+test "qemu: -rtc emits the configured clock base" {
+    var cfg = vm.VmConfig{};
+    cfg.rtc = .localtime;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-rtc"));
+    try expect(has(s, "base=localtime,clock=host"));
+    var cfg2 = vm.VmConfig{}; // default utc
+    const s2 = try buildScriptStr(&cfg2, talloc);
+    defer talloc.free(s2);
+    try expect(has(s2, "base=utc,clock=host"));
 }
 
 test "qemu: -boot emits the boot order and the interactive boot menu" {
