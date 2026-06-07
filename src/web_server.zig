@@ -781,6 +781,11 @@ fn serveHtml(conn: c.fd_t) void {
         };
         return;
     }
+    if (parseVmIdxSuffix(req, "GET /api/vms/", "/diskinfo") != null) {
+        var di_buf: [160]u8 = undefined;
+        writeHttpResponse(conn, HTTP_OK, "application/json; charset=utf-8", handleDiskInfo(req, &di_buf));
+        return;
+    }
     if (parseVmIdxSuffix(req, "POST /api/vms/", "/export") != null) {
         handleExport(conn, req) catch |e| {
             logReqErr("export failed", e, req);
@@ -3075,6 +3080,26 @@ fn handleReset(req: []const u8) ![]const u8 {
 /// unit-testable independent of the QEMU spawn.
 fn shouldAutostart(v: *const vm.VmConfig) bool {
     return v.host_autostart and v.hasDisk();
+}
+
+/// Report a VM's primary-disk virtual + actual (on-disk allocated) byte sizes
+/// via `qemu-img info`. Captures the disk path under the lock, runs qemu-img with
+/// it released. Returns a JSON object into `out`.
+fn handleDiskInfo(req: []const u8, out: []u8) []const u8 {
+    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var disk_len: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "GET /api/vms/") orelse return "{\"error\":\"invalid\"}";
+        if (idx >= appstate.vm_count) return "{\"error\":\"invalid idx\"}";
+        const dp = appstate.vms[idx].getDiskPathSlice();
+        if (dp.len == 0 or dp.len >= disk_buf.len) return "{\"error\":\"no disk\"}";
+        @memcpy(disk_buf[0..dp.len], dp);
+        disk_len = dp.len;
+    }
+    const info = qemu.diskInfo(disk_buf[0..disk_len], std.heap.page_allocator) orelse return "{\"error\":\"unavailable\"}";
+    return std.fmt.bufPrint(out, "{{\"virtual_bytes\":{d},\"actual_bytes\":{d}}}", .{ info.virtual_bytes, info.actual_bytes }) catch "{\"error\":\"render\"}";
 }
 
 /// Grow a VM's primary disk image (qemu-img resize). Stopped VMs only (resizing

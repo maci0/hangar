@@ -145,6 +145,14 @@ test('disk resize grows the primary disk (stopped VM, grow-only)', async ({ page
     expect(s.text).toContain('shrink not allowed');
 });
 
+test('diskinfo reports virtual and actual byte sizes', async ({ page }) => {
+    const idx = await createVm(page, 'wf-diskinfo');
+    const r = await page.evaluate(async (i) => (await (await fetch(`/api/vms/${i}/diskinfo`)).json()), idx);
+    expect(r.error, `diskinfo error: ${r.error}`).toBeUndefined();
+    expect(r.virtual_bytes, 'virtual size should be ~1 GiB').toBeGreaterThan(0);
+    expect(typeof r.actual_bytes).toBe('number');
+});
+
 test('write-action without the API key is rejected (401)', async ({ page }) => {
     const idx = await createVm(page, 'wf-auth');
     const r = await page.evaluate(async (i) => {

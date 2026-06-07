@@ -195,6 +195,7 @@ if(v.extra0_path&&v.extra0_path!=='')h+=`<div class="summary-card"><div class="c
 if(v.extra1_path&&v.extra1_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 2</div><div class="card-value">${escHtml(v.extra1_size)} GB</div></div>`;
 if(v.extra2_path&&v.extra2_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 3</div><div class="card-value">${escHtml(v.extra2_size)} GB</div></div>`;
 if(v.extra3_path&&v.extra3_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 4</div><div class="card-value">${escHtml(v.extra3_size)} GB</div></div>`;
+if(v.hasDisk==='true')h+=`<div class="summary-card"><div class="card-label">Disk Usage</div><div class="card-value" id="diskUsageVal">…</div></div>`;
 if(v.hasFloppy==='true')h+=`<div class="summary-card"><div class="card-label">Floppy</div><div class="card-value">attached</div></div>`;
 if(v.port_forwards)h+=`<div class="summary-card"><div class="card-label">Port Forwards</div><div class="card-value">${escHtml(v.port_forwards)}</div></div>`;
 if(v.tags)h+=`<div class="summary-card"><div class="card-label">Tags</div><div class="card-value">${escHtml(v.tags)}</div></div>`;
@@ -203,6 +204,7 @@ h+=summaryWarnings(v);
 h+='</div>';
 h+='<div class="summary-actions" style="margin-top:12px;display:flex;gap:8px"><button type="button" class="btn" data-action="viewLog">View QEMU Log</button></div>';
 ts.innerHTML=h;
+if(v.hasDisk==='true')loadDiskInfo(sel);
 updateCommandState();}
 async function loadLogInto(idx){var body=document.getElementById('logbody');if(!body)return;body.textContent='Loading…';try{var r=await fetch('/api/vms/'+idx+'/log',{headers:{'X-API-Key':API_KEY}});if(r.status===404){body.textContent='No log yet — the VM has not been started, or QEMU produced no output.';return;}if(!r.ok){var msg=await r.text().catch(function(){return '';});try{var j=JSON.parse(msg);if(j.error)msg=j.error;}catch(e){}body.textContent='Failed to load log: '+(msg||('HTTP '+r.status));return;}var txt=await r.text();body.textContent=txt&&txt.length?txt:'(log is empty)';body.scrollTop=body.scrollHeight;}catch(ex){body.textContent='Failed to load log: '+(ex&&ex.message?ex.message:'request failed');}}
 function viewLog(){if(sel===null||sel>=vms.length)return;var nm=document.getElementById('log_vmname');if(nm)nm.textContent=vms[sel].name;var dlg=document.getElementById('logdlg');if(dlg)dlg.showModal();loadLogInto(sel);}
@@ -482,6 +484,8 @@ saveInFlight=false;
 for(let i=0;i<formEls.length;i++)formEls[i].disabled=false;}}
 async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=document.createElement('input');inp.type='file';inp.accept='.qcow2,.qcow,.vmdk,.vdi,.vhdx,.raw,.img';inp.onchange=async function(){const file=inp.files&&inp.files[0];if(!file)return;const fd=new FormData();fd.append('disk2',file);setStatus('Uploading Disk 2 for "'+vms[idx].name+'"...');try{const r=await fetch('/api/vms/'+idx+'/disk2',{method:'POST',body:fd,headers:{'X-API-Key':API_KEY}});if(!r.ok){var em=await r.text().catch(function(){return'';});try{var j=JSON.parse(em);if(j.error)em=j.error;}catch(e){}throw new Error(em||'HTTP '+r.status);}await refresh();setStatus('Disk 2 uploaded successfully.');if(sel===idx)editVm();}catch(e){setStatus('Upload failed: '+e.message);showToast('Disk 2 upload failed: '+e.message,'error');}};inp.click();}
 function downloadDisk2(){if(sel===null)return;const a=document.createElement('a');a.href='/api/vms/'+sel+'/disk2/download';a.download=vms[sel].name+'_disk2.qcow2';document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);},1000);}
+function fmtBytes(n){if(!Number.isFinite(n)||n<0)return'?';const u=['B','KiB','MiB','GiB','TiB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++;}return(i===0?x:x.toFixed(1))+' '+u[i];}
+async function loadDiskInfo(idx){const el=document.getElementById('diskUsageVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/diskinfo');if(!r.ok)throw 0;const j=await r.json();if(j.error)throw 0;if(sel===idx&&document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent=fmtBytes(j.actual_bytes)+' used / '+fmtBytes(j.virtual_bytes);}catch(e){if(document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent='unavailable';}}
 async function resizeDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before resizing its disk','warn');return;}const cur=parseInt(v.disk,10)||0;const n=await showPromptDialog('New primary disk size in GB (grow only; current '+cur+' GB):',String(cur));if(n===null)return;const gb=parseInt(n,10);if(!Number.isFinite(gb)||gb<=cur){showToast('Enter a size larger than '+cur+' GB','error');return;}const r=await apiPost('/api/vms/'+sel+'/disk/resize','size='+gb);if(r){await refresh();setStatus('Primary disk resized to '+gb+' GB.');}}
 // ── VNet Editor ──
 let vnetsData=[],vnetIdx=-1;

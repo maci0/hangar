@@ -74,6 +74,31 @@ pub fn runWait(argv: []const []const u8, allocator: std.mem.Allocator, err_path:
     if (!exitedClean(status)) return QemuError.ProcessFailed;
 }
 
+/// Parse the first unsigned integer that follows `key` in `text` (a tiny
+/// hand-rolled extractor for `qemu-img info --output=json`, since std.json is
+/// banned project-wide). Returns null if the key or a number isn't found.
+pub fn parseJsonU64(text: []const u8, key: []const u8) ?u64 {
+    const at = std.mem.indexOf(u8, text, key) orelse return null;
+    var i = at + key.len;
+    while (i < text.len and (text[i] == ' ' or text[i] == ':' or text[i] == '\t')) i += 1;
+    const start = i;
+    while (i < text.len and text[i] >= '0' and text[i] <= '9') i += 1;
+    if (i == start) return null;
+    return std.fmt.parseInt(u64, text[start..i], 10) catch null;
+}
+
+/// Virtual (provisioned) and actual (on-disk allocated) byte sizes of a disk
+/// image, via `qemu-img info --output=json`. Returns null if it can't be read.
+pub fn diskInfo(path: []const u8, allocator: std.mem.Allocator) ?struct { virtual_bytes: u64, actual_bytes: u64 } {
+    var out: [8192]u8 = undefined;
+    const n = runCapture(&.{ "qemu-img", "info", "--output=json", path }, &out, allocator) catch return null;
+    if (n == 0 or n > out.len) return null;
+    const text = out[0..n];
+    const v = parseJsonU64(text, "\"virtual-size\"") orelse return null;
+    const a = parseJsonU64(text, "\"actual-size\"") orelse return null;
+    return .{ .virtual_bytes = v, .actual_bytes = a };
+}
+
 /// Run `argv`, capturing its stdout into `out`. Returns the number of bytes
 /// written (truncated to `out.len`). Returns an error unless it exits 0.
 /// stdin/stderr are sent to /dev/null.
@@ -1481,6 +1506,16 @@ test "qemu: disk path with comma is rejected (arg injection guard)" {
     cfg.setDiskPath("/tmp/disk.qcow2,readonly=on,if=none");
     cfg.nics[0].mode = .user;
     try std.testing.expectError(error.UnsafeDiskPath, buildScriptStr(&cfg, talloc));
+}
+
+test "qemu: parseJsonU64 extracts integer fields from qemu-img json" {
+    const sample =
+        \\{ "virtual-size": 1073741824, "filename": "x.qcow2", "format": "qcow2", "actual-size": 200704 }
+    ;
+    try std.testing.expectEqual(@as(?u64, 1073741824), parseJsonU64(sample, "\"virtual-size\""));
+    try std.testing.expectEqual(@as(?u64, 200704), parseJsonU64(sample, "\"actual-size\""));
+    try std.testing.expectEqual(@as(?u64, null), parseJsonU64(sample, "\"missing-key\""));
+    try std.testing.expectEqual(@as(?u64, null), parseJsonU64("\"k\": abc", "\"k\""));
 }
 
 test "qemu: multi-monitor uses max_outputs on one device, not N devices" {
