@@ -595,6 +595,65 @@ test "Connection.connect + request: TCP round-trip via localhost" {
     th.join();
 }
 
+test "Connection.request over Unix sends valid HTTP (regression: no //api framing)" {
+    // The daemon serves Unix-socket clients through the same HTTP accept loop as
+    // TCP, so a Unix request must be real HTTP with Host + X-API-Key. A prior
+    // bug emitted "METHOD /<path>" (yielding "//api/...", no headers), which the
+    // server rejected — this guards the request the client actually sends.
+    const path = "/tmp/hangar-transport-utest.sock";
+    _ = c.unlink(path);
+    const lfd = c.socket(c.AF.UNIX, c.SOCK.STREAM, 0);
+    if (lfd < 0) return error.SkipZigTest;
+    defer {
+        _ = c.close(lfd);
+        _ = c.unlink(path);
+    }
+    var addr: c.sockaddr.un = .{ .family = c.AF.UNIX, .path = undefined };
+    @memcpy(addr.path[0..path.len], path);
+    addr.path[path.len] = 0;
+    const addrlen = @offsetOf(c.sockaddr.un, "path") + path.len + 1;
+    if (c.bind(lfd, @ptrCast(&addr), @intCast(addrlen)) != 0) return error.SkipZigTest;
+    if (c.listen(lfd, 1) != 0) return error.SkipZigTest;
+
+    const ServerCtx = struct {
+        lfd: c.fd_t,
+        req: *[512]u8,
+        req_len: *usize,
+        fn run(ctx: @This()) void {
+            const cfd = c.accept(ctx.lfd, null, null);
+            if (cfd < 0) return;
+            defer _ = c.close(cfd);
+            const m = c.read(cfd, ctx.req, 512);
+            if (m > 0) ctx.req_len.* = @intCast(m);
+            const resp = "HTTP/1.0 200 OK\r\n\r\n{\"ok\":true}";
+            _ = c.write(cfd, resp, resp.len);
+        }
+    };
+    var reqbuf: [512]u8 = undefined;
+    var reqlen: usize = 0;
+    const server = ServerCtx{ .lfd = lfd, .req = &reqbuf, .req_len = &reqlen };
+    const th = try std.Thread.spawn(std.Thread.SpawnConfig{}, ServerCtx.run, .{server});
+
+    var url_buf: [64]u8 = undefined;
+    const urlstr = try std.fmt.bufPrint(&url_buf, "unix://{s}", .{path});
+    const url = Url.parse(urlstr) orelse return error.ParseFailed;
+    var conn = Connection.connect(&url) orelse return error.ConnectFailed;
+    defer conn.close();
+
+    var resp: [256]u8 = undefined;
+    const n = conn.request("POST", "/api/vms/0/power", "x=1", &resp);
+    th.join();
+
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.mem.indexOf(u8, resp[0..n], "{\"ok\":true}") != null);
+
+    const sent = reqbuf[0..reqlen];
+    try std.testing.expect(std.mem.startsWith(u8, sent, "POST /api/vms/0/power HTTP/1.0\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, sent, "\r\nHost: ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sent, "\r\nX-API-Key: ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sent, "//api/") == null);
+}
+
 test "fuzz: Url.parse never panics on random inputs" {
     var prng = std.Random.DefaultPrng.init(0x7A0A5A0B);
     const rnd = prng.random();
