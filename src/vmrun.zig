@@ -60,6 +60,7 @@ const usage =
     \\  snapshot delete  <name|idx> <tag>  Delete a snapshot
     \\  import      <disk-path>  Import a VM from disk image
     \\  export      <name|idx>   Export VM as OVF+VMDK
+    \\  log         <name|idx>   Show the VM's QEMU stderr log
     \\  status                  Show server health
     \\
     \\Server URL formats:
@@ -254,6 +255,8 @@ fn run(init: std.process.Init) !void {
             return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/reset", "reset", init.io);
         } else if (std.mem.eql(u8, command, "cad")) {
             return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/cad", "cad", init.io);
+        } else if (std.mem.eql(u8, command, "log")) {
+            return cmdLog(allocator, &conn, idx, init.io);
         } else {
             return cmdExport(allocator, &conn, idx, init.io);
         }
@@ -268,7 +271,7 @@ fn commandArity(command: []const u8) ?usize {
     const one = [_][]const u8{
         "import",       "start", "stop",     "restart", "clone",
         "linked-clone", "delete", "suspend", "pause",   "resume",
-        "shutdown",     "reset", "cad",      "export",
+        "shutdown",     "reset", "cad",      "export",  "log",
     };
     for (zero) |k| if (std.mem.eql(u8, command, k)) return 0;
     for (one) |k| if (std.mem.eql(u8, command, k)) return 1;
@@ -584,6 +587,22 @@ fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, id
     }
 }
 
+/// GET the tail of a VM's QEMU stderr log and print it. Useful for diagnosing a
+/// "start err" from the CLI without opening the web UI.
+fn cmdLog(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
+    _ = io;
+    var path_buf: [48]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/log", .{idx});
+    const resp = try sendRequest(allocator, conn, "GET", path, null);
+    defer allocator.free(resp);
+    if (resp.len == 0) {
+        fdWrite(c.STDOUT_FILENO, "No log available (VM not started, or QEMU produced no output).\n");
+        return;
+    }
+    fdWrite(c.STDOUT_FILENO, resp);
+    if (resp[resp.len - 1] != '\n') fdWrite(c.STDOUT_FILENO, "\n");
+}
+
 /// POST snapshot op with a `tag=` body. `action` is one of
 /// "take", "revert", "delete".
 fn cmdSnapshotOp(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, comptime action: []const u8, io: std.Io) !void {
@@ -861,7 +880,7 @@ test "commandArity: single-target commands" {
     const one = [_][]const u8{
         "import",       "start", "stop",     "restart", "clone",
         "linked-clone", "delete", "suspend", "pause",   "resume",
-        "shutdown",     "reset", "cad",      "export",
+        "shutdown",     "reset", "cad",      "export",  "log",
     };
     for (one) |cmd| {
         try std.testing.expectEqual(@as(?usize, 1), commandArity(cmd));
