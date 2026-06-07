@@ -52,8 +52,7 @@ Zig 0.16's C importer rejects GLib headers (they emit file-scope `_Pragma`). `sp
 - There is no `App` struct. All shared state lives as module-level globals in `appstate.zig`:
   - `vms` / `vm_count` / `vms_mutex`, `prefs`, `g_vmm` + `g_vmm_handles`, serial console ring + thread state, remote mode flags, undo state.
 - `web_server.zig` is both the local web UI server and the remote daemon. Remote clients (`remote.zig`, `vmrun`) talk to it via `transport.zig` (Unix/TCP + HTTP helpers).
-- Hypervisor abstraction: when a VMM handle exists, QEMU operations must go through the `g_vmm.*Fn` dispatch table (`hv/interface.zig` + `hv/qemu_backend.zig`). Falls back to direct `qemu.*` calls otherwise.
-- Power, snapshots, clone, and disk creation are the operations that flow through the dispatch.
+- Hypervisor abstraction: the `g_vmm.*Fn` dispatch table (`hv/interface.zig` + `hv/qemu_backend.zig`) covers PROCESS lifecycle only — `start`, `forceStop`, `isAlive`, `reap`, `createLinkedClone`, `deinit`. Guest control (pause/resume/shutdown/reset/cdrom/migrate/screenshot) goes directly to QMP via `web_server.vmQmpByName` (fresh connection, lock released); offline disk/snapshot ops call `qemu.*`/`qemu-img` directly. Extend the dispatch interface only when a real second backend needs more.
 
 ## Configuration (environment variables)
 

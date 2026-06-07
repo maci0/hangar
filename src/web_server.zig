@@ -9,6 +9,7 @@ const persist = @import("persist.zig");
 const qemu = @import("qemu.zig");
 const qmp = @import("qmp.zig");
 const vnc = @import("vnc_client.zig");
+const catalog = @import("catalog.zig");
 const ws = @import("ws.zig");
 const usock = @import("usock.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
@@ -844,7 +845,7 @@ fn serveHtml(conn: c.fd_t) void {
         response = if (json_bytes > 0) vms_buf[0..json_bytes] else "[]";
     } else if (routeExact(req, "GET /api/capabilities")) {
         content_type = "application/json; charset=utf-8";
-        response = handleCapabilities(&snap_buf);
+        response = catalog.capabilitiesJson(&snap_buf);
     } else if (routeExact(req, "GET /api/health")) {
         // Report live state so the check actually verifies the daemon can read
         // its VM table, not just that the socket accepts connections.
@@ -879,7 +880,7 @@ fn serveHtml(conn: c.fd_t) void {
         }
     } else if (routeExact(req, "GET /api/catalog")) {
         content_type = "application/json; charset=utf-8";
-        response = handleCatalog(&snap_buf);
+        response = catalog.catalogJson(&snap_buf);
     } else if (std.mem.startsWith(u8, req, "POST /api/vms/quickstart/")) {
         // State-changing (creates and persists a VM), so it must be POST — a GET
         // here would let prefetchers/crawlers/caches silently create VMs and make
@@ -2341,53 +2342,6 @@ fn cleanupCreatedDisk(cfg: *const vm.VmConfig) void {
     _ = c.unlink(@ptrCast(&path_buf));
 }
 
-const CatalogEntry = struct {
-    id: []const u8,
-    name: []const u8,
-    guest_os: usize,
-    memory_mb: u32,
-    cpu_cores: u32,
-    disk_size_gb: u32,
-    description: []const u8,
-};
-
-const catalog: [3]CatalogEntry = .{
-    .{ .id = "ubuntu2404", .name = "Ubuntu 24.04 LTS", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 40, .description = "Ubuntu 24.04 Noble Numbat — latest LTS" },
-    .{ .id = "fedora40", .name = "Fedora 40", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .description = "Fedora 40 Workstation" },
-    .{ .id = "debian12", .name = "Debian 12", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .description = "Debian 12 Bookworm — stable" },
-};
-
-/// Returns the capabilities of the backend — max NICs, max extra disks, etc.
-/// The frontend uses this to dynamically render NIC/disk form fields instead
-/// of hardcoding nic2/nic3/disk2.
-fn handleCapabilities(buf: []u8) []const u8 {
-    return std.fmt.bufPrint(buf,
-        \\{{"max_vms":{d},"max_nics":{d},"max_extra_disks":{d},"max_displays":{d},"version":"1.0"}}
-    , .{ vm.MAX_VMS, vm.MAX_NICS, vm.MAX_EXTRA_DISKS, vm.MAX_DISPLAYS }) catch "{}";
-}
-
-fn handleCatalog(buf: []u8) []const u8 {
-    if (buf.len == 0) return "[]";
-    var w: usize = 0;
-    buf[w] = '[';
-    w += 1;
-    for (catalog, 0..) |entry, i| {
-        if (i > 0) {
-            if (w >= buf.len) return "[]";
-            buf[w] = ',';
-            w += 1;
-        }
-        const part = std.fmt.bufPrint(buf[w..],
-            \\{{"id":"{s}","name":"{s}","guest_os":{d},"memory_mb":{d},"cpu_cores":{d},"disk_size_gb":{d},"description":"{s}"}}
-        , .{ entry.id, entry.name, entry.guest_os, entry.memory_mb, entry.cpu_cores, entry.disk_size_gb, entry.description }) catch return "[]";
-        w += part.len;
-    }
-    if (w >= buf.len) return "[]";
-    buf[w] = ']';
-    w += 1;
-    return buf[0..w];
-}
-
 fn handleQuickstart(req: []const u8) ![]const u8 {
     // Match the path independent of method so the parser is agnostic to GET/POST.
     const prefix = "/api/vms/quickstart/";
@@ -2396,15 +2350,8 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
     const slug = rest[0..end];
 
-    // Find the matching catalog entry (no shared state — needs no lock).
-    var template: ?CatalogEntry = null;
-    for (catalog) |entry| {
-        if (std.mem.eql(u8, entry.id, slug)) {
-            template = entry;
-            break;
-        }
-    }
-    const tmpl = template orelse return "not found";
+    // Look up the template (pure; no lock). VM creation below takes the lock.
+    const tmpl = catalog.find(slug) orelse return "not found";
 
     var cfg = vm.VmConfig{};
     cfg.setName(tmpl.name);
@@ -6137,38 +6084,7 @@ test "writeAll: detects closed fd" {
     try std.testing.expect(!writeAll(fds[1], "x".ptr, 1));
 }
 
-// ── handleCatalog ──
-
-test "handleCatalog: empty buffer returns empty array literal" {
-    var buf: [0]u8 = undefined;
-    const result = handleCatalog(&buf);
-    try std.testing.expectEqualStrings("[]", result);
-}
-
-test "handleCatalog: produces valid JSON array with 3 entries" {
-    var buf: [4096]u8 = undefined;
-    const result = handleCatalog(&buf);
-    try std.testing.expect(result.len > 2);
-    try std.testing.expect(result[0] == '[');
-    try std.testing.expect(result[result.len - 1] == ']');
-    // Each catalog entry must appear.
-    try std.testing.expect(std.mem.indexOf(u8, result, "ubuntu2404") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "fedora40") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "debian12") != null);
-    // Must be valid JSON: no trailing garbage, brace-balanced.
-    var depth: usize = 0;
-    for (result) |ch| {
-        if (ch == '{') depth += 1;
-        if (ch == '}') depth -= 1;
-    }
-    try std.testing.expectEqual(@as(usize, 0), depth);
-}
-
-test "handleCatalog: tiny buffer that overflows mid-write returns []" {
-    var buf: [4]u8 = undefined;
-    const result = handleCatalog(&buf);
-    try std.testing.expectEqualStrings("[]", result);
-}
+// handleCatalog/handleCapabilities moved to catalog.zig (tested there).
 
 test "handleQuickstart: missing space after slug returns 'invalid'" {
     const result = try handleQuickstart("POST /api/vms/quickstart/ubuntu2404");
@@ -6966,16 +6882,7 @@ test "handleNewVm: empty name returns error" {
     try std.testing.expectEqualStrings("invalid name", result);
 }
 
-test "handleCapabilities: produces valid JSON with expected fields" {
-    var buf: [512]u8 = undefined;
-    const result = handleCapabilities(&buf);
-    try std.testing.expect(std.mem.startsWith(u8, result, "{"));
-    try std.testing.expect(std.mem.endsWith(u8, result, "}"));
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"max_vms\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"max_nics\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"max_extra_disks\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"version\"") != null);
-}
+// handleCapabilities moved to catalog.zig (tested there).
 
 test "handleDelete: missing prefix returns 'invalid'" {
     const result = try handleDelete("GET /api/other HTTP/1.1");
