@@ -153,6 +153,19 @@ test('diskinfo reports virtual and actual byte sizes', async ({ page }) => {
     expect(typeof r.actual_bytes).toBe('number');
 });
 
+test('cdrom change then eject updates the ISO on a stopped VM', async ({ page }) => {
+    const idx = await createVm(page, 'wf-cd');
+    let r = await api(page, 'POST', `/api/vms/${idx}/cdrom`, 'path=%2Ftmp%2Fwf-test.iso');
+    expect(r.ok, `cdrom change: ${r.status} ${r.text}`).toBe(true);
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-cd')].iso_path).toBe('/tmp/wf-test.iso');
+    r = await api(page, 'POST', `/api/vms/${idx}/cdrom/eject`, '');
+    expect(r.ok, `cdrom eject: ${r.status} ${r.text}`).toBe(true);
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-cd')].iso_path).toBe('');
+    // A comma in the path is rejected (-drive injection guard).
+    const bad = await api(page, 'POST', `/api/vms/${idx}/cdrom`, 'path=%2Ftmp%2Fa%2Cb.iso');
+    expect(bad.text).toContain('bad path');
+});
+
 test('write-action without the API key is rejected (401)', async ({ page }) => {
     const idx = await createVm(page, 'wf-auth');
     const r = await page.evaluate(async (i) => {

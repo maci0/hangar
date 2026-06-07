@@ -55,6 +55,8 @@ const usage =
     \\  reset       <name|idx>  Hard reset guest
     \\  rename      <name|idx> <new-name>  Rename a VM
     \\  resize      <name|idx> <new-gb>    Grow the primary disk (stopped VM)
+    \\  cd          <name|idx> <iso-path>  Change the mounted CD/ISO
+    \\  eject       <name|idx>             Eject the mounted CD/ISO
     \\  set         <name|idx> <field> <value>  Set a config field
     \\              (field: mem|cpu|cpu_sockets|network|notes|boot_order|vnc_port|spice_port)
     \\  cad         <name|idx>  Send Ctrl+Alt+Del to guest
@@ -236,6 +238,12 @@ fn run(init: std.process.Init) !void {
         _ = std.fmt.parseInt(u32, args[1], 10) catch return error.InvalidSize;
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdResize(allocator, &conn, idx, args[1], init.io);
+    } else if (std.mem.eql(u8, command, "cd")) {
+        const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
+        return cmdCdrom(allocator, &conn, idx, args[1], init.io);
+    } else if (std.mem.eql(u8, command, "eject")) {
+        const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
+        return cmdCdrom(allocator, &conn, idx, null, init.io);
     } else if (std.mem.eql(u8, command, "migrate")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdMigrate(allocator, &conn, idx, args[1], args[2], init.io);
@@ -304,6 +312,8 @@ fn commandArity(command: []const u8) ?usize {
     for (one) |k| if (std.mem.eql(u8, command, k)) return 1;
     if (std.mem.eql(u8, command, "rename")) return 2;
     if (std.mem.eql(u8, command, "resize")) return 2; // target new-gb
+    if (std.mem.eql(u8, command, "cd")) return 2; // target iso-path
+    if (std.mem.eql(u8, command, "eject")) return 1; // target
     if (std.mem.eql(u8, command, "migrate")) return 3; // target host port
     if (std.mem.eql(u8, command, "set")) return 3; // target field value
     if (std.mem.eql(u8, command, "create")) return 4; // name mem cpu disk
@@ -596,6 +606,29 @@ fn cmdResize(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     var buf: [128]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "resize VM [{d}] -> {s} GB: {s}\n", .{ idx, new_gb, resp });
     fdWrite(c.STDOUT_FILENO, line);
+}
+
+/// Change (path != null) or eject (path == null) the VM's CD/ISO.
+fn cmdCdrom(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, path: ?[]const u8, io: std.Io) !void {
+    _ = io;
+    var path_buf: [40]u8 = undefined;
+    if (path) |p| {
+        const url = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/cdrom", .{idx});
+        var enc_buf: [vm.MAX_PATH * 3]u8 = undefined;
+        const enc = try urlencode.percentEncode(&enc_buf, p);
+        var body_buf: [vm.MAX_PATH * 3 + 8]u8 = undefined;
+        const body = try std.fmt.bufPrint(&body_buf, "path={s}", .{enc});
+        const resp = try sendRequest(allocator, conn, "POST", url, body);
+        defer allocator.free(resp);
+        var b: [128]u8 = undefined;
+        fdWrite(c.STDOUT_FILENO, std.fmt.bufPrint(&b, "cd VM [{d}] -> {s}: {s}\n", .{ idx, p, resp }) catch "cd\n");
+    } else {
+        const url = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/cdrom/eject", .{idx});
+        const resp = try sendRequest(allocator, conn, "POST", url, "");
+        defer allocator.free(resp);
+        var b: [96]u8 = undefined;
+        fdWrite(c.STDOUT_FILENO, std.fmt.bufPrint(&b, "eject VM [{d}]: {s}\n", .{ idx, resp }) catch "eject\n");
+    }
 }
 
 fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, new_name: []const u8, io: std.Io) !void {
@@ -1086,6 +1119,11 @@ test "commandArity: migrate takes three args" {
 
 test "commandArity: resize takes two args" {
     try std.testing.expectEqual(@as(?usize, 2), commandArity("resize"));
+}
+
+test "commandArity: cd takes two args, eject one" {
+    try std.testing.expectEqual(@as(?usize, 2), commandArity("cd"));
+    try std.testing.expectEqual(@as(?usize, 1), commandArity("eject"));
 }
 
 test "commandArity: set takes three args" {

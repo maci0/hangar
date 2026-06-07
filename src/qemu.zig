@@ -2262,6 +2262,15 @@ test "qemu: tpm does not emit an unbootable bare tpmdev" {
     try expect(!has(s, "tpm-tis"));
 }
 
+test "qemu: -boot emits the boot order and the interactive boot menu" {
+    var cfg = vm.VmConfig{};
+    cfg.boot_order = .cdrom_first;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-boot"));
+    try expect(has(s, "order=dcn,menu=on")); // cdrom_first => order=dcn, menu always on
+}
+
 test "qemu: buildScriptStr with secure_boot enables SMM" {
     var cfg = vm.VmConfig{};
     cfg.secure_boot = true;
