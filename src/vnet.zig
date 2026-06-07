@@ -388,6 +388,11 @@ fn readString(s: []const u8, out: []u8) ?struct { value: []const u8, rest: []con
             if (s[i + 1] == 'u' and i + 5 < s.len) {
                 const hex = s[i + 2 .. i + 6];
                 const codepoint = std.fmt.parseInt(u16, hex, 16) catch return null;
+                // Reject UTF-16 surrogate-range escapes: encoding one on its own
+                // yields WTF-8 (e.g. \uD800 -> ED A0 80) that strict UTF-8 JSON
+                // readers reject, so it would round-trip an invalid networks.json
+                // back out. Mirrors the QMP parser's surrogate handling.
+                if (codepoint >= 0xD800 and codepoint <= 0xDFFF) return null;
                 if (codepoint < 0x80) {
                     if (out_len >= out.len) return null;
                     out[out_len] = @intCast(codepoint);
@@ -899,6 +904,15 @@ test "vnet: readString \\u escape decodes UTF-8" {
 test "vnet: readString invalid \\u hex returns null" {
     var out: [64]u8 = undefined;
     try testing.expect(readString("\"\\uGGGG\"", &out) == null);
+}
+
+test "vnet: readString rejects lone UTF-16 surrogate escape" {
+    var out: [64]u8 = undefined;
+    // A lone surrogate would encode to invalid UTF-8 (WTF-8); reject it.
+    try testing.expect(readString("\"\\uD800\"", &out) == null);
+    try testing.expect(readString("\"\\uDFFF\"", &out) == null);
+    // Boundary just outside the surrogate range still decodes.
+    try testing.expect(readString("\"\\uE000\"", &out) != null);
 }
 
 test "vnet: readString truncation returns null" {
