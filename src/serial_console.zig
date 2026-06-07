@@ -14,6 +14,14 @@ const app = @import("appstate.zig");
 
 var serial_lifecycle_mutex: sync.SpinMutex = .{};
 
+/// Best-effort single-line diagnostic to stderr. serial_console has no access to
+/// web_server's logger, so write directly like qmp's error funnel does.
+fn logSerial(msg: []const u8) void {
+    var buf: [256]u8 = undefined;
+    const line = std.fmt.bufPrint(&buf, "{s}\n", .{msg}) catch return;
+    _ = std.c.write(2, line.ptr, line.len);
+}
+
 fn serialReader() void {
     serial_lifecycle_mutex.lock();
     const fd = app.serial_fd orelse {
@@ -71,8 +79,17 @@ pub fn serialConnect(vm_name: []const u8) void {
 
     if (app.serial_fd != null or app.serial_thread != null) return;
     var path_buf: [320]u8 = undefined;
-    const path = serialpath.serialSocketPath(&path_buf, vm_name) catch return;
-    const stream = usock.UnixStream.connect(path) catch return;
+    const path = serialpath.serialSocketPath(&path_buf, vm_name) catch {
+        logSerial("serialConnect: could not build socket path (name too long?)");
+        return;
+    };
+    // A failed connect here means the web UI's serial console opens to a blank
+    // pane with no signal; log it so an operator can tell the socket is missing
+    // (VM not started with a serial chardev, or QEMU already gone).
+    const stream = usock.UnixStream.connect(path) catch {
+        logSerial("serialConnect: failed to connect serial socket");
+        return;
+    };
     app.serial_fd = stream.fd;
     @atomicStore(bool, &app.serial_running, true, .seq_cst);
     app.serial_thread = std.Thread.spawn(std.Thread.SpawnConfig{}, serialReader, .{}) catch {

@@ -27,6 +27,12 @@ const MAX_VMS = vm.MAX_VMS;
 /// Emitted by `save`, compared against by `parseVersion`.
 pub const CONFIG_VERSION: u32 = 2;
 
+/// Set by `load` when an *existing* vms.json could not be read (permission,
+/// I/O error, oversize). While set, `save` refuses to overwrite the on-disk
+/// file: the in-memory VM list is empty/incomplete, so persisting it would
+/// clobber the user's real config. A restart with a readable file clears it.
+var load_read_failed: bool = false;
+
 // ── JSON-friendly intermediate struct ───────────────────────────────
 
 /// Flat VM config — used as an intermediate representation for the
@@ -225,11 +231,10 @@ fn emitJsonStr(list: *List, alloc: std.mem.Allocator, s: []const u8) !void {
             '\t' => try list.appendSlice(alloc, "\\t"),
             else => {
                 if (c < 0x20) {
-                    // Buffer is exactly 6 bytes for \uXXXX — always fits,
-                    // so this catch is defensive-only (cannot actually fail).
+                    // Buffer is exactly 6 bytes for \uXXXX (c < 0x20), so the
+                    // format always fits and bufPrint cannot fail here.
                     var esc_buf: [6]u8 = undefined;
-                    const esc = std.fmt.bufPrint(&esc_buf, "\\u{x:0>4}", .{@as(u32, c)}) catch
-                        return error.OutOfMemory;
+                    const esc = std.fmt.bufPrint(&esc_buf, "\\u{x:0>4}", .{@as(u32, c)}) catch unreachable;
                     try list.appendSlice(alloc, esc);
                 } else {
                     try list.append(alloc, c);
@@ -249,18 +254,6 @@ fn emitInt(list: *List, alloc: std.mem.Allocator, val: anytype) !void {
 
 fn emitBool(list: *List, alloc: std.mem.Allocator, val: bool) !void {
     try list.appendSlice(alloc, if (val) "true" else "false");
-}
-
-fn writeFileAtomic(file_path: []const u8, data: []const u8) !void {
-    // Propagate the real error (NoSpaceLeft, AccessDenied, ...) instead of
-    // collapsing everything into a generic WriteFailed — callers log
-    // @errorName(e), so the actual cause is what lands in the operator's logs.
-    var af = try std.Io.Dir.cwd().createFileAtomic(appio.io(), file_path, .{ .replace = true });
-    defer af.deinit(appio.io());
-
-    try af.file.writeStreamingAll(appio.io(), data);
-    try af.file.sync(appio.io());
-    try af.replace(appio.io());
 }
 
 /// Append a single VM config as a JSON object.
@@ -340,45 +333,26 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emit(list, alloc, ",\n");
 
     // Extra disks
-    try emit(list, alloc, "      \"extra_disk_0_path\": ");
-    try emitJsonStr(list, alloc, cfg.getExtraDiskPathSlice(0));
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"extra_disk_0_size_gb\": ");
-    try emitInt(list, alloc, cfg.extra_disks[0].size_gb);
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"extra_disk_0_format\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.extra_disks[0].format.toStr()));
-    try emit(list, alloc, ",\n");
+    var ed_i: usize = 0;
+    while (ed_i < 4) : (ed_i += 1) {
+        var kbuf: [40]u8 = undefined;
+        const path_key = std.fmt.bufPrint(&kbuf, "      \"extra_disk_{d}_path\": ", .{ed_i}) catch unreachable;
+        try emit(list, alloc, path_key);
+        try emitJsonStr(list, alloc, cfg.getExtraDiskPathSlice(ed_i));
+        try emit(list, alloc, ",\n");
 
-    try emit(list, alloc, "      \"extra_disk_1_path\": ");
-    try emitJsonStr(list, alloc, cfg.getExtraDiskPathSlice(1));
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"extra_disk_1_size_gb\": ");
-    try emitInt(list, alloc, cfg.extra_disks[1].size_gb);
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"extra_disk_1_format\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.extra_disks[1].format.toStr()));
-    try emit(list, alloc, ",\n");
+        var sbuf: [40]u8 = undefined;
+        const size_key = std.fmt.bufPrint(&sbuf, "      \"extra_disk_{d}_size_gb\": ", .{ed_i}) catch unreachable;
+        try emit(list, alloc, size_key);
+        try emitInt(list, alloc, cfg.extra_disks[ed_i].size_gb);
+        try emit(list, alloc, ",\n");
 
-    try emit(list, alloc, "      \"extra_disk_2_path\": ");
-    try emitJsonStr(list, alloc, cfg.getExtraDiskPathSlice(2));
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"extra_disk_2_size_gb\": ");
-    try emitInt(list, alloc, cfg.extra_disks[2].size_gb);
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"extra_disk_2_format\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.extra_disks[2].format.toStr()));
-    try emit(list, alloc, ",\n");
-
-    try emit(list, alloc, "      \"extra_disk_3_path\": ");
-    try emitJsonStr(list, alloc, cfg.getExtraDiskPathSlice(3));
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"extra_disk_3_size_gb\": ");
-    try emitInt(list, alloc, cfg.extra_disks[3].size_gb);
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"extra_disk_3_format\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.extra_disks[3].format.toStr()));
-    try emit(list, alloc, ",\n");
+        var fbuf: [40]u8 = undefined;
+        const fmt_key = std.fmt.bufPrint(&fbuf, "      \"extra_disk_{d}_format\": ", .{ed_i}) catch unreachable;
+        try emit(list, alloc, fmt_key);
+        try emitJsonStr(list, alloc, std.mem.span(cfg.extra_disks[ed_i].format.toStr()));
+        try emit(list, alloc, ",\n");
+    }
 
     try emit(list, alloc, "      \"usb_device\": ");
     try emitJsonStr(list, alloc, cfg.getUsbDeviceSlice());
@@ -388,56 +362,21 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
     try emitJsonStr(list, alloc, std.mem.span(cfg.usb_policy.toStr()));
     try emit(list, alloc, ",\n");
 
-    try emit(list, alloc, "      \"nic2_mode\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[1].mode.toStr()));
-    try emit(list, alloc, ",\n");
+    // NIC2..NIC8 (nics[1..7]); NIC1 has no JSON fields here.
+    var nic_i: usize = 1;
+    while (nic_i < 8) : (nic_i += 1) {
+        var key_buf: [32]u8 = undefined;
+        const mode_key = std.fmt.bufPrint(&key_buf, "      \"nic{d}_mode\": ", .{nic_i + 1}) catch unreachable;
+        try emit(list, alloc, mode_key);
+        try emitJsonStr(list, alloc, std.mem.span(cfg.nics[nic_i].mode.toStr()));
+        try emit(list, alloc, ",\n");
 
-    try emit(list, alloc, "      \"nic2_mac\": ");
-    try emitJsonStr(list, alloc, cfg.getNic2MacSlice());
-    try emit(list, alloc, ",\n");
-
-    try emit(list, alloc, "      \"nic3_mode\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[2].mode.toStr()));
-    try emit(list, alloc, ",\n");
-
-    try emit(list, alloc, "      \"nic3_mac\": ");
-    try emitJsonStr(list, alloc, cfg.getNic3MacSlice());
-    try emit(list, alloc, ",\n");
-
-    try emit(list, alloc, "      \"nic4_mode\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[3].mode.toStr()));
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"nic4_mac\": ");
-    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(3));
-    try emit(list, alloc, ",\n");
-
-    try emit(list, alloc, "      \"nic5_mode\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[4].mode.toStr()));
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"nic5_mac\": ");
-    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(4));
-    try emit(list, alloc, ",\n");
-
-    try emit(list, alloc, "      \"nic6_mode\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[5].mode.toStr()));
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"nic6_mac\": ");
-    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(5));
-    try emit(list, alloc, ",\n");
-
-    try emit(list, alloc, "      \"nic7_mode\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[6].mode.toStr()));
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"nic7_mac\": ");
-    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(6));
-    try emit(list, alloc, ",\n");
-
-    try emit(list, alloc, "      \"nic8_mode\": ");
-    try emitJsonStr(list, alloc, std.mem.span(cfg.nics[7].mode.toStr()));
-    try emit(list, alloc, ",\n");
-    try emit(list, alloc, "      \"nic8_mac\": ");
-    try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(7));
-    try emit(list, alloc, ",\n");
+        var mac_key_buf: [32]u8 = undefined;
+        const mac_key = std.fmt.bufPrint(&mac_key_buf, "      \"nic{d}_mac\": ", .{nic_i + 1}) catch unreachable;
+        try emit(list, alloc, mac_key);
+        try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(nic_i));
+        try emit(list, alloc, ",\n");
+    }
 
     try emit(list, alloc, "      \"enable_3d\": ");
     try emitBool(list, alloc, cfg.enable_3d);
@@ -581,12 +520,18 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 /// Save all VM configs and preferences to `~/.config/hangar/vms.json`.
 /// Does not persist runtime state (status, pid).
 pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
+    // If load() could not read an existing vms.json, our in-memory list is
+    // not authoritative — overwriting now would destroy the on-disk config.
+    if (@atomicLoad(bool, &load_read_failed, .seq_cst)) return error.LoadDegradedRefusingOverwrite;
+
     const alloc = std.heap.page_allocator;
 
     // Ensure config directory exists.
     var dir_buf: [512]u8 = undefined;
     if (appstate.configDir(&dir_buf)) |dir_path| {
-        std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
+        // Owner-only (0o700): the config dir holds VM inventory with paths and
+        // MAC addresses — keep it unreadable to other local users.
+        _ = std.Io.Dir.cwd().createDirPathStatus(appio.io(), dir_path, .fromMode(0o700)) catch {
             _ = std.c.write(2, "persist: createDirPath failed\n", 30);
         };
     }
@@ -636,7 +581,7 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
 
     emit(&list, alloc, "\n  ]\n}\n") catch return error.OutOfMemory;
 
-    try writeFileAtomic(file_path, list.items);
+    try appio.writeFileAtomic(file_path, list.items);
 }
 
 // ── Load ────────────────────────────────────────────────────────────
@@ -781,6 +726,18 @@ fn parseJsonIntSigned(s: []const u8) ?struct { value: i32, rest: []const u8 } {
     while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
     if (i == 0 or (i == 1 and s[0] == '-')) return null;
     const val = std.fmt.parseInt(i32, s[0..i], 10) catch return null;
+    return .{ .value = val, .rest = s[i..] };
+}
+
+/// Parse a signed JSON integer as i64. Mirrors `parseJsonIntSigned` for fields
+/// that are stored as i64 and may legitimately hold negative values (e.g.
+/// `autoprotect_last_epoch`), which the unsigned `parseJsonInt64` rejects.
+fn parseJsonIntSigned64(s: []const u8) ?struct { value: i64, rest: []const u8 } {
+    var i: usize = 0;
+    if (s.len > 0 and s[0] == '-') i += 1;
+    while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
+    if (i == 0 or (i == 1 and s[0] == '-')) return null;
+    const val = std.fmt.parseInt(i64, s[0..i], 10) catch return null;
     return .{ .value = val, .rest = s[i..] };
 }
 
@@ -1124,11 +1081,9 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "autoprotect_last_epoch")) {
-            if (parseJsonInt64(cur)) |r| {
-                if (std.math.cast(i64, r.value)) |v| {
-                    cfg.autoprotect_last_epoch = v;
-                    cur = r.rest;
-                } else cur = skipJsonValue(cur);
+            if (parseJsonIntSigned64(cur)) |r| {
+                cfg.autoprotect_last_epoch = r.value;
+                cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "autoprotect_last_seq")) {
             if (parseJsonInt(cur)) |r| {
@@ -1221,7 +1176,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "accel")) {
-            if (parseJsonString(cur, &key_buf)) |r| {
+            if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.accel = vm.VmAccel.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
@@ -1375,6 +1330,10 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
             cur = skipWs(kr.rest);
             if (cur.len == 0 or cur[0] != ':') break;
             cur = skipWs(cur[1..]);
+            // A truncated value (e.g. `"win_x":` at end of input) leaves `cur`
+            // empty; the parse-failure branches below all do `cur[1..]`, which
+            // would slice past the end. Stop here instead.
+            if (cur.len == 0) break;
             if (std.mem.eql(u8, key, "default_vm_dir")) {
                 if (parseJsonString(cur, &str_buf)) |r| {
                     const n = @min(r.value.len, vm.MAX_PATH);
@@ -1437,6 +1396,10 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
             }
         }
     }
+
+    // Reject out-of-range numeric values from a hand-edited or corrupt config,
+    // mirroring the bounds the HTTP settings handler enforces.
+    prefs_out.clampToValidRanges();
 }
 
 /// Load VM configs and preferences from vms.json on disk.
@@ -1460,6 +1423,9 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
         if (e != error.FileNotFound) {
             const msg = "persist: load failed to read vms.json (existing config not loaded)\n";
             _ = std.c.write(2, msg, msg.len);
+            // Block save() from overwriting the unreadable-but-present file
+            // with our empty in-memory list and destroying the user's VMs.
+            @atomicStore(bool, &load_read_failed, true, .seq_cst);
         }
         return 0;
     };
@@ -1474,8 +1440,16 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
 pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out: *vm.Prefs) usize {
     if (content.len == 0) return 0;
 
-    // Parse version field (forward compat: warn if > current version 2).
-    _ = parseVersion(content);
+    // Parse version field (forward compat). A file written by a newer Hangar
+    // may carry fields this build does not understand; parsing keeps only the
+    // known ones, so a subsequent save() would silently downgrade and clobber
+    // the user's real config. Reuse the same guard as an unreadable file:
+    // block save() from overwriting until a supported file is loaded. Suppressed
+    // in test builds (matching parseVersion) so the in-memory round-trip tests
+    // can still exercise save().
+    if (parseVersion(content) > CONFIG_VERSION and !@import("builtin").is_test) {
+        @atomicStore(bool, &load_read_failed, true, .seq_cst);
+    }
 
     // Top-level "theme" + "prefs" keys (optional).
     // parsePrefs resets prefs_out, so save/restore the theme.
@@ -1527,6 +1501,19 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
         if (cur[0] == '{') {
             var cfg = vm.VmConfig{};
             cur = parseVmObject(cur, &cfg);
+            // Enforce model invariants at the deserialization trust boundary.
+            // A hand-edited or corrupted vms.json must not inject out-of-range
+            // sizing that bypasses the form-parse and QEMU-build clamps. These
+            // mirror the bounds applied on the HTTP create/edit path; sentinel
+            // "0 == absent" fields (disk2/extra-disk sizes) are intentionally
+            // left untouched.
+            cfg.memory_mb = vm.clampMemory(cfg.memory_mb);
+            cfg.cpu_cores = vm.clampCpuCores(cfg.cpu_cores);
+            cfg.cpu_sockets = vm.clampCpuCores(cfg.cpu_sockets);
+            cfg.disk_size_gb = vm.clampDiskSize(cfg.disk_size_gb);
+            cfg.num_displays = std.math.clamp(cfg.num_displays, 1, vm.MAX_DISPLAYS);
+            cfg.autoprotect_interval_min = std.math.clamp(cfg.autoprotect_interval_min, vm.PREF_AUTOPROTECT_INTERVAL_MIN, vm.PREF_AUTOPROTECT_INTERVAL_MAX);
+            cfg.autoprotect_max = std.math.clamp(cfg.autoprotect_max, vm.PREF_AUTOPROTECT_MAX_MIN, vm.PREF_AUTOPROTECT_MAX_MAX);
             vms.*[count] = cfg;
             count += 1;
         } else {
@@ -1538,6 +1525,22 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "save refuses to overwrite when load read failed" {
+    // Simulate a degraded load (unreadable existing vms.json).
+    @atomicStore(bool, &load_read_failed, true, .seq_cst);
+    defer @atomicStore(bool, &load_read_failed, false, .seq_cst);
+
+    const empty: [0]vm.VmConfig = .{};
+    const r = save(&empty, 0, vm.Prefs{});
+    try std.testing.expectError(error.LoadDegradedRefusingOverwrite, r);
+
+    // Once cleared, the guard no longer blocks (will fail later for other
+    // reasons in a sandbox, but not with the refusal error).
+    @atomicStore(bool, &load_read_failed, false, .seq_cst);
+    const r2 = save(&empty, 0, vm.Prefs{});
+    if (r2) |_| {} else |e| try std.testing.expect(e != error.LoadDegradedRefusingOverwrite);
+}
 
 test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     var original = vm.VmConfig{};
@@ -2459,6 +2462,43 @@ test "fuzz: loadFromSlice on mutated valid documents never crashes" {
     }
 }
 
+test "fuzz: parsePrefs on mutated valid prefs objects never crashes" {
+    // The whole-document fuzzers above feed random bytes (which almost never
+    // contain a `"prefs"` token) or vms-only documents, so the prefs key-dispatch
+    // loop — the @memcpy into default_vm_dir_buf, the signed win_x/win_y parse,
+    // and the i32 cast guards on win_w/win_h — is barely exercised. This harness
+    // builds a structurally valid prefs object covering every known key, then
+    // mutates random bytes to fuzz the value parsers and forward-progress loop.
+    var prng = std.Random.DefaultPrng.init(0x9_9EF5);
+    const rnd = prng.random();
+
+    const template =
+        "{\"prefs\":{" ++
+        "\"default_vm_dir\":\"/home/user/some/very/long/path/to/vms\"," ++
+        "\"default_memory_mb\":4096,\"default_cpu_cores\":4," ++
+        "\"autoprotect_enabled_default\":true," ++
+        "\"autoprotect_interval_min_default\":60,\"autoprotect_max_default\":10," ++
+        "\"win_x\":-100,\"win_y\":-2147483648," ++
+        "\"win_w\":1920,\"win_h\":1080,\"theme\":\"dark\"}}";
+
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        var buf: [template.len]u8 = undefined;
+        @memcpy(&buf, template);
+        // Corrupt a handful of random bytes anywhere in the document.
+        const muts = rnd.uintLessThan(usize, 8);
+        var m: usize = 0;
+        while (m < muts) : (m += 1) {
+            buf[rnd.uintLessThan(usize, buf.len)] = rnd.int(u8);
+        }
+        const len = rnd.intRangeAtMost(usize, 0, buf.len);
+        var prefs = vm.Prefs{};
+        // Must never panic, and the path copy must stay NUL-terminated within bounds.
+        parsePrefs(buf[0..len], &prefs);
+        try std.testing.expect(prefs.default_vm_dir_len <= vm.MAX_PATH);
+    }
+}
+
 // ── Direct coverage for primitive parsers (previously only fuzzed) ──
 
 test "consumeLiteral: matches prefix or returns null" {
@@ -2795,6 +2835,33 @@ test "parseVersion: survives malformed version" {
     try std.testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":}"));
 }
 
+test "fuzz: parseVersion never crashes on random config bytes" {
+    // version is read straight from untrusted prefs/config file content; the
+    // "version" token + 9-byte skip + JSON int parse must never read out of
+    // bounds on truncated or garbage input. Mirrors vnet.parseVersion's harness,
+    // but persist's parseJsonInt rejects overflow (returns null) rather than
+    // saturating, so a pathological digit run falls back to the default.
+    var prng = std.Random.DefaultPrng.init(0x5E12_C0DE);
+    const rnd = prng.random();
+    var buf: [128]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 8000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        fuzzFill(rnd, buf[0..len]);
+        // Sometimes splice in the literal token to drive the value-parse path,
+        // including a "version" landing near the very end of the buffer.
+        if (len >= 9 and rnd.boolean()) {
+            const at = rnd.uintLessThan(usize, len - 8);
+            @memcpy(buf[at..][0..9], "\"version\"");
+        }
+        _ = parseVersion(buf[0..len]); // must not panic / index out of bounds
+    }
+    // A digit run that overflows u32 must fall back to the default, not wrap.
+    try std.testing.expectEqual(@as(u32, 1), parseVersion("{\"version\": 999999999999999999999999}"));
+    // Token at the exact tail with no value still falls back safely.
+    try std.testing.expectEqual(@as(u32, 1), parseVersion("\"version\""));
+}
+
 test "loadFromSlice: version key parsed but does not affect VM loading" {
     var vms: [MAX_VMS]vm.VmConfig = undefined;
     var prefs: vm.Prefs = .{};
@@ -2806,6 +2873,33 @@ test "loadFromSlice: version key parsed but does not affect VM loading" {
         try std.testing.expectEqual(@as(usize, 1), n);
         try std.testing.expectEqualStrings("v1", std.mem.span(vms[0].getName()));
     }
+}
+
+test "loadFromSlice: out-of-range sizing is clamped at the load boundary" {
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs: vm.Prefs = .{};
+    const json =
+        \\{"version":2,"vms":[{"name":"bad","cpu_cores":0,"cpu_sockets":0,"memory_mb":0,"disk_size_gb":0,"num_displays":9999,"autoprotect_interval_min":0,"autoprotect_max":99999}]}
+    ;
+    const n = loadFromSlice(&vms, json, &prefs);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqual(vm.clampMemory(0), vms[0].memory_mb);
+    try std.testing.expectEqual(vm.clampCpuCores(0), vms[0].cpu_cores);
+    try std.testing.expectEqual(vm.clampCpuCores(0), vms[0].cpu_sockets);
+    try std.testing.expectEqual(vm.clampDiskSize(0), vms[0].disk_size_gb);
+    try std.testing.expectEqual(vm.MAX_DISPLAYS, vms[0].num_displays);
+    try std.testing.expectEqual(vm.PREF_AUTOPROTECT_INTERVAL_MIN, vms[0].autoprotect_interval_min);
+    try std.testing.expectEqual(vm.PREF_AUTOPROTECT_MAX_MAX, vms[0].autoprotect_max);
+    // Valid in-range values must pass through unchanged (idempotent clamp).
+    const ok =
+        \\{"version":2,"vms":[{"name":"ok","cpu_cores":4,"cpu_sockets":2,"memory_mb":4096,"disk_size_gb":50,"num_displays":2}]}
+    ;
+    const m = loadFromSlice(&vms, ok, &prefs);
+    try std.testing.expectEqual(@as(usize, 1), m);
+    try std.testing.expectEqual(@as(u32, 4), vms[0].cpu_cores);
+    try std.testing.expectEqual(@as(u32, 4096), vms[0].memory_mb);
+    try std.testing.expectEqual(@as(u32, 50), vms[0].disk_size_gb);
+    try std.testing.expectEqual(@as(u32, 2), vms[0].num_displays);
 }
 
 test "parseVmObject: enable_kvm backward compat (true → auto, false → tcg)" {
@@ -2928,6 +3022,50 @@ test "parseJsonIntSigned: negative, positive, and invalid" {
     try std.testing.expect(parseJsonIntSigned("-") == null); // lone minus
     try std.testing.expect(parseJsonIntSigned("abc") == null);
     try std.testing.expect(parseJsonIntSigned("") == null);
+}
+
+test "parseJsonIntSigned64: negative, positive, and invalid" {
+    const neg = parseJsonIntSigned64("-5,").?;
+    try std.testing.expectEqual(@as(i64, -5), neg.value);
+    try std.testing.expectEqualStrings(",", neg.rest);
+
+    const big = parseJsonIntSigned64("9223372036854775807}").?; // max i64
+    try std.testing.expectEqual(@as(i64, 9223372036854775807), big.value);
+
+    const negbig = parseJsonIntSigned64("-9223372036854775808 ").?; // min i64
+    try std.testing.expectEqual(@as(i64, -9223372036854775808), negbig.value);
+
+    try std.testing.expect(parseJsonIntSigned64("-") == null); // lone minus
+    try std.testing.expect(parseJsonIntSigned64("abc") == null);
+    try std.testing.expect(parseJsonIntSigned64("") == null);
+}
+
+test "parseJsonIntSigned64: fuzz round-trip via emitInt" {
+    var prng = std.Random.DefaultPrng.init(0x5eed_ab1e);
+    const rnd = prng.random();
+    var buf: [64]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        const v = rnd.int(i64);
+        const s = std.fmt.bufPrint(&buf, "{d},", .{v}) catch unreachable;
+        const r = parseJsonIntSigned64(s).?;
+        try std.testing.expectEqual(v, r.value);
+        try std.testing.expectEqualStrings(",", r.rest);
+    }
+}
+
+test "autoprotect_last_epoch: negative value survives round-trip" {
+    const alloc = std.testing.allocator;
+    var original = vm.VmConfig{};
+    original.autoprotect_last_epoch = -123456;
+
+    var list: List = .empty;
+    defer list.deinit(alloc);
+    try emitVmJson(&list, alloc, &original);
+
+    var restored = vm.VmConfig{};
+    _ = parseVmObject(list.items, &restored);
+    try std.testing.expectEqual(@as(i64, -123456), restored.autoprotect_last_epoch);
 }
 
 test "prefs: negative window coordinates survive round-trip" {

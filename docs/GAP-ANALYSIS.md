@@ -4,12 +4,12 @@
 
 | WS17 Feature | Hangar Status |
 |-------------|---------------|
-| VM Library sidebar | ✅ Fl_Browser + web sidebar with status icons |
+| VM Library sidebar | ✅ Web sidebar with status icons |
 | Create VM wizard | ✅ Modal dialog (name/mem/cpu/disk/ISO/OS) |
 | Edit VM Settings | ✅ Full settings dialog (~40 fields) |
 | Power on/off/suspend | ✅ Power toggle + suspend + pause/resume |
 | Shutdown Guest | ✅ QMP graceful shutdown + reset |
-| Snapshot Manager | ✅ Take/list/revert/delete (FLTK + Web) |
+| Snapshot Manager | ✅ Take/list/revert/delete (Web) |
 | Clone VM | ✅ Full + linked clones |
 | Delete VM | ✅ Array compaction + confirmation |
 | Import VM | ✅ Disk image picker + multipart upload (Web) |
@@ -17,25 +17,25 @@
 | Virtual Network Editor | ✅ VMnet0/1/8 defaults, add/remove |
 | Preferences | ✅ Theme, default mem/CPU, autoprotect defaults |
 | About dialog | ✅ Version + feature list + keyboard shortcuts |
-| VNC/SPICE display | ✅ Auto-connect + FLTK framebuffer + Web VNC WS proxy |
+| VNC/SPICE display | ✅ Auto-connect + Web VNC WS proxy + canvas framebuffer |
 | Serial console | ✅ Ring buffer + reader thread + Web WebSocket serial |
-| Keyboard shortcuts | ✅ Ctrl+N/Q/W/E, F2/F11, DEL, Ctr+Shift+N, Ctrl+I |
+| Keyboard shortcuts | ✅ Ctrl+N/W/E, F2/F11, DEL, Ctrl+Shift+N, Ctrl+I |
 | Context menu | ✅ Right-click popup with full action set |
 | Autoprotect | ✅ Interval-based auto-snapshots with prune |
-| Theme support | ✅ Light/Dark + system (FLTK + Web) |
+| Theme support | ✅ Light/Dark + system (Web) |
 | Multi-display | ✅ VmConfig + QEMU args |
 | USB passthrough | ✅ VmConfig + QEMU args + UI fields |
 | Shared folders | ✅ VmConfig + QEMU args + UI fields |
 | Guest tools auto-mount | ✅ VmConfig + QEMU args + UI fields |
 | Linked clones | ✅ qemu-img backing-file COW |
-| VM rename | ✅ FLTK dialog + Web API |
-| Send Ctrl+Alt+Del | ✅ QMP sendkey + FLTK + Web buttons |
+| VM rename | ✅ Web API + dialog |
+| Send Ctrl+Alt+Del | ✅ QMP sendkey + Web button |
 | Port forwarding | ✅ VmConfig + QEMU hostfwd + UI fields |
-| Second disk + floppy | ✅ VmConfig + QEMU args + UI fields |
-| Extra NICs (2-3) | ✅ VmConfig + QEMU args + UI fields |
+| Second disk + extra disks + floppy | ✅ VmConfig + QEMU args + UI fields (up to 4 extra disks) |
+| Extra NICs (2-8) | ✅ VmConfig + QEMU args + UI fields (up to 8 NICs) |
 | Auto MAC generation | ✅ Random unicast/local-admin MAC |
 | Remote client/daemon | ✅ transport.zig + HTTP API + vmrun CLI |
-| Batch start/stop all | ✅ FLTK toolbar + Web toolbar buttons |
+| Batch start/stop all | ✅ Web toolbar buttons |
 | Favorites | ✅ Star toggle + grouped with separator |
 | Window geometry save | ✅ Persisted x/y/w/h |
 | vmrun CLI | ✅ 18 operations (list/start/stop/clone/delete/snapshot/...) |
@@ -67,7 +67,7 @@
 | Batch start/stop all | ✅ Toolbar buttons |
 | Toast notifications | ✅ Success/error/info with auto-dismiss |
 | API key auth | ✅ X-API-Key header on all writes |
-| Rate limiting | ✅ Atomic 20 req/sec |
+| Rate limiting | ✅ Atomic 200 POST/sec |
 | Security headers | ✅ CSP, X-Content-Type-Options, X-Frame-Options |
 | Favicon | ✅ SVG gradient K logo |
 

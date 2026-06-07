@@ -2,8 +2,8 @@
 //! QEMU Machine Protocol (QMP) client.
 //!
 //! Connects to QEMU's QMP Unix domain socket and provides a high-level API
-//! for VM control: pause, resume, power down, reset, quit, and snapshot
-//! management (via HMP tunneling).
+//! for VM control: pause, resume, power down, reset, quit, suspend-to-file,
+//! live migration, and snapshot management (via HMP tunneling).
 //!
 //! Protocol: JSON-based, line-delimited.  Connection flow:
 //!   1. Connect to Unix socket
@@ -34,9 +34,26 @@ const QMP_IO_TIMEOUT_MS = 10_000;
 
 /// Build the QMP Unix socket path for a VM.
 ///
-/// Returns `null` if the name is too long to fit in the buffer.
+/// The VM name is used directly as a filesystem-path key, so it must be
+/// path-safe. The web input boundary enforces this (`vm.isValidVmName`), but
+/// names loaded from `vms.json` or supplied by the remote daemon do not pass
+/// through that check — enforce the invariant here so a name containing a path
+/// separator or NUL can never escape the `/tmp` socket namespace.
+///
+/// Returns `null` if the name is not path-safe or is too long to fit.
 pub fn socketPath(vm_name: []const u8, buf: *[256]u8) ?[]const u8 {
+    if (!isPathSafeName(vm_name)) return null;
     return std.fmt.bufPrint(buf, "/tmp/hangar-qmp-{s}.sock", .{vm_name}) catch null;
+}
+
+/// Returns true when `name` contains no path separators or NUL, so it is safe
+/// to interpolate into a single `/tmp/...` socket path component. Mirrors the
+/// path-safety subset of `vm.isValidVmName` without pulling in `vm.zig`.
+pub fn isPathSafeName(name: []const u8) bool {
+    for (name) |c| {
+        if (c == '/' or c == '\\' or c == 0) return false;
+    }
+    return true;
 }
 
 /// QMP client for communicating with a single QEMU instance.
@@ -156,11 +173,27 @@ pub const QmpClient = struct {
             if (std.mem.indexOf(u8, line, "\"return\"") != null or
                 std.mem.indexOf(u8, line, "\"error\"") != null)
             {
+                // QEMU replies to a failed command with
+                // {"error":{"class":"...","desc":"..."}}. Callers collapse this
+                // to a generic error.CommandFailed, discarding QEMU's reason —
+                // log the raw error reply here (the single response funnel) so an
+                // operator can tell *why* a power/snapshot/migrate op failed.
+                if (std.mem.indexOf(u8, line, "\"error\"") != null) logErrorReply(line);
                 return line;
             }
             // Otherwise it's an async event — skip and read again.
         }
         return error.CommandFailed;
+    }
+
+    /// Best-effort: write a QMP error reply to stderr (truncated). Used to
+    /// preserve QEMU's failure reason that callers otherwise drop.
+    fn logErrorReply(line: []const u8) void {
+        var buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "qmp: command failed: {s}\n", .{
+            line[0..@min(line.len, 400)],
+        }) catch "qmp: command failed\n";
+        _ = std.c.write(2, msg.ptr, msg.len);
     }
 
     /// Write all bytes to the socket, looping on partial writes.
@@ -258,9 +291,7 @@ pub const QmpClient = struct {
 
         var out: [1024]u8 = undefined;
         const result = try self.execHmp(hmp_cmd, &out);
-        if (result.len > 0 and (std.mem.indexOf(u8, result, "Could not") != null or std.mem.indexOf(u8, result, "Error") != null)) {
-            return error.CommandFailed;
-        }
+        if (hmpReportedError(result)) return error.CommandFailed;
     }
 
     /// Poll migration status via HMP `info migrate`.
@@ -292,11 +323,17 @@ pub const QmpClient = struct {
     pub fn liveMigrate(self: *QmpClient, dest_uri: []const u8) !void {
         if (!self.connected) return error.ConnectionFailed;
 
+        // dest_uri is embedded as a JSON string value, so it MUST be
+        // JSON-escaped; a raw '"' or '\\' would otherwise produce a malformed
+        // QMP object that QEMU rejects (same hazard as execHmp).
+        var esc_buf: [200]u8 = undefined;
+        const esc_uri = jsonEscapeString(dest_uri, &esc_buf) orelse return error.BufferTooSmall;
+
         var cmd_buf: [256]u8 = undefined;
         const cmd = std.fmt.bufPrint(
             &cmd_buf,
             "{{\"execute\":\"migrate\",\"arguments\":{{\"uri\":\"{s}\"}}}}\n",
-            .{dest_uri},
+            .{esc_uri},
         ) catch return error.BufferTooSmall;
 
         try self.writeAll(cmd);
@@ -340,12 +377,21 @@ pub const QmpClient = struct {
     fn execHmp(self: *QmpClient, hmp_cmd: []const u8, out: []u8) ![]const u8 {
         if (!self.connected) return error.ConnectionFailed;
 
+        // The HMP command is embedded as a JSON string value. It can itself
+        // contain '"' and '\\' (e.g. a quoted, quote-escaped CD-ROM path from
+        // changeCdrom, or the `migrate "exec:..."` target from suspendToFile),
+        // so it MUST be JSON-escaped here. Interpolating it raw produces a
+        // malformed QMP object that QEMU rejects, silently breaking every HMP
+        // command whose argument carries a quote.
+        var esc_buf: [1024]u8 = undefined;
+        const esc_cmd = jsonEscapeString(hmp_cmd, &esc_buf) orelse return error.BufferTooSmall;
+
         // Build: {"execute":"human-monitor-command","arguments":{"command-line":"<cmd>"}}
-        var cmd_buf: [512]u8 = undefined;
+        var cmd_buf: [1280]u8 = undefined;
         const cmd = std.fmt.bufPrint(
             &cmd_buf,
             "{{\"execute\": \"human-monitor-command\", \"arguments\": {{\"command-line\": \"{s}\"}}}}\n",
-            .{hmp_cmd},
+            .{esc_cmd},
         ) catch return error.BufferTooSmall;
 
         try self.writeAll(cmd);
@@ -370,7 +416,11 @@ pub const QmpClient = struct {
         var out: [2048]u8 = undefined;
         const result = try self.execHmp(hmp_cmd, &out);
 
-        if (result.len > 0 and std.mem.indexOf(u8, result, "Error") != null) {
+        if (hmpReportedError(result)) {
+            // Snapshot ops are data-integrity critical (a failed loadvm can
+            // leave the guest in an unexpected state). Surface HMP's reason
+            // instead of swallowing it behind a bare error.CommandFailed.
+            logErrorReply(result);
             return error.CommandFailed;
         }
     }
@@ -418,9 +468,7 @@ pub const QmpClient = struct {
         var out: [1024]u8 = undefined;
         const result = try self.execHmp(hmp_cmd, &out);
 
-        if (result.len > 0 and (std.mem.indexOf(u8, result, "Could not") != null or std.mem.indexOf(u8, result, "Error") != null)) {
-            return error.CommandFailed;
-        }
+        if (hmpReportedError(result)) return error.CommandFailed;
     }
 
     /// Eject CD-ROM media via HMP.
@@ -428,11 +476,17 @@ pub const QmpClient = struct {
         var out: [256]u8 = undefined;
         const result = try self.execHmp("eject ide2-cd0", &out);
 
-        if (result.len > 0 and (std.mem.indexOf(u8, result, "Could not") != null or std.mem.indexOf(u8, result, "Error") != null)) {
-            return error.CommandFailed;
-        }
+        if (hmpReportedError(result)) return error.CommandFailed;
     }
 };
+
+/// True if an HMP command reply indicates failure.
+/// HMP prints "" on success; failures contain "Error" (and sometimes "Could not").
+fn hmpReportedError(result: []const u8) bool {
+    return result.len > 0 and
+        (std.mem.indexOf(u8, result, "Could not") != null or
+            std.mem.indexOf(u8, result, "Error") != null);
+}
 
 // ── JSON string extraction helper ───────────────────────────────────
 // Minimal parser that finds `"key": "value"` in a JSON string.
@@ -528,12 +582,24 @@ pub fn extractJsonString(json: []const u8, key: []const u8, out: []u8) ![]const 
     const needle = std.fmt.bufPrint(&needle_buf, "\"{s}\"", .{key}) catch
         return error.BufferTooSmall;
 
-    const key_pos = std.mem.indexOf(u8, json, needle) orelse
+    // Find `"key"` used as an object key — an occurrence followed (after
+    // optional whitespace) by ':'. A bare `indexOf` would also match the needle
+    // inside a string *value* (e.g. an error reply whose "desc" mentions the
+    // queried key), returning the wrong field or a spurious failure. Skip such
+    // value matches and continue scanning for the real key.
+    var i: usize = blk: {
+        var base: usize = 0;
+        while (std.mem.indexOfPos(u8, json, base, needle)) |kp| {
+            var j = kp + needle.len;
+            while (j < json.len and (json[j] == ' ' or json[j] == '\t')) : (j += 1) {}
+            if (j < json.len and json[j] == ':') break :blk j + 1;
+            base = kp + needle.len;
+        }
         return error.CommandFailed;
+    };
 
-    // Skip past "key", then whitespace and colon.
-    var i = key_pos + needle.len;
-    while (i < json.len and (json[i] == ' ' or json[i] == ':' or json[i] == '\t')) : (i += 1) {}
+    // Skip whitespace before the value.
+    while (i < json.len and (json[i] == ' ' or json[i] == '\t')) : (i += 1) {}
 
     if (i >= json.len or json[i] != '"') return error.CommandFailed;
     i += 1; // skip opening quote
@@ -601,6 +667,16 @@ test "extractJsonString: handles escape sequences" {
     try std.testing.expectEqualStrings("hello\nworld", result);
 }
 
+test "extractJsonString: ignores key needle inside a string value" {
+    // The word "status" appears inside the "desc" value but is not a key there;
+    // the extractor must return the real "status" field, not bail on the value.
+    var out: [64]u8 = undefined;
+    const result = try extractJsonString(
+        \\{"desc": "bad status value", "status": "running"}
+    , "status", &out);
+    try std.testing.expectEqualStrings("running", result);
+}
+
 test "extractJsonString: returns error for missing key" {
     var out: [64]u8 = undefined;
     const result = extractJsonString(
@@ -629,6 +705,24 @@ test "socketPath: builds correct path" {
     var buf: [256]u8 = undefined;
     const path = socketPath("TestVM", &buf) orelse unreachable;
     try std.testing.expectEqualStrings("/tmp/hangar-qmp-TestVM.sock", path);
+}
+
+test "socketPath: rejects path-unsafe names" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expect(socketPath("../../etc/x", &buf) == null);
+    try std.testing.expect(socketPath("a/b", &buf) == null);
+    try std.testing.expect(socketPath("a\\b", &buf) == null);
+    try std.testing.expect(socketPath("a\x00b", &buf) == null);
+    // A literal ".." with no separator is harmless and still allowed.
+    const ok = socketPath("v1..v2", &buf) orelse unreachable;
+    try std.testing.expectEqualStrings("/tmp/hangar-qmp-v1..v2.sock", ok);
+}
+
+test "isPathSafeName: separators and NUL" {
+    try std.testing.expect(isPathSafeName("ubuntu-22.04"));
+    try std.testing.expect(!isPathSafeName("a/b"));
+    try std.testing.expect(!isPathSafeName("a\\b"));
+    try std.testing.expect(!isPathSafeName("a\x00b"));
 }
 
 test "extractJsonString: handles tab escape" {
@@ -1100,6 +1194,42 @@ fn isShellSafePath(path: []const u8) bool {
     return true;
 }
 
+/// Escape `s` so it is a valid JSON string body: backslash and double-quote are
+/// backslash-escaped, control characters (< 0x20) become `\u00XX`, everything
+/// else passes through. Returns `null` if the escaped form does not fit in
+/// `out` (callers treat that as `error.BufferTooSmall`).
+fn jsonEscapeString(s: []const u8, out: []u8) ?[]const u8 {
+    const hex = "0123456789abcdef";
+    var pos: usize = 0;
+    for (s) |c| {
+        switch (c) {
+            '"', '\\' => {
+                if (pos + 2 > out.len) return null;
+                out[pos] = '\\';
+                out[pos + 1] = c;
+                pos += 2;
+            },
+            else => {
+                if (c < 0x20) {
+                    if (pos + 6 > out.len) return null;
+                    out[pos] = '\\';
+                    out[pos + 1] = 'u';
+                    out[pos + 2] = '0';
+                    out[pos + 3] = '0';
+                    out[pos + 4] = hex[(c >> 4) & 0xf];
+                    out[pos + 5] = hex[c & 0xf];
+                    pos += 6;
+                } else {
+                    if (pos >= out.len) return null;
+                    out[pos] = c;
+                    pos += 1;
+                }
+            },
+        }
+    }
+    return out[0..pos];
+}
+
 /// Escape double-quote characters in an HMP argument string.
 /// Returns a slice of `out` guaranteed to contain no unescaped `"`.
 fn escapeHmpArg(arg: []const u8, out: []u8) []const u8 {
@@ -1138,7 +1268,7 @@ test "isShellSafePath: rejects shell metacharacters" {
     try std.testing.expect(!isShellSafePath("/tmp/state with space.bin"));
 }
 
-test "isShellSafePath: fuzz never crashes" {
+test "fuzz: isShellSafePath accepts only metacharacter-free, non-empty paths" {
     var seed: u64 = 0x9e3779b97f4a7c15;
     var i: usize = 0;
     while (i < 4096) : (i += 1) {
@@ -1151,7 +1281,22 @@ test "isShellSafePath: fuzz never crashes" {
             s = s *% 2862933555777941757 +% 3037000493;
             buf[j] = @truncate(s);
         }
-        _ = isShellSafePath(buf[0..n]);
+        const path = buf[0..n];
+        if (isShellSafePath(path)) {
+            // The shell-injection guard must never accept an empty path nor any
+            // byte that could break out of an `exec:`/`/bin/sh -c` context. A
+            // regression that drops a char from the reject set fails here.
+            try std.testing.expect(path.len > 0);
+            for (path) |c| {
+                switch (c) {
+                    ' ', ';', '|', '&', '$', '`', '(', ')', '<', '>', '\'', '"',
+                    '\\', '~', '#', '!', '*', '?', '\n', '\r', '\t', 0 => {
+                        try std.testing.expect(false);
+                    },
+                    else => {},
+                }
+            }
+        }
     }
 }
 
@@ -1165,4 +1310,162 @@ test "escapeHmpArg: quote escaping" {
     var buf: [128]u8 = undefined;
     const r = escapeHmpArg("path\"with\"quotes", &buf);
     try std.testing.expectEqualStrings("path\\\"with\\\"quotes", r);
+}
+
+test "jsonEscapeString: escapes quotes, backslashes and control chars" {
+    var buf: [128]u8 = undefined;
+    // A quoted, quote-escaped CD-ROM HMP command is the real-world trigger.
+    try std.testing.expectEqualStrings(
+        "change ide2-cd0 \\\"/tmp/a\\\\\\\"b.iso\\\"\\\"",
+        jsonEscapeString("change ide2-cd0 \"/tmp/a\\\"b.iso\"\"", &buf).?,
+    );
+    try std.testing.expectEqualStrings("a\\u0000b", jsonEscapeString("a\x00b", &buf).?);
+    try std.testing.expectEqualStrings("tab\\u0009nl\\u000a", jsonEscapeString("tab\tnl\n", &buf).?);
+    try std.testing.expectEqualStrings("plain/path", jsonEscapeString("plain/path", &buf).?);
+    // Too small to hold the two-byte escape → null, not a panic.
+    var tiny: [1]u8 = undefined;
+    try std.testing.expect(jsonEscapeString("\"", &tiny) == null);
+}
+
+test "fuzz: jsonEscapeString output is bounded and always valid JSON body" {
+    var seed: u64 = 0xcafef00dd15ea5e5;
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        var in_buf: [80]u8 = undefined;
+        const n = seed % in_buf.len;
+        var s = seed;
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            s = s *% 2862933555777941757 +% 3037000493;
+            in_buf[j] = @truncate(s);
+        }
+        const arg = in_buf[0..n];
+        var out_buf: [512]u8 = undefined;
+        const r = jsonEscapeString(arg, &out_buf).?;
+        // At most six output bytes per input byte (\u00XX worst case).
+        try std.testing.expect(r.len <= arg.len * 6);
+        // No bare control chars, and every '"' is backslash-escaped.
+        var k: usize = 0;
+        while (k < r.len) : (k += 1) {
+            try std.testing.expect(r[k] >= 0x20);
+            if (r[k] == '"') try std.testing.expect(k > 0 and r[k - 1] == '\\');
+        }
+        // Tiny buffer must return null, never overflow.
+        var tiny: [4]u8 = undefined;
+        _ = jsonEscapeString(arg, &tiny);
+    }
+}
+
+test "fuzz: escapeHmpArg never emits an unescaped quote and stays bounded" {
+    var seed: u64 = 0x243f6a8885a308d3;
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        var in_buf: [80]u8 = undefined;
+        const n = seed % in_buf.len;
+        var s = seed;
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            s = s *% 2862933555777941757 +% 3037000493;
+            // Bias toward quotes/backslashes so the escaping path is exercised.
+            in_buf[j] = switch (@as(u8, @truncate(s)) % 4) {
+                0 => '"',
+                1 => '\\',
+                else => @truncate(s >> 8),
+            };
+        }
+        const arg = in_buf[0..n];
+        // Oversized output buffer: the full escaped form always fits.
+        var out_buf: [200]u8 = undefined;
+        const r = escapeHmpArg(arg, &out_buf);
+        // Bounded: at most two output bytes per input byte.
+        try std.testing.expect(r.len <= arg.len * 2);
+        // Documented invariant: every '"' in the output is preceded by '\\'.
+        for (r, 0..) |c, k| {
+            if (c == '"') {
+                try std.testing.expect(k > 0 and r[k - 1] == '\\');
+            }
+        }
+        // Truncation must never split an escape across the buffer boundary:
+        // a trailing lone '\\' that was meant to precede an emitted '"' would
+        // violate the invariant above, so this also guards the tiny-buffer case.
+        var tiny: [8]u8 = undefined;
+        _ = escapeHmpArg(arg, &tiny);
+    }
+}
+
+test "fuzz: isValidSnapshotTag accepts only the documented charset" {
+    var seed: u64 = 0xb7e151628aed2a6a;
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        var buf: [48]u8 = undefined;
+        const n = seed % buf.len;
+        var s = seed;
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            s = s *% 2862933555777941757 +% 3037000493;
+            buf[j] = @truncate(s);
+        }
+        const tag = buf[0..n];
+        const valid = isValidSnapshotTag(tag);
+        if (valid) {
+            // A valid tag must be non-empty and contain only [A-Za-z0-9_-].
+            try std.testing.expect(tag.len > 0);
+            for (tag) |c| {
+                const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+                    (c >= '0' and c <= '9') or c == '-' or c == '_';
+                try std.testing.expect(ok);
+            }
+        }
+    }
+}
+
+// hmpReportedError gates every HMP command: a false negative silently turns a
+// failed power/snapshot operation into a reported success, so its detection
+// behavior is verified directly.
+
+test "hmpReportedError: empty result is not an error" {
+    try std.testing.expect(!hmpReportedError(""));
+}
+
+test "hmpReportedError: clean success output is not an error" {
+    try std.testing.expect(!hmpReportedError("(qemu) "));
+    try std.testing.expect(!hmpReportedError("snapshot 'base' saved"));
+}
+
+test "hmpReportedError: QEMU failure markers are detected" {
+    try std.testing.expect(hmpReportedError("Could not open file"));
+    try std.testing.expect(hmpReportedError("Error: device not found"));
+    // Markers are matched anywhere in the line, not only at the start.
+    try std.testing.expect(hmpReportedError("(qemu) Error while loading snapshot"));
+}
+
+test "hmpReportedError: matching is case-sensitive (known limitation)" {
+    // Documents current behavior: lowercase variants are not treated as errors.
+    try std.testing.expect(!hmpReportedError("could not find it"));
+    try std.testing.expect(!hmpReportedError("error: lowercase"));
+}
+
+test "fuzz: hmpReportedError never panics and matches a reference scan" {
+    var seed: u64 = 0x4849_4d50;
+    const alphabet = "ErorCud nt:()qemu0123";
+    var buf: [64]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        const n = seed % buf.len;
+        var s = seed;
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            s = s *% 2862933555777941757 +% 3037000493;
+            buf[j] = alphabet[s % alphabet.len];
+        }
+        const result = buf[0..n];
+        const expected = result.len > 0 and
+            (std.mem.indexOf(u8, result, "Could not") != null or
+                std.mem.indexOf(u8, result, "Error") != null);
+        try std.testing.expectEqual(expected, hmpReportedError(result));
+    }
 }

@@ -39,6 +39,9 @@ test "SpinMutex: lock then unlock is re-acquirable (single thread)" {
     m.unlock();
     m.lock(); // would spin forever if unlock failed to release
     m.unlock();
+    // After the final unlock the lock must be free: a fresh tryLock succeeds.
+    try std.testing.expect(m.inner.tryLock());
+    m.unlock();
 }
 
 test "SpinMutex: mutual exclusion under contention keeps a counter exact" {
@@ -73,6 +76,9 @@ test "SpinMutex: rapid lock/unlock cycle is stable" {
         m.lock();
         m.unlock();
     }
+    // The cycle must leave the lock released, not stuck held.
+    try std.testing.expect(m.inner.tryLock());
+    m.unlock();
 }
 
 test "SpinMutex: tryLock-acquire-release pattern" {

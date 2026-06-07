@@ -32,6 +32,7 @@
 const std = @import("std");
 const c = std.c;
 const transport = @import("transport.zig");
+const urlencode = @import("urlencode.zig");
 
 const usage =
     \\vmrun — Hangar remote VM manager
@@ -66,9 +67,13 @@ const usage =
     \\  unix:///path       Unix domain socket
     \\  shm:///name        POSIX shared memory (same-machine, fastest)
     \\
-    \\Global:
+    \\Global (accepted in any position):
     \\  help, -h, --help     Show this help and exit
     \\  -v, --version        Show version and exit
+    \\
+    \\Environment:
+    \\  KV_API_KEY           X-API-Key sent with every request (default: built-in
+    \\                       key). Must match the daemon's KV_API_KEY.
     \\
     \\Exit codes: 0 success, 1 runtime error, 2 usage error.
     \\
@@ -89,6 +94,17 @@ fn fdWrite(fd: c_int, msg: []const u8) void {
 
 /// Exit code for usage/argument errors (POSIX convention: 2).
 const EXIT_USAGE: u8 = 2;
+
+/// True when `arg` is any accepted spelling of the help flag. The bare word
+/// `help` is accepted as an alias (matching hangar-web / hangar-webui).
+fn isHelpArg(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "help");
+}
+
+/// True when `arg` is any accepted spelling of the version flag.
+fn isVersionArg(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version");
+}
 
 pub fn main(init: std.process.Init) !void {
     // Translate any runtime error from the command dispatch into a clean,
@@ -115,11 +131,11 @@ fn run(init: std.process.Init) !void {
     };
 
     // Help / version are accepted in the first positional slot.
-    if (std.mem.eql(u8, server_url, "-h") or std.mem.eql(u8, server_url, "--help") or std.mem.eql(u8, server_url, "help")) {
+    if (isHelpArg(server_url)) {
         fdWrite(c.STDOUT_FILENO, usage);
         std.process.exit(0);
     }
-    if (std.mem.eql(u8, server_url, "-v") or std.mem.eql(u8, server_url, "--version")) {
+    if (isVersionArg(server_url)) {
         fdWrite(c.STDOUT_FILENO, version);
         std.process.exit(0);
     }
@@ -131,14 +147,43 @@ fn run(init: std.process.Init) !void {
 
     // Help / version are also accepted in the command slot (e.g. after the
     // URL) so `vmrun <url> --help` works and never needs a connection.
-    if (std.mem.eql(u8, command, "-h") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "help")) {
+    if (isHelpArg(command)) {
         fdWrite(c.STDOUT_FILENO, usage);
         std.process.exit(0);
     }
-    if (std.mem.eql(u8, command, "-v") or std.mem.eql(u8, command, "--version")) {
+    if (isVersionArg(command)) {
         fdWrite(c.STDOUT_FILENO, version);
         std.process.exit(0);
     }
+
+    // Collect the remaining positional arguments once so the command's
+    // argument shape can be validated *before* opening a connection. A usage
+    // mistake (unknown command, missing argument, bad subcommand) must fail
+    // fast with exit code 2 and never require a running daemon — this is what
+    // makes the tool predictable in scripts.
+    var rest: [16][]const u8 = undefined;
+    var rest_n: usize = 0;
+    while (args_iter.next()) |a| : (rest_n += 1) {
+        if (rest_n < rest.len) rest[rest_n] = a;
+    }
+    const args = rest[0..@min(rest_n, rest.len)];
+
+    // Accept help/version anywhere in the trailing args too, so
+    // `vmrun <url> <cmd> --help` behaves like every other CLI (and never needs
+    // a running daemon). Done before validateArgs so it wins over an
+    // "argument count" complaint.
+    for (args) |a| {
+        if (isHelpArg(a)) {
+            fdWrite(c.STDOUT_FILENO, usage);
+            std.process.exit(0);
+        }
+        if (isVersionArg(a)) {
+            fdWrite(c.STDOUT_FILENO, version);
+            std.process.exit(0);
+        }
+    }
+
+    validateArgs(command, args);
 
     const url = transport.Url.parse(server_url) orelse {
         var buf: [256]u8 = undefined;
@@ -155,81 +200,35 @@ fn run(init: std.process.Init) !void {
     };
     defer conn.close();
 
+    // Argument shape was validated by validateArgs() before we connected, so
+    // the positional accesses below are known to be in range.
     if (std.mem.eql(u8, command, "list")) {
         return cmdList(allocator, &conn, init.io);
     } else if (std.mem.eql(u8, command, "status")) {
         return cmdStatus(allocator, &conn, init.io);
     } else if (std.mem.eql(u8, command, "import")) {
-        const path = args_iter.next() orelse {
-            fdWrite(c.STDERR_FILENO, "Error: missing disk path\n");
-            std.process.exit(EXIT_USAGE);
-        };
-        return cmdImport(allocator, &conn, path, init.io);
+        return cmdImport(allocator, &conn, args[0], init.io);
     } else if (std.mem.eql(u8, command, "snapshot")) {
-        const sub = args_iter.next() orelse {
-            fdWrite(c.STDERR_FILENO, "Error: snapshot command requires subcommand: list|take|revert|delete\n");
-            std.process.exit(EXIT_USAGE);
-        };
-        const target = args_iter.next() orelse {
-            fdWrite(c.STDERR_FILENO, "Error: missing VM name or index\n");
-            std.process.exit(EXIT_USAGE);
-        };
-        const idx = resolveVm(allocator, &conn, target) orelse {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
-            fdWrite(c.STDERR_FILENO, msg);
-            std.process.exit(1);
-        };
+        const sub = args[0];
+        const target = args[1];
+        const idx = resolveVm(allocator, &conn, target) orelse return notFound(target);
         if (std.mem.eql(u8, sub, "list")) {
             return cmdSnapshotList(allocator, &conn, idx, init.io);
         } else if (std.mem.eql(u8, sub, "take")) {
-            const tag = args_iter.next() orelse {
-                fdWrite(c.STDERR_FILENO, "Error: missing snapshot tag\n");
-                std.process.exit(EXIT_USAGE);
-            };
-            return cmdSnapshotTake(allocator, &conn, idx, tag, init.io);
+            return cmdSnapshotOp(allocator, &conn, idx, args[2], "take", init.io);
         } else if (std.mem.eql(u8, sub, "revert")) {
-            const tag = args_iter.next() orelse {
-                fdWrite(c.STDERR_FILENO, "Error: missing snapshot tag\n");
-                std.process.exit(EXIT_USAGE);
-            };
-            return cmdSnapshotRevert(allocator, &conn, idx, tag, init.io);
-        } else if (std.mem.eql(u8, sub, "delete")) {
-            const tag = args_iter.next() orelse {
-                fdWrite(c.STDERR_FILENO, "Error: missing snapshot tag\n");
-                std.process.exit(EXIT_USAGE);
-            };
-            return cmdSnapshotDelete(allocator, &conn, idx, tag, init.io);
+            return cmdSnapshotOp(allocator, &conn, idx, args[2], "revert", init.io);
         } else {
-            fdWrite(c.STDERR_FILENO, "Error: unknown snapshot subcommand (use: list|take|revert|delete)\n");
-            std.process.exit(EXIT_USAGE);
+            return cmdSnapshotOp(allocator, &conn, idx, args[2], "delete", init.io);
         }
-    } else if (std.mem.eql(u8, command, "start") or
-        std.mem.eql(u8, command, "stop") or
-        std.mem.eql(u8, command, "restart") or
-        std.mem.eql(u8, command, "clone") or
-        std.mem.eql(u8, command, "linked-clone") or
-        std.mem.eql(u8, command, "delete") or
-        std.mem.eql(u8, command, "suspend") or
-        std.mem.eql(u8, command, "pause") or
-        std.mem.eql(u8, command, "resume") or
-        std.mem.eql(u8, command, "shutdown") or
-        std.mem.eql(u8, command, "reset") or
-        std.mem.eql(u8, command, "cad") or
-        std.mem.eql(u8, command, "export"))
-    {
-        const target = args_iter.next() orelse {
-            fdWrite(c.STDERR_FILENO, "Error: missing VM name or index\n");
-            std.process.exit(EXIT_USAGE);
-        };
-
-        // Resolve name or index to VM index.
-        const idx = resolveVm(allocator, &conn, target) orelse {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
-            fdWrite(c.STDERR_FILENO, msg);
-            std.process.exit(1);
-        };
+    } else if (std.mem.eql(u8, command, "rename")) {
+        const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
+        return cmdRename(allocator, &conn, idx, args[1], init.io);
+    } else {
+        // Single-target VM operations: start/stop/restart/clone/linked-clone/
+        // delete/suspend/pause/resume/shutdown/reset/cad/export.
+        const target = args[0];
+        const idx = resolveVm(allocator, &conn, target) orelse return notFound(target);
 
         if (std.mem.eql(u8, command, "start") or std.mem.eql(u8, command, "stop")) {
             return cmdPower(allocator, &conn, idx, command, init.io);
@@ -256,31 +255,102 @@ fn run(init: std.process.Init) !void {
             return cmdSimple(allocator, &conn, idx, "/api/reset/{d}", "reset", init.io);
         } else if (std.mem.eql(u8, command, "cad")) {
             return cmdSimple(allocator, &conn, idx, "/api/cad/{d}", "cad", init.io);
-        } else if (std.mem.eql(u8, command, "export")) {
+        } else {
             return cmdExport(allocator, &conn, idx, init.io);
         }
-    } else if (std.mem.eql(u8, command, "rename")) {
-        const target = args_iter.next() orelse {
+    }
+}
+
+/// Number of positional arguments a command requires (after the URL and the
+/// command word). Returns null for an unknown command. Snapshot is handled
+/// separately because its arity depends on the subcommand.
+fn commandArity(command: []const u8) ?usize {
+    const zero = [_][]const u8{ "list", "status" };
+    const one = [_][]const u8{
+        "import",       "start", "stop",     "restart", "clone",
+        "linked-clone", "delete", "suspend", "pause",   "resume",
+        "shutdown",     "reset", "cad",      "export",
+    };
+    for (zero) |k| if (std.mem.eql(u8, command, k)) return 0;
+    for (one) |k| if (std.mem.eql(u8, command, k)) return 1;
+    if (std.mem.eql(u8, command, "rename")) return 2;
+    return null;
+}
+
+/// Validate the command name and positional-argument count before any network
+/// activity. On any problem this prints a one-line diagnostic to stderr and
+/// exits with EXIT_USAGE (2) — usage errors never require a running daemon.
+fn validateArgs(command: []const u8, args: []const []const u8) void {
+    if (std.mem.eql(u8, command, "snapshot")) {
+        if (args.len == 0) {
+            fdWrite(c.STDERR_FILENO, "Error: snapshot command requires subcommand: list|take|revert|delete\n");
+            std.process.exit(EXIT_USAGE);
+        }
+        const sub = args[0];
+        const is_list = std.mem.eql(u8, sub, "list");
+        const needs_tag = std.mem.eql(u8, sub, "take") or
+            std.mem.eql(u8, sub, "revert") or std.mem.eql(u8, sub, "delete");
+        if (!is_list and !needs_tag) {
+            fdWrite(c.STDERR_FILENO, "Error: unknown snapshot subcommand (use: list|take|revert|delete)\n");
+            std.process.exit(EXIT_USAGE);
+        }
+        if (args.len < 2) {
             fdWrite(c.STDERR_FILENO, "Error: missing VM name or index\n");
             std.process.exit(EXIT_USAGE);
-        };
-        const new_name = args_iter.next() orelse {
-            fdWrite(c.STDERR_FILENO, "Error: missing new name\n");
+        }
+        if (needs_tag and args.len < 3) {
+            fdWrite(c.STDERR_FILENO, "Error: missing snapshot tag\n");
             std.process.exit(EXIT_USAGE);
-        };
-        const idx = resolveVm(allocator, &conn, target) orelse {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
-            fdWrite(c.STDERR_FILENO, msg);
-            std.process.exit(1);
-        };
-        return cmdRename(allocator, &conn, idx, new_name, init.io);
-    } else {
+        }
+        // Reject trailing junk so a typo (e.g. an extra word) fails loudly
+        // instead of being silently dropped. list takes 2 args (sub + target),
+        // take/revert/delete take 3 (sub + target + tag).
+        const max: usize = if (needs_tag) 3 else 2;
+        if (args.len > max) {
+            fdWrite(c.STDERR_FILENO, "Error: too many arguments for snapshot command (run with --help for usage)\n");
+            std.process.exit(EXIT_USAGE);
+        }
+        return;
+    }
+
+    const arity = commandArity(command) orelse {
+        // A dash-prefixed token in the command slot is almost always a mistyped
+        // flag, so name it as such — matching hangar-web / hangar-webui, which
+        // both report "unknown option" for stray dash args.
+        const kind = if (command.len > 0 and command[0] == '-') "option" else "command";
         var buf: [96]u8 = undefined;
-        const msg = std.fmt.bufPrintZ(&buf, "Error: unknown command '{s}' (run with --help for usage)\n", .{command}) catch "Error: unknown command\n";
+        const msg = std.fmt.bufPrintZ(&buf, "Error: unknown {s} '{s}' (run with --help for usage)\n", .{ kind, command }) catch "Error: unknown command\n";
+        fdWrite(c.STDERR_FILENO, msg);
+        std.process.exit(EXIT_USAGE);
+    };
+    if (args.len < arity) {
+        const msg = if (std.mem.eql(u8, command, "import"))
+            "Error: missing disk path\n"
+        else if (arity == 2 and args.len == 1)
+            "Error: missing new name\n"
+        else
+            "Error: missing VM name or index\n";
         fdWrite(c.STDERR_FILENO, msg);
         std.process.exit(EXIT_USAGE);
     }
+    // Reject excess positional arguments. Without this an invocation like
+    // `vmrun <url> start vm1 vm2` silently ignores `vm2`, so a mistyped
+    // command appears to succeed — bad for interactive use and worse in scripts.
+    if (args.len > arity) {
+        var buf: [96]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Error: too many arguments for '{s}' (run with --help for usage)\n", .{command}) catch "Error: too many arguments\n";
+        fdWrite(c.STDERR_FILENO, msg);
+        std.process.exit(EXIT_USAGE);
+    }
+}
+
+/// Print a "VM not found" diagnostic and exit 1 (runtime error). A lookup that
+/// fails against a live daemon is a runtime condition, not a usage mistake.
+fn notFound(target: []const u8) noreturn {
+    var buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
+    fdWrite(c.STDERR_FILENO, msg);
+    std.process.exit(1);
 }
 
 fn sendRequest(allocator: std.mem.Allocator, conn: *transport.Connection, method: []const u8, path: []const u8, body: ?[]const u8) ![]u8 {
@@ -293,7 +363,29 @@ fn sendRequest(allocator: std.mem.Allocator, conn: *transport.Connection, method
     defer allocator.free(buf);
     const n = conn.request(method, path, body, buf);
     if (n == 0) return error.RequestFailed;
+    // The daemon normalizes every API failure (validation, not-found, auth, and
+    // server-side errors) to a `{"error":"<msg>"}` JSON envelope. Without this
+    // check vmrun printed that body to stdout as a fake success line and exited
+    // 0 — so a failed `start`/`delete`/`snapshot` looked successful in scripts.
+    // Map the envelope to a stderr diagnostic and exit 1 (the documented
+    // runtime-error code) instead.
+    if (errorEnvelopeMsg(buf[0..n])) |detail| {
+        var ebuf: [320]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&ebuf, "Error: {s}\n", .{detail}) catch "Error: server returned an error\n";
+        fdWrite(c.STDERR_FILENO, msg);
+        std.process.exit(1);
+    }
     return try allocator.dupe(u8, buf[0..n]);
+}
+
+/// If `resp` is the daemon's JSON error envelope (`{"error":"<msg>"}`), return
+/// the inner message (empty string when the envelope carries no detail);
+/// otherwise null. Every API error the daemon returns is normalized to this
+/// envelope (see web_server `jsonErr`), while success bodies are plain text
+/// ("ok"), a JSON array, or a health object — none begin with this prefix.
+fn errorEnvelopeMsg(resp: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, resp, "{\"error\":")) return null;
+    return extractJsonString(resp, "error") orelse "";
 }
 
 /// Pure helper: given VM-list JSON and a VM name, find its "idx" field value.
@@ -315,6 +407,28 @@ fn findVmIdxInJson(json: []const u8, target: []const u8) ?usize {
         }
     }
     return null;
+}
+
+/// Pure helper: given VM-list JSON and a numeric index, return that VM's
+/// "status" string (e.g. "running", "stopped"). Matches the object whose
+/// `"idx":N` field equals `idx`. Returns null when no such object exists.
+fn findVmStatusInJson(json: []const u8, idx: usize) ?[]const u8 {
+    var rest = json;
+    while (std.mem.indexOfScalar(u8, rest, '{')) |obj_start| {
+        rest = rest[obj_start..];
+        const obj_end = std.mem.indexOfScalar(u8, rest, '}') orelse break;
+        const obj = rest[0 .. obj_end + 1];
+        rest = rest[obj_end + 1 ..];
+        const obj_idx = extractJsonInt(obj, "idx") orelse continue;
+        if (obj_idx == idx) return extractJsonString(obj, "status");
+    }
+    return null;
+}
+
+/// True when a VM-list status string denotes a powered-on VM (running or
+/// paused), mirroring the daemon's `VmConfig.isAlive`.
+fn statusIsAlive(status: []const u8) bool {
+    return std.mem.eql(u8, status, "running") or std.mem.eql(u8, status, "paused");
 }
 
 fn resolveVm(allocator: std.mem.Allocator, conn: *transport.Connection, target: []const u8) ?usize {
@@ -369,6 +483,23 @@ fn cmdStatus(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.
 
 fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, action: []const u8, io: std.Io) !void {
     _ = io;
+    // The daemon's /api/power endpoint is a toggle (start if off, stop if on).
+    // The CLI exposes explicit `start`/`stop` verbs, so issuing the toggle
+    // blindly inverts the user's intent: `stop` on an already-off VM would
+    // power it ON, and `start` on a running VM would power it OFF. Query the
+    // current state first and only toggle when it actually needs to change,
+    // making `start`/`stop` idempotent and faithful to the documented verbs.
+    const want_on = std.mem.eql(u8, action, "start");
+    const json = try sendRequest(allocator, conn, "GET", "/api/vms", null);
+    defer allocator.free(json);
+    const is_on = if (findVmStatusInJson(json, idx)) |s| statusIsAlive(s) else false;
+    if (is_on == want_on) {
+        var nbuf: [256]u8 = undefined;
+        const noop = try std.fmt.bufPrint(&nbuf, "VM [{d}] already {s}\n", .{ idx, if (want_on) "powered on" else "powered off" });
+        fdWrite(c.STDOUT_FILENO, noop);
+        return;
+    }
+
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/power/{d}", .{idx});
     const resp = try sendRequest(allocator, conn, "POST", path, null);
@@ -401,8 +532,12 @@ fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     _ = io;
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/rename/{d}", .{idx});
-    var body_buf: [256]u8 = undefined;
-    const body = try std.fmt.bufPrint(&body_buf, "name={s}", .{new_name});
+    // Percent-encode the name so values containing &, =, %, +, or spaces reach
+    // the daemon intact (it URL-decodes form values, exactly like the web UI).
+    var name_enc_buf: [vm.MAX_NAME * 3]u8 = undefined;
+    const enc_name = try urlencode.percentEncode(&name_enc_buf, new_name);
+    var body_buf: [vm.MAX_NAME * 3 + 16]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "name={s}", .{enc_name});
     const resp = try sendRequest(allocator, conn, "POST", path, body);
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
@@ -412,8 +547,12 @@ fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
 
 fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_path: []const u8, io: std.Io) !void {
     _ = io;
-    var body_buf: [vm.MAX_PATH + 64]u8 = undefined;
-    const body = try std.fmt.bufPrint(&body_buf, "path={s}", .{disk_path});
+    // Percent-encode the path so values with spaces or reserved characters
+    // round-trip through the daemon's URL-decode (matching the web UI).
+    var path_enc_buf: [vm.MAX_PATH * 3]u8 = undefined;
+    const enc_path = try urlencode.percentEncode(&path_enc_buf, disk_path);
+    var body_buf: [vm.MAX_PATH * 3 + 16]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "path={s}", .{enc_path});
     const resp = try sendRequest(allocator, conn, "POST", "/api/import", body);
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
@@ -446,42 +585,21 @@ fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, id
     }
 }
 
-fn cmdSnapshotTake(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
+/// POST /api/snapshot/{action}/{idx} with a `tag=` body. `action` is one of
+/// "take", "revert", "delete".
+fn cmdSnapshotOp(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, comptime action: []const u8, io: std.Io) !void {
     _ = io;
     var path_buf: [48]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/take/{d}", .{idx});
-    var body_buf: [256]u8 = undefined;
-    const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{tag});
+    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/" ++ action ++ "/{d}", .{idx});
+    // Percent-encode the tag so the daemon's URL-decode reproduces it exactly.
+    var tag_enc_buf: [768]u8 = undefined;
+    const enc_tag = try urlencode.percentEncode(&tag_enc_buf, tag);
+    var body_buf: [800]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{enc_tag});
     const resp = try sendRequest(allocator, conn, "POST", path, body);
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
-    const line = try std.fmt.bufPrint(&buf, "snapshot take [{d}] '{s}': {s}\n", .{ idx, tag, resp });
-    fdWrite(c.STDOUT_FILENO, line);
-}
-
-fn cmdSnapshotRevert(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
-    _ = io;
-    var path_buf: [48]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/revert/{d}", .{idx});
-    var body_buf: [256]u8 = undefined;
-    const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{tag});
-    const resp = try sendRequest(allocator, conn, "POST", path, body);
-    defer allocator.free(resp);
-    var buf: [256]u8 = undefined;
-    const line = try std.fmt.bufPrint(&buf, "snapshot revert [{d}] '{s}': {s}\n", .{ idx, tag, resp });
-    fdWrite(c.STDOUT_FILENO, line);
-}
-
-fn cmdSnapshotDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, io: std.Io) !void {
-    _ = io;
-    var path_buf: [48]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/snapshot/delete/{d}", .{idx});
-    var body_buf: [256]u8 = undefined;
-    const body = try std.fmt.bufPrint(&body_buf, "tag={s}", .{tag});
-    const resp = try sendRequest(allocator, conn, "POST", path, body);
-    defer allocator.free(resp);
-    var buf: [256]u8 = undefined;
-    const line = try std.fmt.bufPrint(&buf, "snapshot delete [{d}] '{s}': {s}\n", .{ idx, tag, resp });
+    const line = try std.fmt.bufPrint(&buf, "snapshot " ++ action ++ " [{d}] '{s}': {s}\n", .{ idx, tag, resp });
     fdWrite(c.STDOUT_FILENO, line);
 }
 
@@ -673,7 +791,153 @@ test "findVmIdxInJson: name contains colon or other special chars" {
     try std.testing.expectEqual(@as(usize, 3), idx.?);
 }
 
+test "findVmStatusInJson: returns status for matching idx" {
+    const json = "[{\"idx\":0,\"name\":\"a\",\"status\":\"running\"},{\"idx\":1,\"name\":\"b\",\"status\":\"stopped\"}]";
+    try std.testing.expectEqualStrings("running", findVmStatusInJson(json, 0).?);
+    try std.testing.expectEqualStrings("stopped", findVmStatusInJson(json, 1).?);
+}
+
+test "findVmStatusInJson: returns null for missing idx or empty list" {
+    const json = "[{\"idx\":0,\"name\":\"a\",\"status\":\"running\"}]";
+    try std.testing.expect(findVmStatusInJson(json, 9) == null);
+    try std.testing.expect(findVmStatusInJson("[]", 0) == null);
+    try std.testing.expect(findVmStatusInJson("", 0) == null);
+}
+
+test "statusIsAlive: running and paused are alive; others are not" {
+    try std.testing.expect(statusIsAlive("running"));
+    try std.testing.expect(statusIsAlive("paused"));
+    try std.testing.expect(!statusIsAlive("stopped"));
+    try std.testing.expect(!statusIsAlive("suspended"));
+    try std.testing.expect(!statusIsAlive(""));
+}
+
+test "fuzz: findVmStatusInJson and statusIsAlive never panic on random input" {
+    var prng = std.Random.DefaultPrng.init(0x57A705);
+    const rnd = prng.random();
+    var buf: [256]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        if (findVmStatusInJson(buf[0..len], rnd.uintLessThan(usize, 8))) |s| {
+            _ = statusIsAlive(s);
+        }
+    }
+}
+
+test "errorEnvelopeMsg: detects error envelope and extracts message" {
+    const msg = errorEnvelopeMsg("{\"error\":\"not found\"}");
+    try std.testing.expect(msg != null);
+    try std.testing.expectEqualStrings("not found", msg.?);
+}
+
+test "errorEnvelopeMsg: empty-detail envelope returns empty string, not null" {
+    const msg = errorEnvelopeMsg("{\"error\":\"\"}");
+    try std.testing.expect(msg != null);
+    try std.testing.expectEqualStrings("", msg.?);
+}
+
+test "errorEnvelopeMsg: success bodies are not treated as errors" {
+    try std.testing.expect(errorEnvelopeMsg("ok") == null);
+    try std.testing.expect(errorEnvelopeMsg("[{\"idx\":0,\"name\":\"vm\"}]") == null);
+    try std.testing.expect(errorEnvelopeMsg("{\"status\":\"ok\"}") == null);
+    try std.testing.expect(errorEnvelopeMsg("") == null);
+    // A snapshot tag or VM name containing the word "error" must not trip it.
+    try std.testing.expect(errorEnvelopeMsg("fix-error") == null);
+}
+
+test "commandArity: zero-arg commands" {
+    try std.testing.expectEqual(@as(?usize, 0), commandArity("list"));
+    try std.testing.expectEqual(@as(?usize, 0), commandArity("status"));
+}
+
+test "commandArity: single-target commands" {
+    const one = [_][]const u8{
+        "import",       "start", "stop",     "restart", "clone",
+        "linked-clone", "delete", "suspend", "pause",   "resume",
+        "shutdown",     "reset", "cad",      "export",
+    };
+    for (one) |cmd| {
+        try std.testing.expectEqual(@as(?usize, 1), commandArity(cmd));
+    }
+}
+
+test "commandArity: rename takes two args" {
+    try std.testing.expectEqual(@as(?usize, 2), commandArity("rename"));
+}
+
+test "commandArity: snapshot is not covered (subcommand-dependent)" {
+    // snapshot arity depends on its subcommand and is validated separately.
+    try std.testing.expectEqual(@as(?usize, null), commandArity("snapshot"));
+}
+
+test "commandArity: unknown command returns null" {
+    try std.testing.expectEqual(@as(?usize, null), commandArity("bogus"));
+    try std.testing.expectEqual(@as(?usize, null), commandArity(""));
+    try std.testing.expectEqual(@as(?usize, null), commandArity("START")); // case-sensitive
+}
+
+test "isHelpArg: accepts all help spellings, rejects others" {
+    try std.testing.expect(isHelpArg("-h"));
+    try std.testing.expect(isHelpArg("--help"));
+    try std.testing.expect(isHelpArg("help"));
+    try std.testing.expect(!isHelpArg("-H"));
+    try std.testing.expect(!isHelpArg("--Help"));
+    try std.testing.expect(!isHelpArg("-v"));
+    try std.testing.expect(!isHelpArg("start"));
+    try std.testing.expect(!isHelpArg(""));
+}
+
+test "isVersionArg: accepts version spellings, rejects others" {
+    try std.testing.expect(isVersionArg("-v"));
+    try std.testing.expect(isVersionArg("--version"));
+    try std.testing.expect(!isVersionArg("version")); // bare word is not a version alias
+    try std.testing.expect(!isVersionArg("-V"));
+    try std.testing.expect(!isVersionArg("-h"));
+    try std.testing.expect(!isVersionArg(""));
+}
+
 // ── Fuzz tests ──────────────────────────────────────────────────────
+
+test "fuzz: isHelpArg and isVersionArg never panic on random input" {
+    var prng = std.Random.DefaultPrng.init(0x4E1D_0042);
+    const rnd = prng.random();
+    var buf: [32]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        _ = isHelpArg(buf[0..len]);
+        _ = isVersionArg(buf[0..len]);
+    }
+}
+
+test "fuzz: errorEnvelopeMsg never panics on random input" {
+    var prng = std.Random.DefaultPrng.init(0xB0A7_F00D);
+    const rnd = prng.random();
+    var buf: [256]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        if (errorEnvelopeMsg(buf[0..len])) |msg| {
+            try std.testing.expect(msg.len <= len);
+        }
+    }
+}
+
+test "fuzz: commandArity never panics on random input" {
+    var prng = std.Random.DefaultPrng.init(0xA11CE_BEEF);
+    const rnd = prng.random();
+    var buf: [64]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        _ = commandArity(buf[0..len]);
+    }
+}
 
 test "fuzz: extractJsonString never panics on random JSON-like input" {
     var prng = std.Random.DefaultPrng.init(0xDEAD_BEEF);

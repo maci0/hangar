@@ -42,6 +42,13 @@ pub const QemuError = error{
     ProcessFailed,
 };
 
+/// True if a raw `waitpid` status reflects a clean exit: not terminated by a
+/// signal (low 7 bits clear) and exit code 0 (next 8 bits clear).
+fn exitedClean(status: c_int) bool {
+    const u: u32 = @bitCast(status);
+    return (u & 0x7f) == 0 and (u >> 8) & 0xff == 0;
+}
+
 /// Build a null-terminated C `argv` array from a Zig slice.
 fn buildCArgv(argv: []const []const u8, arena: std.mem.Allocator) ![:null]?[*:0]const u8 {
     const out = try arena.allocSentinel(?[*:0]const u8, argv.len, null);
@@ -54,16 +61,22 @@ fn buildCArgv(argv: []const []const u8, arena: std.mem.Allocator) ![:null]?[*:0]
 pub fn runWait(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[:0]const u8) !void {
     const pid = try forkExec(argv, allocator, err_path);
     var status: c_int = 0;
-    _ = std.c.waitpid(pid, &status, 0);
-    const ustatus: u32 = @bitCast(status);
-    if ((ustatus & 0x7f) != 0 or (ustatus >> 8) & 0xff != 0) {
-        return QemuError.ProcessFailed;
+    // Retry on EINTR; a failed wait must not be reported as success (status
+    // would stay 0 → caller believes the op succeeded when it did not).
+    while (true) {
+        const rc = std.c.waitpid(pid, &status, 0);
+        if (rc < 0) {
+            if (std.c._errno().* == @intFromEnum(std.c.E.INTR)) continue;
+            return QemuError.ProcessFailed;
+        }
+        break;
     }
+    if (!exitedClean(status)) return QemuError.ProcessFailed;
 }
 
 /// Run `argv`, capturing its stdout into `out`. Returns the number of bytes
 /// written (truncated to `out.len`). Returns an error unless it exits 0.
-/// stderr/stdin are sent to /dev/null.
+/// stdin/stderr are sent to /dev/null.
 pub fn runCapture(argv: []const []const u8, out: []u8, allocator: std.mem.Allocator) !usize {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
@@ -104,9 +117,15 @@ pub fn runCapture(argv: []const []const u8, out: []u8, allocator: std.mem.Alloca
     _ = std.c.close(read_fd);
 
     var status: c_int = 0;
-    _ = std.c.waitpid(pid, &status, 0);
-    const ustatus: u32 = @bitCast(status);
-    if ((ustatus & 0x7f) != 0 or (ustatus >> 8) & 0xff != 0) return QemuError.ProcessFailed;
+    while (true) {
+        const rc = std.c.waitpid(pid, &status, 0);
+        if (rc < 0) {
+            if (std.c._errno().* == @intFromEnum(std.c.E.INTR)) continue;
+            return QemuError.ProcessFailed;
+        }
+        break;
+    }
+    if (!exitedClean(status)) return QemuError.ProcessFailed;
     return total;
 }
 
@@ -145,7 +164,11 @@ fn forkExec(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[
             _ = std.c.dup2(devnull, 1);
         }
         if (err_path) |path| {
-            const errfd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
+            // 0o600: the VM stderr log lands in shared /var/tmp and can contain
+            // disk paths, MAC/network config, and guest console output. Owner-only
+            // perms keep other local users from reading it (matches the 0o600 used
+            // for sockets in transport.zig).
+            const errfd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
             if (errfd >= 0) {
                 _ = std.c.dup2(errfd, 2);
                 _ = std.c.close(errfd);
@@ -242,7 +265,12 @@ const ArgBuffers = struct {
     qmp_buf: [vm.MAX_PATH + 64]u8 = undefined,
     vga_buf: [64]u8 = undefined,
     net_mac_buf: [128]u8 = undefined,
-    netdev_user_buf: [1024]u8 = undefined,
+    // Sized for the worst case: port_forwards is capped at 511 bytes (see
+    // VmConfig.setPortForwards). Each "h:g" pair expands to ",hostfwd=tcp::h-:g"
+    // (16 literal bytes added per pair), so a buffer full of minimal "1:1," pairs
+    // grows to ~2.3 KB. 4096 covers any valid input without silently dropping
+    // forwards via the `catch break` in the builder below.
+    netdev_user_buf: [4096]u8 = undefined,
     boot_buf: [64]u8 = undefined,
     incoming_buf: [vm.MAX_PATH + 64]u8 = undefined,
     shared_buf: [vm.MAX_PATH + 128]u8 = undefined,
@@ -266,25 +294,32 @@ fn appendExtraNic(
 ) !void {
     if (mode == .none) return;
     try args.append(alloc, "-device");
-    if (mac.len > 0) {
-        const dev = std.fmt.bufPrint(dev_buf, "virtio-net-pci,netdev={s},mac={s}", .{ id, mac }) catch "virtio-net-pci";
+    // On a formatting failure the device would lose its `netdev={id}` binding
+    // (or the netdev would carry the wrong id), producing a silently-broken or
+    // duplicate-id adapter. Propagate the error instead of emitting a bad arg.
+    // Only embed a caller-supplied MAC if it is well-formed: an unvalidated
+    // value containing a comma would inject extra `-device` properties
+    // (argument injection, CWE-88). An invalid MAC falls through to the
+    // auto-assigned form rather than poisoning the device string.
+    if (mac.len > 0 and vm.isValidMac(mac)) {
+        const dev = try std.fmt.bufPrint(dev_buf, "virtio-net-pci,netdev={s},mac={s}", .{ id, mac });
         try args.append(alloc, dev);
     } else {
-        const dev = std.fmt.bufPrint(dev_buf, "virtio-net-pci,netdev={s}", .{id}) catch "virtio-net-pci";
+        const dev = try std.fmt.bufPrint(dev_buf, "virtio-net-pci,netdev={s}", .{id});
         try args.append(alloc, dev);
     }
     try args.append(alloc, "-netdev");
     switch (mode) {
         .user => {
-            const nd = std.fmt.bufPrint(dev_buf[64..], "user,id={s}", .{id}) catch "user,id=net1";
+            const nd = try std.fmt.bufPrint(dev_buf[64..], "user,id={s}", .{id});
             try args.append(alloc, nd);
         },
         .bridge => {
-            const nd = std.fmt.bufPrint(dev_buf[64..], "bridge,id={s},br=br0", .{id}) catch "bridge,id=net1,br=br0";
+            const nd = try std.fmt.bufPrint(dev_buf[64..], "bridge,id={s},br=br0", .{id});
             try args.append(alloc, nd);
         },
         .none => {
-            // caller should filter .none before calling buildNetdev
+            // unreachable: .none is filtered at function entry above.
             return;
         },
     }
@@ -326,6 +361,11 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     try args.append(alloc, mem_str);
 
     if (config.hasDisk()) {
+        // The disk path is interpolated into a comma-separated -drive property
+        // list, so a comma (or NUL/newline) in it would inject extra drive
+        // options (argument injection, CWE-88) — reject such paths, matching the
+        // floppy/ISO/shared-folder guards below.
+        if (!isSafeQemuPropValue(config.getDiskPathSlice())) return error.UnsafeDiskPath;
         // Throttle options are part of the SAME -drive that defines the disk —
         // a standalone `-drive throttling.*` with no file= makes QEMU reject
         // the command line ("Device needs media, but drive is empty").
@@ -349,6 +389,9 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 
     // Optional second (data) disk, attached as another virtio drive.
     if (config.hasDisk2()) {
+        // Same argument-injection guard as the primary disk: the disk2 path is
+        // attacker-influenced (e.g. the uploaded filename via /upload-disk).
+        if (!isSafeQemuPropValue(config.getDisk2PathSlice())) return error.UnsafeDiskPath;
         const disk2_str = try std.fmt.bufPrint(&bufs.disk2_buf, "file={s},format={s},if=virtio,cache={s}", .{
             config.getDisk2PathSlice(),
             std.mem.span(config.disk2_format.toStr()),
@@ -361,6 +404,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     // Extra disks (up to MAX_EXTRA_DISKS), attached as additional virtio drives.
     for (&bufs.extra_disk_bufs, config.extra_disks, 0..) |*ed_buf, ed, i| {
         if (config.hasExtraDisk(i)) {
+            if (!isSafeQemuPropValue(config.getExtraDiskPathSlice(i))) return error.UnsafeDiskPath;
             const ed_str = try std.fmt.bufPrint(ed_buf, "file={s},format={s},if=virtio,cache={s}", .{
                 config.getExtraDiskPathSlice(i),
                 std.mem.span(ed.format.toStr()),
@@ -371,18 +415,24 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         }
     }
 
-    // Optional floppy drive (drive A:), raw image.
-    if (config.hasFloppy()) {
+    // Optional floppy drive (drive A:), raw image. The path is interpolated into
+    // a comma-separated `-drive` property list, so a comma (or NUL/newline) in it
+    // would inject extra drive options (argument injection, CWE-88); reject such
+    // paths rather than emit them.
+    if (config.hasFloppy() and isSafeQemuPropValue(config.getFloppyPathSlice())) {
         const fd_str = try std.fmt.bufPrint(&bufs.floppy_buf, "file={s},if=floppy,format=raw", .{config.getFloppyPathSlice()});
         try args.append(alloc, "-drive");
         try args.append(alloc, fd_str);
     }
 
     // Use an explicit ide-cd device with a stable id ("ide2-cd0") so that
-    // QMP `change ide2-cd0` can hot-swap the ISO without rebooting.
+    // QMP `change ide2-cd0` can hot-swap the ISO without rebooting. As with the
+    // floppy, an ISO path carrying a comma could inject `-drive` options (e.g.
+    // flipping `readonly=on`), so an unsafe path is treated as "no ISO" — the
+    // empty drive is still emitted so the ide-cd device has a backing slot.
     try args.append(alloc, "-device");
     try args.append(alloc, "ide-cd,drive=cdrom0,id=ide2-cd0");
-    if (config.hasIso()) {
+    if (config.hasIso() and isSafeQemuPropValue(config.getIsoPathSlice())) {
         const cdrom_str = try std.fmt.bufPrint(&bufs.cdrom_buf, "file={s},if=none,id=cdrom0,media=cdrom,readonly=on", .{config.getIsoPathSlice()});
         try args.append(alloc, "-drive");
         try args.append(alloc, cdrom_str);
@@ -424,13 +474,20 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
             try args.append(alloc, "-spice");
             try args.append(alloc, spice_str);
         } else {
-            // VNC display number = port - 5900.  Saturate to 0 if port < 5900
-            // to prevent u16 underflow (panic in debug, UB in release).
-            const vnc_display: u16 = if (config.vnc_port >= 5900) config.vnc_port - 5900 else 0;
-            const vnc_str = try std.fmt.bufPrint(&bufs.vnc_buf, "localhost:{d}", .{vnc_display});
+            const vnc_str = try std.fmt.bufPrint(&bufs.vnc_buf, "localhost:{d}", .{vncDisplayNum(config.vnc_port)});
             try args.append(alloc, "-vnc");
             try args.append(alloc, vnc_str);
         }
+    } else if (config.display == .vnc) {
+        // QEMU has no "vnc" backend for `-display`; VNC is configured via
+        // `-vnc`. Emitting `-display vnc` makes QEMU reject the command line
+        // ("Display 'vnc' is not available"), so route it like the embedded
+        // VNC path: headless display plus a `-vnc` listener.
+        const vnc_str = try std.fmt.bufPrint(&bufs.vnc_buf, "localhost:{d}", .{vncDisplayNum(config.vnc_port)});
+        try args.append(alloc, "-display");
+        try args.append(alloc, "none");
+        try args.append(alloc, "-vnc");
+        try args.append(alloc, vnc_str);
     } else {
         try args.append(alloc, "-display");
         // 3D acceleration (virgl) needs a GL-capable native display.
@@ -534,11 +591,8 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, "tpm-tis,tpmdev=tpm0");
     }
 
-    if (config.secure_boot) {
-        // SMM is enabled via -machine q35,smm=on above.
-        // Additionally, UEFI vars with Secure Boot should be used.
-        // The firmware selection (Bios/UEFI) already handles pflash.
-    }
+    // Secure Boot needs no extra args here: SMM is already enabled via
+    // -machine q35,smm=on and the Bios/UEFI firmware selection handles pflash.
 
     if (config.hugepages) {
         try args.append(alloc, "-mem-prealloc");
@@ -562,17 +616,21 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, qmp_str);
     }
 
+    // The net0 `-device` line is identical for user and bridge modes; only the
+    // `-netdev` value that follows differs. Emit the shared part once here.
+    if (config.nics[0].mode != .none) {
+        try args.append(alloc, "-device");
+        if (config.hasMacAddress() and vm.isValidMac(config.getMacAddressSlice())) {
+            const mac_str = std.fmt.bufPrint(&bufs.net_mac_buf, "virtio-net-pci,netdev=net0,mac={s}", .{config.getMacAddressSlice()}) catch "virtio-net-pci,netdev=net0";
+            try args.append(alloc, mac_str);
+        } else {
+            try args.append(alloc, "virtio-net-pci,netdev=net0");
+        }
+        try args.append(alloc, "-netdev");
+    }
+
     switch (config.nics[0].mode) {
         .user => {
-            try args.append(alloc, "-device");
-            if (config.hasMacAddress()) {
-                const mac_str = std.fmt.bufPrint(&bufs.net_mac_buf, "virtio-net-pci,netdev=net0,mac={s}", .{config.getMacAddressSlice()}) catch "virtio-net-pci,netdev=net0";
-                try args.append(alloc, mac_str);
-            } else {
-                try args.append(alloc, "virtio-net-pci,netdev=net0");
-            }
-            try args.append(alloc, "-netdev");
-
             if (config.hasPortForwards()) {
                 var fwd_str: []u8 = &bufs.netdev_user_buf;
                 var offset: usize = 0;
@@ -586,6 +644,10 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
                     var parts = std.mem.splitScalar(u8, trimmed, ':');
                     const host = parts.next() orelse continue;
                     const guest = parts.next() orelse continue;
+                    // Only emit forwards whose host and guest are bare port
+                    // numbers; anything else is dropped rather than passed into
+                    // the netdev property list (see isDecimalPort).
+                    if (!isDecimalPort(host) or !isDecimalPort(guest)) continue;
                     const chunk = std.fmt.bufPrint(fwd_str[offset..], ",hostfwd=tcp::{s}-:{s}", .{ host, guest }) catch break;
                     offset += chunk.len;
                 }
@@ -595,14 +657,6 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
             }
         },
         .bridge => {
-            try args.append(alloc, "-device");
-            if (config.hasMacAddress()) {
-                const mac_str = std.fmt.bufPrint(&bufs.net_mac_buf, "virtio-net-pci,netdev=net0,mac={s}", .{config.getMacAddressSlice()}) catch "virtio-net-pci,netdev=net0";
-                try args.append(alloc, mac_str);
-            } else {
-                try args.append(alloc, "virtio-net-pci,netdev=net0");
-            }
-            try args.append(alloc, "-netdev");
             try args.append(alloc, "bridge,id=net0,br=br0");
         },
         .none => {},
@@ -626,13 +680,18 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
             try args.append(alloc, "-device");
             try args.append(alloc, "intel-hda");
             try args.append(alloc, "-device");
-            try args.append(alloc, "hda-duplex");
+            // hda-duplex must reference the audiodev id explicitly; modern QEMU
+            // no longer auto-binds the lone backend, so without audiodev= the
+            // codec attaches to a null backend and the guest gets no sound.
+            try args.append(alloc, "hda-duplex,audiodev=snd0");
             try args.append(alloc, "-audiodev");
             try args.append(alloc, "sdl,id=snd0");
         },
         .ac97 => {
             try args.append(alloc, "-device");
-            try args.append(alloc, "AC97");
+            // The AC97 device must reference the audiodev id explicitly; without
+            // audiodev= modern QEMU binds it to a null backend and emits no sound.
+            try args.append(alloc, "AC97,audiodev=snd0");
             try args.append(alloc, "-audiodev");
             try args.append(alloc, "sdl,id=snd0");
         },
@@ -678,25 +737,44 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 
     // USB device passthrough. The field holds "vendorid:productid" in hex
     // (e.g. "046d:c52b"). The q35 machine already provides a USB controller.
+    //
+    // vendor/product are interpolated into a comma-separated `-device` property
+    // list, so each must be validated as plain hex. A value such as
+    // "046d,hostbus=1" would otherwise inject extra QEMU device properties
+    // (argument injection, CWE-88) — selecting a different physical device than
+    // intended. The web boundary only strips "..", so enforce the format here at
+    // the sink, where it also covers names loaded from vms.json / the daemon.
     if (config.hasUsbDevice()) {
         const spec = config.getUsbDeviceSlice();
         if (std.mem.indexOfScalar(u8, spec, ':')) |sep| {
             const vendor = spec[0..sep];
             const product = spec[sep + 1 ..];
-            const usb_str = try std.fmt.bufPrint(&bufs.usb_buf, "usb-host,vendorid=0x{s},productid=0x{s}", .{ vendor, product });
-            try args.append(alloc, "-device");
-            try args.append(alloc, usb_str);
+            if (isHexId(vendor) and isHexId(product)) {
+                const usb_str = try std.fmt.bufPrint(&bufs.usb_buf, "usb-host,vendorid=0x{s},productid=0x{s}", .{ vendor, product });
+                try args.append(alloc, "-device");
+                try args.append(alloc, usb_str);
+            }
         }
     }
 
     // Shared folder via virtio-9p: mounts a host directory into the guest.
     // Guest mounts with: mount -t 9p -o trans=virtio shared /mnt/shared
+    //
+    // The path is interpolated into a comma-separated `-fsdev` property list. A
+    // comma (QEMU's property delimiter) in the path would inject extra fsdev
+    // properties — e.g. downgrading `security_model` or adding `readonly=off`
+    // (argument injection, CWE-88). QEMU itself cannot represent an un-escaped
+    // comma in this position anyway, so a path containing one (or a NUL /
+    // newline) is rejected outright rather than emitted.
     if (config.hasSharedFolder()) {
-        const shared_str = try std.fmt.bufPrint(&bufs.shared_buf, "local,id=shared0,path={s},security_model=mapped-xattr", .{config.getSharedFolderSlice()});
-        try args.append(alloc, "-fsdev");
-        try args.append(alloc, shared_str);
-        try args.append(alloc, "-device");
-        try args.append(alloc, "virtio-9p-pci,fsdev=shared0,mount_tag=shared");
+        const folder = config.getSharedFolderSlice();
+        if (isSafeQemuPropValue(folder)) {
+            const shared_str = try std.fmt.bufPrint(&bufs.shared_buf, "local,id=shared0,path={s},security_model=mapped-xattr", .{folder});
+            try args.append(alloc, "-fsdev");
+            try args.append(alloc, shared_str);
+            try args.append(alloc, "-device");
+            try args.append(alloc, "virtio-9p-pci,fsdev=shared0,mount_tag=shared");
+        }
     }
 }
 
@@ -902,9 +980,7 @@ pub fn tryReapChild(pid: std.c.pid_t) ?bool {
     const r = std.c.waitpid(pid, &status, std.c.W.NOHANG);
     if (r == 0) return null; // still running
     if (r < 0) return false; // error / already reaped
-    const ustatus: u32 = @bitCast(status);
-    if ((ustatus & 0x7f) != 0) return false; // signalled or stopped
-    return (ustatus >> 8) & 0xff == 0;
+    return exitedClean(status);
 }
 
 /// Create a linked clone: a new qcow2 image backed by `backing_path`.
@@ -956,6 +1032,52 @@ fn isSafeShellPath(path: []const u8) bool {
             => return false,
             else => {},
         }
+    }
+    return true;
+}
+
+/// Returns true if `s` is a non-empty run of 1–4 hex digits — the only shape a
+/// USB vendor/product id may take. Rejecting anything else stops a comma (or
+/// other QEMU `-device` property delimiter) from injecting extra device
+/// properties when the id is interpolated into a property list.
+fn isHexId(s: []const u8) bool {
+    if (s.len == 0 or s.len > 4) return false;
+    for (s) |c| {
+        const ok = (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+        if (!ok) return false;
+    }
+    return true;
+}
+
+/// Returns true if `s` is a syntactically valid TCP port: a non-empty run of
+/// 1–5 decimal digits that parses as a non-zero `u16`. Port-forward tokens are
+/// interpolated into the QEMU `-netdev user,...,hostfwd=...` property list;
+/// restricting them to bare port numbers keeps any other byte (a stray comma,
+/// `=`, or property name) from being smuggled into that list, matching the
+/// guarding applied to every other user value that reaches a QEMU argument.
+fn isDecimalPort(s: []const u8) bool {
+    if (s.len == 0 or s.len > 5) return false;
+    for (s) |c| {
+        if (c < '0' or c > '9') return false;
+    }
+    const n = std.fmt.parseInt(u16, s, 10) catch return false;
+    return n != 0;
+}
+
+/// VNC display number for a TCP port: `port - 5900`, saturated to 0 when
+/// `port < 5900` to prevent u16 underflow (panic in debug, UB in release).
+fn vncDisplayNum(port: u16) u16 {
+    return if (port >= 5900) port - 5900 else 0;
+}
+
+/// Returns true if `s` can be safely interpolated into a single value of a
+/// comma-separated QEMU `-fsdev`/`-device` property list. Rejects the comma
+/// property delimiter and the NUL/newline terminators; everything else (spaces,
+/// slashes, etc.) is a legitimate path byte.
+fn isSafeQemuPropValue(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| {
+        if (c == ',' or c == 0 or c == '\n' or c == '\r') return false;
     }
     return true;
 }
@@ -1022,6 +1144,91 @@ test "isSafeShellPath: safe and unsafe paths" {
     try std.testing.expect(!isSafeShellPath("bad|cat /etc/passwd"));
     try std.testing.expect(!isSafeShellPath("bad\"quotes"));
     try std.testing.expect(!isSafeShellPath(""));
+}
+
+test "isHexId: accepts only short hex runs" {
+    try std.testing.expect(isHexId("046d"));
+    try std.testing.expect(isHexId("c52b"));
+    try std.testing.expect(isHexId("0"));
+    try std.testing.expect(isHexId("ABCD"));
+    try std.testing.expect(!isHexId("")); // empty
+    try std.testing.expect(!isHexId("12345")); // too long
+    try std.testing.expect(!isHexId("046d,hostbus=1")); // property injection
+    try std.testing.expect(!isHexId("xy")); // non-hex
+    try std.testing.expect(!isHexId("0x46")); // no prefix allowed here
+}
+
+test "fuzz: isHexId never panics and accepts only [0-9a-fA-F]{1,4}" {
+    var seed: u64 = 0x9e3779b97f4a7c15;
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        var buf: [12]u8 = undefined;
+        const n = seed % buf.len;
+        var s = seed;
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            s = s *% 2862933555777941757 +% 3037000493;
+            buf[j] = @truncate(s);
+        }
+        const arg = buf[0..n];
+        if (isHexId(arg)) {
+            try std.testing.expect(arg.len >= 1 and arg.len <= 4);
+            for (arg) |c| {
+                const ok = (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+                try std.testing.expect(ok);
+            }
+        }
+    }
+}
+
+test "vncDisplayNum: subtracts 5900 and saturates" {
+    try std.testing.expectEqual(@as(u16, 0), vncDisplayNum(5900));
+    try std.testing.expectEqual(@as(u16, 1), vncDisplayNum(5901));
+    try std.testing.expectEqual(@as(u16, 100), vncDisplayNum(6000));
+    try std.testing.expectEqual(@as(u16, 0), vncDisplayNum(0)); // below 5900 saturates
+    try std.testing.expectEqual(@as(u16, 0), vncDisplayNum(5899));
+}
+
+test "fuzz: vncDisplayNum never underflows" {
+    var seed: u64 = 0x9e3779b97f4a7c15;
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        const port: u16 = @truncate(seed);
+        const d = vncDisplayNum(port);
+        if (port >= 5900) try std.testing.expectEqual(port - 5900, d) else try std.testing.expectEqual(@as(u16, 0), d);
+    }
+}
+
+test "isSafeQemuPropValue: rejects comma and terminators" {
+    try std.testing.expect(isSafeQemuPropValue("/home/user/shared"));
+    try std.testing.expect(isSafeQemuPropValue("/path with spaces/x"));
+    try std.testing.expect(!isSafeQemuPropValue("")); // empty
+    try std.testing.expect(!isSafeQemuPropValue("/x,security_model=none")); // injection
+    try std.testing.expect(!isSafeQemuPropValue("/x\x00y"));
+    try std.testing.expect(!isSafeQemuPropValue("/x\ny"));
+}
+
+test "fuzz: isSafeQemuPropValue never panics and rejects delimiters" {
+    var seed: u64 = 0xd1b54a32d192ed03;
+    var i: usize = 0;
+    while (i < 4096) : (i += 1) {
+        seed = seed *% 6364136223846793005 +% 1442695040888963407;
+        var buf: [24]u8 = undefined;
+        const n = seed % buf.len;
+        var s = seed;
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            s = s *% 2862933555777941757 +% 3037000493;
+            buf[j] = @truncate(s);
+        }
+        const arg = buf[0..n];
+        if (isSafeQemuPropValue(arg)) {
+            try std.testing.expect(arg.len > 0);
+            for (arg) |c| try std.testing.expect(c != ',' and c != 0 and c != '\n' and c != '\r');
+        }
+    }
 }
 
 test "convertDiskImage: arg builder includes streamOptimized for VMDK" {
@@ -1194,6 +1401,44 @@ test "qemu: buildScriptStr emits core flags (user net)" {
     try expect(has(s, "-name"));
 }
 
+test "qemu: non-embedded VNC display uses -vnc, not invalid -display vnc" {
+    // QEMU has no "vnc" backend for -display; it must be configured via -vnc.
+    var cfg = vm.VmConfig{};
+    cfg.setName("VncVm");
+    cfg.setDiskPath("/tmp/disk.qcow2");
+    cfg.nics[0].mode = .user;
+    cfg.embed_display = false;
+    cfg.display = .vnc;
+    cfg.vnc_port = 5902;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-vnc"));
+    try expect(has(s, "localhost:2"));
+    try expect(!has(s, "-display vnc"));
+}
+
+test "qemu: disk path with comma is rejected (arg injection guard)" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("Inject");
+    cfg.setDiskPath("/tmp/disk.qcow2,readonly=on,if=none");
+    cfg.nics[0].mode = .user;
+    try std.testing.expectError(error.UnsafeDiskPath, buildScriptStr(&cfg, talloc));
+}
+
+test "qemu: malformed MAC is dropped rather than embedded" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("MacInject");
+    cfg.setDiskPath("/tmp/disk.qcow2");
+    cfg.nics[0].mode = .user;
+    // A comma-bearing value would inject -device properties if embedded; it is
+    // not a valid MAC, so the device must fall back to the auto-assigned form.
+    cfg.setMacAddress("00,evil=1");
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(!has(s, "evil=1"));
+    try expect(has(s, "virtio-net-pci,netdev=net0"));
+}
+
 test "qemu: bridge network + UEFI firmware flags" {
     var cfg = vm.VmConfig{};
     cfg.nics[0].mode = .bridge;
@@ -1201,7 +1446,8 @@ test "qemu: bridge network + UEFI firmware flags" {
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(has(s, "bridge,id=net0,br=br0"));
-    // UEFI selects OVMF via -bios (path comes from findOvmfPath; flag always present).
+    // UEFI selects OVMF via -bios when findOvmfPath() locates the firmware
+    // (otherwise buildScriptStr returns OvmfNotFound).
     try expect(has(s, "-bios"));
 }
 
@@ -1220,6 +1466,81 @@ test "qemu: port forwards appear as hostfwd" {
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(has(s, "hostfwd=tcp::2222-:22"));
+}
+
+test "qemu: many port forwards are not silently truncated" {
+    // A port_forwards string near its 511-byte cap expands to ~2.3 KB of
+    // hostfwd args. The netdev buffer must hold all of it; previously a 1024-byte
+    // buffer dropped the tail rules via `catch break`. Build many minimal pairs
+    // and confirm the FIRST and LAST both survive.
+    var cfg = vm.VmConfig{};
+    cfg.nics[0].mode = .user;
+    var pf_buf: [600]u8 = undefined;
+    var w: usize = 0;
+    var n: u32 = 100;
+    // Pairs like "100:200,101:201,..." until we approach the 511-byte cap.
+    while (true) {
+        const chunk = std.fmt.bufPrint(pf_buf[w..], "{d}:{d},", .{ n, n + 100 }) catch break;
+        if (w + chunk.len > 500) break;
+        w += chunk.len;
+        n += 1;
+    }
+    cfg.setPortForwards(pf_buf[0 .. w - 1]); // drop trailing comma
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "hostfwd=tcp::100-:200")); // first rule
+    const last = n - 1;
+    var first_buf: [32]u8 = undefined;
+    const last_str = try std.fmt.bufPrint(&first_buf, "hostfwd=tcp::{d}-:{d}", .{ last, last + 100 });
+    try expect(has(s, last_str)); // last rule survived (no truncation)
+}
+
+test "qemu: malformed port forwards are dropped, not injected" {
+    var cfg = vm.VmConfig{};
+    cfg.nics[0].mode = .user;
+    // A valid pair followed by ones carrying QEMU property/metacharacters or a
+    // non-numeric guest. Only the valid pair must reach the netdev value.
+    cfg.setPortForwards("2222:22,80=x:81,99:smb,0:22,7:0");
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "hostfwd=tcp::2222-:22"));
+    try expect(!has(s, "80=x")); // '=' token rejected
+    try expect(!has(s, "smb")); // non-numeric guest rejected
+    try expect(!has(s, "tcp::0-")); // zero port rejected
+    try expect(!has(s, "-:0")); // zero guest port rejected
+}
+
+test "qemu: isDecimalPort accepts ports, rejects junk" {
+    try expect(isDecimalPort("1"));
+    try expect(isDecimalPort("2222"));
+    try expect(isDecimalPort("65535"));
+    try expect(!isDecimalPort("")); // empty
+    try expect(!isDecimalPort("0")); // zero is not a usable port
+    try expect(!isDecimalPort("65536")); // overflows u16
+    try expect(!isDecimalPort("123456")); // too many digits
+    try expect(!isDecimalPort("80,smb=/x")); // comma/property injection
+    try expect(!isDecimalPort("8a")); // non-digit
+    try expect(!isDecimalPort(" 80")); // whitespace
+}
+
+test "qemu: fuzz isDecimalPort never injects metacharacters" {
+    var prng = std.Random.DefaultPrng.init(0xF0F7);
+    const rnd = prng.random();
+    var buf: [8]u8 = undefined;
+    var i: usize = 0;
+    while (i < 5000) : (i += 1) {
+        const len = rnd.intRangeAtMost(usize, 0, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        const s = buf[0..len];
+        if (isDecimalPort(s)) {
+            // Anything accepted must be a bare 1-5 digit non-zero u16: no comma,
+            // '=', NUL, or other byte that could escape the netdev value.
+            try expect(s.len >= 1 and s.len <= 5);
+            for (s) |c| try expect(c >= '0' and c <= '9');
+            const n = try std.fmt.parseInt(u16, s, 10);
+            try expect(n != 0);
+        }
+    }
 }
 
 test "qemu: extra NICs add net1/net2 devices" {
@@ -1474,6 +1795,7 @@ test "qemu: buildScriptStr gpu virtio-gpu (non-GL)" {
     try expect(has(s, "virtio-gpu"));
     try expect(!has(s, "virtio-vga-gl"));
     try expect(!has(s, "qxl"));
+    try expect(!has(s, "gl=on")); // non-GL device must not enable GL acceleration
 }
 
 test "qemu: buildScriptStr gpu virtio-vga (non-GL)" {
@@ -1486,6 +1808,7 @@ test "qemu: buildScriptStr gpu virtio-vga (non-GL)" {
     // "-vga virtio" not "virtio-gpu" or "virtio-vga"
     try expect(!has(s, "virtio-gpu"));
     try expect(!has(s, "virtio-vga"));
+    try expect(!has(s, "gl=on")); // non-GL device must not enable GL acceleration
 }
 
 test "qemu: buildScriptStr gpu qxl" {
@@ -1507,7 +1830,7 @@ test "qemu: buildScriptStr gpu std-vga" {
     try expect(has(s, "std"));
 }
 
-test "qemu: buildScriptStr 3d enabled with non-GL gpu falls back to virtio-vga" {
+test "qemu: buildScriptStr 3d enabled with non-GL gpu keeps the non-GL device (no GL)" {
     var cfg = vm.VmConfig{};
     cfg.enable_3d = true;
     cfg.display = .gtk;
@@ -1517,6 +1840,9 @@ test "qemu: buildScriptStr 3d enabled with non-GL gpu falls back to virtio-vga" 
     defer talloc.free(s);
     try expect(has(s, "-vga"));
     try expect(has(s, "std"));
+    // enable_3d must not swap a non-GL GPU device for a virgl variant.
+    try expect(!has(s, "virtio-vga-gl"));
+    try expect(!has(s, "virtio-gpu-gl"));
 }
 
 test "qemu: buildScriptStr with USB device" {
@@ -1650,6 +1976,8 @@ test "qemu: buildScriptStr with HDA audio" {
     defer talloc.free(s);
     try expect(has(s, "intel-hda"));
     try expect(has(s, "hda-duplex"));
+    // The codec must be bound to the audiodev backend or the guest gets no sound.
+    try expect(has(s, "hda-duplex,audiodev=snd0"));
 }
 
 test "qemu: buildScriptStr with AC97 audio" {
@@ -1658,6 +1986,8 @@ test "qemu: buildScriptStr with AC97 audio" {
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(has(s, "AC97"));
+    // The device must be bound to the audiodev backend or the guest gets no sound.
+    try expect(has(s, "AC97,audiodev=snd0"));
 }
 
 test "qemu: buildScriptStr with data disk" {

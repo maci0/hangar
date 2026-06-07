@@ -11,7 +11,6 @@ const qmp = @import("qmp.zig");
 const vnc = @import("vnc_client.zig");
 const ws = @import("ws.zig");
 const usock = @import("usock.zig");
-const hv_iface = @import("hv/interface.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
 const ovf = @import("ovf.zig");
 const vnet = @import("vnet.zig");
@@ -22,6 +21,7 @@ const sync = @import("sync.zig");
 const urlencode = @import("urlencode.zig");
 const form_parsers = @import("form_parsers.zig");
 const path_helpers = @import("path_helpers.zig");
+const transport = @import("transport.zig");
 
 extern fn time(t: ?*c_long) c_long;
 extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
@@ -31,14 +31,16 @@ const HTTP_OK: u16 = 200;
 const HTTP_CREATED: u16 = 201;
 const HTTP_BAD_REQUEST: u16 = 400;
 const HTTP_UNAUTHORIZED: u16 = 401;
+const HTTP_FORBIDDEN: u16 = 403;
 const HTTP_NOT_FOUND: u16 = 404;
 const HTTP_METHOD_NOT_ALLOWED: u16 = 405;
+const HTTP_CONFLICT: u16 = 409;
 const HTTP_PAYLOAD_TOO_LARGE: u16 = 413;
 const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 const HTTP_INTERNAL_ERROR: u16 = 500;
 
-const API_KEY: []const u8 = "hangar"; // default API key for X-API-Key auth
-const DEFAULT_PORT: u16 = 9080; // KV_PORT default; matches transport.DEFAULT_PORT
+const API_KEY: []const u8 = transport.DEFAULT_API_KEY; // built-in X-API-Key default
+const DEFAULT_PORT: u16 = transport.DEFAULT_PORT; // KV_PORT default
 var auth_token: [64]u8 = [_]u8{0} ** 64;
 var auth_token_len: usize = 0;
 
@@ -120,7 +122,10 @@ fn rateLimitCheck() bool {
     const prev: i64 = @atomicLoad(i64, &g_rate_window_start, .acquire);
     if (now != prev) {
         // Try to CAS the window forward — only the winner resets the count.
-        const won = @cmpxchgWeak(i64, &g_rate_window_start, prev, now, .acq_rel, .monotonic);
+        // Strong (not weak): a spurious failure here would drop the thread into
+        // the increment path against the *previous* window's not-yet-reset
+        // counter, spuriously 429-ing a legitimate request at a second boundary.
+        const won = @cmpxchgStrong(i64, &g_rate_window_start, prev, now, .acq_rel, .monotonic);
         if (won == null) {
             // We advanced the window — reset the count and allow this request.
             @atomicStore(u32, &g_rate_count, 0, .release);
@@ -169,7 +174,7 @@ fn isAuthExempt(method_get: bool, path: []const u8) bool {
 
 fn clampPref(v: []const u8, fallback: u32, lo: u32, hi: u32) u32 {
     const val = std.fmt.parseInt(u32, v, 10) catch return fallback;
-    return if (val < lo) lo else if (val > hi) hi else val;
+    return std.math.clamp(val, lo, hi);
 }
 
 /// Map an arbitrary name to a filesystem/shell-safe slug, replacing any
@@ -220,17 +225,61 @@ fn secretEql(a: []const u8, b: []const u8) bool {
     return diff == 0;
 }
 
+/// Validate a `KV_API_KEY` value: 1-64 bytes of printable ASCII (no control
+/// chars, no spaces). Rejecting whitespace/control bytes fails fast on the
+/// common footgun of `export KV_API_KEY=$(cat keyfile)` leaving a trailing
+/// newline — that byte would otherwise be embedded into the client's
+/// `X-API-Key:` header (see `transport.buildHttpRequest`) and silently corrupt
+/// request framing while the daemon binds all interfaces with a mismatched key.
+fn validApiKey(key: []const u8) bool {
+    if (key.len == 0 or key.len > 64) return false;
+    for (key) |ch| {
+        if (ch <= 0x20 or ch == 0x7f) return false;
+    }
+    return true;
+}
+
+/// Validate the request's `Host` header against the loopback allowlist.
+///
+/// Only enforced in loopback mode (no custom `KV_API_KEY`), where the daemon
+/// binds `::1`/`127.0.0.1` and accepts the publicly-known built-in key. Without
+/// this, a DNS-rebinding attack defeats the same-origin/CORS protection: a page
+/// the victim visits rebinds its own hostname to `127.0.0.1`, becomes
+/// same-origin with the daemon (so no CORS preflight blocks a custom header),
+/// and drives every state-changing endpoint with `X-API-Key: hangar`
+/// (CWE-350 / CWE-1385). A real browser only ever sends `Host: localhost:PORT`
+/// or `Host: 127.0.0.1:PORT` for a loopback connection, so rejecting any other
+/// host closes the rebinding hole without affecting legitimate local use.
+///
+/// When a custom key is set (the daemon is intentionally exposed on all
+/// interfaces) the host is operator-defined and the secret key — not the
+/// origin — is the control, so the check is skipped.
+fn hostHeaderOk(req: []const u8) bool {
+    if (auth_token_len > 0) return true; // exposed mode: secret key gates access
+    const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse req.len;
+    const host = findHeader(req[0..hdr_end], "Host: ") orelse return false;
+    // Strip the optional ":port" suffix (IPv6 literals are bracketed, so a
+    // ']' marks the end of the address before any port colon).
+    const addr = if (std.mem.lastIndexOfScalar(u8, host, ']')) |rb|
+        host[0 .. rb + 1]
+    else if (std.mem.indexOfScalar(u8, host, ':')) |colon|
+        host[0..colon]
+    else
+        host;
+    return std.ascii.eqlIgnoreCase(addr, "localhost") or
+        std.mem.eql(u8, addr, "127.0.0.1") or
+        std.mem.eql(u8, addr, "[::1]") or
+        std.mem.eql(u8, addr, "::1");
+}
+
 fn checkAuth(req: []const u8) bool {
     const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return false;
     const headers = req[0..hdr_end];
 
-    if (auth_token_len > 0) {
-        const provided = findHeader(headers, "X-API-Key: ") orelse return false;
-        return secretEql(provided, auth_token[0..auth_token_len]);
-    }
-    // No custom token set — fall back to built-in API_KEY
     const provided = findHeader(headers, "X-API-Key: ") orelse return false;
-    return secretEql(provided, API_KEY);
+    // Compare against the custom token if set, else the built-in API_KEY.
+    const expected = if (auth_token_len > 0) auth_token[0..auth_token_len] else API_KEY;
+    return secretEql(provided, expected);
 }
 
 const LogLevel = enum {
@@ -280,9 +329,31 @@ fn logErr(msg: []const u8) void {
     logAt(.err, msg);
 }
 
+/// Log a `persist.save` failure including the underlying error name so an
+/// operator can tell apart a full disk (NoSpaceLeft), a permissions problem
+/// (AccessDenied), and a missing HOME (HomeNotFound) from the log alone.
+/// `context` is an optional prefix (e.g. "liveness: "); pass "" for none.
+fn logSaveErr(context: []const u8, e: anyerror) void {
+    var ebuf: [128]u8 = undefined;
+    logErr(std.fmt.bufPrint(&ebuf, "{s}persist.save failed: {s}", .{ context, @errorName(e) }) catch "persist.save failed");
+}
+
 /// Log a warn-level line (audit/security events such as rejected auth).
 fn logWarn(msg: []const u8) void {
     logAt(.warn, msg);
+}
+
+/// Log a request-handler failure with the underlying error name and the
+/// sanitized request line. The WebSocket-proxy, download, and export handlers
+/// return a 500 to the client on failure; without this the daemon log stays
+/// silent, so an operator seeing "VNC proxy failed" in the browser has no way
+/// to tell a refused connection from a broken pipe or a missing VM. `context`
+/// is a short static label (e.g. "VNC proxy failed"); `req` is the raw request
+/// line, sanitized before logging. Format: `<context>: <ErrorName> [<reqline>]`.
+fn logReqErr(context: []const u8, e: anyerror, req: []const u8) void {
+    var rl_buf: [128]u8 = undefined;
+    var eb: [320]u8 = undefined;
+    logErr(std.fmt.bufPrint(&eb, "{s}: {s} [{s}]", .{ context, @errorName(e), requestLine(req, &rl_buf) }) catch context);
 }
 
 /// Copy a user-controlled VM name into `out`, replacing every non-printable
@@ -304,6 +375,20 @@ fn logAudit(action: []const u8, vm_name: []const u8) void {
     const safe = sanitizeLogName(&name_buf, vm_name);
     var msg: [320]u8 = undefined;
     logAt(.info, std.fmt.bufPrint(&msg, "audit: {s} vm=\"{s}\"", .{ action, safe }) catch action);
+}
+
+/// Log an error-level line for a failed destructive QMP/disk operation,
+/// including the underlying error name and the (sanitized) VM name. Handlers
+/// return a short token ("create err", "qmp err") to the browser; without this
+/// the daemon log stays silent, so an operator cannot tell a full disk
+/// (NoSpaceLeft) from a locked image or a missing `qemu-img` at 3 AM. `op` is a
+/// short static label (e.g. "snapshot take"). Format:
+/// `<op> failed: <ErrorName> vm="<name>"`.
+fn logOpErr(op: []const u8, e: anyerror, vm_name: []const u8) void {
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    const safe = sanitizeLogName(&name_buf, vm_name);
+    var msg: [320]u8 = undefined;
+    logErr(std.fmt.bufPrint(&msg, "{s} failed: {s} vm=\"{s}\"", .{ op, @errorName(e), safe }) catch op);
 }
 
 /// Copy the HTTP request line (method + path, up to the first CR/LF) into
@@ -332,9 +417,18 @@ fn writeAll(conn: c.fd_t, buf: [*]const u8, len: usize) bool {
 }
 
 /// Format an error message as a JSON object: {"error":"<msg>"}.
-/// Returns a slice of `buf`; buffer must be at least msg.len + 16 bytes.
+/// Returns a slice of `buf`; buffer must be at least msg.len + 12 bytes
+/// (the `{"error":""}` wrapper). Falls back to a static string if it overflows.
 fn jsonErr(buf: []u8, msg: []const u8) []const u8 {
     return std.fmt.bufPrint(buf, "{{\"error\":\"{s}\"}}", .{msg}) catch "{\"error\":\"internal\"}";
+}
+
+/// True if `s` exactly equals any token in `set`.
+fn anyEql(s: []const u8, set: []const []const u8) bool {
+    for (set) |t| {
+        if (std.mem.eql(u8, s, t)) return true;
+    }
+    return false;
 }
 
 /// Dynamic server-side failure tokens that handlers return as their response
@@ -372,8 +466,10 @@ fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8
         HTTP_CREATED => "HTTP/1.1 201 Created\r\n",
         HTTP_BAD_REQUEST => "HTTP/1.1 400 Bad Request\r\n",
         HTTP_UNAUTHORIZED => "HTTP/1.1 401 Unauthorized\r\n",
+        HTTP_FORBIDDEN => "HTTP/1.1 403 Forbidden\r\n",
         HTTP_NOT_FOUND => "HTTP/1.1 404 Not Found\r\n",
         HTTP_METHOD_NOT_ALLOWED => "HTTP/1.1 405 Method Not Allowed\r\n",
+        HTTP_CONFLICT => "HTTP/1.1 409 Conflict\r\n",
         HTTP_PAYLOAD_TOO_LARGE => "HTTP/1.1 413 Payload Too Large\r\n",
         HTTP_TOO_MANY_REQUESTS => "HTTP/1.1 429 Too Many Requests\r\n",
         HTTP_INTERNAL_ERROR => "HTTP/1.1 500 Internal Server Error\r\n",
@@ -402,6 +498,12 @@ fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8
     append(&hbuf, &hlen, "\r\nServer: hangar");
     if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null) {
         append(&hbuf, &hlen, "\r\nCache-Control: public, max-age=86400");
+    } else {
+        // Dynamic responses (API JSON, errors) carry auth-gated VM state — disk
+        // paths, MACs, notes. Forbid browser/proxy caching so they are never
+        // persisted to a shared-machine disk cache or replayed from history
+        // (CWE-525).
+        append(&hbuf, &hlen, "\r\nCache-Control: no-store");
     }
     if (status == HTTP_TOO_MANY_REQUESTS) {
         // Rate-limit window is 1 second; tell clients/proxies when to retry.
@@ -453,6 +555,12 @@ fn acceptLoop(fd: c.fd_t) void {
             logErr("acceptLoop: accept() failed, listener thread exiting");
             break;
         }
+        // Both writeHttpResponse and ws.writeFrame emit a small header write
+        // followed by a separate body/payload write. Without TCP_NODELAY,
+        // Nagle holds the header until its ACK, adding up to a round-trip of
+        // latency to every response and every relayed display frame on remote
+        // (non-loopback) connections. No-op on the Unix listener's fds.
+        setTcpNoDelay(conn);
         const th = std.Thread.spawn(std.Thread.SpawnConfig{}, serveHtml, .{conn}) catch {
             // Thread exhaustion drops this request; log so load-shedding is visible.
             logErr("acceptLoop: thread spawn failed, dropping connection");
@@ -473,7 +581,8 @@ fn serveHtml(conn: c.fd_t) void {
     var buf: [65536]u8 = undefined;
     const n = c.read(conn, &buf, buf.len);
     if (n <= 0) return;
-    const req = buf[0..@intCast(n)];
+    var req_len: usize = @intCast(n);
+    var req = buf[0..req_len];
 
     // ── Rate limiting: POST requests only ──
     if (std.mem.startsWith(u8, req, "POST ") and rateLimitCheck()) {
@@ -493,6 +602,14 @@ fn serveHtml(conn: c.fd_t) void {
         return;
     }
 
+    // ── Anti-DNS-rebinding: in loopback mode require a loopback Host header ──
+    // Runs before any route (including the WebSocket proxies) so a rebound
+    // origin cannot reach state-changing endpoints with the default key.
+    if (!hostHeaderOk(req)) {
+        writeHttpResponse(conn, HTTP_FORBIDDEN, "application/json; charset=utf-8", "{\"error\":\"forbidden host\"}");
+        return;
+    }
+
     // Extract the URL path from the request line for precise matching.
     // Avoids path-traversal auth bypass via stitched prefixes (e.g.
     // "GET /api/vm/../../api/save/0" matched the exempt "GET /api/vm/").
@@ -509,13 +626,27 @@ fn serveHtml(conn: c.fd_t) void {
                 writeHttpResponse(conn, HTTP_PAYLOAD_TOO_LARGE, "application/json; charset=utf-8", "{\"error\":\"Payload Too Large\"}");
                 return;
             }
+            // A single read() is not guaranteed to deliver the whole body: TCP
+            // may segment any POST larger than one packet. Keep reading until the
+            // declared Content-Length has arrived (or the connection stalls), so
+            // body handlers never see a truncated request.
+            if (std.mem.indexOf(u8, req, "\r\n\r\n")) |hdr_end| {
+                const need = hdr_end + 4 + cl;
+                while (req_len < need and req_len < buf.len) {
+                    const m = c.read(conn, buf[req_len..].ptr, buf.len - req_len);
+                    if (m <= 0) break;
+                    req_len += @intCast(m);
+                }
+                req = buf[0..req_len];
+            }
         }
     }
 
     // ── WebSocket VNC Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/vnc/")) {
         if (!wsAuthOk(conn, req, "/ws/vnc")) return;
-        handleWsVnc(conn, req) catch {
+        handleWsVnc(conn, req) catch |e| {
+            logReqErr("VNC proxy failed", e, req);
             writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"VNC proxy failed\"}");
         };
         return;
@@ -524,7 +655,8 @@ fn serveHtml(conn: c.fd_t) void {
     // ── WebSocket SPICE Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/spice/")) {
         if (!wsAuthOk(conn, req, "/ws/spice")) return;
-        handleWsSpice(conn, req) catch {
+        handleWsSpice(conn, req) catch |e| {
+            logReqErr("SPICE proxy failed", e, req);
             writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"SPICE proxy failed\"}");
         };
         return;
@@ -533,7 +665,8 @@ fn serveHtml(conn: c.fd_t) void {
     // ── WebSocket Serial Console ──
     if (std.mem.startsWith(u8, req, "GET /ws/serial/")) {
         if (!wsAuthOk(conn, req, "/ws/serial")) return;
-        handleWsSerial(conn, req) catch {
+        handleWsSerial(conn, req) catch |e| {
+            logReqErr("Serial proxy failed", e, req);
             writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"Serial proxy failed\"}");
         };
         return;
@@ -556,27 +689,54 @@ fn serveHtml(conn: c.fd_t) void {
     const needs_auth = !isAuthExempt(method_get, req_path);
 
     if (needs_auth and !checkAuth(req)) {
-        logWarn(if (method_get) "auth rejected: GET /api" else "auth rejected: POST /api");
+        // Include the sanitized request line so the audit log shows which
+        // endpoint was probed — distinguishes a misconfigured client from
+        // someone scanning state-changing routes.
+        var rl_buf: [128]u8 = undefined;
+        var wb: [192]u8 = undefined;
+        logWarn(std.fmt.bufPrint(&wb, "auth rejected: {s}", .{requestLine(req, &rl_buf)}) catch "auth rejected");
         writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
         return;
     }
 
     // ── File download (streaming) routes — handled after auth ──
     if (parseVmIdxSuffix(req, "GET /api/vm/", "/disk2/download") != null) {
-        handleDisk2Download(conn, req) catch {
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "Download failed");
+        handleDisk2Download(conn, req) catch |e| {
+            logReqErr("disk2 download failed", e, req);
+            // Error path uses the unified JSON envelope like the rest of the API,
+            // even though the success path streams binary (octet-stream). A
+            // programmatic client should never have to special-case text/plain.
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"download failed\"}");
         };
         return;
     }
     if (parseVmIdxSuffix(req, "POST /api/vm/", "/upload-disk") != null) {
-        const resp = handleUploadDisk(req) catch "upload err";
-        const upload_status: u16 = if (std.mem.eql(u8, resp, "ok")) HTTP_OK else HTTP_BAD_REQUEST;
-        writeHttpResponse(conn, upload_status, "text/plain", resp);
+        const resp = handleUploadDisk(req) catch |e| blk: {
+            logReqErr("disk upload failed", e, req);
+            break :blk "upload err";
+        };
+        if (std.mem.eql(u8, resp, "ok")) {
+            writeHttpResponse(conn, HTTP_OK, "text/plain", "ok");
+        } else {
+            // Match the central error mapper: server-side failures are 500,
+            // client mistakes 400, and the body is the unified `{"error":...}`
+            // envelope rather than a bare text token (this endpoint returned
+            // text/plain and mislabelled write/encode failures as 400).
+            const s: u16 = if (std.mem.eql(u8, resp, "upload err") or isServerErrToken(resp))
+                HTTP_INTERNAL_ERROR
+            else
+                HTTP_BAD_REQUEST;
+            var jb: [256]u8 = undefined;
+            writeHttpResponse(conn, s, "application/json; charset=utf-8", jsonErr(&jb, resp));
+        }
         return;
     }
     if (std.mem.startsWith(u8, req, "POST /api/export/")) {
-        handleExport(conn, req) catch {
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "text/plain", "export err");
+        handleExport(conn, req) catch |e| {
+            logReqErr("export failed", e, req);
+            // Unified JSON error envelope, consistent with the central mapper and
+            // the rest of the API (the success path streams the OVF tarball).
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"export err\"}");
         };
         return;
     }
@@ -587,7 +747,14 @@ fn serveHtml(conn: c.fd_t) void {
         // budget below), so the common /api/vms poll allocates nothing. Only
         // large libraries spill to a heap buffer sized to the live VM count
         // rather than always mmapping the MAX_VMS worst case.
-        const need = (appstate.vm_count + 1) * 4096;
+        // Snapshot vm_count under the lock: a concurrent add/delete could
+        // otherwise tear this read and mis-size the buffer.
+        const vm_count_snapshot = blk: {
+            appstate.vms_mutex.lock();
+            defer appstate.vms_mutex.unlock();
+            break :blk appstate.vm_count;
+        };
+        const need = (vm_count_snapshot + 1) * 4096;
         const vms_buf: []u8 = if (need > json_buf.len)
             (std.heap.page_allocator.alloc(u8, need) catch &json_buf)
         else
@@ -602,15 +769,21 @@ fn serveHtml(conn: c.fd_t) void {
         // Report live state so the check actually verifies the daemon can read
         // its VM table, not just that the socket accepts connections.
         var running: u32 = 0;
+        var total: usize = 0;
         {
             appstate.vms_mutex.lock();
             defer appstate.vms_mutex.unlock();
+            // Snapshot the count under the lock so the reported total and the
+            // running tally come from the same moment. Reading vm_count again
+            // after unlocking could observe an add/delete in flight and emit an
+            // inconsistent pair (e.g. running > vms).
+            total = appstate.vm_count;
             var i: usize = 0;
-            while (i < appstate.vm_count) : (i += 1) {
+            while (i < total) : (i += 1) {
                 if (appstate.vms[i].status == .running) running += 1;
             }
         }
-        response = std.fmt.bufPrint(&snap_buf, "{{\"status\":\"ok\",\"version\":\"1.0\",\"vms\":{d},\"running\":{d}}}", .{ appstate.vm_count, running }) catch "{\"status\":\"ok\",\"version\":\"1.0\"}";
+        response = std.fmt.bufPrint(&snap_buf, "{{\"status\":\"ok\",\"version\":\"1.0\",\"vms\":{d},\"running\":{d}}}", .{ total, running }) catch "{\"status\":\"ok\",\"version\":\"1.0\"}";
         content_type = "application/json; charset=utf-8";
     } else if (routeExact(req, "GET /api/config")) {
         content_type = "application/json; charset=utf-8";
@@ -623,15 +796,32 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (routeExact(req, "GET /api/catalog")) {
         content_type = "application/json; charset=utf-8";
         response = handleCatalog(&snap_buf);
-    } else if (std.mem.startsWith(u8, req, "GET /api/quickstart/")) {
+    } else if (std.mem.startsWith(u8, req, "POST /api/quickstart/")) {
+        // State-changing (creates and persists a VM), so it must be POST — a GET
+        // here would let prefetchers/crawlers/caches silently create VMs and make
+        // repeated requests non-idempotent. The web UI already POSTs this route.
         response = try handleQuickstart(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "GET /api/vm/")) {
         content_type = "application/json; charset=utf-8";
         response = renderVmDetail(req, &detail_buf) catch blk: {
+            // A render failure (detail buffer overflow on a VM with very long
+            // notes, or an unparseable index) is a server-side fault, not a
+            // missing resource. Report it as 500 so it is not conflated with the
+            // genuine not-found "{}" below — a 404 would wrongly tell the client
+            // the VM vanished when it actually exists.
             logErr("renderVmDetail: buffer overflow or parse error");
-            break :blk "{}";
+            status = HTTP_INTERNAL_ERROR;
+            break :blk "{\"error\":\"render failed\"}";
         };
+        // No such VM (index out of range). The rest of the API returns 404 with
+        // an {"error":...} envelope for a missing resource, so align this
+        // endpoint instead of a misleading 200 {} that a programmatic client
+        // cannot distinguish from a real (but empty) VM.
+        if (status == HTTP_OK and std.mem.eql(u8, response, "{}")) {
+            status = HTTP_NOT_FOUND;
+            response = "{\"error\":\"no vm\"}";
+        }
     } else if (std.mem.startsWith(u8, req, "POST /api/power/")) {
         response = try handlePower(req);
         content_type = "text/plain";
@@ -654,7 +844,12 @@ fn serveHtml(conn: c.fd_t) void {
         } else |_| {
             response = "no fb";
         }
-        content_type = "image/bmp";
+        // renderFramebuffer returns BMP bytes on success or a short error token
+        // ("no vm", "off", "no vnc", ...) on failure. Only label real image
+        // bytes as image/bmp; let error tokens fall through as text/plain so the
+        // central status mapper turns them into proper 4xx/5xx JSON instead of a
+        // 200 "image" the browser silently renders as broken.
+        content_type = if (std.mem.startsWith(u8, response, "BM")) "image/bmp" else "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/clone/")) {
         response = try handleClone(req);
         content_type = "text/plain";
@@ -668,8 +863,8 @@ fn serveHtml(conn: c.fd_t) void {
         response = "saved";
         appstate.vms_mutex.lock();
         defer appstate.vms_mutex.unlock();
-        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
-            logErr("persist.save failed");
+        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+            logSaveErr("", e);
             response = "save failed";
         };
         content_type = "text/plain";
@@ -712,20 +907,36 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (std.mem.startsWith(u8, req, "GET /api/migrate/status/")) {
         response = handleMigrateStatus(req, &snap_buf);
         content_type = "application/json; charset=utf-8";
+        // The status payload is JSON, so it bypasses the central text/plain error
+        // mapper. Surface its error states as real HTTP codes — otherwise a bad
+        // index or a failed QMP query both return 200 OK, indistinguishable from a
+        // live migration to a programmatic client. The body is unchanged and the
+        // web UI reads it regardless of status code, so this is non-breaking.
+        status = migrateStatusHttpCode(response);
     } else if (std.mem.startsWith(u8, req, "POST /api/migrate/cancel/")) {
         response = try handleMigrateCancel(req);
         content_type = "text/plain";
     } else if (std.mem.startsWith(u8, req, "POST /api/migrate/")) {
         response = try handleMigrate(req);
-        // Use text/plain so handleMigrate's error strings ("no dest", "qmp err",
-        // ...) flow through the central error mapper and become 4xx/5xx JSON.
-        // The success body is JSON; fetch's .json() parses it regardless of CT.
-        content_type = "text/plain";
+        // The success body is a JSON object ({"status":"started"}); label it as
+        // such for strict clients. Error returns are bare tokens ("no dest",
+        // "qmp err", ...) kept on text/plain so the central error mapper turns
+        // them into 4xx/5xx JSON envelopes.
+        content_type = if (std.mem.startsWith(u8, response, "{"))
+            "application/json; charset=utf-8"
+        else
+            "text/plain";
     } else if (routeExact(req, "GET /api/vnets")) {
         content_type = "application/json; charset=utf-8";
         response = handleVnetsJson(&snap_buf);
     } else if (routeExact(req, "POST /api/vnets/save")) {
-        response = handleVnetsSave(req) catch "save err";
+        response = handleVnetsSave(req) catch |e| blk: {
+            // Surface a failed networks.json write: without this the browser
+            // gets "save err" but the daemon log stays silent, so an operator
+            // can't tell a full disk from a permissions problem.
+            logReqErr("vnets save failed", e, req);
+            break :blk "save err";
+        };
         content_type = "text/plain";
     } else if (routeExact(req, "POST /api/config")) {
         response = handleConfigSave(req) catch "save err";
@@ -773,28 +984,25 @@ fn serveHtml(conn: c.fd_t) void {
     // Map known error strings to HTTP status codes and JSON error responses.
     // Previously returned plain text; now unified as `{"error":"..."}`.
     if (std.mem.eql(u8, content_type, "text/plain")) {
-        if (std.mem.eql(u8, response, "invalid") or std.mem.eql(u8, response, "invalid idx") or std.mem.eql(u8, response, "not found") or std.mem.eql(u8, response, "no undo")) {
-            status = HTTP_NOT_FOUND;
-            response = jsonErr(&json_err_buf, response);
-            content_type = "application/json; charset=utf-8";
-        } else if (std.mem.eql(u8, response, "no disk") or std.mem.eql(u8, response, "not running") or std.mem.eql(u8, response, "off") or std.mem.eql(u8, response, "not paused") or std.mem.eql(u8, response, "vm running")) {
-            status = HTTP_BAD_REQUEST;
-            response = jsonErr(&json_err_buf, response);
-            content_type = "application/json; charset=utf-8";
-        } else if (std.mem.eql(u8, response, "full") or std.mem.eql(u8, response, "no body") or std.mem.eql(u8, response, "invalid name") or std.mem.eql(u8, response, "bad path") or std.mem.eql(u8, response, "no name") or std.mem.eql(u8, response, "no path") or std.mem.eql(u8, response, "bad ext") or std.mem.eql(u8, response, "no file") or std.mem.eql(u8, response, "bad name") or std.mem.eql(u8, response, "no dest") or std.mem.eql(u8, response, "bad dest") or std.mem.eql(u8, response, "missing from/to") or std.mem.eql(u8, response, "parse error")) {
-            status = HTTP_BAD_REQUEST;
-            response = jsonErr(&json_err_buf, response);
-            content_type = "application/json; charset=utf-8";
-        } else if (std.mem.eql(u8, response, "no vnc") or std.mem.eql(u8, response, "no spice")) {
-            status = HTTP_INTERNAL_ERROR;
-            response = jsonErr(&json_err_buf, response);
-            content_type = "application/json; charset=utf-8";
-        } else if (std.mem.eql(u8, response, "save failed")) {
-            status = HTTP_INTERNAL_ERROR;
-            response = jsonErr(&json_err_buf, response);
-            content_type = "application/json; charset=utf-8";
-        } else if (isServerErrToken(response)) {
-            status = HTTP_INTERNAL_ERROR;
+        const err_status: ?u16 = blk: {
+            if (anyEql(response, &.{ "invalid", "invalid idx", "not found", "no undo", "no vm" })) {
+                break :blk HTTP_NOT_FOUND;
+            } else if (anyEql(response, &.{ "not running", "off", "not paused", "vm running", "full" })) {
+                // The resource is in a state incompatible with the request
+                // (running VM that must be off, off VM that must be running, table
+                // at capacity, ...). 409 lets clients distinguish a transient state
+                // conflict — retriable after changing VM state — from a malformed
+                // request (400).
+                break :blk HTTP_CONFLICT;
+            } else if (anyEql(response, &.{ "no disk", "no body", "invalid name", "bad path", "no name", "no path", "bad ext", "no file", "bad name", "no dest", "bad dest", "missing from/to", "parse error" })) {
+                break :blk HTTP_BAD_REQUEST;
+            } else if (anyEql(response, &.{ "no vnc", "no spice", "save failed", "save err", "no fb" }) or isServerErrToken(response)) {
+                break :blk HTTP_INTERNAL_ERROR;
+            }
+            break :blk null;
+        };
+        if (err_status) |s| {
+            status = s;
             response = jsonErr(&json_err_buf, response);
             content_type = "application/json; charset=utf-8";
         }
@@ -832,7 +1040,8 @@ fn serveConfigRawAlloc() ?[]u8 {
     };
     @memcpy(clipped, raw[0..CONFIG_RAW_MAX]);
     std.heap.page_allocator.free(raw);
-    std.log.warn("vms.json truncated to {} bytes", .{CONFIG_RAW_MAX});
+    var wb: [96]u8 = undefined;
+    logWarn(std.fmt.bufPrint(&wb, "vms.json truncated to {d} bytes", .{CONFIG_RAW_MAX}) catch "vms.json truncated");
     return clipped;
 }
 
@@ -901,7 +1110,7 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
             while (true) {
                 const n = c.read(ctx_ptr.vnc_fd, &buf, buf.len);
                 if (n <= 0) break;
-                // Send shutdown signal to peer via empty write
+                // Relay VNC bytes to the WebSocket client as a binary frame.
                 ctx_ptr.wmtx.lock();
                 ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch {
                     ctx_ptr.wmtx.unlock();
@@ -937,7 +1146,7 @@ fn handleWsVnc(conn: c.fd_t, req: []const u8) !void {
                 if (hdr.opcode == .pong) continue;
                 const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                 if (rlen == 0) continue;
-                _ = c.write(ctx_ptr.vnc_fd, buf[0..rlen].ptr, rlen);
+                if (!writeAll(ctx_ptr.vnc_fd, buf[0..rlen].ptr, rlen)) break;
             }
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.vnc_fd, SHUT_RDWR);
@@ -1048,7 +1257,7 @@ fn handleWsSpice(conn: c.fd_t, req: []const u8) !void {
                 if (hdr.opcode == .pong) continue;
                 const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                 if (rlen == 0) continue;
-                _ = c.write(ctx_ptr.spice_fd, buf[0..rlen].ptr, rlen);
+                if (!writeAll(ctx_ptr.spice_fd, buf[0..rlen].ptr, rlen)) break;
             }
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.spice_fd, SHUT_RDWR);
@@ -1157,7 +1366,7 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
                 if (hdr.opcode == .pong) continue;
                 const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                 if (rlen == 0) continue;
-                _ = c.write(ctx_ptr.serial_fd, buf[0..rlen].ptr, rlen);
+                if (!writeAll(ctx_ptr.serial_fd, buf[0..rlen].ptr, rlen)) break;
             }
             // Shutdown both directions so the peer thread unblocks.
             _ = c.shutdown(ctx_ptr.serial_fd, SHUT_RDWR);
@@ -1216,7 +1425,8 @@ fn renderFramebuffer(req: []const u8, out: []u8) ![]const u8 {
             if (out.len < 54) return "no fb";
             const copy_size = @min(pixel_size, out.len - 54);
             if (pixel_size > out.len - 54) {
-                std.log.warn("VNC framebuffer {}x{} ({} bytes) truncated to {} bytes", .{ fw, fh, pixel_size, out.len - 54 });
+                var wb: [128]u8 = undefined;
+                logWarn(std.fmt.bufPrint(&wb, "VNC framebuffer {d}x{d} ({d} bytes) truncated to {d} bytes", .{ fw, fh, pixel_size, out.len - 54 }) catch "VNC framebuffer truncated");
             }
             const file_size: u32 = @intCast(54 + copy_size);
 
@@ -1359,19 +1569,30 @@ fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     }) catch return error.RenderFailed;
     w += part2c.len;
 
+    // Extra-disk paths are user-controlled; escape each into its own buffer
+    // so a path containing a quote/backslash can't break the JSON document.
+    var ex0_buf: [vm.MAX_PATH]u8 = undefined;
+    const ex0_e = if (v.hasExtraDisk(0)) escapeJson(&ex0_buf, v.getExtraDiskPathSlice(0), "extra0_path") else "";
+    var ex1_buf: [vm.MAX_PATH]u8 = undefined;
+    const ex1_e = if (v.hasExtraDisk(1)) escapeJson(&ex1_buf, v.getExtraDiskPathSlice(1), "extra1_path") else "";
+    var ex2_buf: [vm.MAX_PATH]u8 = undefined;
+    const ex2_e = if (v.hasExtraDisk(2)) escapeJson(&ex2_buf, v.getExtraDiskPathSlice(2), "extra2_path") else "";
+    var ex3_buf: [vm.MAX_PATH]u8 = undefined;
+    const ex3_e = if (v.hasExtraDisk(3)) escapeJson(&ex3_buf, v.getExtraDiskPathSlice(3), "extra3_path") else "";
+
     const part2d = std.fmt.bufPrint(buf[w..],
         \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d}}}
     , .{
-        if (v.hasExtraDisk(0)) v.getExtraDiskPathSlice(0) else "",
+        ex0_e,
         v.extra_disks[0].size_gb,
         v.extra_disks[0].format.toIndex(),
-        if (v.hasExtraDisk(1)) v.getExtraDiskPathSlice(1) else "",
+        ex1_e,
         v.extra_disks[1].size_gb,
         v.extra_disks[1].format.toIndex(),
-        if (v.hasExtraDisk(2)) v.getExtraDiskPathSlice(2) else "",
+        ex2_e,
         v.extra_disks[2].size_gb,
         v.extra_disks[2].format.toIndex(),
-        if (v.hasExtraDisk(3)) v.getExtraDiskPathSlice(3) else "",
+        ex3_e,
         v.extra_disks[3].size_gb,
         v.extra_disks[3].format.toIndex(),
     }) catch return error.RenderFailed;
@@ -1512,19 +1733,30 @@ fn renderJson(buf: []u8) usize {
         };
         w += part2c.len;
 
+        // Escape user-controlled extra-disk paths (each own buffer) so a quote
+        // or backslash in a path cannot corrupt the JSON for the whole list.
+        var ex0_buf: [vm.MAX_PATH]u8 = undefined;
+        const ex0_e = if (v.hasExtraDisk(0)) escapeJson(&ex0_buf, v.getExtraDiskPathSlice(0), "extra0_path") else "";
+        var ex1_buf: [vm.MAX_PATH]u8 = undefined;
+        const ex1_e = if (v.hasExtraDisk(1)) escapeJson(&ex1_buf, v.getExtraDiskPathSlice(1), "extra1_path") else "";
+        var ex2_buf: [vm.MAX_PATH]u8 = undefined;
+        const ex2_e = if (v.hasExtraDisk(2)) escapeJson(&ex2_buf, v.getExtraDiskPathSlice(2), "extra2_path") else "";
+        var ex3_buf: [vm.MAX_PATH]u8 = undefined;
+        const ex3_e = if (v.hasExtraDisk(3)) escapeJson(&ex3_buf, v.getExtraDiskPathSlice(3), "extra3_path") else "";
+
         const part2d = std.fmt.bufPrint(buf[w..],
             \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d}}}
         , .{
-            if (v.hasExtraDisk(0)) v.getExtraDiskPathSlice(0) else "",
+            ex0_e,
             v.extra_disks[0].size_gb,
             v.extra_disks[0].format.toIndex(),
-            if (v.hasExtraDisk(1)) v.getExtraDiskPathSlice(1) else "",
+            ex1_e,
             v.extra_disks[1].size_gb,
             v.extra_disks[1].format.toIndex(),
-            if (v.hasExtraDisk(2)) v.getExtraDiskPathSlice(2) else "",
+            ex2_e,
             v.extra_disks[2].size_gb,
             v.extra_disks[2].format.toIndex(),
-            if (v.hasExtraDisk(3)) v.getExtraDiskPathSlice(3) else "",
+            ex3_e,
             v.extra_disks[3].size_gb,
             v.extra_disks[3].format.toIndex(),
         }) catch {
@@ -1544,57 +1776,44 @@ fn renderJson(buf: []u8) usize {
 threadlocal var start_err_buf: [640]u8 = undefined;
 
 fn handlePower(req: []const u8) ![]const u8 {
-    // Lock only to validate, copy the VM name, and determine the power action.
-    // QEMU start/stop (fork+exec / forceStop+reap) can take seconds — release
-    // the mutex before doing the heavy I/O so other API calls aren't blocked.
+    // Hold the lock across the whole operation. The VMM handle (and the
+    // VmConfig it points at) can be freed by a concurrent delete/clone/suspend
+    // the instant the lock is released, so it must never be used unlocked —
+    // doing so was a use-after-free. The QEMU start/stop therefore runs under
+    // the lock, matching the snapshot/pause handlers which already issue their
+    // QMP I/O this way.
     appstate.vms_mutex.lock();
-    const idx = parseIdx(req, "POST /api/power/") orelse {
-        appstate.vms_mutex.unlock();
-        return "invalid";
-    };
-    if (idx >= appstate.vm_count) {
-        appstate.vms_mutex.unlock();
-        return "invalid idx";
-    }
+    defer appstate.vms_mutex.unlock();
+    const idx = parseIdx(req, "POST /api/power/") orelse return "invalid";
+    if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     const was_alive = v.isAlive();
-    // Copy the VM name — another thread could rename/delete the VM while the
-    // lock is released.
     var vm_name_buf: [vm.MAX_NAME]u8 = undefined;
     const vm_name = v.getNameSlice();
     @memcpy(vm_name_buf[0..vm_name.len], vm_name);
     vm_name_buf[vm_name.len] = 0;
-    // Take a full value copy of the config to drive the slow QEMU I/O outside
-    // the lock. Operating directly on `&appstate.vms[idx]` would be a
-    // use-after-free / wrong-VM hazard: another thread can delete or reorder
-    // the array while the lock is released, shifting the slot out from under
-    // the pointer. The pid/status the copy gains is propagated back after we
-    // re-acquire the lock and re-validate the slot.
-    var vm_copy = appstate.vms[idx];
-    // Capture the VMM handle (if any) before unlocking.
     const vmm_handle = appstate.getVmmHandle(idx);
-    appstate.vms_mutex.unlock();
 
     if (was_alive) {
-        // Force-stop the running VM outside the lock.
+        // Force-stop the running VM.
         if (vmm_handle) |h| {
             appstate.g_vmm.forceStopFn(h);
             appstate.g_vmm.reapFn(h);
         } else {
-            qemu.forceStopVm(&vm_copy);
-            qemu.reapVm(&vm_copy);
+            qemu.forceStopVm(v);
+            qemu.reapVm(v);
         }
     } else {
-        // Start the VM outside the lock.
+        // Start the VM.
         if (vmm_handle) |h| {
-            appstate.g_vmm.startFn(h, @ptrCast(&vm_copy)) catch {
-                appstate.vms_mutex.lock();
-                defer appstate.vms_mutex.unlock();
+            appstate.g_vmm.startFn(h, @ptrCast(v)) catch |e| {
+                logOpErr("power on", e, vm_name_buf[0..vm_name.len]);
                 appstate.destroyVmmHandle(idx);
                 return "start err";
             };
         } else {
-            qemu.startVm(&vm_copy, std.heap.page_allocator) catch {
+            qemu.startVm(v, std.heap.page_allocator) catch |e| {
+                logOpErr("power on", e, vm_name_buf[0..vm_name.len]);
                 var log_path_buf: [320]u8 = [_]u8{0} ** 320;
                 var log_content_buf: [512]u8 = undefined;
                 const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/hangar-vm-{s}.log", .{vm_name_buf[0..vm_name.len]}) catch null;
@@ -1607,16 +1826,6 @@ fn handlePower(req: []const u8) ![]const u8 {
         }
     }
 
-    // Re-acquire the lock for the state mutation. Re-validate idx in case the
-    // VM was deleted or the array shifted during the slow I/O.
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    if (idx >= appstate.vm_count) return "invalid idx";
-    if (!std.mem.eql(u8, appstate.vms[idx].getNameSlice(), vm_name_buf[0..vm_name.len])) return "invalid idx";
-    // Propagate the pid/status the copy gained during the unlocked I/O back to
-    // the live entry (startVm sets pid+running; reapVm clears them).
-    appstate.vms[idx].pid = vm_copy.pid;
-    appstate.vms[idx].status = vm_copy.status;
     if (was_alive) {
         appstate.destroyVmmHandle(idx);
         appstate.vm_started[idx] = 0;
@@ -1624,9 +1833,12 @@ fn handlePower(req: []const u8) ![]const u8 {
         appstate.vm_started[idx] = time(null);
     }
     logAudit(if (was_alive) "power off" else "power on", vm_name_buf[0..vm_name.len]);
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
-        logErr("persist.save failed");
-    };
+    // No persist.save here: power on/off only mutates runtime state
+    // (vm_started, the VMM handle, status) which is never written to vms.json.
+    // The serialized config is byte-identical to what is already on disk, so a
+    // save would be a redundant full-JSON serialize + atomic file write
+    // (open/write/fsync/rename) issued on every toggle while holding vms_mutex,
+    // stalling concurrent /api/vms polls for no benefit.
     return "ok";
 }
 
@@ -1732,6 +1944,9 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "audio")) cfg.audio = vm.AudioDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.audio.toIndex());
         if (std.mem.eql(u8, key, "boot_order")) cfg.boot_order = vm.BootOrder.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.boot_order.toIndex());
         if (std.mem.eql(u8, key, "accel")) cfg.accel = form_parsers.parseAccel(val);
+        if (std.mem.eql(u8, key, "enable_kvm")) {
+            if (std.mem.eql(u8, val, "1")) cfg.accel = .auto else cfg.accel = .tcg;
+        }
         if (std.mem.eql(u8, key, "embed_display")) cfg.embed_display = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "vnc_port")) {
             const p = std.fmt.parseInt(u16, val, 10) catch cfg.vnc_port;
@@ -1830,6 +2045,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
         return "save failed";
     };
+    logAudit("create", cfg.getNameSlice());
     return "ok";
 }
 
@@ -1881,7 +2097,8 @@ fn handleCatalog(buf: []u8) []const u8 {
 }
 
 fn handleQuickstart(req: []const u8) ![]const u8 {
-    const prefix = "GET /api/quickstart/";
+    // Match the path independent of method so the parser is agnostic to GET/POST.
+    const prefix = "/api/quickstart/";
     const start = std.mem.indexOf(u8, req, prefix) orelse return "invalid";
     const rest = req[start + prefix.len ..];
     const end = std.mem.indexOfScalar(u8, rest, ' ') orelse return "invalid";
@@ -1927,33 +2144,33 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
         return "save failed";
     };
+    // Match the audit trail of the other VM-creation paths (handleNewVm,
+    // handleClone, handleImport) so a catalog-spawned VM never appears in the
+    // fleet with no "how did this get here" record in the daemon log.
+    logAudit("quickstart", cfg.getNameSlice());
     return "ok";
 }
 
 fn handleClone(req: []const u8) ![]const u8 {
-    // Build the clone config under the lock (fast). If this is a linked clone,
-    // release the lock for the qemu-img disk creation which can take seconds.
+    // Hold the lock across the whole operation. The VMM handle captured below
+    // points at heap memory a concurrent delete/suspend can free the moment the
+    // lock is released, so it must not be used unlocked — that was a
+    // use-after-free. The qemu-img linked-clone creation runs under the lock
+    // (it only stamps a qcow2 backing file, so it is cheap).
     appstate.vms_mutex.lock();
-    const idx = parseIdx(req, "POST /api/clone/") orelse {
-        appstate.vms_mutex.unlock();
-        return "invalid";
-    };
-    if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) {
-        appstate.vms_mutex.unlock();
-        return "full";
-    }
+    defer appstate.vms_mutex.unlock();
+    const idx = parseIdx(req, "POST /api/clone/") orelse return "invalid";
+    if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
     var clone = appstate.vms[idx];
     const src = &appstate.vms[idx];
     var name_buf: [320]u8 = undefined;
-    const cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{clone.getNameSlice()}) catch {
-        appstate.vms_mutex.unlock();
-        return "nameerr";
-    };
+    const cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{clone.getNameSlice()}) catch return "nameerr";
     clone.setName(cn);
     clone.status = .stopped;
     clone.pid = null;
-    clone.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
-    clone.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+    // Ports are assigned once just before the VM is committed (below). The lock
+    // is held for the whole clone, so the VM table can't change underneath us;
+    // computing them here too would be redundant work overwritten before use.
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
     clone.setMacAddress(std.mem.span(mac));
@@ -1971,23 +2188,11 @@ fn handleClone(req: []const u8) ![]const u8 {
     const do_linked = linked and src.hasDisk();
     if (do_linked) {
         const home = appio.getenv("HOME") orelse "/tmp";
-        disk_path_z = std.fmt.bufPrintZ(&disk_path_buf, "{s}/VMs/{s}.qcow2", .{ home, clone.getNameSlice() }) catch {
-            appstate.vms_mutex.unlock();
-            return "nameerr";
-        };
+        disk_path_z = std.fmt.bufPrintZ(&disk_path_buf, "{s}/VMs/{s}.qcow2", .{ home, clone.getNameSlice() }) catch return "nameerr";
     }
-    // Capture the VMM handle and src disk info before unlocking. The disk
-    // path must be COPIED into a local buffer: `src` points into the shared
-    // `appstate.vms` array, and once the lock is released another thread can
-    // delete/reorder VMs — which overwrites that slot in place, corrupting any
-    // slice still pointing at it. The handle/format are captured by value.
     const vmm_handle = appstate.getVmmHandle(idx);
-    var src_disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    const src_disk_slice = src.getDiskPathSlice();
-    @memcpy(src_disk_buf[0..src_disk_slice.len], src_disk_slice);
-    const src_disk = src_disk_buf[0..src_disk_slice.len];
+    const src_disk = src.getDiskPathSlice();
     const src_fmt: vm.DiskFormat = src.disk_format;
-    appstate.vms_mutex.unlock();
 
     if (do_linked) {
         const disk_path: []const u8 = std.mem.span(disk_path_z);
@@ -2000,12 +2205,7 @@ fn handleClone(req: []const u8) ![]const u8 {
         clone.disk_format = .qcow2;
     }
 
-    // Re-acquire the lock to add the clone. Re-validate in case another thread
-    // deleted the source or filled the array.
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
     if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
-    // Refresh ports — another VM may have been added while unlocked.
     clone.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     clone.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
     appstate.vms[appstate.vm_count] = clone;
@@ -2015,6 +2215,7 @@ fn handleClone(req: []const u8) ![]const u8 {
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
         return "save failed";
     };
+    logAudit("clone", clone.getNameSlice());
     return "ok";
 }
 
@@ -2075,6 +2276,9 @@ fn handleUndo() ![]const u8 {
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
         return "save failed";
     };
+    // Restoring a deleted VM is the inverse of the audited "delete"; log it so
+    // the audit trail explains why a VM operators thought was gone reappeared.
+    logAudit("undo restore", appstate.vms[appstate.undo_idx].getNameSlice());
     return "ok";
 }
 
@@ -2131,8 +2335,8 @@ fn handleReorder(req: []const u8) ![]const u8 {
     appstate.g_vmm_handles[b] = saved_handle;
     rebindVmmHandleLocked(b);
     appstate.vm_started[b] = saved_started;
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
-        logErr("persist.save failed");
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+        logSaveErr("", e);
         return "save failed";
     };
     return "ok";
@@ -2290,8 +2494,9 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "extra3_size")) v.extra_disks[3].size_gb = form_parsers.parseU32OrDefault(val, 0);
         if (std.mem.eql(u8, key, "extra3_format")) v.extra_disks[3].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[3].format.toIndex());
     }
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
-        logErr("persist.save failed");
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+        logSaveErr("", e);
+        return "save failed";
     };
     return "ok";
 }
@@ -2377,14 +2582,23 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
     const sock = qmp.socketPath(vm_name_buf[0..vm_name.len], &sock_buf) orelse return "sock err";
-    client.connect(sock) catch return "qmp err";
+    client.connect(sock) catch |e| {
+        logOpErr("suspend", e, vm_name_buf[0..vm_name.len]);
+        return "qmp err";
+    };
     defer client.disconnect();
-    client.suspendToFile(path) catch return "migrate err";
-    client.waitMigrateComplete() catch |e| return switch (e) {
-        error.MigrateFailed => "migrate failed",
-        error.MigrateCancelled => "migrate cancelled",
-        error.MigrateTimeout => "timeout",
-        else => "migrate err",
+    client.suspendToFile(path) catch |e| {
+        logOpErr("suspend", e, vm_name_buf[0..vm_name.len]);
+        return "migrate err";
+    };
+    client.waitMigrateComplete() catch |e| {
+        logOpErr("suspend", e, vm_name_buf[0..vm_name.len]);
+        return switch (e) {
+            error.MigrateFailed => "migrate failed",
+            error.MigrateCancelled => "migrate cancelled",
+            error.MigrateTimeout => "timeout",
+            else => "migrate err",
+        };
     };
 
     // Re-acquire the lock for the state mutation. Re-validate idx in case the
@@ -2406,10 +2620,11 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     }
     appstate.destroyVmmHandle(idx);
     appstate.vm_started[idx] = 0;
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
-        logErr("handleSuspend: persist.save failed");
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+        logSaveErr("handleSuspend: ", e);
         return "save failed";
     };
+    logAudit("suspend", vm_name_buf[0..vm_name.len]);
     return "ok";
 }
 
@@ -2421,15 +2636,25 @@ fn handlePause(req: []const u8) ![]const u8 {
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
     if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.pauseFn(h) catch return "qmp err";
+        appstate.g_vmm.pauseFn(h) catch |e| {
+            logOpErr("pause", e, v.getNameSlice());
+            return "qmp err";
+        };
     } else {
         var client = qmp.QmpClient{};
         var sock_buf: [256]u8 = undefined;
         const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-        client.connect(sock) catch return "qmp err";
+        client.connect(sock) catch |e| {
+            logOpErr("pause", e, v.getNameSlice());
+            return "qmp err";
+        };
         defer client.disconnect();
-        client.pause() catch return "qmp err";
+        client.pause() catch |e| {
+            logOpErr("pause", e, v.getNameSlice());
+            return "qmp err";
+        };
     }
+    logAudit("pause", v.getNameSlice());
     return "ok";
 }
 
@@ -2441,15 +2666,25 @@ fn handleResume(req: []const u8) ![]const u8 {
     const v = &appstate.vms[idx];
     if (!v.isPaused()) return "not paused";
     if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.resumeFn(h) catch return "qmp err";
+        appstate.g_vmm.resumeFn(h) catch |e| {
+            logOpErr("resume", e, v.getNameSlice());
+            return "qmp err";
+        };
     } else {
         var client = qmp.QmpClient{};
         var sock_buf: [256]u8 = undefined;
         const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-        client.connect(sock) catch return "qmp err";
+        client.connect(sock) catch |e| {
+            logOpErr("resume", e, v.getNameSlice());
+            return "qmp err";
+        };
         defer client.disconnect();
-        client.cont() catch return "qmp err";
+        client.cont() catch |e| {
+            logOpErr("resume", e, v.getNameSlice());
+            return "qmp err";
+        };
     }
+    logAudit("resume", v.getNameSlice());
     return "ok";
 }
 
@@ -2476,6 +2711,7 @@ fn handleRename(req: []const u8) ![]const u8 {
                 logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
                 return "save failed";
             };
+            logAudit("rename", val);
             return "ok";
         }
     }
@@ -2490,15 +2726,25 @@ fn handleShutdown(req: []const u8) ![]const u8 {
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
     if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.shutdownFn(h) catch return "qmp err";
+        appstate.g_vmm.shutdownFn(h) catch |e| {
+            logOpErr("shut down guest", e, v.getNameSlice());
+            return "qmp err";
+        };
     } else {
         var client = qmp.QmpClient{};
         var sock_buf: [256]u8 = undefined;
         const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-        client.connect(sock) catch return "qmp err";
+        client.connect(sock) catch |e| {
+            logOpErr("shut down guest", e, v.getNameSlice());
+            return "qmp err";
+        };
         defer client.disconnect();
-        client.powerdown() catch return "qmp err";
+        client.powerdown() catch |e| {
+            logOpErr("shut down guest", e, v.getNameSlice());
+            return "qmp err";
+        };
     }
+    logAudit("shut down guest", v.getNameSlice());
     return "ok";
 }
 
@@ -2510,15 +2756,25 @@ fn handleReset(req: []const u8) ![]const u8 {
     const v = &appstate.vms[idx];
     if (!v.isAlive()) return "not running";
     if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.resetFn(h) catch return "qmp err";
+        appstate.g_vmm.resetFn(h) catch |e| {
+            logOpErr("reset", e, v.getNameSlice());
+            return "qmp err";
+        };
     } else {
         var client = qmp.QmpClient{};
         var sock_buf: [256]u8 = undefined;
         const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-        client.connect(sock) catch return "qmp err";
+        client.connect(sock) catch |e| {
+            logOpErr("reset", e, v.getNameSlice());
+            return "qmp err";
+        };
         defer client.disconnect();
-        client.systemReset() catch return "qmp err";
+        client.systemReset() catch |e| {
+            logOpErr("reset", e, v.getNameSlice());
+            return "qmp err";
+        };
     }
+    logAudit("reset", v.getNameSlice());
     return "ok";
 }
 
@@ -2559,10 +2815,17 @@ fn handleSnapshotTake(req: []const u8) ![]const u8 {
     const decoded = urlencode.urlDecode(&decode_buf, tag);
     if (!validateSnapshotTag(decoded)) return "no name";
     if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "create err";
+        appstate.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
+            logOpErr("snapshot take", e, v.getNameSlice());
+            return "create err";
+        };
     } else {
-        qemu.snapshotCreate(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "create err";
+        qemu.snapshotCreate(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
+            logOpErr("snapshot take", e, v.getNameSlice());
+            return "create err";
+        };
     }
+    logAudit("snapshot take", v.getNameSlice());
     return "ok";
 }
 
@@ -2574,9 +2837,15 @@ fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
     const v = &appstate.vms[idx];
     if (!v.hasDisk()) return "no disk";
     const n: usize = if (appstate.getVmmHandle(idx)) |h|
-        appstate.g_vmm.snapshotListFn(h, v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch 0
+        appstate.g_vmm.snapshotListFn(h, v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch |e| blk: {
+            logOpErr("snapshot list", e, v.getNameSlice());
+            break :blk 0;
+        }
     else
-        qemu.snapshotList(v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch 0;
+        qemu.snapshotList(v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch |e| blk: {
+            logOpErr("snapshot list", e, v.getNameSlice());
+            break :blk 0;
+        };
     if (n == 0 or n > raw_buf.len) return "(none)";
 
     const nodes = snapparse.parse(raw_buf[0..n]);
@@ -2620,9 +2889,15 @@ fn handleSnapshotRevert(req: []const u8) ![]const u8 {
     const decoded = urlencode.urlDecode(&decode_buf, tag);
     if (!validateSnapshotTag(decoded)) return "no name";
     if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
+        appstate.g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
+            logOpErr("snapshot revert", e, v.getNameSlice());
+            return "apply err";
+        };
     } else {
-        qemu.snapshotApply(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "apply err";
+        qemu.snapshotApply(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
+            logOpErr("snapshot revert", e, v.getNameSlice());
+            return "apply err";
+        };
     }
     logAudit("snapshot revert", v.getNameSlice());
     return "ok";
@@ -2653,10 +2928,17 @@ fn handleSnapshotDelete(req: []const u8) ![]const u8 {
     const decoded = urlencode.urlDecode(&decode_buf, tag);
     if (!validateSnapshotTag(decoded)) return "no name";
     if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "delete err";
+        appstate.g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
+            logOpErr("snapshot delete", e, v.getNameSlice());
+            return "delete err";
+        };
     } else {
-        qemu.snapshotDelete(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch return "delete err";
+        qemu.snapshotDelete(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
+            logOpErr("snapshot delete", e, v.getNameSlice());
+            return "delete err";
+        };
     }
+    logAudit("snapshot delete", v.getNameSlice());
     return "ok";
 }
 
@@ -2708,6 +2990,7 @@ fn handleImport(req: []const u8) ![]const u8 {
         logErr(std.fmt.bufPrint(&ebuf, "persist.save failed: {s}", .{@errorName(e)}) catch "persist.save failed");
         return "save failed";
     };
+    logAudit("import", cfg.getNameSlice());
     return "ok";
 }
 
@@ -2721,9 +3004,16 @@ fn handleCad(req: []const u8) ![]const u8 {
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
     const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-    client.connect(sock) catch return "qmp err";
+    client.connect(sock) catch |e| {
+        logOpErr("ctrl-alt-del", e, v.getNameSlice());
+        return "qmp err";
+    };
     defer client.disconnect();
-    client.sendCtrlAltDel() catch return "cad err";
+    client.sendCtrlAltDel() catch |e| {
+        logOpErr("ctrl-alt-del", e, v.getNameSlice());
+        return "cad err";
+    };
+    logAudit("ctrl-alt-del", v.getNameSlice());
     return "ok";
 }
 
@@ -2771,13 +3061,32 @@ fn handleMigrate(req: []const u8) ![]const u8 {
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
     const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-    client.connect(sock) catch return "qmp err";
+    client.connect(sock) catch |e| {
+        logOpErr("migrate", e, v.getNameSlice());
+        return "qmp err";
+    };
     defer client.disconnect();
-    client.liveMigrate(dest) catch return "migrate err";
+    logAudit("migrate", v.getNameSlice());
+    client.liveMigrate(dest) catch |e| {
+        logOpErr("migrate", e, v.getNameSlice());
+        return "migrate err";
+    };
     return "{\"status\":\"started\"}";
 }
 
 /// Query current migration status for a VM.
+/// Map a `handleMigrateStatus` JSON body to an HTTP status code. A success
+/// payload (`{"status":"active"}`) stays 200; error payloads become the same
+/// 4xx/5xx codes the central text/plain mapper assigns to the equivalent tokens
+/// so the migrate-status endpoint reports failures consistently with the rest of
+/// the API. The body itself is left unchanged.
+fn migrateStatusHttpCode(body: []const u8) u16 {
+    if (std.mem.indexOf(u8, body, "\"status\":\"error\"") == null) return HTTP_OK;
+    if (std.mem.indexOf(u8, body, "invalid idx") != null or std.mem.indexOf(u8, body, "bad idx") != null) return HTTP_NOT_FOUND;
+    if (std.mem.indexOf(u8, body, "not running") != null) return HTTP_CONFLICT;
+    return HTTP_INTERNAL_ERROR;
+}
+
 fn handleMigrateStatus(req: []const u8, buf: []u8) []const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
@@ -2810,9 +3119,16 @@ fn handleMigrateCancel(req: []const u8) ![]const u8 {
     var client = qmp.QmpClient{};
     var sock_buf: [256]u8 = undefined;
     const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-    client.connect(sock) catch return "qmp err";
+    client.connect(sock) catch |e| {
+        logOpErr("migrate cancel", e, v.getNameSlice());
+        return "qmp err";
+    };
     defer client.disconnect();
-    client.cancelMigrate() catch return "cancel err";
+    client.cancelMigrate() catch |e| {
+        logOpErr("migrate cancel", e, v.getNameSlice());
+        return "cancel err";
+    };
+    logAudit("migrate cancel", v.getNameSlice());
     return "ok";
 }
 
@@ -2827,7 +3143,16 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
 
     const disk2_path = v.getDisk2Path();
     const fd = c.open(@ptrCast(disk2_path), .{ .ACCMODE = .RDONLY });
-    if (fd < 0) return;
+    if (fd < 0) {
+        // The disk2 file is recorded on the VM but cannot be opened (deleted out
+        // from under us, permissions, bad path). Without this line a failed
+        // download is a silent dead end — the client gets nothing and nothing
+        // explains why.
+        var nb: [vm.MAX_NAME]u8 = undefined;
+        var eb: [256]u8 = undefined;
+        logErr(std.fmt.bufPrint(&eb, "disk2 download: open failed vm=\"{s}\"", .{sanitizeLogName(&nb, v.getNameSlice())}) catch "disk2 download: open failed");
+        return;
+    }
     defer _ = c.close(fd);
 
     const seek_end = c.lseek(fd, 0, 2); // SEEK_END = 2
@@ -2847,6 +3172,8 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
         &hdr_buf,
         "HTTP/1.1 200 OK\r\n" ++
             "Content-Type: application/octet-stream\r\n" ++
+            "X-Content-Type-Options: nosniff\r\n" ++
+            "Cache-Control: no-store\r\n" ++
             "Content-Disposition: {s}\r\n" ++
             "Content-Length: {d}\r\n" ++
             "Connection: close\r\n\r\n",
@@ -2861,14 +3188,19 @@ fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
         if (n <= 0) break;
         if (!writeAll(conn, &buf, @intCast(n))) return error.BrokenPipe;
     }
+
+    // Audit the completed secondary-disk download: a VM disk image left the host.
+    logAudit("disk2 download", v.getNameSlice());
 }
 
 /// Accept a multipart/form-data file upload for disk2.
 fn handleUploadDisk(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
+    // The multipart parse below only reads `req` (this connection's own buffer),
+    // so it needs no lock. We take vms_mutex only to read the VM's disk paths and
+    // later to record the result — never across the (potentially multi-GB)
+    // writeFile, which would otherwise freeze every other handler and the
+    // liveness/autoprotect tickers for the whole upload.
     const idx = parseIdx(req, "POST /api/vm/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
 
     // Parse multipart boundary from Content-Type header (case-insensitive per RFC 7230).
     const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
@@ -2922,10 +3254,13 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
         if (fn_end > 0) filename = std.mem.trimEnd(u8, fn_val[0..fn_end], " \t");
     }
 
-    // Reject path traversal in filename.
+    // Reject path traversal in filename. Also reject the QEMU -drive property
+    // delimiters (',' and control chars): the resulting path is interpolated
+    // into a comma-separated `-drive file=...` list at launch, so a comma would
+    // inject extra drive options (argument injection, CWE-88).
     if (filename.len == 0) return "no filename";
     for (filename) |ch| {
-        if (ch == '/' or ch == '\\' or ch == 0) return "bad filename";
+        if (ch == '/' or ch == '\\' or ch == ',' or ch < 0x20) return "bad filename";
     }
     if (std.mem.indexOf(u8, filename, "..") != null) return "bad filename";
 
@@ -2948,31 +3283,55 @@ fn handleUploadDisk(req: []const u8) ![]const u8 {
 
     // Build destination path: same dir as primary disk, with _disk2 suffix.
     // Prefer the uploaded filename; fall back to the primary disk's name + extension.
-    const v = &appstate.vms[idx];
-    const primary = v.getDiskPathSlice();
-    if (primary.len == 0) return "no primary disk";
-    const ext = std.fs.path.extension(primary);
-    const dir = std.fs.path.dirname(primary) orelse ".";
-
-    const basename = std.fs.path.basename(primary);
+    // Compute `dest` (and snapshot the VM name) under the lock, then release it
+    // before the file write. `dest_buf`/`name_buf` outlive the locked scope, and
+    // `file_data`/`filename` point into `req` (stable), so nothing read after the
+    // unlock aliases the shared VM table.
     var dest_buf: [vm.MAX_PATH]u8 = undefined;
-    if (filename.len > 0) {
-        const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}", .{ dir, filename }) catch return "path err";
-        std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
-        appstate.vms[idx].setDisk2Path(dest);
-    } else if (ext.len > 0 and ext.len < 16) {
-        const name_no_ext = basename[0 .. basename.len - ext.len];
-        const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2{s}", .{ dir, name_no_ext, ext }) catch return "path err";
-        std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
-        appstate.vms[idx].setDisk2Path(dest);
-    } else {
-        const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2", .{ dir, basename }) catch return "path err";
-        std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
-        appstate.vms[idx].setDisk2Path(dest);
+    var dest: []const u8 = undefined;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var name_len: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        if (idx >= appstate.vm_count) return "invalid idx";
+        const v = &appstate.vms[idx];
+        const primary = v.getDiskPathSlice();
+        if (primary.len == 0) return "no primary disk";
+        const ext = std.fs.path.extension(primary);
+        const dir = std.fs.path.dirname(primary) orelse ".";
+        const basename = std.fs.path.basename(primary);
+        if (filename.len > 0) {
+            dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}", .{ dir, filename }) catch return "path err";
+        } else if (ext.len > 0 and ext.len < 16) {
+            const name_no_ext = basename[0 .. basename.len - ext.len];
+            dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2{s}", .{ dir, name_no_ext, ext }) catch return "path err";
+        } else {
+            dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2", .{ dir, basename }) catch return "path err";
+        }
+        const nm = v.getNameSlice();
+        name_len = @min(nm.len, name_buf.len);
+        @memcpy(name_buf[0..name_len], nm[0..name_len]);
     }
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
-        logErr("persist.save failed");
+
+    // Heavy I/O outside the lock — an uploaded disk image can be many GB.
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = dest, .data = file_data }) catch return "write err";
+
+    // Re-acquire to record the new disk2 path, re-validating that the VM didn't
+    // move or disappear while unlocked (a concurrent delete compacts the array).
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    if (idx >= appstate.vm_count) return "ok"; // file written; VM is gone
+    if (!std.mem.eql(u8, appstate.vms[idx].getNameSlice(), name_buf[0..name_len])) return "ok";
+    appstate.vms[idx].setDisk2Path(dest);
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+        // The disk file was written and attached in memory, but persisting the
+        // attachment failed — on restart the disk2 path would be lost silently.
+        // Surface it instead of reporting success like the other save paths.
+        logSaveErr("handleUploadDisk: ", e);
+        return "save failed";
     };
+    logAudit("disk upload", name_buf[0..name_len]);
     return "ok";
 }
 
@@ -3128,6 +3487,8 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
         &hdr_buf,
         "HTTP/1.1 200 OK\r\n" ++
             "Content-Type: application/octet-stream\r\n" ++
+            "X-Content-Type-Options: nosniff\r\n" ++
+            "Cache-Control: no-store\r\n" ++
             "Content-Disposition: {s}\r\n" ++
             "Content-Length: {d}\r\n" ++
             "Connection: close\r\n\r\n",
@@ -3150,6 +3511,10 @@ fn handleExport(conn: c.fd_t, req: []const u8) !void {
     _ = c.unlink(tar_path);
     dir_cleanup = false;
     tar_cleanup = false;
+
+    // Audit the completed export: a full VM disk left the host. Without this the
+    // exfiltration of a multi-GB image is invisible in the daemon log.
+    logAudit("export", v.getNameSlice());
 }
 
 /// Parse Content-Length header value from an HTTP request. Returns null if not found.
@@ -3362,11 +3727,11 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
     }
     {
         const v = bodyVal(body, "default_memory_mb");
-        if (v.len > 0) appstate.prefs.default_memory_mb = clampPref(v, appstate.prefs.default_memory_mb, 128, 65536);
+        if (v.len > 0) appstate.prefs.default_memory_mb = clampPref(v, appstate.prefs.default_memory_mb, vm.PREF_MEMORY_MB_MIN, vm.PREF_MEMORY_MB_MAX);
     }
     {
         const v = bodyVal(body, "default_cpu_cores");
-        if (v.len > 0) appstate.prefs.default_cpu_cores = clampPref(v, appstate.prefs.default_cpu_cores, 1, 256);
+        if (v.len > 0) appstate.prefs.default_cpu_cores = clampPref(v, appstate.prefs.default_cpu_cores, vm.PREF_CPU_CORES_MIN, vm.PREF_CPU_CORES_MAX);
     }
     {
         const v = bodyVal(body, "autoprotect_enabled");
@@ -3374,11 +3739,11 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
     }
     {
         const v = bodyVal(body, "autoprotect_interval");
-        if (v.len > 0) appstate.prefs.autoprotect_interval_min_default = clampPref(v, appstate.prefs.autoprotect_interval_min_default, 1, 1440);
+        if (v.len > 0) appstate.prefs.autoprotect_interval_min_default = clampPref(v, appstate.prefs.autoprotect_interval_min_default, vm.PREF_AUTOPROTECT_INTERVAL_MIN, vm.PREF_AUTOPROTECT_INTERVAL_MAX);
     }
     {
         const v = bodyVal(body, "autoprotect_max");
-        if (v.len > 0) appstate.prefs.autoprotect_max_default = clampPref(v, appstate.prefs.autoprotect_max_default, 1, 1000);
+        if (v.len > 0) appstate.prefs.autoprotect_max_default = clampPref(v, appstate.prefs.autoprotect_max_default, vm.PREF_AUTOPROTECT_MAX_MIN, vm.PREF_AUTOPROTECT_MAX_MAX);
     }
     {
         const v = bodyVal(body, "default_vm_dir");
@@ -3393,8 +3758,9 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
         }
     }
 
-    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
-        logErr("persist.save failed");
+    persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+        logSaveErr("", e);
+        return "save failed";
     };
     return "ok";
 }
@@ -3422,6 +3788,14 @@ fn livenessTicker() void {
                 else
                     qemu.isVmAlive(v);
                 if (!alive) {
+                    // A VM that was running/paused is now gone — an unexpected
+                    // exit (guest shutdown, QEMU crash, OOM-kill). Record it: a
+                    // VM that silently flips to stopped is a 3 AM blind spot with
+                    // no timestamp of when or which VM died.
+                    var name_buf: [vm.MAX_NAME]u8 = undefined;
+                    const safe = sanitizeLogName(&name_buf, v.getNameSlice());
+                    var msg: [320]u8 = undefined;
+                    logWarn(std.fmt.bufPrint(&msg, "vm exited unexpectedly: vm=\"{s}\" prev={s}", .{ safe, v.status.toStr() }) catch "vm exited unexpectedly");
                     v.status = .stopped;
                     appstate.destroyVmmHandle(i);
                     changed = true;
@@ -3429,8 +3803,8 @@ fn livenessTicker() void {
             }
         }
         if (changed) {
-            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
-                logErr("autoprotect: persist.save failed");
+            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+                logSaveErr("liveness: ", e);
             };
         }
     }
@@ -3490,17 +3864,22 @@ fn autoprotectTicker() void {
             const dp = w.disk_path[0..w.disk_path_len];
             const sn = w.snap_name[0..w.snap_name_len];
 
+            // Disk path is config-controlled, so sanitize before logging to keep
+            // the background-job error lines single-line and injection-safe.
+            var dp_log_buf: [256]u8 = undefined;
+            const dp_safe = sanitizeLogName(&dp_log_buf, dp);
+
             qemu.snapshotCreate(dp, sn, std.heap.page_allocator) catch |e| {
-                var ebuf: [64]u8 = undefined;
-                logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotCreate failed");
+                var ebuf: [320]u8 = undefined;
+                logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotCreate failed: {s} disk=\"{s}\" snap=\"{s}\"", .{ @errorName(e), dp_safe, sn }) catch "autoprotect snapshotCreate failed");
                 continue;
             };
 
             // Prune excess AutoProtect snapshots
             var list_buf: [4096]u8 = undefined;
             const list_n = qemu.snapshotList(dp, &list_buf, std.heap.page_allocator) catch |e| {
-                var ebuf: [64]u8 = undefined;
-                logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotList failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotList failed");
+                var ebuf: [320]u8 = undefined;
+                logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotList failed: {s} disk=\"{s}\"", .{ @errorName(e), dp_safe }) catch "autoprotect snapshotList failed");
                 continue;
             };
 
@@ -3527,16 +3906,16 @@ fn autoprotectTicker() void {
             var d: usize = 0;
             while (d < excess and d < auto_names.len) : (d += 1) {
                 qemu.snapshotDelete(dp, auto_names[d], std.heap.page_allocator) catch |e| {
-                    var ebuf: [64]u8 = undefined;
-                    logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s}", .{@errorName(e)}) catch "autoprotect snapshotDelete failed");
+                    var ebuf: [320]u8 = undefined;
+                    logErr(std.fmt.bufPrint(&ebuf, "autoprotect snapshotDelete failed: {s} disk=\"{s}\"", .{ @errorName(e), dp_safe }) catch "autoprotect snapshotDelete failed");
                 };
             }
         }
 
         // Re-acquire lock only for the save
         appstate.vms_mutex.lock();
-        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch {
-            logErr("persist.save failed");
+        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+            logSaveErr("", e);
         };
         appstate.vms_mutex.unlock();
     }
@@ -3917,6 +4296,39 @@ test "fuzz: secretEql matches std.mem.eql semantics" {
     }
 }
 
+test "validApiKey: bounds and character class" {
+    try std.testing.expect(validApiKey("hangar"));
+    try std.testing.expect(validApiKey("a"));
+    try std.testing.expect(validApiKey("S3cr3t-Key_With.Symbols!~"));
+    try std.testing.expect(validApiKey("x" ** 64));
+    // Length bounds.
+    try std.testing.expect(!validApiKey(""));
+    try std.testing.expect(!validApiKey("x" ** 65));
+    // Whitespace / control characters (the trailing-newline footgun).
+    try std.testing.expect(!validApiKey("secret\n"));
+    try std.testing.expect(!validApiKey("secret\r"));
+    try std.testing.expect(!validApiKey("two words"));
+    try std.testing.expect(!validApiKey("\tsecret"));
+    try std.testing.expect(!validApiKey("bad\x7fkey"));
+}
+
+test "fuzz: validApiKey never panics and only accepts printable in-range keys" {
+    var prng = std.Random.DefaultPrng.init(0xA11CE);
+    const rand = prng.random();
+    var buf: [80]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rand.uintLessThan(usize, buf.len + 1);
+        rand.bytes(buf[0..len]);
+        const ok = validApiKey(buf[0..len]);
+        if (ok) {
+            // Every accepted key must satisfy the documented contract.
+            try std.testing.expect(len >= 1 and len <= 64);
+            for (buf[0..len]) |ch| try std.testing.expect(ch > 0x20 and ch != 0x7f);
+        }
+    }
+}
+
 test "checkAuth: accepts correct default API key" {
     const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: hangar\r\n\r\n";
     try std.testing.expect(checkAuth(req));
@@ -3982,6 +4394,43 @@ test "checkAuth: key value is empty string when header ends at colon-space" {
 test "checkAuth: partial header name match is not fooled" {
     const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key2: hangar\r\n\r\n";
     try std.testing.expect(!checkAuth(req));
+}
+
+test "hostHeaderOk: loopback mode accepts loopback hosts, rejects rebinding" {
+    // Loopback mode (no custom key): only loopback Host values pass.
+    try std.testing.expect(hostHeaderOk("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+    try std.testing.expect(hostHeaderOk("GET / HTTP/1.1\r\nHost: localhost:9080\r\n\r\n"));
+    try std.testing.expect(hostHeaderOk("GET / HTTP/1.1\r\nHost: 127.0.0.1:9080\r\n\r\n"));
+    try std.testing.expect(hostHeaderOk("GET / HTTP/1.1\r\nHost: [::1]:9080\r\n\r\n"));
+    try std.testing.expect(hostHeaderOk("GET / HTTP/1.1\r\nHost: LocalHost\r\n\r\n"));
+    // DNS-rebinding origin and missing Host are rejected.
+    try std.testing.expect(!hostHeaderOk("GET / HTTP/1.1\r\nHost: evil.com:9080\r\n\r\n"));
+    try std.testing.expect(!hostHeaderOk("GET / HTTP/1.1\r\nHost: 10.0.0.5\r\n\r\n"));
+    try std.testing.expect(!hostHeaderOk("GET / HTTP/1.1\r\n\r\n"));
+}
+
+test "hostHeaderOk: exposed mode (custom key) skips host validation" {
+    auth_token_len = 6;
+    @memcpy(auth_token[0..6], "secret");
+    defer {
+        auth_token_len = 0;
+        @memset(&auth_token, 0);
+    }
+    // With a real key set the daemon is intentionally exposed; any host passes.
+    try std.testing.expect(hostHeaderOk("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"));
+    try std.testing.expect(hostHeaderOk("GET / HTTP/1.1\r\n\r\n"));
+}
+
+test "fuzz: hostHeaderOk never panics on random header-like input" {
+    var prng = std.Random.DefaultPrng.init(0x4057_F00D);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 2000) : (iter += 1) {
+        const n = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..n]) |*ch| ch.* = rnd.int(u8);
+        _ = hostHeaderOk(buf[0..n]);
+    }
 }
 
 // ── Edge-case fuzz: request parsing surfaces ───────────────────────
@@ -4103,7 +4552,7 @@ test "fuzz: serveHtml routing never panics on random method/URL input" {
         "GET /api/snapshot/list/",
         "GET /api/capabilities",
         "GET /api/catalog",
-        "GET /api/quickstart/",
+        "POST /api/quickstart/",
         "GET /api/migrate/status/",
         "GET /ws/vnc/",
         "GET /ws/spice/",
@@ -4286,6 +4735,15 @@ test "validateSnapshotTag: control characters rejected" {
     try std.testing.expect(!validateSnapshotTag("\x10middle"));
 }
 
+test "validateSnapshotTag: dot-dot path traversal rejected" {
+    try std.testing.expect(!validateSnapshotTag(".."));
+    try std.testing.expect(!validateSnapshotTag("../escape"));
+    try std.testing.expect(!validateSnapshotTag("snap/../etc"));
+    try std.testing.expect(!validateSnapshotTag("trailing.."));
+    // A single dot is fine; only the ".." sequence is dangerous.
+    try std.testing.expect(validateSnapshotTag("v1.0"));
+}
+
 test "jsonEscape: escapes quotes and backslashes" {
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("\\\"", (jsonEscape(&buf, "\"")).escaped);
@@ -4422,9 +4880,63 @@ test "fuzz: sanitizeHeaderValue never panics on random input" {
     }
 }
 
+test "fuzz: isAuthExempt never panics and never exempts protected surfaces" {
+    var prng = std.Random.DefaultPrng.init(0x5EC_0DE);
+    const rnd = prng.random();
+    var buf: [256]u8 = undefined;
+    const alphabet = "/abcdeimnpqstv0123._-";
+
+    var iter: usize = 0;
+    while (iter < 6000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        // Mix random bytes with a bias toward the literal path characters so the
+        // fuzzer reaches boundary-confusable prefixes (e.g. "/api/vm/...").
+        for (buf[0..len]) |*b| {
+            b.* = if (rnd.boolean())
+                alphabet[rnd.uintLessThan(usize, alphabet.len)]
+            else
+                rnd.int(u8);
+        }
+        const path = buf[0..len];
+        const method_get = rnd.boolean();
+        const exempt = isAuthExempt(method_get, path);
+
+        // Security invariants: a non-GET request is never auth-exempt, and the
+        // raw disk-image download must never be exempt regardless of method.
+        if (!method_get) try std.testing.expect(!exempt);
+        if (std.mem.endsWith(u8, path, "/disk2/download")) {
+            try std.testing.expect(!exempt);
+        }
+    }
+}
+
+test "fuzz: sanitizeSlug stays bounded, non-empty, and shell-safe" {
+    var prng = std.Random.DefaultPrng.init(0x51_06_A17E);
+    const rnd = prng.random();
+    var input: [256]u8 = undefined;
+    var output: [64]u8 = undefined;
+
+    var iter: usize = 0;
+    while (iter < 6000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, input.len + 1);
+        rnd.bytes(input[0..len]);
+        const slug = sanitizeSlug(input[0..len], &output);
+
+        // Bounded write and never empty (falls back to "vm").
+        try std.testing.expect(slug.len > 0);
+        try std.testing.expect(slug.len <= output.len);
+        // Every byte is in the documented safe charset [A-Za-z0-9._-].
+        for (slug) |ch| {
+            const safe = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
+                (ch >= '0' and ch <= '9') or ch == '.' or ch == '_' or ch == '-';
+            try std.testing.expect(safe);
+        }
+    }
+}
+
 test "writeAll: writes exact bytes to fd via pipe" {
     var fds: [2]c_int = undefined;
-    if (c.pipe(&fds) != 0) return;
+    if (c.pipe(&fds) != 0) return error.SkipZigTest;
     defer {
         _ = c.close(fds[0]);
         _ = c.close(fds[1]);
@@ -4433,13 +4945,13 @@ test "writeAll: writes exact bytes to fd via pipe" {
     try std.testing.expect(writeAll(fds[1], msg.ptr, msg.len));
     var buf: [64]u8 = undefined;
     const n = c.read(fds[0], &buf, buf.len);
-    try std.testing.expect(n >= 0);
+    try std.testing.expectEqual(@as(@TypeOf(n), msg.len), n);
     try std.testing.expectEqualStrings(msg, buf[0..@intCast(n)]);
 }
 
 test "writeAll: empty buffer succeeds without write" {
     var fds: [2]c_int = undefined;
-    if (c.pipe(&fds) != 0) return;
+    if (c.pipe(&fds) != 0) return error.SkipZigTest;
     defer {
         _ = c.close(fds[0]);
         _ = c.close(fds[1]);
@@ -4449,7 +4961,7 @@ test "writeAll: empty buffer succeeds without write" {
 
 test "writeAll: detects closed fd" {
     var fds: [2]c_int = undefined;
-    if (c.pipe(&fds) != 0) return;
+    if (c.pipe(&fds) != 0) return error.SkipZigTest;
     _ = c.close(fds[0]);
     _ = c.close(fds[1]); // both ends closed
     try std.testing.expect(!writeAll(fds[1], "x".ptr, 1));
@@ -4504,8 +5016,9 @@ test "handleQuickstart: unknown slug returns 'not found'" {
 }
 
 test "handleQuickstart: full VM array returns 'full'" {
+    const prev_count = appstate.vm_count;
     appstate.vm_count = appstate.MAX_VMS;
-    defer appstate.vm_count = 0;
+    defer appstate.vm_count = prev_count;
     const result = try handleQuickstart("GET /api/quickstart/ubuntu2404 HTTP/1.1");
     try std.testing.expectEqualStrings("full", result);
 }
@@ -4825,11 +5338,87 @@ test "handleVnetsSave: empty JSON object returns defaults (ok)" {
 
     const req = "POST /api/vnets/save HTTP/1.1\r\nHost: localhost\r\n\r\n{}";
     const result = try handleVnetsSave(req);
-    // Empty JSON yields count=0 and body.len > 2, but vnet.fromJson("{}") should work.
-    // If fromJson handles empty JSON objects, this returns "ok"; otherwise "parse error".
-    _ = result;
+    // Empty object is body.len == 2, so the "parse error" guard (body.len > 2)
+    // does not trip: an empty network set is saved and "ok" is returned.
+    try std.testing.expectEqualStrings("ok", result);
 }
-pub fn main() !void {
+const daemon_usage =
+    \\hangar-web — Hangar VM manager daemon (HTTP server + web UI)
+    \\
+    \\Usage: hangar-web [--help] [--version]
+    \\
+    \\Runs the HTTP server and web UI, and serves remote clients such as vmrun.
+    \\All configuration is via environment variables — there are no positional
+    \\arguments or runtime flags beyond the two below; an unrecognized option
+    \\is rejected with exit code 2.
+    \\
+    \\Options:
+    \\  -h, --help     Show this help and exit
+    \\  -v, --version  Show version and exit
+    \\
+    \\Environment:
+    \\  KV_API_KEY           X-API-Key secret (1-64 bytes, printable ASCII, no
+    \\                       spaces). Setting a non-default key also exposes the
+    \\                       daemon on all interfaces (::); unset or the built-in
+    \\                       default stays loopback-only.
+    \\  KV_PORT              TCP listen port (default 9080; must be 1-65535).
+    \\  HANGAR_CONFIG_HOME   Base dir for ~/.config/hangar/* state (default $HOME).
+    \\
+    \\Endpoints:
+    \\  Web UI:  http://localhost:<KV_PORT>/
+    \\  Health:  GET /api/health
+    \\
+    \\Exit codes: 0 success, 1 runtime error, 2 usage error.
+    \\
+;
+
+const daemon_version = "hangar-web 0.1.0\n";
+
+/// The argument classes the daemon recognizes. It takes no positional
+/// arguments. The bare word `help` is accepted as a `.help` alias (matching
+/// `vmrun`); any other non-flag token is `.other` and ignored (the daemon
+/// starts normally), but a dash-prefixed token that is not help/version is
+/// `.unknown` — almost always a mistyped flag, which we reject rather than swallow.
+const CliArg = enum { help, version, unknown, other };
+
+/// Classify a single command-line argument against the daemon's minimal flag
+/// set. Accepts the same spellings as `vmrun` for cross-tool consistency.
+fn classifyCliArg(arg: []const u8) CliArg {
+    if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "help")) return .help;
+    if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) return .version;
+    // A dash-prefixed token that matched neither is a typo (e.g. `--prot 8080`
+    // when the operator meant the KV_PORT env var). The daemon has no such
+    // flag, so silently ignoring it would hide the mistake — fail loudly.
+    if (arg.len > 0 and arg[0] == '-') return .unknown;
+    return .other;
+}
+
+pub fn main(init: std.process.Init) !void {
+    // Handle --help/--version before any side effects (loading config, creating
+    // the hypervisor handle, binding sockets) so they work even without a
+    // writable config dir or a free port, and never start a stray daemon.
+    {
+        var args_iter = std.process.Args.Iterator.init(init.minimal.args);
+        _ = args_iter.next(); // program name
+        while (args_iter.next()) |arg| switch (classifyCliArg(arg)) {
+            .help => {
+                _ = c.write(1, daemon_usage.ptr, daemon_usage.len);
+                std.process.exit(0);
+            },
+            .version => {
+                _ = c.write(1, daemon_version.ptr, daemon_version.len);
+                std.process.exit(0);
+            },
+            .unknown => {
+                var buf: [160]u8 = undefined;
+                const msg = std.fmt.bufPrintZ(&buf, "Error: unknown option '{s}' (run with --help for usage)\n", .{arg}) catch "Error: unknown option\n";
+                _ = c.write(2, msg.ptr, msg.len);
+                std.process.exit(2);
+            },
+            .other => {},
+        };
+    }
+
     // Ignore SIGPIPE — the only safe response to writing on a closed connection.
     _ = signal(SIGPIPE, SIG_IGN);
 
@@ -4841,9 +5430,9 @@ pub fn main() !void {
     // value instead of silently falling back to the weak built-in default —
     // an operator who set KV_API_KEY expects it to take effect.
     if (appio.getenv("KV_API_KEY")) |key| {
-        if (key.len == 0 or key.len > 64) {
-            logErr("KV_API_KEY must be 1-64 bytes — refusing to start with an invalid key");
-            return;
+        if (!validApiKey(key)) {
+            logErr("KV_API_KEY must be 1-64 bytes of printable ASCII (no spaces or control characters) — refusing to start with an invalid key");
+            std.process.exit(1);
         }
         if (secretEql(key, API_KEY)) {
             // KV_API_KEY was set to the publicly-known built-in default. Treat it
@@ -4868,17 +5457,20 @@ pub fn main() !void {
     const port: u16 = if (appio.getenv("KV_PORT")) |env| blk: {
         const p = std.fmt.parseInt(u16, env, 10) catch {
             logErr("KV_PORT is not a valid port number — refusing to start");
-            return;
+            std.process.exit(1);
         };
         if (p == 0) {
             logErr("KV_PORT must be 1-65535 — refusing to start");
-            return;
+            std.process.exit(1);
         }
         break :blk p;
     } else DEFAULT_PORT;
 
     const sock = c.socket(AF_INET6, SOCK_STREAM, 0);
-    if (sock < 0) return;
+    if (sock < 0) {
+        logErr("Failed to create TCP socket");
+        std.process.exit(1);
+    }
     storeServerFd(&tcp_sock_fd, sock);
     defer {
         _ = c.close(sock);
@@ -4892,8 +5484,8 @@ pub fn main() !void {
     _ = c.setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &zero, @sizeOf(c_int));
 
     // Bind to :: (IPv6 any-address, dual-stack) only when a real API key is
-    // set; otherwise confine to ::1 (loopback) so the default key is never
-    // reachable off-host.
+    // set; otherwise confine to the IPv4-mapped loopback (::ffff:127.0.0.1,
+    // set below) so the default key is never reachable off-host.
     var addr: c.sockaddr.in6 = std.mem.zeroes(c.sockaddr.in6);
     addr.family = AF_INET6;
     addr.port = std.mem.nativeToBig(u16, port);
@@ -4909,11 +5501,11 @@ pub fn main() !void {
     // When expose_all, addr.addr stays zero-initialized (in6addr_any).
     if (c.bind(sock, @ptrCast(&addr), @sizeOf(c.sockaddr.in6)) != 0) {
         logErr("Failed to bind TCP port — already in use");
-        return;
+        std.process.exit(1);
     }
     if (c.listen(sock, 10) != 0) {
         logErr("Failed to listen on TCP port");
-        return;
+        std.process.exit(1);
     }
 
     // Create Unix socket listener for local clients
@@ -4937,6 +5529,11 @@ pub fn main() !void {
         logErr("Failed to bind Unix socket — is /tmp/hangar-daemon.sock stale?");
         return;
     }
+    // Restrict the socket to its owner. It lives in world-writable /tmp; without
+    // an explicit mode its permissions depend on the process umask, so a lax
+    // umask (e.g. 0002) would let other local users connect and drive the daemon
+    // using the publicly known default API key. 0600 makes this deterministic.
+    _ = c.chmod(unix_path, 0o600);
     if (c.listen(unix_sock, 10) != 0) {
         logErr("Failed to listen on Unix socket");
         return;
@@ -4950,6 +5547,14 @@ pub fn main() !void {
     std.debug.print("╚══════════════════════════════════════════════╝\n\n", .{});
 
     var ebuf: [64]u8 = undefined;
+
+    // Emit a single parseable startup line: the box-art banner above is for
+    // humans, but log aggregators need a leveled record confirming the daemon
+    // came up and which interface scope it bound to.
+    {
+        var sb: [128]u8 = undefined;
+        logAt(.info, std.fmt.bufPrint(&sb, "daemon started: port={d} bind={s}", .{ port, if (expose_all) "all" else "loopback" }) catch "daemon started");
+    }
 
     // Spawn thread to accept Unix socket connections
     if (std.Thread.spawn(std.Thread.SpawnConfig{}, acceptLoop, .{unix_sock})) |th| {
@@ -4974,8 +5579,16 @@ pub fn main() !void {
 
     while (true) {
         const conn = c.accept(sock, null, null);
-        if (conn < 0) break;
+        if (conn < 0) {
+            // The TCP listener is gone — the daemon stops serving and main()
+            // returns. Mirror acceptLoop and surface it so an operator can tell
+            // a clean shutdown from a silent listener death.
+            logErr("main: TCP accept() failed, daemon exiting");
+            break;
+        }
         const th = std.Thread.spawn(std.Thread.SpawnConfig{}, serveHtml, .{conn}) catch {
+            // Thread exhaustion drops this request; log so load-shedding is visible.
+            logErr("main: thread spawn failed, dropping TCP connection");
             _ = c.close(conn);
             continue;
         };
@@ -4984,6 +5597,37 @@ pub fn main() !void {
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "classifyCliArg: help spellings" {
+    try std.testing.expectEqual(CliArg.help, classifyCliArg("-h"));
+    try std.testing.expectEqual(CliArg.help, classifyCliArg("--help"));
+    try std.testing.expectEqual(CliArg.help, classifyCliArg("help"));
+}
+
+test "classifyCliArg: version spellings" {
+    try std.testing.expectEqual(CliArg.version, classifyCliArg("-v"));
+    try std.testing.expectEqual(CliArg.version, classifyCliArg("--version"));
+}
+
+test "classifyCliArg: mistyped flags are unknown, bare words are other" {
+    try std.testing.expectEqual(CliArg.other, classifyCliArg(""));
+    try std.testing.expectEqual(CliArg.unknown, classifyCliArg("--helpp")); // dash-prefixed typo
+    try std.testing.expectEqual(CliArg.unknown, classifyCliArg("-V"));
+    try std.testing.expectEqual(CliArg.other, classifyCliArg("HELP")); // case-sensitive, no dash
+    try std.testing.expectEqual(CliArg.other, classifyCliArg("status"));
+}
+
+test "fuzz: classifyCliArg never panics on random input" {
+    var prng = std.Random.DefaultPrng.init(0x5EED_F00D);
+    const rnd = prng.random();
+    var buf: [32]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        _ = classifyCliArg(buf[0..len]);
+    }
+}
 
 test "findHeader: exact match" {
     const headers = "Host: localhost\r\nX-API-Key: secret123\r\nContent-Type: text/html\r\n";
@@ -5023,7 +5667,7 @@ test "shutdownSignal: shuts down both TCP and Unix listen sockets" {
     // the other end is immediately closed so that shutdown() is observable
     // as a read returning 0 or error on the surviving end.
     var tcp_fds: [2]c_int = undefined;
-    if (c.socketpair(AF_INET, SOCK_STREAM, 0, &tcp_fds) != 0) return;
+    if (c.socketpair(AF_INET, SOCK_STREAM, 0, &tcp_fds) != 0) return error.SkipZigTest;
     _ = c.close(tcp_fds[0]);
     tcp_sock_fd = tcp_fds[1];
 
@@ -5588,6 +6232,41 @@ test "handleMigrateStatus: idx out of range returns error JSON" {
     try std.testing.expect(std.mem.indexOf(u8, result, "\"error\"") != null);
 }
 
+test "migrateStatusHttpCode: maps status payloads to HTTP codes" {
+    try std.testing.expectEqual(HTTP_OK, migrateStatusHttpCode("{\"status\":\"active\"}"));
+    try std.testing.expectEqual(HTTP_OK, migrateStatusHttpCode("{\"status\":\"completed\"}"));
+    try std.testing.expectEqual(HTTP_NOT_FOUND, migrateStatusHttpCode("{\"status\":\"error\",\"error\":\"invalid idx\"}"));
+    try std.testing.expectEqual(HTTP_NOT_FOUND, migrateStatusHttpCode("{\"status\":\"error\",\"error\":\"bad idx\"}"));
+    try std.testing.expectEqual(HTTP_CONFLICT, migrateStatusHttpCode("{\"status\":\"error\",\"error\":\"not running\"}"));
+    try std.testing.expectEqual(HTTP_INTERNAL_ERROR, migrateStatusHttpCode("{\"status\":\"error\",\"error\":\"qmp query\"}"));
+    try std.testing.expectEqual(HTTP_INTERNAL_ERROR, migrateStatusHttpCode("{\"status\":\"error\"}"));
+}
+
+test "fuzz: migrateStatusHttpCode never panics and only ever returns mapped codes" {
+    var prng = std.Random.DefaultPrng.init(0x9135_a7c2);
+    const rnd = prng.random();
+    const fragments = [_][]const u8{
+        "{\"status\":\"error\"", "invalid idx", "bad idx", "not running",
+        "qmp query", "\"status\":\"active\"", "}", ",", "\"", "x",
+    };
+    var buf: [256]u8 = undefined;
+    var i: usize = 0;
+    while (i < 2000) : (i += 1) {
+        var len: usize = 0;
+        const parts = rnd.intRangeAtMost(usize, 0, 6);
+        var p: usize = 0;
+        while (p < parts) : (p += 1) {
+            const frag = fragments[rnd.intRangeLessThan(usize, 0, fragments.len)];
+            if (len + frag.len > buf.len) break;
+            @memcpy(buf[len..][0..frag.len], frag);
+            len += frag.len;
+        }
+        const code = migrateStatusHttpCode(buf[0..len]);
+        try std.testing.expect(code == HTTP_OK or code == HTTP_NOT_FOUND or
+            code == HTTP_CONFLICT or code == HTTP_INTERNAL_ERROR);
+    }
+}
+
 test "handleMigrateCancel: missing prefix returns 'invalid'" {
     const result = try handleMigrateCancel("GET /api/other HTTP/1.1");
     try std.testing.expectEqualStrings("invalid", result);
@@ -5651,6 +6330,11 @@ test "handleClone: full array returns 'full'" {
 // ── Fuzz: handler error paths never panic ─────────────────────────
 
 test "fuzz: handlePower never panics on random request-like input" {
+    // Empty VM table → the idx>=vm_count guard always fires, so random bytes
+    // never reach QMP/VMM/filesystem side effects. Assert the precondition so a
+    // future test that leaks a populated table can't silently turn this fuzzer
+    // into a destructive power-cycle harness.
+    try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
     var prng = std.Random.DefaultPrng.init(0x70A1E070);
     const rnd = prng.random();
     for (0..500) |_| {
@@ -5661,6 +6345,8 @@ test "fuzz: handlePower never panics on random request-like input" {
 }
 
 test "fuzz: handleDelete never panics on random request-like input" {
+    // Empty table required: otherwise random idx bytes could delete a real VM.
+    try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
     var prng = std.Random.DefaultPrng.init(0x70A1E071);
     const rnd = prng.random();
     for (0..500) |_| {
@@ -5681,6 +6367,8 @@ test "fuzz: handleSave never panics on random request-like input" {
 }
 
 test "fuzz: handleReorder never panics on random request-like input" {
+    // Empty table keeps reorder a pure no-op over random from/to indices.
+    try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
     var prng = std.Random.DefaultPrng.init(0x70A1E073);
     const rnd = prng.random();
     for (0..500) |_| {
@@ -5688,6 +6376,104 @@ test "fuzz: handleReorder never panics on random request-like input" {
         for (&buf) |*b| b.* = rnd.int(u8);
         _ = handleReorder(&buf) catch {};
     }
+}
+
+test "fuzz: idx-gated VM handlers never panic on random request-like input" {
+    // Every handler below locks vms_mutex, parses an idx out of the (untrusted)
+    // request line, and bails at `idx >= vm_count` before touching QMP, the
+    // filesystem, or the VMM dispatch. With the test's empty VM table that guard
+    // always fires, so feeding fully random bytes exercises the prefix match and
+    // idx parse on each surface with zero I/O side effects — same contract as the
+    // handlePower/handleDelete harnesses above, extended to the operations that
+    // previously had no fuzz coverage.
+    try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
+
+    var prng = std.Random.DefaultPrng.init(0x70A1E074);
+    const rnd = prng.random();
+    for (0..2000) |_| {
+        var buf: [160]u8 = undefined;
+        for (&buf) |*b| b.* = rnd.int(u8);
+        const req = buf[0..rnd.uintLessThan(usize, buf.len)];
+        var out: [256]u8 = undefined;
+        _ = handleSuspend(req) catch {};
+        _ = handlePause(req) catch {};
+        _ = handleResume(req) catch {};
+        _ = handleReset(req) catch {};
+        _ = handleShutdown(req) catch {};
+        _ = handleRename(req) catch {};
+        _ = handleClone(req) catch {};
+        _ = handleCad(req) catch {};
+        _ = handleMigrate(req) catch {};
+        _ = handleMigrateCancel(req) catch {};
+        _ = handleSnapshotTake(req) catch {};
+        _ = handleSnapshotRevert(req) catch {};
+        _ = handleSnapshotDelete(req) catch {};
+        _ = handleSnapshotList(req, &out);
+        _ = handleMigrateStatus(req, &out);
+    }
+    // Table must be untouched: no handler created or removed a VM.
+    try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
+}
+
+test "fuzz: handleUploadDisk multipart parser never panics on structured input" {
+    // Random bytes alone die at the `POST /api/vm/<idx>` prefix check, so they
+    // never reach the multipart parser. This harness keeps a valid request line
+    // and Content-Type boundary, then mutates the boundary marker, part headers,
+    // filename token, and body framing — the slicing-heavy code that backs up
+    // over CRLF, extracts quoted/unquoted filenames, and computes data bounds.
+    //
+    // Safe to drive directly: with the test's empty VM table the handler returns
+    // "invalid idx" at the `idx >= vm_count` guard, which sits *after* the full
+    // parse but *before* any filesystem write — so the parser is exercised with
+    // no I/O side effects.
+    try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
+
+    var prng = std.Random.DefaultPrng.init(0x71117ADD);
+    const rnd = prng.random();
+    var buf: [1024]u8 = undefined;
+
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        // Random boundary token (may be empty, may contain odd bytes).
+        var bnd: [24]u8 = undefined;
+        const bnd_len = rnd.uintLessThan(usize, bnd.len + 1);
+        for (bnd[0..bnd_len]) |*b| b.* = rnd.int(u8);
+
+        // Random filename token, including traversal / injection bait.
+        const fnames = [_][]const u8{
+            "disk.qcow2", "../../etc/passwd", "a,b.img", "x\x00y", "", "no-quote",
+            "with space.vmdk", "..", "a\"b", "\r\n",
+        };
+        const fname = fnames[rnd.uintLessThan(usize, fnames.len)];
+
+        const quoted = rnd.boolean();
+        const msg = std.fmt.bufPrint(&buf,
+            "POST /api/vm/0 HTTP/1.1\r\nContent-Type: multipart/form-data; boundary={s}\r\n\r\n" ++
+            "--{s}\r\nContent-Disposition: form-data; name=\"file\"; filename={s}{s}{s}\r\n\r\n" ++
+            "PAYLOAD-BYTES\r\n--{s}--\r\n", .{
+            bnd[0..bnd_len],
+            bnd[0..bnd_len],
+            if (quoted) "\"" else "",
+            fname,
+            if (quoted) "\"" else "",
+            bnd[0..bnd_len],
+        }) catch {
+            _ = handleUploadDisk("POST /api/vm/0 HTTP/1.1\r\n\r\n") catch {};
+            continue;
+        };
+
+        // Corrupt a handful of random bytes to fuzz the framing.
+        const flips = rnd.uintLessThan(usize, 6);
+        var f: usize = 0;
+        while (f < flips) : (f += 1) {
+            msg[rnd.uintLessThan(usize, msg.len)] = rnd.int(u8);
+        }
+
+        _ = handleUploadDisk(msg) catch {};
+    }
+
+    // The parser path must not have mutated shared state (no write reached).
+    try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
 }
 
 test "requestLine: stops at CRLF and keeps method+path" {
@@ -5715,6 +6501,54 @@ test "sanitizeLogName: replaces control bytes and bounds output" {
     try std.testing.expectEqualStrings("a?b?c", sanitizeLogName(&out, "a\nb\x00c"));
     var small: [3]u8 = undefined;
     try std.testing.expectEqualStrings("abc", sanitizeLogName(&small, "abcdef"));
+}
+
+test "logReqErr: emits without crashing on normal and edge inputs" {
+    // logReqErr writes a single sanitized line to fd 2; it must never crash
+    // regardless of context length, error value, or request-line content.
+    logReqErr("VNC proxy failed", error.ConnectionRefused, "GET /ws/vnc/3 HTTP/1.1\r\n");
+    logReqErr("", error.BrokenPipe, "");
+    // Control bytes in the request line must not break the single-line invariant.
+    logReqErr("export failed", error.AccessDenied, "POST /api/export/9\t\x01\r\nHost: x");
+    // Overlong context still returns (falls back to the static context string).
+    const long_ctx = "x" ** 400;
+    logReqErr(long_ctx, error.OutOfMemory, "GET /a");
+}
+
+test "logOpErr: emits without crashing on normal and edge inputs" {
+    // logOpErr writes a single sanitized line to fd 2; it must never crash
+    // regardless of op label, error value, or VM-name content.
+    logOpErr("snapshot take", error.NoSpaceLeft, "my-vm");
+    logOpErr("power on", error.FileNotFound, "");
+    // Control bytes in the VM name must not break the single-line invariant.
+    logOpErr("snapshot revert", error.AccessDenied, "vm\n\x01name");
+    // Overlong op label still returns (falls back to the static op string).
+    const long_op = "x" ** 400;
+    logOpErr(long_op, error.OutOfMemory, "vm");
+}
+
+test "fuzz logOpErr: random vm names never crash" {
+    var prng = std.Random.DefaultPrng.init(0x0BCE7711);
+    const rnd = prng.random();
+    const errs = [_]anyerror{ error.NoSpaceLeft, error.FileNotFound, error.AccessDenied, error.OutOfMemory };
+    for (0..500) |_| {
+        var buf: [vm.MAX_NAME]u8 = undefined;
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        logOpErr("fuzz", errs[rnd.uintLessThan(usize, errs.len)], buf[0..len]);
+    }
+}
+
+test "fuzz logReqErr: random request lines never crash" {
+    var prng = std.Random.DefaultPrng.init(0x10C9E771);
+    const rnd = prng.random();
+    const errs = [_]anyerror{ error.ConnectionRefused, error.BrokenPipe, error.AccessDenied, error.OutOfMemory };
+    for (0..500) |_| {
+        var buf: [256]u8 = undefined;
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        logReqErr("fuzz", errs[rnd.uintLessThan(usize, errs.len)], buf[0..len]);
+    }
 }
 
 test "fuzz: sanitizeLogName never panics and stays printable/bounded" {

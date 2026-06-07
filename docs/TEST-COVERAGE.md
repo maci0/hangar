@@ -4,51 +4,60 @@
 
 ```
 zig build test
-→ All tests pass across 31 modules (~1755 tests)
+→ All tests pass across 35 modules
 ```
 
 ## Pure Module Tests
 
-| Module | Tests | Coverage |
-|--------|-------|----------|
-| `vm.zig` | 122 | Config model, enums, serialization |
-| `web_server.zig` | 83 | HTTP API handlers, JSON rendering, body parsing, auth, validation, isAuthExempt, clampPref |
-| `persist.zig` | 45 | JSON parse/emit, VmJson mapping |
-| `qemu.zig` | 36 | QEMU arg builder, OVMF detection, snapshot funcs |
-| `qmp.zig` | 32 | QMP protocol parser, unicode escapes |
-| `vmrun.zig` | 25 | CLI operations, JSON extraction |
-| `vnet.zig` | 36 | Virtual network model, JSON/validation |
-| `form_parsers.zig` | 28 | Form data parse/emit, enum fromStr |
-| `fbmath.zig` | 10 | Math utilities |
-| `ringbuf.zig` | 9 | Ring buffer operations |
-| `serialpath.zig` | 6 | Serial Unix-socket path builder |
-| `uimath.zig` | 10 | UI positioning math |
-| `snapparse.zig` | 17 | Snapshot output parser (QMP + HMP variants) |
-| `termfilter.zig` | 4 | Terminal escape filter |
-| `ovf.zig` | 10 | OVF manifest generation |
-| `autoprotect.zig` | 11 | Auto-snapshot logic |
-| `sync.zig` | 5 | SpinMutex operations |
-| `usock.zig` | 3 | Unix socket operations |
-| `appio.zig` | 3 | I/O + env helpers |
-| `hv/interface.zig` | 7 | Accelerator detection |
-| `hv/qemu_backend.zig` | 7 | QEMU backend dispatch |
-| `path_helpers.zig` | 13 | Path manipulation |
-| `urlencode.zig` | 20 | URL encoding/decoding |
-| `ws.zig` | 11 | WebSocket protocol (RFC 6455) |
-| `transport.zig` | 8 | HTTP transport, URL parsing, IPv6 |
-| `filter.zig` | 7 | Request filtering |
-| `vmlist.zig` | 8 | VM browser line→index mapping |
-| `remote.zig` | 6 | Remote config |
-| `vnet_label.zig` | 6 | Network label helpers |
-| `spice_client.zig` | 4 | SPICE client wrappers |
-| `vnc_client.zig` | 4 | VNC client wrappers |
+Each module carries its own unit + fuzz tests at the bottom of its `.zig`
+(thin wrappers `appstate_test.zig` / `hv_*_test.zig` re-export the rest).
+Exact per-module counts are intentionally omitted — they drift on every
+commit; run `zig build test` for the authoritative result.
 
-## Integration Tests (GUI — FLTK)
+| Module | Coverage |
+|--------|----------|
+| `vm.zig` | Config model, enums, serialization |
+| `web_server.zig` | HTTP API handlers, JSON rendering, body parsing, auth, validation, isAuthExempt, clampPref |
+| `persist.zig` | JSON parse/emit, VmJson mapping |
+| `qemu.zig` | QEMU arg builder, OVMF detection, snapshot funcs |
+| `qmp.zig` | QMP protocol parser, unicode escapes |
+| `vmrun.zig` | CLI operations, JSON extraction |
+| `vnet.zig` | Virtual network model, JSON/validation |
+| `form_parsers.zig` | Form data parse/emit, enum fromStr |
+| `fbmath.zig` | Math utilities |
+| `ringbuf.zig` | Ring buffer operations |
+| `serial_console.zig` | Serial console reader + connection lifecycle |
+| `serialpath.zig` | Serial Unix-socket path builder |
+| `uimath.zig` | UI positioning math |
+| `snapparse.zig` | Snapshot output parser (QMP + HMP variants) |
+| `termfilter.zig` | Terminal escape filter |
+| `ovf.zig` | OVF manifest generation |
+| `autoprotect.zig` | Auto-snapshot logic |
+| `sync.zig` | SpinMutex operations |
+| `usock.zig` | Unix socket operations |
+| `appio.zig` | I/O + env helpers |
+| `hv/interface.zig` | Accelerator detection |
+| `hv/qemu_backend.zig` | QEMU backend dispatch |
+| `path_helpers.zig` | Path manipulation |
+| `urlencode.zig` | URL encoding/decoding |
+| `ws.zig` | WebSocket protocol (RFC 6455) |
+| `transport.zig` | HTTP transport, URL parsing, IPv6 |
+| `filter.zig` | Request filtering |
+| `vmlist.zig` | VM browser line→index mapping |
+| `remote.zig` | Remote config |
+| `vnet_label.zig` | Network label helpers |
+| `spice_client.zig` | SPICE client wrappers |
+| `vnc_client.zig` | VNC client wrappers |
+| `appstate.zig` | Shared global state, config path helpers |
+| `appstate_test.zig` | App-state wiring (test wrapper) |
+| `webui_app.zig` | Native WebView desktop wrapper |
+
+## Web End-to-End Smoke
+
+The puppeteer smoke is folded into the umbrella `test` step, or run on its own:
 
 ```bash
-zig build smoke        # Xvfb: launch app, create VM, settings, about
-zig build fuzzgui      # Xvfb: random event-storm fuzz of the full GUI
-zig build fuzzmodals   # Xvfb: direct-fuzz modal callbacks with Escape watchdog
+zig build web-smoke    # Web UI end-to-end smoke (puppeteer, temp port + $HOME)
 ```
 
 ## Web Backend Tests
@@ -58,20 +67,18 @@ zig build web          # Build + launch web backend (HTTP on :9080)
 bash tests/test_web_api.sh  # Curl-based HTTP API validation
 ```
 
-## Visual Tests (FLTK)
+## Visual Tests
 
 ```bash
-python3 tests/visual/e2e_fltk_screenshots.sh   # Xvfb screenshots — 22 dialogs
-python3 tests/visual/e2e_web_screenshots.mjs   # Puppeteer screenshots — web UI interaction flow
+node tests/visual/e2e_web_screenshots.mjs   # Puppeteer screenshots — web UI interaction flow
 ```
 
 ## Running Tests
 
 ```bash
-zig build test                              # All unit + fuzz tests
-zig build                                   # Build FLTK frontend
-zig build web                               # Build web backend
-python3 tests/visual/test_fltk.py           # FLTK visual (single screenshot)
+zig build test         # All unit + fuzz tests + web E2E smoke
+zig build web          # Build web backend
+zig build webui        # Build native WebView desktop wrapper
 ```
 
 ## Known Issues

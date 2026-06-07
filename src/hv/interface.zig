@@ -10,10 +10,11 @@
 //!   macOS   → HVF (if available, else TCG)
 //!   Windows → WHPX (if available, else TCG)
 //!
-//! The `enable_kvm` flag in VmConfig is renamed conceptually to
-//! `accel` — `VmAccel.auto` means "pick best available hardware accelerator."
-//! `VmAccel.tcg` forces software emulation. Single-accelerator variants
-//! (`.kvm`, `.hvf`, `.whpx`) request a specific hardware backend.
+//! Accelerator selection lives in the VmConfig `accel` field: `VmAccel.auto`
+//! means "pick best available hardware accelerator," `VmAccel.tcg` forces
+//! software emulation, and the single-accelerator variants (`.kvm`, `.hvf`,
+//! `.whpx`) request a specific hardware backend. (Older configs used an
+//! `enable_kvm` bool, still accepted on load for backward compatibility.)
 
 const std = @import("std");
 const builtin = @import("builtin");

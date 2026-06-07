@@ -24,17 +24,10 @@ pub const SnapNodes = struct {
 /// number, i.e. the snapshot ID), take the 2nd whitespace column as the tag.
 pub fn parse(output: []const u8) SnapNodes {
     var nodes = SnapNodes{};
-    // Normalize \r\n → \n and lone \r → \n for robust line splitting.
-    var buf: [4096]u8 = undefined;
-    const normalized = if (output.len < buf.len) blk: {
-        @memcpy(buf[0..output.len], output);
-        for (buf[0..output.len]) |*c| {
-            if (c.* == '\r') c.* = '\n';
-        }
-        break :blk buf[0..output.len];
-    } else output;
-
-    var lines = std.mem.splitScalar(u8, normalized, '\n');
+    // Split on \n and lone \r alike (a \r\n pair yields an empty token that the
+    // trim/empty-line check below drops), so line splitting is robust for any
+    // line ending and any input size — no fixed-size normalization buffer.
+    var lines = std.mem.splitAny(u8, output, "\r\n");
     while (lines.next()) |line| {
         if (nodes.count >= MAX_SNAP_NODES) break;
         const trimmed = std.mem.trim(u8, line, " \t\r");

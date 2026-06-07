@@ -38,15 +38,13 @@ pub fn parseNicMode(s: []const u8) vm.NetworkMode {
 }
 
 /// Parse a guest OS label into a GuestOs enum.
-/// Matches against substrings: "linux", "windows", "freebsd", "macos".
-/// Falls back to GuestOs.fromStr for the exact "other" match,
-/// then defaults to .other for unrecognized input.
+/// Matches case-insensitive substrings: "linux", "windows", "freebsd",
+/// "macos". Anything else (including "other") defaults to .other.
 pub fn parseGuestOs(s: []const u8) vm.GuestOs {
     if (std.ascii.indexOfIgnoreCase(s, "linux") != null) return .linux;
     if (std.ascii.indexOfIgnoreCase(s, "windows") != null) return .windows;
     if (std.ascii.indexOfIgnoreCase(s, "freebsd") != null) return .freebsd;
     if (std.ascii.indexOfIgnoreCase(s, "macos") != null) return .macos;
-    if (std.ascii.eqlIgnoreCase(s, "other")) return .other;
     return .other;
 }
 
@@ -88,13 +86,12 @@ pub fn parseFirmware(s: []const u8) vm.BootFirmware {
 /// Handles full label names ("Virtio-GPU (virgl 3D)", "QXL (SPICE)", "Standard VGA", etc.)
 /// Falls back to GpuDevice.fromStr for exact toStr matches.
 pub fn parseGpuDevice(s: []const u8) vm.GpuDevice {
+    const accel = std.ascii.indexOfIgnoreCase(s, "virgl") != null or std.ascii.indexOfIgnoreCase(s, "3d") != null;
     if (std.ascii.indexOfIgnoreCase(s, "virtio-gpu") != null) {
-        if (std.ascii.indexOfIgnoreCase(s, "virgl") != null or std.ascii.indexOfIgnoreCase(s, "3d") != null) return .virtio_gpu_gl;
-        return .virtio_gpu;
+        return if (accel) .virtio_gpu_gl else .virtio_gpu;
     }
     if (std.ascii.indexOfIgnoreCase(s, "virtio-vga") != null) {
-        if (std.ascii.indexOfIgnoreCase(s, "virgl") != null or std.ascii.indexOfIgnoreCase(s, "3d") != null) return .virtio_vga_gl;
-        return .virtio_vga;
+        return if (accel) .virtio_vga_gl else .virtio_vga;
     }
     if (std.ascii.indexOfIgnoreCase(s, "qxl") != null) return .qxl;
     if (std.ascii.indexOfIgnoreCase(s, "standard") != null and std.ascii.indexOfIgnoreCase(s, "vga") != null) return .std_vga;
@@ -117,7 +114,7 @@ pub fn themeFromIndex(idx: u8) vm.Theme {
 }
 
 /// Parse a string as u32, returning a default on failure or empty input.
-/// Extracted from dialogs.zig prefsDialog (used 4+ times for mem, cpu, ap_interval, ap_max).
+/// Used for numeric form fields (mem, cpu, ap_interval, ap_max).
 pub fn parseU32OrDefault(input: []const u8, default: u32) u32 {
     if (input.len == 0) return default;
     return std.fmt.parseInt(u32, input, 10) catch default;

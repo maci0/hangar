@@ -966,6 +966,18 @@ pub const VmAccel = enum(u8) {
 
 // ── Application Preferences ──────────────────────────────────────────
 
+// Valid ranges for the numeric preferences. Single source of truth shared by
+// the HTTP settings handler (clampPref) and the config-file loader, so a
+// hand-edited vms.json cannot install out-of-range defaults the API rejects.
+pub const PREF_MEMORY_MB_MIN: u32 = 128;
+pub const PREF_MEMORY_MB_MAX: u32 = 65536;
+pub const PREF_CPU_CORES_MIN: u32 = 1;
+pub const PREF_CPU_CORES_MAX: u32 = 256;
+pub const PREF_AUTOPROTECT_INTERVAL_MIN: u32 = 1;
+pub const PREF_AUTOPROTECT_INTERVAL_MAX: u32 = 1440;
+pub const PREF_AUTOPROTECT_MAX_MIN: u32 = 1;
+pub const PREF_AUTOPROTECT_MAX_MAX: u32 = 1000;
+
 /// Application-wide preferences (persisted in vms.json alongside VMs).
 pub const Prefs = struct {
     /// UI theme preference.
@@ -988,6 +1000,17 @@ pub const Prefs = struct {
     win_y: i32 = -1,
     win_w: i32 = 0,
     win_h: i32 = 0,
+
+    /// Clamp the numeric preferences into their valid ranges. Applied after
+    /// loading from disk so a hand-edited or corrupt vms.json cannot install
+    /// defaults (e.g. 0 cores / 0 MB) that would yield unbootable VMs — the
+    /// same bounds the HTTP settings handler enforces via clampPref.
+    pub fn clampToValidRanges(self: *Prefs) void {
+        self.default_memory_mb = std.math.clamp(self.default_memory_mb, PREF_MEMORY_MB_MIN, PREF_MEMORY_MB_MAX);
+        self.default_cpu_cores = std.math.clamp(self.default_cpu_cores, PREF_CPU_CORES_MIN, PREF_CPU_CORES_MAX);
+        self.autoprotect_interval_min_default = std.math.clamp(self.autoprotect_interval_min_default, PREF_AUTOPROTECT_INTERVAL_MIN, PREF_AUTOPROTECT_INTERVAL_MAX);
+        self.autoprotect_max_default = std.math.clamp(self.autoprotect_max_default, PREF_AUTOPROTECT_MAX_MIN, PREF_AUTOPROTECT_MAX_MAX);
+    }
 };
 
 // ── VM Configuration ─────────────────────────────────────────────────
@@ -1106,9 +1129,6 @@ pub const VmConfig = struct {
     usb_device_buf: [64]u8 = [_]u8{0} ** 64,
     usb_device_len: u16 = 0,
 
-    // ── Additional network adapters (persisted) ───────────────────
-    // The primary adapter is `network`/`mac_buf` above. These are extra
-    // NICs; `.none` mode means the adapter is absent.
     // ── 3D graphics acceleration (virgl), persisted ───────────────
     enable_3d: bool = false,
     gpu_device: GpuDevice = .virtio_vga_gl,
@@ -1224,7 +1244,7 @@ pub const VmConfig = struct {
 
     /// Sets the MAC address of NIC 0.
     pub fn setMacAddress(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, 17));
+        const len: u16 = @intCast(@min(s.len, self.nics[0].mac_buf.len - 1));
         @memcpy(self.nics[0].mac_buf[0..len], s[0..len]);
         self.nics[0].mac_buf[len] = 0;
         self.nics[0].mac_len = len;
@@ -1247,7 +1267,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setNotes(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, 4095));
+        const len: u16 = @intCast(@min(s.len, self.notes_buf.len - 1));
         @memcpy(self.notes_buf[0..len], s[0..len]);
         self.notes_buf[len] = 0;
         self.notes_len = len;
@@ -1269,7 +1289,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setPortForwards(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, 511));
+        const len: u16 = @intCast(@min(s.len, self.port_fwd_buf.len - 1));
         @memcpy(self.port_fwd_buf[0..len], s[0..len]);
         self.port_fwd_buf[len] = 0;
         self.port_fwd_len = len;
@@ -1415,10 +1435,7 @@ pub const VmConfig = struct {
         return self.nics[1].mac_buf[0..self.nics[1].mac_len];
     }
     pub fn setNic2Mac(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, 17));
-        @memcpy(self.nics[1].mac_buf[0..len], s[0..len]);
-        self.nics[1].mac_buf[len] = 0;
-        self.nics[1].mac_len = len;
+        self.setNicMacAny(1, s);
     }
     pub fn getNic3Mac(self: *const VmConfig) [*:0]const u8 {
         return @ptrCast(&self.nics[2].mac_buf);
@@ -1427,10 +1444,7 @@ pub const VmConfig = struct {
         return self.nics[2].mac_buf[0..self.nics[2].mac_len];
     }
     pub fn setNic3Mac(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, 17));
-        @memcpy(self.nics[2].mac_buf[0..len], s[0..len]);
-        self.nics[2].mac_buf[len] = 0;
-        self.nics[2].mac_len = len;
+        self.setNicMacAny(2, s);
     }
 
     /// Generic accessors for any NIC (0 = NIC1, 1 = NIC2, … up to MAX_NICS-1).
@@ -1440,7 +1454,7 @@ pub const VmConfig = struct {
     }
     pub fn setNicMacAny(self: *VmConfig, idx: usize, s: []const u8) void {
         if (idx >= MAX_NICS) return;
-        const len: u16 = @intCast(@min(s.len, 17));
+        const len: u16 = @intCast(@min(s.len, self.nics[idx].mac_buf.len - 1));
         @memcpy(self.nics[idx].mac_buf[0..len], s[0..len]);
         self.nics[idx].mac_buf[len] = 0;
         self.nics[idx].mac_len = len;
@@ -1569,7 +1583,13 @@ pub fn isValidVmName(name: []const u8) bool {
     const trimmed = std.mem.trim(u8, name, " \t\r\n");
     if (trimmed.len == 0) return false;
     for (trimmed) |c| {
-        if (c == '/' or c == '\\' or c == 0) return false;
+        // Reject path separators and NUL (path traversal in the /tmp socket and
+        // log paths derived from the name). Reject ',' and control bytes: the
+        // name is interpolated into comma-separated QEMU chardev property lists
+        // (`-qmp`/`-serial`/`-chardev` specs in qemu.zig), where a comma would
+        // inject extra chardev properties — e.g. a `logfile=` to a chosen path
+        // (argument injection, CWE-88). Mirrors `qemu.isSafeQemuPropValue`.
+        if (c == '/' or c == '\\' or c == ',' or c < 0x20 or c == 0x7f) return false;
     }
     return true;
 }
@@ -1590,47 +1610,53 @@ pub fn isValidMac(mac: []const u8) bool {
     return true;
 }
 
+/// Lowest TCP port VNC display servers bind to.
+pub const VNC_PORT_MIN: u16 = 5900;
+/// Highest TCP port VNC/SPICE display servers bind to.
+pub const DISPLAY_PORT_MAX: u16 = 5999;
+/// Lowest TCP port SPICE display servers bind to.
+pub const SPICE_PORT_MIN: u16 = 5930;
+const DISPLAY_PORT_SPAN = DISPLAY_PORT_MAX - VNC_PORT_MIN + 1;
+
 /// Returns true if `port` is in a safe range for VNC/SPICE (5900-5999).
 pub fn isValidDisplayPort(port: u16) bool {
-    return port >= 5900 and port <= 5999;
+    return port >= VNC_PORT_MIN and port <= DISPLAY_PORT_MAX;
 }
 
-/// Find an unused VNC port by scanning existing VMs. Falls back to 5900 + count.
+/// Find an unused VNC port by scanning existing VMs. Falls back to `VNC_PORT_MIN`
+/// when every port in the range is reserved.
 ///
 /// VNC (5900-5999) and SPICE (5930-5999) draw from an overlapping port range,
 /// so both `vnc_port` and `spice_port` of every VM are treated as reserved to
 /// avoid two VMs (one VNC, one SPICE) racing for the same TCP port.
 pub fn findUnusedVncPort(vms: []VmConfig) u16 {
-    var port: u16 = 5900;
-    while (port <= 5999) : (port += 1) {
-        var used = false;
-        for (vms) |*v| {
-            if (v.vnc_port == port or v.spice_port == port) {
-                used = true;
-                break;
-            }
-        }
-        if (!used) return port;
+    var reserved = [_]bool{false} ** DISPLAY_PORT_SPAN;
+    for (vms) |*v| {
+        if (isValidDisplayPort(v.vnc_port)) reserved[v.vnc_port - VNC_PORT_MIN] = true;
+        if (isValidDisplayPort(v.spice_port)) reserved[v.spice_port - VNC_PORT_MIN] = true;
     }
-    return 5900;
+    var port: u16 = VNC_PORT_MIN;
+    while (port <= DISPLAY_PORT_MAX) : (port += 1) {
+        if (!reserved[port - VNC_PORT_MIN]) return port;
+    }
+    return VNC_PORT_MIN;
 }
 
-/// Find an unused SPICE port by scanning existing VMs. Falls back to 5930 + count.
+/// Find an unused SPICE port by scanning existing VMs. Falls back to
+/// `SPICE_PORT_MIN` when every port in the range is reserved.
 ///
 /// Reserves both `vnc_port` and `spice_port` of every VM — see `findUnusedVncPort`.
 pub fn findUnusedSpicePort(vms: []VmConfig) u16 {
-    var port: u16 = 5930;
-    while (port <= 5999) : (port += 1) {
-        var used = false;
-        for (vms) |*v| {
-            if (v.spice_port == port or v.vnc_port == port) {
-                used = true;
-                break;
-            }
-        }
-        if (!used) return port;
+    var reserved = [_]bool{false} ** DISPLAY_PORT_SPAN;
+    for (vms) |*v| {
+        if (isValidDisplayPort(v.spice_port)) reserved[v.spice_port - VNC_PORT_MIN] = true;
+        if (isValidDisplayPort(v.vnc_port)) reserved[v.vnc_port - VNC_PORT_MIN] = true;
     }
-    return 5930;
+    var port: u16 = SPICE_PORT_MIN;
+    while (port <= DISPLAY_PORT_MAX) : (port += 1) {
+        if (!reserved[port - VNC_PORT_MIN]) return port;
+    }
+    return SPICE_PORT_MIN;
 }
 
 /// Clamp memory to a sane range (1 MB to 1 TB). Zero is replaced with min.
@@ -2772,6 +2798,11 @@ test "isValidVmName: rejects path separators and empty names" {
     try std.testing.expect(!isValidVmName("path/name"));
     try std.testing.expect(!isValidVmName("path\\name"));
     try std.testing.expect(!isValidVmName("name\x00embedded"));
+    // Comma and control bytes are rejected: the name is interpolated into
+    // comma-separated QEMU chardev specs, so a comma injects extra properties.
+    try std.testing.expect(!isValidVmName("evil,logfile=/tmp/x"));
+    try std.testing.expect(!isValidVmName("name\nwith-newline"));
+    try std.testing.expect(!isValidVmName("name\twith-tab"));
 }
 
 test "isValidMac: validates MAC format" {
@@ -2826,7 +2857,17 @@ test "fuzz: isValidVmName never crashes on arbitrary input" {
     while (i < 5000) : (i += 1) {
         const n = rnd.uintLessThan(usize, buf.len + 1);
         for (buf[0..n]) |*c| c.* = rnd.int(u8);
-        _ = isValidVmName(buf[0..n]); // must not crash
+        const name = buf[0..n];
+        // Security contract: an accepted name must never carry a path separator,
+        // comma, or control byte (argument/path injection, CWE-88/path traversal).
+        // Asserting it here fails loudly if the validator is ever weakened.
+        if (isValidVmName(name)) {
+            const trimmed = std.mem.trim(u8, name, " \t\r\n");
+            for (trimmed) |c| {
+                try std.testing.expect(c != '/' and c != '\\' and c != ',');
+                try std.testing.expect(c >= 0x20 and c != 0x7f);
+            }
+        }
     }
 }
 
@@ -2996,8 +3037,17 @@ test "VmAccel: out-of-range fromIndex defaults" {
 
 test "VmAccel: platformDefault returns a valid variant" {
     const pd = VmAccel.platformDefault();
-    _ = pd.toStr(); // must not crash
-    _ = pd.label();
+    const expected: VmAccel = switch (builtin.os.tag) {
+        .linux => .kvm,
+        .macos => .hvf,
+        .windows => .whpx,
+        else => .tcg,
+    };
+    try std.testing.expectEqual(expected, pd);
+    // Round-trips through the enum machinery without losing identity.
+    try std.testing.expectEqual(pd, VmAccel.fromIndex(pd.toIndex()));
+    try std.testing.expect(std.mem.span(pd.toStr()).len > 0);
+    try std.testing.expect(std.mem.span(pd.label()).len > 0);
 }
 
 test "VmConfig: findUnusedVncPort returns first gap" {
@@ -3136,4 +3186,57 @@ test "VmConfig: extra disk accessors round-trip" {
     vm.setExtraDiskPath(0, long[0..MAX_PATH]);
     try std.testing.expect(vm.hasExtraDisk(0));
     try std.testing.expectEqual(MAX_PATH, vm.getExtraDiskPathSlice(0).len);
+}
+
+test "Prefs: clampToValidRanges bounds numeric fields" {
+    // Below-minimum values (including 0) are raised to the minimum.
+    var low: Prefs = .{
+        .default_memory_mb = 0,
+        .default_cpu_cores = 0,
+        .autoprotect_interval_min_default = 0,
+        .autoprotect_max_default = 0,
+    };
+    low.clampToValidRanges();
+    try std.testing.expectEqual(PREF_MEMORY_MB_MIN, low.default_memory_mb);
+    try std.testing.expectEqual(PREF_CPU_CORES_MIN, low.default_cpu_cores);
+    try std.testing.expectEqual(PREF_AUTOPROTECT_INTERVAL_MIN, low.autoprotect_interval_min_default);
+    try std.testing.expectEqual(PREF_AUTOPROTECT_MAX_MIN, low.autoprotect_max_default);
+
+    // Above-maximum values are lowered to the maximum.
+    var high: Prefs = .{
+        .default_memory_mb = 1 << 30,
+        .default_cpu_cores = 100000,
+        .autoprotect_interval_min_default = 100000,
+        .autoprotect_max_default = 100000,
+    };
+    high.clampToValidRanges();
+    try std.testing.expectEqual(PREF_MEMORY_MB_MAX, high.default_memory_mb);
+    try std.testing.expectEqual(PREF_CPU_CORES_MAX, high.default_cpu_cores);
+    try std.testing.expectEqual(PREF_AUTOPROTECT_INTERVAL_MAX, high.autoprotect_interval_min_default);
+    try std.testing.expectEqual(PREF_AUTOPROTECT_MAX_MAX, high.autoprotect_max_default);
+
+    // In-range values are left untouched.
+    var ok: Prefs = .{ .default_memory_mb = 4096, .default_cpu_cores = 4 };
+    ok.clampToValidRanges();
+    try std.testing.expectEqual(@as(u32, 4096), ok.default_memory_mb);
+    try std.testing.expectEqual(@as(u32, 4), ok.default_cpu_cores);
+}
+
+test "fuzz: clampToValidRanges always yields in-range values" {
+    var prng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15);
+    const rand = prng.random();
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        var p: Prefs = .{
+            .default_memory_mb = rand.int(u32),
+            .default_cpu_cores = rand.int(u32),
+            .autoprotect_interval_min_default = rand.int(u32),
+            .autoprotect_max_default = rand.int(u32),
+        };
+        p.clampToValidRanges();
+        try std.testing.expect(p.default_memory_mb >= PREF_MEMORY_MB_MIN and p.default_memory_mb <= PREF_MEMORY_MB_MAX);
+        try std.testing.expect(p.default_cpu_cores >= PREF_CPU_CORES_MIN and p.default_cpu_cores <= PREF_CPU_CORES_MAX);
+        try std.testing.expect(p.autoprotect_interval_min_default >= PREF_AUTOPROTECT_INTERVAL_MIN and p.autoprotect_interval_min_default <= PREF_AUTOPROTECT_INTERVAL_MAX);
+        try std.testing.expect(p.autoprotect_max_default >= PREF_AUTOPROTECT_MAX_MIN and p.autoprotect_max_default <= PREF_AUTOPROTECT_MAX_MAX);
+    }
 }

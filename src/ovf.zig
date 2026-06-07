@@ -360,6 +360,22 @@ test "fuzz: esc function handles all byte values" {
             list.deinit(a);
             continue;
         };
+        // XML-injection contract: escaped output must never carry a raw markup
+        // metacharacter, and every '&' must open one of the five entities esc
+        // emits. A regression that stops escaping any of these would surface here.
+        const out = list.items;
+        for (out, 0..) |c, idx| {
+            try std.testing.expect(c != '<' and c != '>' and c != '"' and c != '\'');
+            if (c == '&') {
+                const rest = out[idx..];
+                const ok = std.mem.startsWith(u8, rest, "&amp;") or
+                    std.mem.startsWith(u8, rest, "&lt;") or
+                    std.mem.startsWith(u8, rest, "&gt;") or
+                    std.mem.startsWith(u8, rest, "&quot;") or
+                    std.mem.startsWith(u8, rest, "&apos;");
+                try std.testing.expect(ok);
+            }
+        }
         list.deinit(a);
     }
 }

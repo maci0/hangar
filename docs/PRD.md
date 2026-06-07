@@ -1,8 +1,8 @@
 # Hangar — Product Requirements Document
 
 ## Elevator Pitch
-Lightweight QEMU/KVM virtual machine manager with FLTK desktop + web frontend.
-Zero libvirt dependency. Single binary for each platform.
+Lightweight QEMU/KVM virtual machine manager with a web UI and an optional
+native WebView desktop wrapper. Zero libvirt dependency. Single binary per role.
 
 ## Target Users
 - Developers running local VMs for testing
@@ -10,8 +10,8 @@ Zero libvirt dependency. Single binary for each platform.
 - Homelab users managing QEMU VMs without libvirt complexity
 
 ## Architecture Principles
-1. **Pure modules shared** — both FLTK and Web frontends share the same VM/QEMU logic
-2. **Single binary** — FLTK desktop is one statically-linked ELF; web server is one ELF
+1. **Pure modules shared** — `web_server.zig`, `webui_app.zig`, and `vmrun` reuse the same VM/QEMU logic
+2. **Single binary per role** — `hangar-web` (server + daemon), `hangar-webui` (native WebView wrapper), `vmrun` (CLI client)
 3. **No dependencies** — hand-rolled JSON parser, no libvirt, no systemd
 4. **Platform detection** — KVM on Linux, HVF on macOS, WHPX on Windows, TCG fallback
 
@@ -30,14 +30,14 @@ Zero libvirt dependency. Single binary for each platform.
 - Web frontend with REST API + HTML UI
 
 ## Build Targets
-| Target | Binary | Size |
-|--------|--------|------|
-| Linux FLTK | zig-out/bin/hangar | ~11.8MB |
-| Linux Web | zig-out/bin/hangar-web | ~6.5MB |
+| Target | Binary | Build step |
+|--------|--------|-----------|
+| Web server + daemon | zig-out/bin/hangar-web | `zig build web` |
+| Native WebView wrapper | zig-out/bin/hangar-webui | `zig build webui` |
+| CLI client | zig-out/bin/vmrun | `zig build` |
 
 ## Success Metrics
-- 567/568 pure module tests passing
-- FLTK renders correctly under Xvfb (visual verified)
+- All unit + fuzz tests pass (`zig build test`)
 - Web API serves all endpoints correctly
 - VM create + power on + power off lifecycle works
 - Config persists across restarts

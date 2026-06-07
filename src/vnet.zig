@@ -18,6 +18,11 @@ const appstate = @import("appstate.zig");
 /// Hard cap on virtual switches. VMware Workstation exposes VMnet0..VMnet19.
 pub const MAX_VNETS: usize = 20;
 
+/// Set by `load` when an existing networks.json could not be read. While set,
+/// `save` refuses to overwrite the file so a transient read error cannot cause
+/// the in-memory defaults to clobber the user's real network config.
+var load_read_failed: bool = false;
+
 const NAME_CAP = 16;
 const IP_CAP = 16; // "255.255.255.255" + NUL fits
 const IFACE_CAP = 32;
@@ -241,17 +246,6 @@ fn emit(list: *List, alloc: std.mem.Allocator, s: []const u8) !void {
     try list.appendSlice(alloc, s);
 }
 
-fn writeFileAtomic(file_path: []const u8, data: []const u8) !void {
-    // Propagate the real error (NoSpaceLeft, AccessDenied, ...) rather than
-    // masking it as a generic WriteFailed, so the actual cause reaches callers.
-    var af = try std.Io.Dir.cwd().createFileAtomic(appio.io(), file_path, .{ .replace = true });
-    defer af.deinit(appio.io());
-
-    try af.file.writeStreamingAll(appio.io(), data);
-    try af.file.sync(appio.io());
-    try af.replace(appio.io());
-}
-
 /// Append `s` as a quoted, escaped JSON string.
 fn emitStr(list: *List, alloc: std.mem.Allocator, s: []const u8) !void {
     try list.append(alloc, '"');
@@ -320,11 +314,14 @@ pub fn toJson(set: *const NetworkSet, alloc: std.mem.Allocator) ![]u8 {
 /// Persist `set` to `~/.config/hangar/networks.json`. Best-effort: creates the
 /// config dir if missing.
 pub fn save(set: *const NetworkSet) !void {
+    if (@atomicLoad(bool, &load_read_failed, .seq_cst)) return error.LoadDegradedRefusingOverwrite;
+
     const alloc = std.heap.page_allocator;
 
     var dir_buf: [512]u8 = undefined;
     if (appstate.configDir(&dir_buf)) |dir_path| {
-        std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
+        // Owner-only (0o700): keep network config unreadable to other local users.
+        _ = std.Io.Dir.cwd().createDirPathStatus(appio.io(), dir_path, .fromMode(0o700)) catch {
             _ = std.c.write(2, "vnet: createDirPath failed\n", 27);
         };
     }
@@ -335,7 +332,7 @@ pub fn save(set: *const NetworkSet) !void {
     const json = try toJson(set, alloc);
     defer alloc.free(json);
 
-    try writeFileAtomic(file_path, json);
+    try appio.writeFileAtomic(file_path, json);
 }
 
 // ── Parse ────────────────────────────────────────────────────────────
@@ -366,8 +363,9 @@ pub fn parseVersion(content: []const u8) u32 {
             }
             if (i == 0) return 1; // non-numeric (e.g. "abc", true) → default
             if (val > CUR_VERSION and !@import("builtin").is_test) {
-                const msg = "hangar: networks file version newer than supported (max 1); some settings may be ignored\n";
-                _ = std.c.write(2, msg, msg.len);
+                var msg_buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "hangar: networks file version newer than supported (max {d}); some settings may be ignored\n", .{CUR_VERSION}) catch "hangar: networks file version newer than supported; some settings may be ignored\n";
+                _ = std.c.write(2, msg.ptr, msg.len);
             }
             return val;
         }
@@ -477,15 +475,28 @@ fn isValidSubnetMask(s: []const u8) bool {
     return (inv & (inv +% 1)) == 0;
 }
 
+/// Find `"key"` used as an object key — i.e. an occurrence followed (after
+/// optional whitespace) by `:` — and return the slice starting just after that
+/// colon (whitespace-trimmed). Occurrences that appear as string *values* (a
+/// value equal to some other field's key name, e.g. a network literally named
+/// "type") are not followed by `:`, so they are skipped rather than mistaken for
+/// the key. Returns null when no key match exists.
+fn findKeyValue(obj: []const u8, pat: []const u8) ?[]const u8 {
+    var search = obj;
+    while (std.mem.indexOf(u8, search, pat)) |idx| {
+        const after = skipWs(search[idx + pat.len ..]);
+        if (after.len > 0 and after[0] == ':') return skipWs(after[1..]);
+        search = search[idx + pat.len ..];
+    }
+    return null;
+}
+
 /// Within a single object slice `obj`, find `"key"` and read the string value
 /// that follows `:`. Writes into `out`, returns the slice (empty if absent).
 fn fieldStr(obj: []const u8, key: []const u8, out: []u8) []const u8 {
     var pat_buf: [40]u8 = undefined;
     const pat = std.fmt.bufPrint(&pat_buf, "\"{s}\"", .{key}) catch return out[0..0];
-    const idx = std.mem.indexOf(u8, obj, pat) orelse return out[0..0];
-    var cur = skipWs(obj[idx + pat.len ..]);
-    if (cur.len == 0 or cur[0] != ':') return out[0..0];
-    cur = skipWs(cur[1..]);
+    const cur = findKeyValue(obj, pat) orelse return out[0..0];
     const r = readString(cur, out) orelse return out[0..0];
     return r.value;
 }
@@ -494,10 +505,7 @@ fn fieldStr(obj: []const u8, key: []const u8, out: []u8) []const u8 {
 fn fieldBool(obj: []const u8, key: []const u8) bool {
     var pat_buf: [40]u8 = undefined;
     const pat = std.fmt.bufPrint(&pat_buf, "\"{s}\"", .{key}) catch return false;
-    const idx = std.mem.indexOf(u8, obj, pat) orelse return false;
-    var cur = skipWs(obj[idx + pat.len ..]);
-    if (cur.len == 0 or cur[0] != ':') return false;
-    cur = skipWs(cur[1..]);
+    const cur = findKeyValue(obj, pat) orelse return false;
     return cur.len >= 4 and std.mem.eql(u8, cur[0..4], "true");
 }
 
@@ -539,7 +547,14 @@ pub fn fromJson(content: []const u8) NetworkSet {
     var set = NetworkSet{};
 
     // Forward-compat: warn (once) if the file was written by a newer Hangar.
-    _ = parseVersion(content);
+    // A newer file may carry fields this build does not understand; parsing keeps
+    // only the known ones, so a later save() would silently downgrade and clobber
+    // the user's real config. Block save() until a supported file is loaded
+    // (same guard as an unreadable file). Suppressed in test builds so the
+    // round-trip tests can still exercise save().
+    if (parseVersion(content) > CUR_VERSION and !@import("builtin").is_test) {
+        @atomicStore(bool, &load_read_failed, true, .seq_cst);
+    }
 
     // Narrow to the "networks" array; if absent, parse the whole buffer (the
     // object scanner ignores the outer wrapper object anyway because we start
@@ -603,6 +618,7 @@ pub fn load() NetworkSet {
         if (e != error.FileNotFound) {
             const msg = "vnet: load failed to read networks.json (existing config not loaded)\n";
             _ = std.c.write(2, msg, msg.len);
+            @atomicStore(bool, &load_read_failed, true, .seq_cst);
         }
         return NetworkSet.defaults();
     };
@@ -617,6 +633,13 @@ pub fn load() NetworkSet {
 // ── Tests ────────────────────────────────────────────────────────────
 
 const testing = std.testing;
+
+test "save refuses to overwrite when load read failed" {
+    @atomicStore(bool, &load_read_failed, true, .seq_cst);
+    defer @atomicStore(bool, &load_read_failed, false, .seq_cst);
+    const set = NetworkSet.defaults();
+    try testing.expectError(error.LoadDegradedRefusingOverwrite, save(&set));
+}
 
 test "VNetType: fromIndex round-trip" {
     try testing.expectEqual(VNetType.bridged, VNetType.fromIndex(0));
@@ -896,6 +919,20 @@ test "vnet: fieldStr with missing key returns empty" {
     try testing.expectEqual(@as(usize, 0), result.len);
 }
 
+test "vnet: fieldStr skips a value equal to another field's key name" {
+    // A network literally named "type" must not suppress the real "type" field:
+    // the value "type" of the name field is not followed by ':', so it is skipped.
+    var out: [64]u8 = undefined;
+    const obj = "{\"name\": \"type\", \"type\": \"bridged\"}";
+    try testing.expectEqualStrings("bridged", fieldStr(obj, "type", &out));
+    try testing.expectEqualStrings("type", fieldStr(obj, "name", &out));
+}
+
+test "vnet: fieldBool skips a value equal to its key name" {
+    const obj = "{\"name\": \"dhcp\", \"dhcp\": true}";
+    try testing.expect(fieldBool(obj, "dhcp"));
+}
+
 test "vnet: fieldBool with false" {
     const obj = "{\"dhcp\": false}";
     try testing.expect(!fieldBool(obj, "dhcp"));
@@ -1050,4 +1087,82 @@ test "fuzz: fromJson on mutated valid JSON never crashes" {
         const set = fromJson(json);
         try testing.expect(set.count <= MAX_VNETS);
     }
+}
+
+test "fuzz: isValidIpv4/isValidSubnetMask never panic and stay consistent" {
+    // These validators gate untrusted network config from both networks.json
+    // and the Virtual Network Editor web form. Random bytes — including
+    // arithmetic-overflow bait like long digit runs — must never panic, and a
+    // value accepted as a subnet mask must always be a valid IPv4 address.
+    var prng = std.Random.DefaultPrng.init(0x176E_7A11);
+    const rnd = prng.random();
+    var buf: [32]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 6000) : (iter += 1) {
+        const n = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..n]) |*b| {
+            // Bias toward digits/dots so deep parse branches are reached.
+            b.* = switch (rnd.uintLessThan(u8, 4)) {
+                0 => '.',
+                1 => '0' + rnd.uintLessThan(u8, 10),
+                else => rnd.int(u8),
+            };
+        }
+        const s = buf[0..n];
+        const is_ip = isValidIpv4(s);
+        if (isValidSubnetMask(s)) {
+            // A mask must also satisfy the IPv4 grammar it is built on.
+            try testing.expect(is_ip);
+        }
+    }
+}
+
+test "fuzz: readString never panics and rest is always a suffix" {
+    // Honors the suffix invariant documented on readString: on success the
+    // returned `rest` must be a tail slice of the input, and the decoded value
+    // must fit inside the caller buffer. Feeds raw bytes plus quote/backslash
+    // bait to exercise the escape and \uXXXX decoding paths.
+    var prng = std.Random.DefaultPrng.init(0x5237_4EAD);
+    const rnd = prng.random();
+    var in: [48]u8 = undefined;
+    var out: [48]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 6000) : (iter += 1) {
+        const n = rnd.uintLessThan(usize, in.len);
+        for (in[0..n]) |*b| {
+            b.* = switch (rnd.uintLessThan(u8, 6)) {
+                0 => '"',
+                1 => '\\',
+                2 => 'u',
+                else => rnd.int(u8),
+            };
+        }
+        const s = in[0..n];
+        if (readString(s, &out)) |r| {
+            // value lives in `out`; rest is a genuine suffix of the input.
+            try testing.expect(r.value.len <= out.len);
+            try testing.expect(@intFromPtr(r.rest.ptr) >= @intFromPtr(s.ptr));
+            try testing.expect(@intFromPtr(r.rest.ptr) + r.rest.len <= @intFromPtr(s.ptr) + s.len);
+        }
+    }
+}
+
+test "fuzz: parseVersion never panics and saturates" {
+    // version is read straight from untrusted networks.json content. Long digit
+    // runs must saturate (no integer overflow), and absent/garbage input must
+    // fall back to the default version 1.
+    var prng = std.Random.DefaultPrng.init(0x7E12_510E);
+    const rnd = prng.random();
+    var buf: [64]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 5000) : (iter += 1) {
+        const n = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..n]) |*b| b.* = rnd.int(u8);
+        _ = parseVersion(buf[0..n]);
+    }
+    // A pathological all-9s value must saturate rather than wrap.
+    const big = "\"version\": 999999999999999999999999";
+    try testing.expect(parseVersion(big) == std.math.maxInt(u32));
+    // Missing key falls back to the default.
+    try testing.expect(parseVersion("{}") == 1);
 }

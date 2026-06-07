@@ -14,9 +14,13 @@ kvmgui-fltk
 test_cairo_iup
 test_rfb_cimport
 check_syntax
+test_json_escape
+test_guest_os
 
 # Secrets / local env
 .env
+.env.*
+!.env.example
 *.local
 .qwen/
 
@@ -24,6 +28,7 @@ check_syntax
 .codegraph/
 .opencode/
 .ruff_cache/
+.review-loop.lock
 ~
 
 # Test sandbox
@@ -44,7 +49,6 @@ rfbclient.h
 rfbproto.h
 test_serial.zig
 node_modules/
-package-lock.json
 __pycache__/
 *.pyc
 

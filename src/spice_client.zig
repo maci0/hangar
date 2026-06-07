@@ -387,7 +387,7 @@ pub const SpiceClient = struct {
 const testing = std.testing;
 
 test "spice: fresh client public API is safe (unconnected)" {
-    const cl = SpiceClient.new() orelse return;
+    const cl = SpiceClient.new() orelse return error.SkipZigTest;
     defer cl.free();
     try testing.expect(!cl.isConnected());
     var w: c_int = -1;
@@ -409,7 +409,7 @@ test "spice: GLib signal callbacks guard null data (no deref)" {
 }
 
 test "fuzz: spice onInvalidate/onPrimaryDestroy self-side over random coords" {
-    const cl = SpiceClient.new() orelse return;
+    const cl = SpiceClient.new() orelse return error.SkipZigTest;
     defer cl.free();
     var fired: bool = false;
     const Cb = struct {
@@ -439,7 +439,7 @@ test "fuzz: spice channel callbacks against real (unconnected) channels" {
     // isDisplayChannel/isInputsChannel g_type dispatch, spice_channel_connect
     // (returns FALSE on an unconnected session), and get_primary (no primary →
     // else branch) — rather than only the null-guard paths.
-    const session = c.spice_session_new() orelse return;
+    const session = c.spice_session_new() orelse return error.SkipZigTest;
     defer c.g_object_unref(session);
     c.g_object_set(
         @as(c.gpointer, @ptrCast(session)),
@@ -447,7 +447,7 @@ test "fuzz: spice channel callbacks against real (unconnected) channels" {
         @as(c.gboolean, 0),
         @as(?*anyopaque, null),
     );
-    const cl = SpiceClient.new() orelse return;
+    const cl = SpiceClient.new() orelse return error.SkipZigTest;
     defer cl.free();
 
     var prng = std.Random.DefaultPrng.init(0x5717_C0DE);

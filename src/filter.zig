@@ -12,10 +12,14 @@ const vm = @import("vm.zig");
 pub fn filterMatch(v: *const vm.VmConfig, filter: []const u8) bool {
     if (filter.len == 0) return true;
     const name = v.getNameSlice();
-    var name_buf: [128]u8 = undefined;
-    var filter_buf: [128]u8 = undefined;
-    const lower_name = std.ascii.lowerString(&name_buf, name);
-    const lower_filter = std.ascii.lowerString(&filter_buf, filter);
+    // VM names are capped at MAX_NAME; a filter longer than the name can never
+    // be a substring. Rejecting early gives the right answer and guarantees
+    // both inputs fit the MAX_NAME-sized lowercase buffers below.
+    if (filter.len > name.len) return false;
+    var name_buf: [vm.MAX_NAME + 1]u8 = undefined;
+    var filter_buf: [vm.MAX_NAME + 1]u8 = undefined;
+    const lower_name = std.ascii.lowerString(name_buf[0..name.len], name);
+    const lower_filter = std.ascii.lowerString(filter_buf[0..filter.len], filter);
     return std.mem.indexOf(u8, lower_name, lower_filter) != null;
 }
 
@@ -61,6 +65,17 @@ test "filterMatch: empty name" {
     v.setName("");
     try std.testing.expect(filterMatch(&v, "")); // empty filter matches empty name
     try std.testing.expect(!filterMatch(&v, "x")); // non-empty filter doesn't match
+}
+
+test "filterMatch: long name beyond 128 bytes does not overflow" {
+    var v: vm.VmConfig = .{};
+    const long = "a" ** 200 ++ "needle" ++ "b" ** 40; // 246 bytes, < MAX_NAME
+    v.setName(long);
+    try std.testing.expect(filterMatch(&v, "needle"));
+    try std.testing.expect(filterMatch(&v, "NEEDLE"));
+    try std.testing.expect(!filterMatch(&v, "missing"));
+    // A filter longer than the (capped) name can never match.
+    try std.testing.expect(!filterMatch(&v, "z" ** 250));
 }
 
 test "fuzz: filterMatch never panics on random inputs" {

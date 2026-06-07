@@ -72,11 +72,28 @@ pub fn writeUpgradeResponse(fd: c.fd_t, accept_key: [29]u8) !void {
     _ = c.write(fd, resp.ptr, resp.len);
 }
 
+/// Read exactly `dst.len` bytes from `fd`, looping on partial reads.
+/// Returns false on EOF or error before the buffer is filled. A single
+/// `c.read` may return fewer bytes than requested on a fragmented TCP
+/// stream (the VNC proxy serves possibly-remote browser clients), so the
+/// fixed-size header reads below must accumulate rather than demand the
+/// full count in one syscall — otherwise a split header is misread as a
+/// protocol error and the connection is dropped spuriously.
+fn readFull(fd: c.fd_t, dst: []u8) bool {
+    var got: usize = 0;
+    while (got < dst.len) {
+        const n = c.read(fd, dst.ptr + got, dst.len - got);
+        if (n <= 0) return false;
+        got += @intCast(n);
+    }
+    return true;
+}
+
 /// Read a WebSocket frame header from the socket.
 /// Returns null on EOF or invalid frame.
 pub fn readFrameHeader(fd: c.fd_t) ?FrameHeader {
     var buf: [2]u8 = undefined;
-    if (c.read(fd, &buf, 2) != 2) return null;
+    if (!readFull(fd, &buf)) return null;
 
     const b0 = buf[0];
     const b1 = buf[1];
@@ -88,11 +105,11 @@ pub fn readFrameHeader(fd: c.fd_t) ?FrameHeader {
 
     if (payload_len == 126) {
         var ext: [2]u8 = undefined;
-        if (c.read(fd, &ext, 2) != 2) return null;
+        if (!readFull(fd, &ext)) return null;
         payload_len = std.mem.readInt(u16, &ext, .big);
     } else if (payload_len == 127) {
         var ext: [8]u8 = undefined;
-        if (c.read(fd, &ext, 8) != 8) return null;
+        if (!readFull(fd, &ext)) return null;
         payload_len = std.mem.readInt(u64, &ext, .big);
         // RFC 6455 §5.2: MSB of 64-bit extended length must be clear.
         if ((payload_len & (1 << 63)) != 0) return null;
@@ -114,7 +131,7 @@ pub fn readFramePayload(fd: c.fd_t, buf: []u8, header: FrameHeader) ?usize {
     if (len == 0 and header.mask) {
         // Mask key is still on the wire even with zero payload — consume it.
         var mask_key: [4]u8 = undefined;
-        if (c.read(fd, &mask_key, 4) != 4) return null;
+        if (!readFull(fd, &mask_key)) return null;
         return 0;
     }
     if (len == 0) return 0;
@@ -122,7 +139,7 @@ pub fn readFramePayload(fd: c.fd_t, buf: []u8, header: FrameHeader) ?usize {
     // Read mask key FIRST (RFC 6455 §5.3: masking-key precedes Payload Data).
     var mask_key: [4]u8 = [_]u8{0} ** 4;
     if (header.mask) {
-        if (c.read(fd, &mask_key, 4) != 4) return null;
+        if (!readFull(fd, &mask_key)) return null;
     }
 
     // Read and unmask the payload in a single pass.
@@ -174,8 +191,22 @@ pub fn writeFrame(fd: c.fd_t, opcode: Opcode, payload: []const u8) !void {
         header_len = 10;
     }
 
-    if (c.write(fd, &header, header_len) != @as(isize, @intCast(header_len))) return error.WriteFailed;
-    if (c.write(fd, payload.ptr, payload.len) != @as(isize, @intCast(payload.len))) return error.WriteFailed;
+    // Emit header+payload in a single writev so the 2-byte header is not sent
+    // as its own runt TCP segment. The relay sockets set TCP_NODELAY, so two
+    // separate write() calls would push a tiny header packet ahead of every
+    // frame on the VNC/SPICE/serial console path. One syscall, one segment.
+    if (payload.len == 0) {
+        if (c.write(fd, &header, header_len) != @as(isize, @intCast(header_len))) return error.WriteFailed;
+        return;
+    }
+    var iov = [2]std.posix.iovec_const{
+        .{ .base = &header, .len = header_len },
+        .{ .base = payload.ptr, .len = payload.len },
+    };
+    const total: isize = @intCast(header_len + payload.len);
+    // A short writev (signal/buffer pressure) is treated as failure, matching
+    // the prior write()-based behaviour which also did not loop on partial writes.
+    if (c.writev(fd, &iov, 2) != total) return error.WriteFailed;
 }
 
 /// Write a WebSocket close frame.
@@ -370,7 +401,44 @@ test "fuzz: parseUpgrade never panics on random HTTP headers" {
         for (buf[0..n]) |*b| b.* = rnd.int(u8);
         // Ensure there's no uninitialized read past the generated data.
         @memset(buf[n..], 0);
-        _ = parseUpgrade(buf[0..n]);
+        if (parseUpgrade(buf[0..n])) |accept| assertAcceptKey(accept);
+    }
+}
+
+test "fuzz: parseUpgrade accept key is injection-safe on valid-shaped requests" {
+    // Random bytes almost never carry all three required markers, so the
+    // accept-computation path above is rarely reached. Build well-formed
+    // upgrade requests with an attacker-controlled key value and assert the
+    // derived accept key can never carry a CR/LF (which would let the key
+    // smuggle headers into the HTTP 101 response in writeUpgradeResponse).
+    var prng = std.Random.DefaultPrng.init(0xC0FFEE11);
+    const rnd = prng.random();
+    var iter: usize = 0;
+    while (iter < 3000) : (iter += 1) {
+        var key: [64]u8 = undefined;
+        const klen = rnd.uintLessThan(usize, key.len);
+        for (key[0..klen]) |*b| b.* = rnd.int(u8);
+        var buf: [512]u8 = undefined;
+        // The '\r' terminator for the key header is guaranteed by bufPrint; a
+        // raw '\r' inside the random key just truncates it early, which is fine.
+        const req = std.fmt.bufPrint(
+            &buf,
+            "GET / HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {s}\r\n\r\n",
+            .{key[0..klen]},
+        ) catch continue;
+        const accept = parseUpgrade(req) orelse continue;
+        assertAcceptKey(accept);
+    }
+}
+
+/// The accept key is base64 of a 20-byte SHA1 (exactly 28 chars) plus a NUL
+/// terminator, and bytes 0..28 flow unescaped into the HTTP 101 response.
+fn assertAcceptKey(accept: [29]u8) void {
+    std.testing.expect(accept[28] == 0) catch unreachable;
+    for (accept[0..28]) |ch| {
+        const ok = (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or
+            (ch >= '0' and ch <= '9') or ch == '+' or ch == '/' or ch == '=';
+        std.testing.expect(ok) catch unreachable;
     }
 }
 
@@ -519,6 +587,36 @@ test "readFrameHeader: masked frame" {
     try std.testing.expectEqual(Opcode.text, hdr.?.opcode);
     try std.testing.expect(hdr.?.mask);
     try std.testing.expectEqual(@as(u64, 3), hdr.?.payload_len);
+}
+
+test "readFrameHeader: header split across reads is reassembled" {
+    // A fragmented stream delivers the 4-byte (126-marker) header one byte at
+    // a time. readFull must accumulate rather than treat the first short read
+    // as a protocol error, so the header still parses correctly.
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer {
+        _ = c.close(fds[0]);
+        _ = c.close(fds[1]);
+    }
+
+    // FIN + binary, unmasked, extended payload_len=300.
+    const frame = [_]u8{ 0x82, 126, 0x01, 0x2c };
+    const Writer = struct {
+        fn run(wfd: c.fd_t, bytes: []const u8) void {
+            for (bytes) |b| {
+                var one = [_]u8{b};
+                _ = c.write(wfd, &one, 1);
+            }
+        }
+    };
+    var th = try std.Thread.spawn(.{}, Writer.run, .{ fds[1], frame[0..] });
+    defer th.join();
+
+    const hdr = readFrameHeader(fds[0]);
+    try std.testing.expect(hdr != null);
+    try std.testing.expectEqual(Opcode.binary, hdr.?.opcode);
+    try std.testing.expectEqual(@as(u64, 300), hdr.?.payload_len);
 }
 
 test "readFrameHeader: EOF on first 2 bytes returns null" {
@@ -780,5 +878,88 @@ test "fuzz: readFramePayload never panics on random masked data" {
         if (n) |len| {
             try std.testing.expectEqualStrings(plain[0..payload_len], buf[0..len]);
         }
+    }
+}
+
+test "fuzz: readFramePayload drains an oversized frame and leaves the stream aligned" {
+    // Exercises the overflow path (payload_len > buf.len): a hostile client can
+    // claim a payload bigger than our receive buffer. readFramePayload must read
+    // what fits, then drain the remainder so the NEXT frame header parses cleanly.
+    var prng = std.Random.DefaultPrng.init(0x7EAF00F);
+    const rnd = prng.random();
+    var iter: usize = 0;
+    while (iter < 400) : (iter += 1) {
+        var fds: [2]c.fd_t = undefined;
+        if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) continue;
+        defer {
+            _ = c.close(fds[0]);
+            _ = c.close(fds[1]);
+        }
+
+        const masked = rnd.boolean();
+        // Buffer smaller than the payload forces the drain branch.
+        const cap: usize = 16 + rnd.uintLessThan(usize, 48); // [16, 64)
+        const payload_len: usize = cap + 1 + rnd.uintLessThan(usize, 200);
+
+        // Frame 1: oversized payload (raw masked bytes; content is irrelevant
+        // to the drain path, only the byte count must be consumed exactly).
+        var wire: [512]u8 = undefined;
+        var wp: usize = 0;
+        if (masked) {
+            for (0..4) |_| {
+                wire[wp] = rnd.int(u8);
+                wp += 1;
+            }
+        }
+        for (0..payload_len) |_| {
+            wire[wp] = rnd.int(u8);
+            wp += 1;
+        }
+        _ = c.write(fds[1], wire[0..wp].ptr, wp);
+
+        // Frame 2: a tiny known unmasked payload that must survive intact only
+        // if frame 1 was drained to the exact byte.
+        const sentinel = "OK";
+        _ = c.write(fds[1], sentinel.ptr, sentinel.len);
+
+        var buf: [64]u8 = undefined;
+        const hdr1 = FrameHeader{ .fin = true, .opcode = .binary, .mask = masked, .payload_len = payload_len };
+        const got = readFramePayload(fds[0], buf[0..cap], hdr1);
+        if (got) |len| {
+            // Truncated to buffer capacity, never more.
+            try std.testing.expectEqual(cap, len);
+            // Stream re-aligned: the sentinel reads back byte-for-byte.
+            var s: [2]u8 = undefined;
+            const hdr2 = FrameHeader{ .fin = true, .opcode = .binary, .mask = false, .payload_len = sentinel.len };
+            const m = readFramePayload(fds[0], &s, hdr2);
+            if (m) |ml| try std.testing.expectEqualStrings(sentinel, s[0..ml]);
+        }
+    }
+}
+
+test "fuzz: readFrameHeader rejects a 64-bit length with the reserved MSB set" {
+    // RFC 6455 §5.2: the most-significant bit of a 127 (64-bit) extended length
+    // MUST be 0. A frame with it set is malformed and must be refused, not
+    // turned into a ~2^63 allocation/drain request.
+    var prng = std.Random.DefaultPrng.init(0x7EAF010);
+    const rnd = prng.random();
+    var iter: usize = 0;
+    while (iter < 300) : (iter += 1) {
+        var fds: [2]c.fd_t = undefined;
+        if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) continue;
+        defer {
+            _ = c.close(fds[0]);
+            _ = c.close(fds[1]);
+        }
+
+        var header: [10]u8 = undefined;
+        header[0] = 0x82; // FIN + binary
+        header[1] = 127; // 64-bit extended length, unmasked
+        // Force the reserved high bit and randomize the rest.
+        const bad_len: u64 = (@as(u64, 1) << 63) | rnd.int(u63);
+        std.mem.writeInt(u64, header[2..10], bad_len, .big);
+        _ = c.write(fds[1], &header, 10);
+
+        try std.testing.expect(readFrameHeader(fds[0]) == null);
     }
 }

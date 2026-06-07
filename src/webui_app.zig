@@ -3,12 +3,14 @@
 //!
 //! Spawns the hangar-web HTTP backend as a child process, then opens
 //! a zig-webui native window showing the web UI. The existing HTML/CSS/JS
-//! frontend communicates with the backend via fetch() to localhost:9080
-//! — no frontend changes needed.
+//! frontend communicates with the backend via fetch() to loopback on the
+//! resolved port (KV_PORT, default 9080 — see resolvePort) — no frontend
+//! changes needed.
 
 const std = @import("std");
 const webui = @import("webui");
 const appio = @import("appio.zig");
+const transport = @import("transport.zig");
 
 extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
 extern "c" fn kill(pid: c_int, sig: c_int) c_int;
@@ -18,8 +20,22 @@ const SIGTERM: c_int = 15;
 const SIGKILL: c_int = 9;
 const WNOHANG: c_int = 1;
 
-/// Port the web backend listens on.
-const WEB_PORT: u16 = 9080;
+/// Default port the web backend listens on. Matches web_server DEFAULT_PORT
+/// and transport DEFAULT_PORT.
+const WEB_PORT: u16 = transport.DEFAULT_PORT;
+
+/// Resolve the port the backend listens on, honoring KV_PORT. The spawned
+/// hangar-web child inherits our environment (execvp), so it binds whatever
+/// KV_PORT says; this wrapper must probe and open the same port. Falls back
+/// to WEB_PORT when KV_PORT is unset or invalid (web_server itself rejects an
+/// invalid KV_PORT at startup, so an out-of-range value never reaches here on
+/// a healthy launch).
+fn resolvePort() u16 {
+    const env = appio.getenv("KV_PORT") orelse return WEB_PORT;
+    const p = std.fmt.parseInt(u16, env, 10) catch return WEB_PORT;
+    if (p == 0) return WEB_PORT;
+    return p;
+}
 
 /// Maximum time to wait for the backend to start (ms).
 const STARTUP_TIMEOUT_MS: u64 = 5000;
@@ -51,8 +67,9 @@ fn findBackendBinary(buf: []u8) ![:0]const u8 {
     return error.BackendBinaryNotFound;
 }
 
-/// Spawn the hangar-web backend process.
-fn spawnBackend() !void {
+/// Spawn the hangar-web backend process and wait until it accepts connections
+/// on `port` (the port the child binds via inherited KV_PORT).
+fn spawnBackend(port: u16) !void {
     const pid = std.c.fork();
     if (pid < 0) return error.ForkFailed;
 
@@ -93,7 +110,7 @@ fn spawnBackend() !void {
         const bind_ip: u32 = 0x7F_00_00_01; // 127.0.0.1 in host byte order
         var addr: std.c.sockaddr.in = .{
             .family = std.c.AF.INET,
-            .port = std.mem.nativeToBig(u16, WEB_PORT),
+            .port = std.mem.nativeToBig(u16, port),
             .addr = std.mem.nativeToBig(u32, bind_ip),
             .zero = [_]u8{0} ** 8,
         };
@@ -140,9 +157,73 @@ fn stopBackend() void {
     }
 }
 
-pub fn main() !void {
-    // Start the web backend.
-    try spawnBackend();
+const usage =
+    \\hangar-webui — Hangar native desktop app (WebView wrapper)
+    \\
+    \\Usage: hangar-webui [--help] [--version]
+    \\
+    \\Launches the hangar-web backend as a child process and opens it in a
+    \\native window. Honors KV_PORT (default 9080) to match the backend.
+    \\
+    \\Options:
+    \\  -h, --help     Show this help and exit
+    \\  -v, --version  Show version and exit
+    \\
+    \\Environment (passed through to the spawned hangar-web backend):
+    \\  KV_API_KEY           X-API-Key secret (1-64 bytes). Setting a non-default
+    \\                       key also exposes the backend on all interfaces (::);
+    \\                       unset or the built-in default stays loopback-only.
+    \\  KV_PORT              TCP listen port (default 9080; must be 1-65535).
+    \\  HANGAR_CONFIG_HOME   Base dir for ~/.config/hangar/* state (default $HOME).
+    \\
+    \\Exit codes: 0 success, 1 runtime error, 2 usage error.
+    \\
+;
+
+const version_str = "hangar-webui 0.1.0\n";
+
+/// Argument classes for the desktop wrapper's minimal flag set. It takes no
+/// positional arguments, so a bare word is `.other` and the app launches; a
+/// dash-prefixed token that is not help/version is `.unknown` (a mistyped
+/// flag) and is rejected rather than silently ignored.
+const CliArg = enum { help, version, unknown, other };
+
+/// Classify a single command-line argument. Matches `vmrun`/`hangar-web`
+/// spellings so all three tools accept the same help/version flags.
+fn classifyCliArg(arg: []const u8) CliArg {
+    if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "help")) return .help;
+    if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) return .version;
+    if (arg.len > 0 and arg[0] == '-') return .unknown;
+    return .other;
+}
+
+pub fn main(init: std.process.Init) !void {
+    // Handle --help/--version before spawning the backend or opening a window.
+    {
+        var args_iter = std.process.Args.Iterator.init(init.minimal.args);
+        _ = args_iter.next(); // program name
+        while (args_iter.next()) |arg| switch (classifyCliArg(arg)) {
+            .help => {
+                _ = std.c.write(1, usage.ptr, usage.len);
+                std.process.exit(0);
+            },
+            .version => {
+                _ = std.c.write(1, version_str.ptr, version_str.len);
+                std.process.exit(0);
+            },
+            .unknown => {
+                var buf: [160]u8 = undefined;
+                const msg = std.fmt.bufPrintZ(&buf, "Error: unknown option '{s}' (run with --help for usage)\n", .{arg}) catch "Error: unknown option\n";
+                _ = std.c.write(2, msg.ptr, msg.len);
+                std.process.exit(2);
+            },
+            .other => {},
+        };
+    }
+
+    // Start the web backend on the configured port (KV_PORT or default).
+    const port = resolvePort();
+    try spawnBackend(port);
     defer stopBackend();
 
     // Create the webui window.
@@ -155,14 +236,20 @@ pub fn main() !void {
 
     // Build the URL to the local web backend.
     var url_buf: [64]u8 = undefined;
-    const url = try std.fmt.bufPrintZ(&url_buf, "http://127.0.0.1:{d}", .{WEB_PORT});
+    const url = try std.fmt.bufPrintZ(&url_buf, "http://127.0.0.1:{d}", .{port});
 
     // Show the window using WebView for a native desktop experience.
     w.showWv(url) catch {
         // Fall back to browser-based window if WebView fails.
         w.show(url) catch {
-            std.debug.print("Failed to open webui window.\n", .{});
-            return;
+            // Both window backends failed: report on stderr, tear down the
+            // spawned backend (std.process.exit skips the deferred stopBackend),
+            // and exit 1 — the documented runtime-error code. A bare `return`
+            // here would have exited 0 and orphaned the child process.
+            const msg = "Error: failed to open hangar-webui window\n";
+            _ = std.c.write(2, msg.ptr, msg.len);
+            stopBackend();
+            std.process.exit(1);
         };
     };
 
@@ -174,6 +261,84 @@ pub fn main() !void {
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+test "classifyCliArg: help and version spellings" {
+    try std.testing.expectEqual(CliArg.help, classifyCliArg("-h"));
+    try std.testing.expectEqual(CliArg.help, classifyCliArg("--help"));
+    try std.testing.expectEqual(CliArg.help, classifyCliArg("help"));
+    try std.testing.expectEqual(CliArg.version, classifyCliArg("-v"));
+    try std.testing.expectEqual(CliArg.version, classifyCliArg("--version"));
+}
+
+test "classifyCliArg: mistyped flags are unknown, bare words are other" {
+    try std.testing.expectEqual(CliArg.other, classifyCliArg(""));
+    try std.testing.expectEqual(CliArg.unknown, classifyCliArg("--versionx"));
+    try std.testing.expectEqual(CliArg.other, classifyCliArg("HELP"));
+}
+
+test "fuzz: classifyCliArg never panics on random input" {
+    var prng = std.Random.DefaultPrng.init(0x1CEB00DA);
+    const rnd = prng.random();
+    var buf: [32]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        _ = classifyCliArg(buf[0..len]);
+    }
+}
+
+test "resolvePort: unset falls back to default" {
+    const saved = appio.getenv("KV_PORT");
+    defer {
+        if (saved) |v| _ = setenv("KV_PORT", @ptrCast(v.ptr), 1) else _ = unsetenv("KV_PORT");
+    }
+    _ = unsetenv("KV_PORT");
+    try std.testing.expectEqual(WEB_PORT, resolvePort());
+}
+
+test "resolvePort: valid KV_PORT is honored" {
+    const saved = appio.getenv("KV_PORT");
+    defer {
+        if (saved) |v| _ = setenv("KV_PORT", @ptrCast(v.ptr), 1) else _ = unsetenv("KV_PORT");
+    }
+    _ = setenv("KV_PORT", "12345", 1);
+    try std.testing.expectEqual(@as(u16, 12345), resolvePort());
+}
+
+test "resolvePort: zero and garbage fall back to default" {
+    const saved = appio.getenv("KV_PORT");
+    defer {
+        if (saved) |v| _ = setenv("KV_PORT", @ptrCast(v.ptr), 1) else _ = unsetenv("KV_PORT");
+    }
+    _ = setenv("KV_PORT", "0", 1);
+    try std.testing.expectEqual(WEB_PORT, resolvePort());
+    _ = setenv("KV_PORT", "not-a-port", 1);
+    try std.testing.expectEqual(WEB_PORT, resolvePort());
+    _ = setenv("KV_PORT", "99999999", 1); // overflows u16
+    try std.testing.expectEqual(WEB_PORT, resolvePort());
+}
+
+test "fuzz: resolvePort never panics on random KV_PORT" {
+    const saved = appio.getenv("KV_PORT");
+    defer {
+        if (saved) |v| _ = setenv("KV_PORT", @ptrCast(v.ptr), 1) else _ = unsetenv("KV_PORT");
+    }
+    var prng = std.Random.DefaultPrng.init(0xC0FFEE42);
+    const rnd = prng.random();
+    var buf: [16:0]u8 = undefined;
+    for (0..1000) |_| {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        buf[len] = 0;
+        _ = setenv("KV_PORT", &buf, 1);
+        const p = resolvePort();
+        try std.testing.expect(p != 0);
+    }
+}
 
 test "findBackendBinary: returns a path ending in hangar-web" {
     var buf: [4096]u8 = undefined;

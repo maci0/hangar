@@ -145,6 +145,14 @@ pub const VncClient = struct {
 
     /// Get the remote framebuffer dimensions.
     /// Returns false if not connected or framebuffer not yet received.
+    ///
+    /// THREAD SAFETY: the caller MUST hold the framebuffer mutex (i.e. call this
+    /// only between `lockFb` and `unlockFb`). `framebuffer`/`width`/`height` are
+    /// written under that mutex by the poll thread's `onMallocFb` callback on a
+    /// server resize; reading them unlocked risks torn dimensions that no longer
+    /// match the framebuffer the caller then copies, a heap over-read. This does
+    /// not lock internally because the production caller already holds the mutex
+    /// and `SpinMutex` is non-reentrant (re-locking would deadlock).
     pub fn getSize(self: *const VncClient, width: *c_int, height: *c_int) bool {
         if (!@atomicLoad(bool, &self.connected, .seq_cst) or self.framebuffer == null) return false;
         width.* = self.width;
@@ -299,7 +307,7 @@ test "vnc: getSelf(null) and onFbUpdate(null) are safe no-ops" {
 }
 
 test "vnc: fresh client public API is safe (unconnected)" {
-    const cl = VncClient.new() orelse return;
+    const cl = VncClient.new() orelse return error.SkipZigTest;
     defer cl.free();
     try std.testing.expect(!cl.isConnected());
     var w: c_int = -1;

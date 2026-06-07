@@ -51,6 +51,30 @@ pub fn sleepMs(ms: u64) void {
     }
 }
 
+/// Write `data` to `file_path` atomically: stage into a temp file, fsync, then
+/// rename over the destination so a crash never leaves a half-written file.
+///
+/// The file is created owner-only (`0o600`). Hangar's persisted state
+/// (`vms.json`, `networks.json`) records VM names, disk/ISO paths and NIC MAC
+/// addresses; on a shared host the default `0o644` would let any local user
+/// read another user's VM inventory, so we restrict it at the single write
+/// funnel rather than relying on the caller's umask.
+///
+/// Propagates the real error (NoSpaceLeft, AccessDenied, ...) rather than
+/// masking it as a generic WriteFailed, so the actual cause reaches callers
+/// (they typically log `@errorName(e)`).
+pub fn writeFileAtomic(file_path: []const u8, data: []const u8) !void {
+    var af = try std.Io.Dir.cwd().createFileAtomic(io(), file_path, .{
+        .replace = true,
+        .permissions = .fromMode(0o600),
+    });
+    defer af.deinit(io());
+
+    try af.file.writeStreamingAll(io(), data);
+    try af.file.sync(io());
+    try af.replace(io());
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 const testing = std.testing;
@@ -100,5 +124,54 @@ test "appio fuzz: sleepMs tolerates random small durations" {
     while (i < 100) : (i += 1) {
         const ms = rnd.uintLessThan(u64, 10);
         sleepMs(ms);
+    }
+}
+
+test "appio: writeFileAtomic round-trips and overwrites" {
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-appio-atomic-{d}.txt", .{std.c.getpid()});
+    defer _ = std.Io.Dir.cwd().deleteFile(io(), path) catch {};
+
+    try writeFileAtomic(path, "first");
+    const first = try std.Io.Dir.cwd().readFileAlloc(io(), path, testing.allocator, .limited(64));
+    defer testing.allocator.free(first);
+    try testing.expectEqualStrings("first", first);
+
+    // A second write must atomically replace the prior contents.
+    try writeFileAtomic(path, "second-longer");
+    const second = try std.Io.Dir.cwd().readFileAlloc(io(), path, testing.allocator, .limited(64));
+    defer testing.allocator.free(second);
+    try testing.expectEqualStrings("second-longer", second);
+}
+
+test "appio: writeFileAtomic creates owner-only (0o600) files" {
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-appio-atomic-mode-{d}.txt", .{std.c.getpid()});
+    defer _ = std.Io.Dir.cwd().deleteFile(io(), path) catch {};
+
+    try writeFileAtomic(path, "secret-ish config");
+
+    // Stat the resulting file; persisted state must not be world/group readable.
+    var f = try std.Io.Dir.cwd().openFile(io(), path, .{});
+    defer f.close(io());
+    const st = try f.stat(io());
+    try testing.expectEqual(@as(std.posix.mode_t, 0o600), st.permissions.toMode() & 0o777);
+}
+
+test "appio fuzz: writeFileAtomic never panics on random byte payloads" {
+    var prng = std.Random.DefaultPrng.init(0xA7010A72);
+    const rnd = prng.random();
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-appio-atomic-fuzz-{d}.txt", .{std.c.getpid()});
+    defer _ = std.Io.Dir.cwd().deleteFile(io(), path) catch {};
+    var data: [256]u8 = undefined;
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
+        const n = rnd.uintLessThan(usize, data.len + 1);
+        for (data[0..n]) |*b| b.* = rnd.int(u8);
+        try writeFileAtomic(path, data[0..n]);
+        const got = try std.Io.Dir.cwd().readFileAlloc(io(), path, testing.allocator, .limited(512));
+        defer testing.allocator.free(got);
+        try testing.expectEqualSlices(u8, data[0..n], got);
     }
 }

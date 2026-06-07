@@ -57,13 +57,13 @@
     <button class="btn primary keep-mobile new-vm-btn" data-action="newVm" title="New VM">＋ New VM</button>
     <span class="sep" aria-hidden="true"></span>
     <button class="btn keep-mobile" data-action="editVm" data-vm-action="settings" title="Settings">⚙ Settings</button>
-    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="powerMenu" aria-haspopup="menu" aria-expanded="false">Power ▾</button>
-    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="snapshotMenu" aria-haspopup="menu" aria-expanded="false">Snapshots ▾</button>
-    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="devicesMenu" aria-haspopup="menu" aria-expanded="false">Devices ▾</button>
-    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="toolsMenu" aria-haspopup="menu" aria-expanded="false">Tools ▾</button>
-    <button class="btn menu-btn danger-menu" data-action="toggleActionMenu" data-menu="dangerMenu" aria-haspopup="menu" aria-expanded="false">More ▾</button>
+    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="powerMenu" aria-haspopup="menu" aria-controls="powerMenu" aria-expanded="false">Power ▾</button>
+    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="snapshotMenu" aria-haspopup="menu" aria-controls="snapshotMenu" aria-expanded="false">Snapshots ▾</button>
+    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="devicesMenu" aria-haspopup="menu" aria-controls="devicesMenu" aria-expanded="false">Devices ▾</button>
+    <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="toolsMenu" aria-haspopup="menu" aria-controls="toolsMenu" aria-expanded="false">Tools ▾</button>
+    <button class="btn menu-btn danger-menu" data-action="toggleActionMenu" data-menu="dangerMenu" aria-haspopup="menu" aria-controls="dangerMenu" aria-expanded="false">More ▾</button>
     <button class="btn theme-toggle-btn keep-mobile" data-action="toggleTheme" title="Toggle theme" aria-label="Toggle theme">🌓</button>
-    <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-expanded="false">⋯</button>
+    <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
     <div class="toolbar-more-popover" role="menu" aria-label="More actions"></div>
     <div id="powerMenu" class="action-menu" role="menu" aria-label="Power actions">
       <button class="menu-item" data-action="shutdownGuest" data-vm-action="shutdown">Shut Down Guest</button>
@@ -150,7 +150,7 @@
     <!-- Tab: Summary -->
     <div id="tabSummary" role="tabpanel" aria-labelledby="tab-btn-summary">
       <div class="empty-state">
-        <svg class="empty-icon"><use href="#icon-monitor"/></svg>
+        <svg class="empty-icon" aria-hidden="true"><use href="#icon-monitor"/></svg>
         <h3>No Virtual Machine Selected</h3>
         <p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p>
         <div class="empty-actions">
@@ -164,7 +164,7 @@
     <!-- Tab: Settings (hidden) -->
     <div id="tabSettings" role="tabpanel" aria-labelledby="tab-btn-settings" aria-hidden="true" style="display:none">
       <div class="empty-state">
-        <svg class="empty-icon"><use href="#icon-settings"/></svg>
+        <svg class="empty-icon" aria-hidden="true"><use href="#icon-settings"/></svg>
         <h3>No Virtual Machine Selected</h3>
         <p>Select a VM from the sidebar to edit its settings.</p>
       </div>
@@ -172,20 +172,24 @@
 
     <!-- Migration progress bar -->
     <div id="mig_bar_container" style="margin-top:20px">
-      <div id="mig_progress" style="display:none;height:4px;background:var(--border);border-radius:2px;margin-bottom:6px;overflow:hidden">
+      <div id="mig_progress" role="progressbar" aria-label="Migration progress" aria-valuemin="0" aria-valuemax="100" style="display:none;height:4px;background:var(--border);border-radius:2px;margin-bottom:6px;overflow:hidden">
         <div style="height:100%;width:0;background:var(--accent);border-radius:2px;transition:width 300ms ease"></div>
       </div>
-      <span id="mig_pct" style="display:none;font-size:12px;color:var(--text-muted)"></span>
+      <span id="mig_pct" role="status" aria-live="polite" style="display:none;font-size:12px;color:var(--text-muted)"></span>
       <button id="mig_cancel" class="btn danger" data-action="cancelMigrate" style="display:none;margin-left:12px;font-size:11px;padding:3px 10px">Cancel</button>
     </div>
   </div>
 </main>
 
 <!-- Status Bar -->
-<div id="statusbar" role="status" aria-live="polite">Ready</div>
+<div id="statusbar">Ready</div>
+<!-- Screen-reader announcer: only intentional status messages are announced here,
+     so the status bar's frequent passive updates (uptime, VM counts) stay silent. -->
+<div id="statusannounce" class="sr-only" role="status" aria-live="polite"></div>
 
-<!-- Toast Container -->
-<div id="toast-container" aria-live="polite"></div>
+<!-- Toast Container: each toast carries its own role (status/alert) so it announces
+     exactly once with the right urgency; the container itself is not a live region. -->
+<div id="toast-container"></div>
 
 <!-- ═══ Dialogs ═══ -->
 
@@ -195,7 +199,7 @@
     <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">New Virtual Machine</h3>
     <div style="padding:16px 24px">
       <label for="n_name">Name <span class="req" aria-hidden="true">*</span></label>
-      <input id="n_name" type="text" required maxlength="128" style="width:100%;margin:4px 0 12px">
+      <input id="n_name" type="text" required aria-required="true" maxlength="128" style="width:100%;margin:4px 0 12px">
       <div class="field-error" id="err_n_name" aria-live="polite"></div>
       <label for="n_mem">Memory (MB)</label>
       <input id="n_mem" type="number" value="2048" min="128" max="65536" step="1" style="width:100%;margin:4px 0 12px">
@@ -325,12 +329,12 @@
   <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Migrate Virtual Machine</h3>
   <div style="padding:16px 24px">
     <p style="margin-bottom:12px"><strong id="migrate_vmname"></strong></p>
-    <label for="mig_host">Target Host</label>
-    <input id="mig_host" type="text" placeholder="hostname or IP" style="width:100%;margin:4px 0 12px">
+    <label for="mig_host">Target Host <span class="req" aria-hidden="true">*</span></label>
+    <input id="mig_host" type="text" required aria-required="true" placeholder="hostname or IP" style="width:100%;margin:4px 0 12px">
     <label for="mig_port">Target Port</label>
     <input id="mig_port" type="number" value="4444" min="1" max="65535" style="width:100%;margin:4px 0 12px">
     <label for="mig_uri">Migration URI</label>
-    <input id="mig_uri" type="text" readonly style="width:100%;margin:4px 0 12px;color:var(--text-dim)">
+    <input id="mig_uri" type="text" readonly placeholder="tcp:host:port" style="width:100%;margin:4px 0 12px;color:var(--text-dim)">
   </div>
   <div class="btn-row">
     <button type="button" class="btn" data-action="closeDlg" data-dialog="migratedlg">Cancel</button>
@@ -350,9 +354,17 @@
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">F5</kbd></td><td>Refresh VM list</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">F11</kbd></td><td>Fullscreen / Display-only mode</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+F</kbd></td><td>Focus search</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+S</kbd></td><td>Save settings (Settings tab)</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+S</kbd></td><td>Save settings (Settings tab) · Suspend VM otherwise</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+Enter</kbd></td><td>Edit VM settings</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Alt+↑↓</kbd></td><td>Reorder VM in list</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">←→</kbd></td><td>Switch between VM tabs</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+N</kbd></td><td>New VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+Shift+N</kbd></td><td>Clone VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+E</kbd> / <kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">F2</kbd></td><td>Edit VM settings</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+I</kbd></td><td>Import VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+P</kbd></td><td>Open Preferences</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+W</kbd></td><td>Home (deselect VM)</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">?</kbd></td><td>Show this shortcuts list</td></tr>
     </table>
   </div>
   <div class="btn-row">

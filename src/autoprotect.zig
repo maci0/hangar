@@ -146,3 +146,34 @@ test "due: interval zero disables" {
     try t.expect(!due(true, 0, 0, 1000000));
     try t.expect(!due(true, 0, 1000, 1000000));
 }
+
+test "fuzz: snapName/isAutoName never panic and stay bounded" {
+    // snapName writes into caller buffers of any size (the buf-too-small branch
+    // returns an empty slice) and isAutoName classifies untrusted snapshot tags
+    // parsed out of `qemu-img snapshot -l` output. Neither had a fuzz harness.
+    var prng = std.Random.DefaultPrng.init(0xA070_5EED);
+    const rnd = prng.random();
+    var i: usize = 0;
+    while (i < 8000) : (i += 1) {
+        // snapName: vary the destination buffer size from far-too-small to ample
+        // and feed arbitrary sequence numbers; output must fit and, when
+        // non-empty, always be a valid AutoProtect name.
+        var nbuf: [40]u8 = undefined;
+        const cap = rnd.uintLessThan(usize, nbuf.len + 1);
+        const seq = rnd.int(u32);
+        const out = snapName(nbuf[0..cap], seq);
+        try t.expect(out.len <= cap);
+        if (out.len != 0) {
+            try t.expect(isAutoName(out)); // round-trip: a produced name is "auto"
+            try t.expect(std.mem.startsWith(u8, out, PREFIX));
+        }
+
+        // isAutoName: arbitrary bytes must never panic and must agree with a
+        // direct prefix check.
+        var rbuf: [48]u8 = undefined;
+        const rlen = rnd.uintLessThan(usize, rbuf.len);
+        for (rbuf[0..rlen]) |*b| b.* = rnd.int(u8);
+        const name = rbuf[0..rlen];
+        try t.expectEqual(std.mem.startsWith(u8, name, PREFIX), isAutoName(name));
+    }
+}

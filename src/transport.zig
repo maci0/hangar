@@ -9,8 +9,21 @@ const c = std.c;
 /// but never replies.
 const CLIENT_IO_TIMEOUT_MS = 15_000;
 
+/// TCP/Unix connect() timeout (ms). SO_SNDTIMEO does not bound a blocking
+/// connect(), so a dead host (dropped SYNs) would otherwise wedge the caller
+/// for the OS default (~127s on Linux). Keep it well under CLIENT_IO_TIMEOUT_MS
+/// so the connect phase fails fast.
+const CONNECT_TIMEOUT_MS = 10_000;
+
+// fcntl/O_NONBLOCK numeric constants (Linux). std.c.O is a packed struct in
+// 0.16, so we use the raw values for the fcntl flag dance.
+const F_GETFL: c_int = 3;
+const F_SETFL: c_int = 4;
+const O_NONBLOCK: c_int = 0o4000;
+
 /// Default TCP port, used when a URL omits or has an unparseable port.
-const DEFAULT_PORT: u16 = 9080;
+/// Canonical value; `web_server` and `webui_app` reference it to stay in sync.
+pub const DEFAULT_PORT: u16 = 9080;
 
 /// Parse a port from a host:port tail, stopping at an optional trailing path.
 /// Falls back to DEFAULT_PORT on a missing or invalid value.
@@ -27,6 +40,32 @@ fn setFdTimeout(fd: c.fd_t, ms: u32) void {
     };
     _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
     _ = c.setsockopt(fd, c.SOL.SOCKET, c.SO.SNDTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
+}
+
+/// Connect `fd` to `addr` with a bounded wait. A blocking connect() ignores
+/// SO_SNDTIMEO, so this switches the socket to non-blocking, issues the
+/// connect, and waits with poll() up to `ms`, then restores blocking mode for
+/// the subsequent read/write (which are bounded by setFdTimeout). Returns true
+/// only on a fully established connection.
+fn connectWithTimeout(fd: c.fd_t, addr: *const c.sockaddr, addrlen: c.socklen_t, ms: u31) bool {
+    const flags = c.fcntl(fd, F_GETFL, @as(c_int, 0));
+    if (flags < 0) return false;
+    _ = c.fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    defer _ = c.fcntl(fd, F_SETFL, flags); // restore original (blocking) mode
+
+    if (c.connect(fd, addr, addrlen) == 0) return true;
+    if (c._errno().* != @intFromEnum(c.E.INPROGRESS)) return false;
+
+    var pfd = c.pollfd{ .fd = fd, .events = c.POLL.OUT, .revents = 0 };
+    const pr = c.poll(@ptrCast(&pfd), 1, @intCast(ms));
+    if (pr <= 0) return false; // 0 = timeout, <0 = poll error
+    if (pfd.revents & c.POLL.OUT == 0) return false;
+
+    // Writable can mean "connected" or "failed" — SO_ERROR disambiguates.
+    var so_err: c_int = 0;
+    var len: c.socklen_t = @sizeOf(c_int);
+    if (c.getsockopt(fd, c.SOL.SOCKET, c.SO.ERROR, @ptrCast(&so_err), &len) != 0) return false;
+    return so_err == 0;
 }
 
 /// Transport protocol variants.
@@ -58,7 +97,14 @@ pub const Url = struct {
         } else if (std.mem.startsWith(u8, s, "http://")) {
             u.proto = .tcp;
             rest = s["http://".len..];
+        } else if (std.mem.indexOf(u8, s, "://") != null) {
+            // A scheme separator is present but matched none of the supported
+            // schemes (e.g. https://, ftp://, a typo). Reject so the caller can
+            // surface a clear "invalid server URL" diagnostic instead of silently
+            // treating the whole string as a TCP hostname and failing to connect.
+            return null;
         } else {
+            // No scheme at all: treat as a bare host[:port] over TCP.
             u.proto = .tcp;
         }
 
@@ -166,7 +212,7 @@ fn connectUnixFd(url: *const Url) c.fd_t {
     addr.path[path_bytes.len] = 0;
     const addrlen = @offsetOf(c.sockaddr.un, "path") + path_bytes.len + 1;
     setFdTimeout(sock, CLIENT_IO_TIMEOUT_MS);
-    if (c.connect(sock, @ptrCast(&addr), @intCast(addrlen)) != 0) {
+    if (!connectWithTimeout(sock, @ptrCast(&addr), @intCast(addrlen), CONNECT_TIMEOUT_MS)) {
         _ = c.close(sock);
         return -1;
     }
@@ -208,7 +254,7 @@ fn connectTcpFd(url: *const Url) c.fd_t {
     if (sock < 0) return -1;
 
     setFdTimeout(sock, CLIENT_IO_TIMEOUT_MS);
-    if (c.connect(sock, @ptrCast(&addr), ai.addrlen) != 0) {
+    if (!connectWithTimeout(sock, @ptrCast(&addr), ai.addrlen, CONNECT_TIMEOUT_MS)) {
         _ = c.close(sock);
         return -1;
     }
@@ -247,6 +293,14 @@ fn shmRequest(conn: *Connection, method: []const u8, path: []const u8, body: ?[]
     // Publish request length (release store so server sees the data).
     @atomicStore(u32, &shm.req_len, @intCast(req_total), .release);
 
+    // Fast path: tight busy-spin first so a same-machine server that answers in
+    // microseconds is observed without paying a full 1ms sleep quantum.
+    var spins: u32 = 4096;
+    while (spins > 0) : (spins -= 1) {
+        if (@atomicLoad(u32, &shm.resp_len, .acquire) > 0) break;
+        std.atomic.spinLoopHint();
+    }
+
     // Spin-wait for response (with bounded retries to avoid infinite hang).
     var retries: u32 = 1000;
     while (retries > 0) : (retries -= 1) {
@@ -279,10 +333,39 @@ fn writeAll(fd: c.fd_t, data: []const u8) void {
     }
 }
 
+/// The built-in API key the daemon accepts when no custom `KV_API_KEY` is set.
+/// Canonical value; `web_server.API_KEY` references it so the client default and
+/// the daemon default cannot silently drift apart (a divergence would 401 every
+/// authenticated request in loopback mode with no test catching it).
+pub const DEFAULT_API_KEY = "hangar";
+
+/// Resolve the `X-API-Key` value the HTTP client sends. Mirrors the daemon:
+/// an operator-supplied `KV_API_KEY` takes effect, otherwise the built-in
+/// default the daemon falls back to when no custom key is set. An empty or
+/// over-long value is invalid (the daemon refuses to start with one), so we
+/// send the default rather than a header that is guaranteed to be rejected.
+fn apiKey() []const u8 {
+    const v = std.c.getenv("KV_API_KEY") orelse return DEFAULT_API_KEY;
+    const span = std.mem.span(v);
+    if (span.len == 0 or span.len > 64) return DEFAULT_API_KEY;
+    return span;
+}
+
+/// Build the HTTP/1.0 request line and headers (no body) into `buf`. Split out
+/// of `httpRequest` so the exact header set — crucially the `X-API-Key` the
+/// daemon requires on every state-changing endpoint — is unit-testable without
+/// a live socket. Returns null if `buf` is too small.
+fn buildHttpRequest(buf: []u8, method: []const u8, path: []const u8, host: []const u8, key: []const u8, body_len: usize) ?[:0]u8 {
+    return std.fmt.bufPrintZ(buf, "{s} {s} HTTP/1.0\r\nHost: {s}\r\nX-API-Key: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ method, path, host, key, body_len }) catch null;
+}
+
 fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u8, body: ?[]const u8, out: []u8) usize {
     var req_buf: [512]u8 = undefined;
     const body_len = if (body) |b| b.len else 0;
-    const req = std.fmt.bufPrintZ(&req_buf, "{s} {s} HTTP/1.0\r\nHost: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ method, path, host, body_len }) catch return 0;
+    // Send the X-API-Key on every request. The daemon enforces auth on all
+    // state-changing endpoints (start/stop/delete/snapshot/...), so without
+    // this header every write command from vmrun/remote got a 401 over TCP.
+    const req = buildHttpRequest(&req_buf, method, path, host, apiKey(), body_len) orelse return 0;
     writeAll(fd, req.ptr[0..req.len]);
     if (body) |b| {
         writeAll(fd, b);
@@ -350,6 +433,14 @@ test "Url parse: no scheme defaults to tcp" {
     try std.testing.expectEqual(@as(u16, 9080), u.port);
 }
 
+test "Url parse: unknown scheme is rejected" {
+    // A scheme separator with an unsupported scheme must fail rather than being
+    // silently reinterpreted as a TCP hostname.
+    try std.testing.expect(Url.parse("https://host:9080") == null);
+    try std.testing.expect(Url.parse("ftp://host") == null);
+    try std.testing.expect(Url.parse("tcp://host:1") == null);
+}
+
 test "Url parse: IPv6 with brackets" {
     const u = Url.parse("http://[::1]:9080").?;
     try std.testing.expectEqual(Proto.tcp, u.proto);
@@ -393,6 +484,68 @@ test "Connection.close: no-op when shm is null and fd is -1" {
     conn.close();
     try std.testing.expect(conn.shm == null);
     try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
+}
+
+extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern fn unsetenv(name: [*:0]const u8) c_int;
+
+test "buildHttpRequest: includes X-API-Key and core headers" {
+    var buf: [512]u8 = undefined;
+    const req = buildHttpRequest(&buf, "POST", "/api/power/0", "127.0.0.1:9080", "secret", 0).?;
+    try std.testing.expect(std.mem.startsWith(u8, req, "POST /api/power/0 HTTP/1.0\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, req, "\r\nX-API-Key: secret\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, req, "\r\nHost: 127.0.0.1:9080\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, req, "\r\nContent-Length: 0\r\n") != null);
+    try std.testing.expect(std.mem.endsWith(u8, req, "\r\n\r\n"));
+}
+
+test "buildHttpRequest: returns null when buffer too small" {
+    var buf: [8]u8 = undefined;
+    try std.testing.expect(buildHttpRequest(&buf, "POST", "/api/power/0", "host", "key", 0) == null);
+}
+
+test "apiKey: default when unset, honors custom, rejects invalid" {
+    const saved = std.c.getenv("KV_API_KEY");
+    defer {
+        if (saved) |v| _ = setenv("KV_API_KEY", v, 1) else _ = unsetenv("KV_API_KEY");
+    }
+
+    _ = unsetenv("KV_API_KEY");
+    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+
+    _ = setenv("KV_API_KEY", "custom-secret", 1);
+    try std.testing.expectEqualStrings("custom-secret", apiKey());
+
+    _ = setenv("KV_API_KEY", "", 1); // empty is invalid → default
+    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+
+    var long: [80]u8 = undefined;
+    @memset(&long, 'x');
+    long[79] = 0;
+    _ = setenv("KV_API_KEY", @ptrCast(&long), 1); // > 64 bytes → default
+    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+}
+
+test "fuzz: buildHttpRequest never panics on random inputs" {
+    var prng = std.Random.DefaultPrng.init(0x7A11_5C0DE);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    var src: [256]u8 = undefined;
+    const methods = [_][]const u8{ "GET", "POST" };
+    var iter: usize = 0;
+    while (iter < 4000) : (iter += 1) {
+        const plen = rnd.uintLessThan(usize, 80);
+        const hlen = rnd.uintLessThan(usize, 80);
+        const klen = rnd.uintLessThan(usize, 64);
+        rnd.bytes(src[0 .. plen + hlen + klen]);
+        const path = src[0..plen];
+        const host = src[plen .. plen + hlen];
+        const key = src[plen + hlen .. plen + hlen + klen];
+        const m = methods[rnd.uintLessThan(usize, methods.len)];
+        if (buildHttpRequest(&buf, m, path, host, key, rnd.int(u16))) |req| {
+            try std.testing.expect(std.mem.endsWith(u8, req, "\r\n\r\n"));
+        }
+    }
 }
 
 test "Connection.connect + request: TCP round-trip via localhost" {

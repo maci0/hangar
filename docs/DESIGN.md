@@ -18,75 +18,63 @@
                    │ hv/qemu_backend.zig     │
                    └──────────┬──────────────┘
                               │
-              ┌───────────────┴───────────────┐
-              │                               │
-    ┌─────────┴──────────┐     ┌──────────────┴──────────┐
-    │ FLTK Frontend       │     │ Web Frontend            │
-    │ src/main.zig        │     │ src/web_server.zig      │
-    │ (11.8MB binary)     │     │ (6.5MB binary)          │
-    │                     │     │                         │
-    │ Native C++ FLTK 1.4 │     │ HTTP server + HTML/CSS  │
-    │ X11/GTK+ theme      │     │ REST API endpoints      │
-    │ Keyboard shortcuts  │     │ Canvas framebuffer      │
-    │ Context menus       │     │ Auto-refresh polling    │
-    └─────────────────────┘     └─────────────────────────┘
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+┌───────┴────────┐  ┌─────────┴─────────┐  ┌────────┴────────┐
+│ hangar-web     │  │ hangar-webui      │  │ vmrun           │
+│ web_server.zig │  │ webui_app.zig     │  │ vmrun.zig       │
+│                │  │                   │  │                 │
+│ HTTP server +  │  │ Native WebView    │  │ CLI client over │
+│ HTML/CSS/JS UI │  │ wrapper; spawns   │  │ transport.zig   │
+│ + remote       │◄─┤ hangar-web and    │  │ (talks to the   │
+│ daemon         │  │ shows its web UI  │──┤ hangar-web      │
+│ (transport.zig)│  │ in a native win   │  │ daemon)         │
+└────────────────┘  └───────────────────┘  └─────────────────┘
 ```
 
-## Design Tokens (FLTK)
-
-FLTK uses the `gtk+` scheme for matching the system GTK2 theme.
-No custom CSS overrides — widgets inherit the native look.
-
-## Window Structure
-
-```
-┌ menu bar ────────────────────────────────────────────────┐
-│ File  Edit  VM  View  Help                                │
-├ toolbar ─────────────────────────────────────────────────┤
-│ [New VM] [Power On] [Suspend] [Settings]                  │
-├───────────────────────────────────────────────────────────┤
-│ Library │  Summary | Display | Console tabs               │
-│ ┌─────┐ │  ┌───────────────────────────────────────────┐ │
-│ │search││  │ VM Name (bold, 18pt)                       │ │
-│ │ VM1  ││  │ State: ...  Guest OS: ...  Memory: ...    │ │
-│ │ VM2  ││  │ CPU: ...    Disk: ...     Network: ...    │ │
-│ │ ...  ││  │ CD/DVD: ... Notes: ...                    │ │
-│ │      ││  │ [Power On] button                          │ │
-│ └─────┘ │  └───────────────────────────────────────────┘ │
-├───────────────────────────────────────────────────────────┤
-│ Status: "N virtual machine(s)"                            │
-└───────────────────────────────────────────────────────────┘
-```
+`web_server.zig` is both the local web UI server and the remote daemon;
+`hangar-webui` and `vmrun` are clients of it. There is no native FLTK
+frontend and no `src/main.zig` — the FLTK GUI was removed.
 
 ## Web UI Layout
 
-Dark theme (`#1e1f23` surface, `#16171a` sidebar) with WS7-style
+Dark theme (`#0e0f12` background, `#1b1d21` surface) with WS7-style
 sidebar + main content. Canvas for VNC framebuffer display.
 5-second auto-refresh via polling `GET /api/vms`.
 
 ## Keyboard Shortcuts
 
+Handled in the web UI (`src/web/app.js`); press `?` in the app for the full list.
+
 | Key | Action |
 |-----|--------|
-| Ctrl+N | New VM |
-| Ctrl+Q | Quit (save + cleanup) |
+| Ctrl+N / Ctrl+Shift+N | New VM / Clone |
+| Ctrl+E, F2, Ctrl+Enter | Edit VM Settings |
+| Ctrl+I | Import VM |
+| Ctrl+S | Save (Settings tab) / Suspend |
 | Ctrl+W | Deselect VM |
-| F2 | Edit VM Settings |
+| Ctrl+F | Focus search |
+| Ctrl+P | Preferences |
+| F5 | Refresh |
+| F11 | Toggle fullscreen / display-only |
+| Enter | Power on/off selected VM |
 | DEL | Delete selected VM |
-| F11 | Toggle fullscreen |
+| Alt+↑ / Alt+↓ | Reorder VM in list |
+| Esc | Close dialog / exit display-only / deselect |
 
 ## Persistence
 
-All VM configs stored in `~/.config/hangar/vms.json`.
+VM configs stored in `~/.config/hangar/vms.json`; virtual networks in
+`~/.config/hangar/networks.json` (owned by `vnet.zig`). Base dir is
+overridable via `HANGAR_CONFIG_HOME`.
 Hand-rolled JSON parser (no `std.json` — linker compatibility).
 `GpuDevice` enum persisted for virtio-gpu / virtio-vga selection.
 
 ## Visual Verification
 
 ```bash
-FLTK_BACKEND=x11 DISPLAY=:99 ./zig-out/bin/hangar
-import -display :99 -window root screenshot.png
+node tests/visual/e2e_web_screenshots.mjs   # Puppeteer screenshots of the web UI
 ```
 
-FLTK renders under Xvfb with `FLTK_BACKEND=x11` (X11 backend).
-Standard deviation analysis confirms visible UI content.
+The puppeteer flow drives a headless browser against a `hangar-web` instance
+on a temp port and captures the UI interaction flow.

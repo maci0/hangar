@@ -54,6 +54,13 @@ pub var remote_url_len: usize = 0;
 // ── VMM handle helpers ──────────────────────────────────────────────
 
 /// Get or create the Vmm handle for VM at index idx.
+///
+/// NOT thread-safe on its own: the `g_vmm_handles[idx]` check-then-create is a
+/// data race if two threads run it concurrently (double `createHandle`, leaked
+/// handle, torn slot read). The caller MUST hold `vms_mutex` for the duration of
+/// the call and any use of the returned handle. Do not add an internal lock —
+/// `vms_mutex` is a non-reentrant SpinMutex the callers already hold, so locking
+/// here would deadlock.
 pub fn getVmmHandle(idx: usize) ?hv_iface.VmmHandle {
     if (idx >= vm_count) return null;
     if (g_vmm_handles[idx] == null) {
@@ -64,6 +71,10 @@ pub fn getVmmHandle(idx: usize) ?hv_iface.VmmHandle {
 
 /// Destroy the Vmm handle for VM at index idx.
 /// Requires g_vmm to be initialized (g_vmm_ready == true).
+/// Caller MUST hold `vms_mutex`: it mutates the shared `g_vmm_handles` slot,
+/// which is read/written concurrently by request handlers and the background
+/// tickers. (Non-reentrant — never call while already holding a different lock
+/// that the freed backend might re-acquire.)
 pub fn destroyVmmHandle(idx: usize) void {
     std.debug.assert(g_vmm_ready);
     if (g_vmm_handles[idx]) |h| {
@@ -74,8 +85,17 @@ pub fn destroyVmmHandle(idx: usize) void {
 
 // ── Config path helpers ────────────────────────────────────────────
 
+/// Read an env var, treating an empty value as unset.
+fn getenvNonEmpty(key: [*:0]const u8) ?[]const u8 {
+    const v = appio.getenv(key) orelse return null;
+    return if (v.len > 0) v else null;
+}
+
 fn configHome() ?[]const u8 {
-    return appio.getenv("HANGAR_CONFIG_HOME") orelse appio.getenv("HOME");
+    // Treat an env var set to the empty string as unset: an empty
+    // HANGAR_CONFIG_HOME/HOME would otherwise produce filesystem-root paths
+    // like "/.config/hangar/vms.json" instead of falling through correctly.
+    return getenvNonEmpty("HANGAR_CONFIG_HOME") orelse getenvNonEmpty("HOME");
 }
 
 /// Return the hangar config directory path, or null if no config home is set.
@@ -136,6 +156,27 @@ test "appstate: config path helpers return null when HOME is unset" {
     try std.testing.expect(networksPath(&buf) == null);
 }
 
+test "appstate: empty config-home env vars are treated as unset" {
+    const saved_home = appio.getenv("HOME");
+    const saved_config = appio.getenv("HANGAR_CONFIG_HOME");
+    defer {
+        if (saved_home) |v| _ = setenv("HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HOME");
+        if (saved_config) |v| _ = setenv("HANGAR_CONFIG_HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HANGAR_CONFIG_HOME");
+    }
+
+    // Empty HANGAR_CONFIG_HOME must fall through to HOME rather than yielding
+    // a filesystem-root path.
+    _ = setenv("HANGAR_CONFIG_HOME", "", 1);
+    _ = setenv("HOME", "/tmp/hangar-home-test", 1);
+    var buf: [512]u8 = undefined;
+    const path = vmsPath(&buf) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("/tmp/hangar-home-test/.config/hangar/vms.json", path);
+
+    // Both empty → no config home at all.
+    _ = setenv("HOME", "", 1);
+    try std.testing.expect(vmsPath(&buf) == null);
+}
+
 test "appstate: HANGAR_CONFIG_HOME overrides HOME" {
     const saved_home = appio.getenv("HOME");
     const saved_config = appio.getenv("HANGAR_CONFIG_HOME");
@@ -168,6 +209,8 @@ test "appstate: destroyVmmHandle null handle no-ops" {
     g_vmm_ready = true;
     // g_vmm_handles[0] is null by default — should not crash.
     destroyVmmHandle(0);
+    // A no-op on a null slot must leave the slot null (no spurious handle).
+    try std.testing.expectEqual(@as(?hv_iface.VmmHandle, null), g_vmm_handles[0]);
 }
 
 test "appstate: fuzz config path helpers never panic" {

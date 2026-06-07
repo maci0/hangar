@@ -1,5 +1,13 @@
 # Hangar — TODO / Gap Tracker
 
+> **Historical / archived.** This tracker dates from the FLTK desktop-GUI era.
+> The FLTK frontend has since been removed (`src/main.zig`, `src/dialogs.zig`,
+> `src/display.zig`, the `cfltk` bindings — all gone); the current frontends are
+> `hangar-web` (web UI + remote daemon) and `hangar-webui` (native WebView
+> wrapper). Entries below mentioning FLTK/cfltk refer to removed code and are
+> kept only for history. For current architecture see `docs/DESIGN.md`; for
+> feature status see `docs/GAP-ANALYSIS.md`.
+
 Comprehensive inventory of missing features, unfinished work, and improvement
 opportunities. Organized by priority tier with cross-references to source files
 and the design docs.

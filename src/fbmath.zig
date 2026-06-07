@@ -39,10 +39,10 @@ pub fn bgraToRgba(
         while (x < width) : (x += 1) {
             const si = x * 4;
             const di = x * 4;
-            dst_row[di + 0] = src_row[si + 2]; // R ← B
-            dst_row[di + 1] = src_row[si + 1]; // G ← G
-            dst_row[di + 2] = src_row[si + 0]; // B ← R
-            dst_row[di + 3] = src_row[si + 3]; // A ← A
+            dst_row[di + 0] = src_row[si + 2]; // dst.R ← src.R (BGRA byte 2)
+            dst_row[di + 1] = src_row[si + 1]; // dst.G ← src.G
+            dst_row[di + 2] = src_row[si + 0]; // dst.B ← src.B (BGRA byte 0)
+            dst_row[di + 3] = src_row[si + 3]; // dst.A ← src.A
         }
     }
 }
@@ -130,10 +130,10 @@ test "bgraToRgba: single pixel conversion" {
     const src = [_]u8{ 0x11, 0x22, 0x33, 0x44 }; // B=0x11, G=0x22, R=0x33, A=0x44
     var dst = [_]u8{ 0, 0, 0, 0 };
     bgraToRgba(&dst, &src, 1, 1, 4, 4);
-    try std.testing.expectEqual(@as(u8, 0x33), dst[0]); // R ← B=0x11
-    try std.testing.expectEqual(@as(u8, 0x22), dst[1]); // G ← G=0x22
-    try std.testing.expectEqual(@as(u8, 0x11), dst[2]); // B ← R=0x33
-    try std.testing.expectEqual(@as(u8, 0x44), dst[3]); // A ← A=0x44
+    try std.testing.expectEqual(@as(u8, 0x33), dst[0]); // dst.R = src.R = 0x33
+    try std.testing.expectEqual(@as(u8, 0x22), dst[1]); // dst.G = src.G = 0x22
+    try std.testing.expectEqual(@as(u8, 0x11), dst[2]); // dst.B = src.B = 0x11
+    try std.testing.expectEqual(@as(u8, 0x44), dst[3]); // dst.A = src.A = 0x44
 }
 
 test "bgraToRgba: 2x2 pixel conversion with stride" {
@@ -145,20 +145,20 @@ test "bgraToRgba: 2x2 pixel conversion with stride" {
     var dst = [_]u8{0} ** 16;
     bgraToRgba(&dst, &src, 2, 2, 12, 8);
     // Row 0, pixel 0: B=01,G=02,R=03,A=04 → R=03,G=02,B=01,A=04
-    try std.testing.expectEqual(@as(u8, 3), dst[0]); // R ← B=1
-    try std.testing.expectEqual(@as(u8, 2), dst[1]); // G ← G=2
-    try std.testing.expectEqual(@as(u8, 1), dst[2]); // B ← R=3
-    try std.testing.expectEqual(@as(u8, 4), dst[3]); // A ← A=4
+    try std.testing.expectEqual(@as(u8, 3), dst[0]); // dst.R = src.R = 3
+    try std.testing.expectEqual(@as(u8, 2), dst[1]); // dst.G = src.G = 2
+    try std.testing.expectEqual(@as(u8, 1), dst[2]); // dst.B = src.B = 1
+    try std.testing.expectEqual(@as(u8, 4), dst[3]); // dst.A = src.A = 4
     // Row 0, pixel 1: B=05,G=06,R=07,A=08 → R=07,G=06,B=05,A=08
-    try std.testing.expectEqual(@as(u8, 7), dst[4]); // R ← B=5
-    try std.testing.expectEqual(@as(u8, 6), dst[5]); // G ← G=6
-    try std.testing.expectEqual(@as(u8, 5), dst[6]); // B ← R=7
-    try std.testing.expectEqual(@as(u8, 8), dst[7]); // A ← A=8
+    try std.testing.expectEqual(@as(u8, 7), dst[4]); // dst.R = src.R = 7
+    try std.testing.expectEqual(@as(u8, 6), dst[5]); // dst.G = src.G = 6
+    try std.testing.expectEqual(@as(u8, 5), dst[6]); // dst.B = src.B = 5
+    try std.testing.expectEqual(@as(u8, 8), dst[7]); // dst.A = src.A = 8
     // Row 1, pixel 0
-    try std.testing.expectEqual(@as(u8, 0x13), dst[8]); // R ← B=0x11
-    try std.testing.expectEqual(@as(u8, 0x12), dst[9]); // G ← G=0x12
-    try std.testing.expectEqual(@as(u8, 0x11), dst[10]); // B ← R=0x13
-    try std.testing.expectEqual(@as(u8, 0x14), dst[11]); // A ← A=0x14
+    try std.testing.expectEqual(@as(u8, 0x13), dst[8]); // dst.R = src.R = 0x13
+    try std.testing.expectEqual(@as(u8, 0x12), dst[9]); // dst.G = src.G = 0x12
+    try std.testing.expectEqual(@as(u8, 0x11), dst[10]); // dst.B = src.B = 0x11
+    try std.testing.expectEqual(@as(u8, 0x14), dst[11]); // dst.A = src.A = 0x14
 }
 
 test "bgraToRgba: identity round-trip (apply twice = original)" {
