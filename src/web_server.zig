@@ -529,6 +529,14 @@ fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8
 /// Auth-gate a WebSocket route. On failure, logs the rejected `route` and
 /// writes a 401, returning false; returns true when the request is authorized.
 fn wsAuthOk(conn: c.fd_t, req: []const u8, route: []const u8) bool {
+    // Browsers cannot set request headers on a WebSocket handshake, so the UI's
+    // console/serial sockets carry no X-API-Key. In loopback mode (no KV_API_KEY)
+    // the daemon binds ::1 only and hostHeaderOk has already required a loopback
+    // Host, so the origin is gated without the key — allow the upgrade, otherwise
+    // the embedded VNC/SPICE/serial console never connects. When KV_API_KEY is
+    // set the daemon is exposed and these routes stay key-gated (browser console
+    // is then local/CLI-only, matching the write-action policy).
+    if (auth_token_len == 0) return true;
     if (checkAuth(req)) return true;
     var buf: [64]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "auth rejected: GET {s}", .{route}) catch "auth rejected: GET /ws";
@@ -2428,6 +2436,23 @@ fn handleDelete(req: []const u8) ![]const u8 {
     appstate.undo_vm = appstate.vms[idx];
     appstate.undo_idx = idx;
     appstate.undo_available = true;
+    // Force-stop a running VM before tearing it down. destroyVmmHandle only frees
+    // the dispatch handle / disconnects QMP — it does NOT kill the process — so
+    // deleting a running VM would otherwise orphan a detached QEMU that keeps the
+    // qcow2 write-locked (re-creating the VM with that disk then fails) and holds
+    // RAM/ports. Mirrors handlePower's stop path.
+    {
+        const v = &appstate.vms[idx];
+        if (v.isAlive()) {
+            if (appstate.getVmmHandle(idx)) |h| {
+                appstate.g_vmm.forceStopFn(h);
+                appstate.g_vmm.reapFn(h);
+            } else {
+                qemu.forceStopVm(v);
+                qemu.reapVm(v);
+            }
+        }
+    }
     appstate.destroyVmmHandle(idx);
     // Shift remaining
     var i = idx;
@@ -4780,6 +4805,30 @@ test "checkAuth: rejects wrong default API key" {
 test "checkAuth: rejects when X-API-Key header missing" {
     const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\n\r\n";
     try std.testing.expect(!checkAuth(req));
+}
+
+test "wsAuthOk: loopback (no KV_API_KEY) allows keyless WebSocket upgrade" {
+    // The browser cannot send X-API-Key on a WS handshake; in loopback mode the
+    // upgrade must still be allowed (hostHeaderOk already gated the origin) or the
+    // console/serial console never connects.
+    const prev = auth_token_len;
+    auth_token_len = 0;
+    defer auth_token_len = prev;
+    // No X-API-Key header, conn=-1 (only touched on the failure path, which we
+    // don't take here).
+    try std.testing.expect(wsAuthOk(-1, "GET /ws/vnc/0 HTTP/1.1\r\nHost: localhost\r\n\r\n", "/ws/vnc"));
+}
+
+test "wsAuthOk: exposed (KV_API_KEY set) still requires the key" {
+    auth_token_len = 6;
+    @memcpy(auth_token[0..6], "secret");
+    defer {
+        auth_token_len = 0;
+        @memset(&auth_token, 0);
+    }
+    // Correct key upgrades; the no-key path would write a 401 to conn, so only
+    // assert the accepting case here.
+    try std.testing.expect(wsAuthOk(-1, "GET /ws/vnc/0 HTTP/1.1\r\nX-API-Key: secret\r\nHost: localhost\r\n\r\n", "/ws/vnc"));
 }
 
 test "checkAuth: accepts correct custom auth token" {
