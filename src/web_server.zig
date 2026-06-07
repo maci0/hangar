@@ -10,6 +10,7 @@ const qemu = @import("qemu.zig");
 const qmp = @import("qmp.zig");
 const vnc = @import("vnc_client.zig");
 const catalog = @import("catalog.zig");
+const framebuffer = @import("framebuffer.zig");
 const ws = @import("ws.zig");
 const usock = @import("usock.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
@@ -43,8 +44,6 @@ const API_KEY: []const u8 = transport.DEFAULT_API_KEY; // built-in X-API-Key def
 const DEFAULT_PORT: u16 = transport.DEFAULT_PORT; // KV_PORT default
 var auth_token: [64]u8 = [_]u8{0} ** 64;
 var auth_token_len: usize = 0;
-
-const FB_BMP_BUF_SIZE = 2 * 1024 * 1024 + 54;
 const CONFIG_RAW_MAX = 4 * 1024 * 1024;
 
 // Server socket fds for shutdown signaling.
@@ -911,10 +910,10 @@ fn serveHtml(conn: c.fd_t) void {
         };
         content_type = "text/plain";
         // ── Item sub-action routes (longest suffix first where ambiguous) ──
-    } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/framebuffer") != null) {
-        if (std.heap.page_allocator.alloc(u8, FB_BMP_BUF_SIZE)) |bytes| {
+    } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/framebuffer")) |fb_idx| {
+        if (std.heap.page_allocator.alloc(u8, framebuffer.BMP_BUF_SIZE)) |bytes| {
             response_alloc = bytes;
-            response = try renderFramebuffer(req, bytes);
+            response = framebuffer.render(fb_idx, bytes);
         } else |_| {
             response = "no fb";
         }
@@ -1142,16 +1141,6 @@ fn serveConfigRawAlloc() ?[]u8 {
     logWarn(std.fmt.bufPrint(&wb, "vms.json truncated to {d} bytes", .{CONFIG_RAW_MAX}) catch "vms.json truncated");
     return clipped;
 }
-
-var fb_client: ?*vnc.VncClient = null;
-// Tracks which VM index fb_client is connected to. appstate.MAX_VMS = sentinel (none).
-var fb_vm_idx: usize = appstate.MAX_VMS;
-// VNC port the cached connection points at. A delete/clone can shift the VM
-// table so the same index now maps to a different VM with a different port;
-// keying the cache on index alone would then serve the wrong VM's screen.
-// Reconnecting whenever the port for `idx` changed closes that hole.
-var fb_vnc_port: c_int = -1;
-var fb_mutex: sync.SpinMutex = .{};
 
 /// Handle WebSocket VNC proxy request.
 /// Upgrades the connection to WebSocket, connects to the VM's VNC port,
@@ -1508,79 +1497,6 @@ fn handleWsSerial(conn: c.fd_t, req: []const u8) !void {
     ser2ws.join();
     ws2ser.join();
     serial.close();
-}
-
-fn renderFramebuffer(req: []const u8, out: []u8) ![]const u8 {
-    // GET /api/vms/N/framebuffer — return the framebuffer for VM N as a valid BMP image
-    const idx = parseIdx(req, "GET /api/vms/") orelse return "invalid";
-    appstate.vms_mutex.lock();
-    if (idx >= appstate.vm_count) {
-        appstate.vms_mutex.unlock();
-        return "no vm";
-    }
-    const v = &appstate.vms[idx];
-    if (!v.isAlive()) {
-        appstate.vms_mutex.unlock();
-        return "off";
-    }
-    const vnc_port = v.vnc_port;
-    appstate.vms_mutex.unlock();
-
-    fb_mutex.lock();
-    defer fb_mutex.unlock();
-
-    if (fb_client == null) {
-        fb_client = vnc.VncClient.new() orelse return "no vnc";
-        fb_vm_idx = appstate.MAX_VMS; // not yet connected to any VM
-    }
-    const vc = fb_client.?;
-    // Reconnect if the VM changed, the port behind this index changed (table
-    // shifted by a delete/clone), or the connection dropped.
-    if (fb_vm_idx != idx or fb_vnc_port != @as(c_int, @intCast(vnc_port)) or !vc.isConnected()) {
-        if (fb_vm_idx != appstate.MAX_VMS) vc.disconnect();
-        _ = vc.connect("127.0.0.1", @intCast(vnc_port));
-        fb_vm_idx = idx;
-        fb_vnc_port = @intCast(vnc_port);
-    }
-    if (vc.lockFb()) |pixels| {
-        defer vc.unlockFb();
-        var fw: c_int = 0;
-        var fh: c_int = 0;
-        if (vc.getSize(&fw, &fh) and fw > 0 and fh > 0) {
-            const pixel_size: usize = @intCast(@as(u64, @intCast(fw)) * @as(u64, @intCast(fh)) * 4);
-            if (out.len < 54) return "no fb";
-            const copy_size = @min(pixel_size, out.len - 54);
-            if (pixel_size > out.len - 54) {
-                var wb: [128]u8 = undefined;
-                logWarn(std.fmt.bufPrint(&wb, "VNC framebuffer {d}x{d} ({d} bytes) truncated to {d} bytes", .{ fw, fh, pixel_size, out.len - 54 }) catch "VNC framebuffer truncated");
-            }
-            const file_size: u32 = @intCast(54 + copy_size);
-
-            // ── BITMAPFILEHEADER (14 bytes) ──────────────────────
-            out[0] = 'B';
-            out[1] = 'M';
-            std.mem.writeInt(u32, out[2..6], file_size, .little); // bfSize
-            std.mem.writeInt(u32, out[6..10], 0, .little); // bfReserved
-            std.mem.writeInt(u32, out[10..14], 54, .little); // bfOffBits
-
-            // ── BITMAPINFOHEADER (40 bytes) ──────────────────────
-            @memset(out[14..54], 0); // zero-fill then set fields
-            std.mem.writeInt(u32, out[14..18], 40, .little); // biSize
-            std.mem.writeInt(i32, out[18..22], fw, .little); // biWidth
-            std.mem.writeInt(i32, out[22..26], -fh, .little); // biHeight (negative = top-down)
-            std.mem.writeInt(u16, out[26..28], 1, .little); // biPlanes
-            std.mem.writeInt(u16, out[28..30], 32, .little); // biBitCount
-            // biCompression = 0 (BI_RGB), biSizeImage = 0 (OK for BI_RGB)
-            // biXPelsPerMeter = biYPelsPerMeter = 2835 (~72 DPI)
-            std.mem.writeInt(u32, out[38..42], 2835, .little);
-            std.mem.writeInt(u32, out[42..46], 2835, .little);
-
-            // ── Pixel data ───────────────────────────────────────
-            @memcpy(out[54..][0..copy_size], @as([*]const u8, @ptrCast(pixels))[0..copy_size]);
-            return out[0 .. 54 + copy_size];
-        }
-    }
-    return "no fb";
 }
 
 fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
