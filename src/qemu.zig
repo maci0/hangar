@@ -341,6 +341,15 @@ fn appendExtraNic(
 fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc: std.mem.Allocator, bufs: *ArgBuffers) !void {
     try args.append(alloc, "qemu-system-x86_64");
 
+    // The VM name is interpolated into the comma-separated chardev property lists
+    // for -serial / -qmp / -chardev (and their socket paths). A name containing a
+    // comma or slash would inject extra QEMU properties or escape the socket
+    // directory — and names loaded from vms.json or the remote daemon bypass the
+    // web layer's isValidVmName check. Reject an unsafe name at the sink (same
+    // posture as the disk-path guards below) so a hostile config cannot produce a
+    // dangerous launch.
+    if (config.hasName() and !vm.isValidVmName(config.getNameSlice())) return error.UnsafeVmName;
+
     const accel_flag = config.accel.toStr();
     try args.append(alloc, "-machine");
     const mach_str = if (config.secure_boot)
@@ -2035,6 +2044,28 @@ test "qemu: buildScriptStr handles multi-socket topology" {
     defer talloc.free(s);
     try expect(has(s, "sockets=2"));
     try expect(has(s, "cores=4"));
+}
+
+test "qemu: buildArgs rejects a name that would inject QEMU chardev properties" {
+    // A comma in the name would splice extra properties into the -serial/-qmp
+    // /-chardev comma-lists (CWE-88). The sink guard must refuse to build.
+    var cfg = vm.VmConfig{};
+    cfg.setName("evil,logfile=/tmp/pwned");
+    cfg.enable_serial = true;
+    try std.testing.expectError(error.UnsafeVmName, buildScriptStr(&cfg, talloc));
+
+    // A slash would escape the socket directory.
+    var cfg2 = vm.VmConfig{};
+    cfg2.setName("../../etc/x");
+    try std.testing.expectError(error.UnsafeVmName, buildScriptStr(&cfg2, talloc));
+
+    // A normal name still builds.
+    var ok = vm.VmConfig{};
+    ok.setName("ubuntu-server");
+    ok.enable_serial = true;
+    const s = try buildScriptStr(&ok, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "hangar-serial-ubuntu-server.sock"));
 }
 
 test "qemu: buildScriptStr with disk_bps_throttle emits throttling flag" {
