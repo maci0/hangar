@@ -62,6 +62,38 @@ Handled in the web UI (`src/web/app.js`); press `?` in the app for the full list
 | Alt+↑ / Alt+↓ | Reorder VM in list |
 | Esc | Close dialog / exit display-only / deselect |
 
+## HTTP API
+
+Resource-rooted under `/api`. State-changing requests require the `X-API-Key`
+header (the bundled UI and `vmrun` send it; the built-in default `hangar` is
+accepted in loopback mode). GET reads are exempt except `disk2/download`,
+`framebuffer`, and migrate status.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/health` | Liveness + VM/running counts + persist status |
+| GET | `/api/config` · POST `/api/config` | Read / save preferences |
+| GET | `/api/capabilities` · `/api/catalog` | Host capabilities / VM templates |
+| GET | `/api/vms` | List VMs |
+| POST | `/api/vms` | Create VM |
+| POST | `/api/vms/{import,reorder,undo,save}` | Import / reorder / undo-delete / persist-all |
+| POST | `/api/vms/quickstart/<slug>` | Create VM from a catalog template |
+| GET | `/api/vms/<id>` | VM detail |
+| POST | `/api/vms/<id>` | Update VM settings |
+| POST | `/api/vms/<id>/delete` | Delete VM |
+| POST | `/api/vms/<id>/{power,pause,resume,suspend,shutdown,reset,cad,clone,rename}` | Lifecycle actions |
+| GET | `/api/vms/<id>/log` | Tail of the QEMU stderr log |
+| GET | `/api/vms/<id>/framebuffer` | Current framebuffer (BMP) |
+| GET | `/api/vms/<id>/disk2/download` · POST `/api/vms/<id>/disk2` | Download / upload secondary disk |
+| POST | `/api/vms/<id>/export` | Export OVF (streamed tarball) |
+| GET | `/api/vms/<id>/snapshots` · POST same | List / take snapshot |
+| POST | `/api/vms/<id>/snapshots/{revert,delete}` | Revert / delete snapshot (tag in body) |
+| GET | `/api/vms/<id>/migrate` · POST same · POST `/api/vms/<id>/migrate/cancel` | Migration status / start / cancel |
+| GET | `/api/networks` · POST `/api/networks` | List / save virtual networks |
+
+WebSocket proxies (not under `/api`): `/ws/vnc/<id>`, `/ws/spice/<id>`,
+`/ws/serial/<id>`.
+
 ## Persistence
 
 VM configs stored in `~/.config/hangar/vms.json`; virtual networks in
@@ -73,8 +105,8 @@ Hand-rolled JSON parser (no `std.json` — linker compatibility).
 ## Visual Verification
 
 ```bash
-node tests/visual/e2e_web_screenshots.mjs   # Puppeteer screenshots of the web UI
+node tests/visual/e2e_web_screenshots.mjs   # Playwright screenshots of the web UI
 ```
 
-The puppeteer flow drives a headless browser against a `hangar-web` instance
+The Playwright flow drives a headless browser against a `hangar-web` instance
 on a temp port and captures the UI interaction flow.

@@ -52,12 +52,12 @@ commit; run `zig build test` for the authoritative result.
 | `appstate_test.zig` | App-state wiring (test wrapper) |
 | `webui_app.zig` | Native WebView desktop wrapper |
 
-## Web End-to-End Smoke
+## Web End-to-End
 
-The puppeteer smoke is folded into the umbrella `test` step, or run on its own:
+The Playwright e2e suite is folded into the umbrella `test` step, or run on its own:
 
 ```bash
-zig build web-smoke    # Web UI end-to-end smoke (puppeteer, temp port + $HOME)
+zig build web-e2e      # Web UI end-to-end tests (Playwright, temp port + $HOME)
 ```
 
 ## Web Backend Tests
@@ -70,13 +70,13 @@ bash tests/test_web_api.sh  # Curl-based HTTP API validation
 ## Visual Tests
 
 ```bash
-node tests/visual/e2e_web_screenshots.mjs   # Puppeteer screenshots — web UI interaction flow
+node tests/visual/e2e_web_screenshots.mjs   # Playwright screenshots — web UI interaction flow
 ```
 
 ## Running Tests
 
 ```bash
-zig build test         # All unit + fuzz tests + web E2E smoke
+zig build test         # All unit + fuzz tests + Playwright web E2E
 zig build web          # Build web backend
 zig build webui        # Build native WebView desktop wrapper
 ```
