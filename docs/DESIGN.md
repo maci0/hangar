@@ -86,6 +86,7 @@ accepted in loopback mode). GET reads are exempt except `disk2/download`,
 | GET | `/api/vms/<id>/framebuffer` | Current framebuffer (BMP) |
 | GET | `/api/vms/<id>/diskinfo` | Primary disk virtual + actual byte sizes |
 | POST | `/api/vms/<id>/disk/resize` | Grow the primary disk (stopped, grow-only) |
+| POST | `/api/vms/<id>/cdrom` · `/api/vms/<id>/cdrom/eject` | Change / eject CD-ISO (live via QMP, or stopped) |
 | GET | `/api/vms/<id>/disk2/download` · POST `/api/vms/<id>/disk2` | Download / upload (streamed) secondary disk |
 | POST | `/api/vms/<id>/export` | Export OVF (streamed tarball) |
 | GET | `/api/vms/<id>/snapshots` · POST same | List / take snapshot |
@@ -117,6 +118,7 @@ mode, or `KV_API_KEY` if set). A VM is addressed by name or list index.
 | `clone` / `linked-clone` `<name\|idx>` | Clone (full / qcow2 backing) |
 | `rename <name\|idx> <new-name>` | Rename |
 | `resize <name\|idx> <new-gb>` | Grow the primary disk (stopped VM) |
+| `cd <name\|idx> <iso-path>` · `eject <name\|idx>` | Change / eject the CD/ISO |
 | `set <name\|idx> <field> <value>` | Set one config field (mem, cpu, cpu_sockets, network, notes, tags, boot_order, vnc_port, spice_port) |
 | `delete <name\|idx>` | Delete |
 | `snapshot list\|take\|revert\|delete <name\|idx> [tag]` | Snapshots |
