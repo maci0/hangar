@@ -478,6 +478,23 @@ pub const QmpClient = struct {
 
         if (hmpReportedError(result)) return error.CommandFailed;
     }
+
+    /// Capture the guest's display to a PNG at `path` (native QMP `screendump`).
+    /// PNG support requires QEMU 7.1+. Caller serves/reads the file afterward.
+    pub fn screenshotPng(self: *QmpClient, path: []const u8) !void {
+        if (!self.connected) return error.ConnectionFailed;
+        var esc_buf: [vm.MAX_PATH * 2 + 1]u8 = undefined;
+        const esc = jsonEscapeString(path, &esc_buf) orelse return error.BufferTooSmall;
+        var cmd_buf: [vm.MAX_PATH * 2 + 128]u8 = undefined;
+        const cmd = std.fmt.bufPrint(
+            &cmd_buf,
+            "{{\"execute\": \"screendump\", \"arguments\": {{\"filename\": \"{s}\", \"format\": \"png\"}}}}\n",
+            .{esc},
+        ) catch return error.BufferTooSmall;
+        try self.writeAll(cmd);
+        const resp = try self.readResponse();
+        if (std.mem.indexOf(u8, resp, "\"error\"") != null) return error.CommandFailed;
+    }
 };
 
 /// True if an HMP command reply indicates failure.

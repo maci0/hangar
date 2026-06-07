@@ -202,7 +202,7 @@ if(v.tags)h+=`<div class="summary-card"><div class="card-label">Tags</div><div c
 if(v.notes)h+=`<div class="summary-card"><div class="card-label">Notes</div><div class="card-value">${escHtml(v.notes)}</div></div>`;
 h+=summaryWarnings(v);
 h+='</div>';
-h+='<div class="summary-actions" style="margin-top:12px;display:flex;gap:8px"><button type="button" class="btn" data-action="viewLog">View QEMU Log</button></div>';
+h+='<div class="summary-actions" style="margin-top:12px;display:flex;gap:8px"><button type="button" class="btn" data-action="viewLog">View QEMU Log</button>'+(v.status==='running'?'<button type="button" class="btn" data-action="takeScreenshot">Screenshot</button>':'')+'</div>';
 ts.innerHTML=h;
 if(v.hasDisk==='true')loadDiskInfo(sel);
 updateCommandState();}
@@ -487,6 +487,7 @@ async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=docume
 function downloadDisk2(){if(sel===null)return;const a=document.createElement('a');a.href='/api/vms/'+sel+'/disk2/download';a.download=vms[sel].name+'_disk2.qcow2';document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);},1000);}
 function fmtBytes(n){if(!Number.isFinite(n)||n<0)return'?';const u=['B','KiB','MiB','GiB','TiB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++;}return(i===0?x:x.toFixed(1))+' '+u[i];}
 async function loadDiskInfo(idx){const el=document.getElementById('diskUsageVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/diskinfo');if(!r.ok)throw 0;const j=await r.json();if(j.error)throw 0;if(sel===idx&&document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent=fmtBytes(j.actual_bytes)+' used / '+fmtBytes(j.virtual_bytes);}catch(e){if(document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent='unavailable';}}
+async function takeScreenshot(){if(sel===null)return;try{const r=await fetch('/api/vms/'+sel+'/screenshot',{headers:{'X-API-Key':API_KEY}});if(!r.ok){let t='';try{const j=await r.json();t=j.error||'';}catch(e){}showToast('Screenshot failed: '+(t||('HTTP '+r.status)),'error');return;}const b=await r.blob();const u=URL.createObjectURL(b);window.open(u,'_blank');setTimeout(function(){URL.revokeObjectURL(u);},10000);}catch(e){showToast('Screenshot failed','error');}}
 async function changeCd(){if(sel===null)return;const cur=(document.getElementById('e_iso_path')||{}).value||vms[sel].iso_path||'';const p=await showPromptDialog('Path to the CD/ISO image to mount:',cur);if(p===null||p==='')return;const r=await apiPost('/api/vms/'+sel+'/cdrom','path='+encodeURIComponent(p));if(r){await refresh();setStatus('CD/ISO changed.'+(vms[sel].status==='running'?'':' Mounts on next boot.'));}}
 async function ejectCd(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/cdrom/eject','');if(r){await refresh();setStatus('CD/ISO ejected.');}}
 async function resizeDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before resizing its disk','warn');return;}const cur=parseInt(v.disk,10)||0;const n=await showPromptDialog('New primary disk size in GB (grow only; current '+cur+' GB):',String(cur));if(n===null)return;const gb=parseInt(n,10);if(!Number.isFinite(gb)||gb<=cur){showToast('Enter a size larger than '+cur+' GB','error');return;}const r=await apiPost('/api/vms/'+sel+'/disk/resize','size='+gb);if(r){await refresh();setStatus('Primary disk resized to '+gb+' GB.');}}
@@ -1150,6 +1151,7 @@ var actionHandlers={
 	 resizeDisk:function(){resizeDisk();},
 	 changeCd:function(){changeCd();},
 	 ejectCd:function(){ejectCd();},
+	 takeScreenshot:function(){takeScreenshot();},
 	 enterDisplayOnly:function(){enterDisplayOnly();},
 	 exitDisplayOnly:function(){exitDisplayOnly();},
 	 reconnectDisplay:function(){reconnectDisplay();},

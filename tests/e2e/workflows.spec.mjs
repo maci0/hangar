@@ -166,6 +166,12 @@ test('cdrom change then eject updates the ISO on a stopped VM', async ({ page })
     expect(bad.text).toContain('bad path');
 });
 
+test('screenshot on a stopped VM returns 409 (needs a running guest)', async ({ page }) => {
+    const idx = await createVm(page, 'wf-shot');
+    const r = await api(page, 'GET', `/api/vms/${idx}/screenshot`, null);
+    expect(r.status, `screenshot on stopped VM: ${r.text}`).toBe(409);
+});
+
 test('write-action without the API key is rejected (401)', async ({ page }) => {
     const idx = await createVm(page, 'wf-auth');
     const r = await page.evaluate(async (i) => {

@@ -176,6 +176,8 @@ fn isAuthExempt(method_get: bool, path: []const u8) bool {
         // matching the pre-refactor posture.
         if (std.mem.endsWith(u8, p, "/framebuffer")) return false;
         if (std.mem.endsWith(u8, p, "/migrate")) return false;
+        // Screenshot exposes the guest display — require auth like framebuffer.
+        if (std.mem.endsWith(u8, p, "/screenshot")) return false;
         // Detail, /log, and /snapshots are read-only and exempt.
         return true;
     }
@@ -784,6 +786,10 @@ fn serveHtml(conn: c.fd_t) void {
     if (parseVmIdxSuffix(req, "GET /api/vms/", "/diskinfo") != null) {
         var di_buf: [160]u8 = undefined;
         writeHttpResponse(conn, HTTP_OK, "application/json; charset=utf-8", handleDiskInfo(req, &di_buf));
+        return;
+    }
+    if (parseVmIdxSuffix(req, "GET /api/vms/", "/screenshot") != null) {
+        handleScreenshot(conn, req);
         return;
     }
     if (parseVmIdxSuffix(req, "POST /api/vms/", "/export") != null) {
@@ -3232,6 +3238,91 @@ fn handleDiskInfo(req: []const u8, out: []u8) []const u8 {
     }
     const info = qemu.diskInfo(disk_buf[0..disk_len], std.heap.page_allocator) orelse return "{\"error\":\"unavailable\"}";
     return std.fmt.bufPrint(out, "{{\"virtual_bytes\":{d},\"actual_bytes\":{d}}}", .{ info.virtual_bytes, info.actual_bytes }) catch "{\"error\":\"render\"}";
+}
+
+/// Capture the running guest's display and stream it back as PNG (QMP
+/// screendump). Only meaningful for a running VM; a stopped VM gets 409.
+fn handleScreenshot(conn: c.fd_t, req: []const u8) void {
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var name_len: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "GET /api/vms/") orelse {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid\"}");
+            return;
+        };
+        if (idx >= appstate.vm_count) {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid idx\"}");
+            return;
+        }
+        const v = &appstate.vms[idx];
+        if (!v.isAlive()) {
+            writeHttpResponse(conn, HTTP_CONFLICT, "application/json; charset=utf-8", "{\"error\":\"vm not running\"}");
+            return;
+        }
+        const nm = v.getNameSlice();
+        if (nm.len > name_buf.len or !qmp.isPathSafeName(nm)) {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"screenshot err\"}");
+            return;
+        }
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
+    }
+
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    var path_buf: [96]u8 = undefined;
+    const png_path = std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-shot-{d}-{d}.png", .{ std.c.getpid(), ts.nsec }) catch {
+        writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"screenshot err\"}");
+        return;
+    };
+
+    {
+        var client = qmp.QmpClient{};
+        var sock_buf: [256]u8 = undefined;
+        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"screenshot err\"}");
+            return;
+        };
+        client.connect(sock) catch |e| {
+            logOpErr("screenshot", e, name_buf[0..name_len]);
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"screenshot err\"}");
+            return;
+        };
+        defer client.disconnect();
+        client.screenshotPng(png_path) catch |e| {
+            logOpErr("screenshot", e, name_buf[0..name_len]);
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"screenshot failed\"}");
+            return;
+        };
+    }
+    defer _ = c.unlink(png_path);
+
+    const fd = c.open(png_path, .{ .ACCMODE = .RDONLY });
+    if (fd < 0) {
+        writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"screenshot read failed\"}");
+        return;
+    }
+    defer _ = c.close(fd);
+    const seek_end = c.lseek(fd, 0, 2);
+    if (seek_end <= 0) {
+        writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"screenshot empty\"}");
+        return;
+    }
+    const file_size: u64 = @intCast(seek_end);
+    if (c.lseek(fd, 0, 0) < 0) return;
+
+    var hdr_buf: [256]u8 = undefined;
+    const headers = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nCache-Control: no-store\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{file_size}) catch return;
+    if (!writeAll(conn, headers.ptr, headers.len)) return;
+    var sbuf: [65536]u8 = undefined;
+    while (true) {
+        const n = c.read(fd, &sbuf, sbuf.len);
+        if (n <= 0) break;
+        if (!writeAll(conn, &sbuf, @intCast(n))) return;
+    }
+    logAudit("screenshot", name_buf[0..name_len]);
 }
 
 /// Grow a VM's primary disk image (qemu-img resize). Stopped VMs only (resizing
