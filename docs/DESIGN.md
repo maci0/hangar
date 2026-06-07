@@ -114,6 +114,7 @@ mode, or `KV_API_KEY` if set). A VM is addressed by name or list index.
 | `shutdown` / `reset` / `cad` `<name\|idx>` | ACPI shutdown / hard reset / Ctrl-Alt-Del |
 | `clone` / `linked-clone` `<name\|idx>` | Clone (full / qcow2 backing) |
 | `rename <name\|idx> <new-name>` | Rename |
+| `set <name\|idx> <field> <value>` | Set one config field (mem, cpu, cpu_sockets, network, notes, boot_order, vnc_port, spice_port) |
 | `delete <name\|idx>` | Delete |
 | `snapshot list\|take\|revert\|delete <name\|idx> [tag]` | Snapshots |
 | `import <disk-path>` | Import an existing disk image |

@@ -54,6 +54,8 @@ const usage =
     \\  shutdown    <name|idx>  Graceful ACPI shutdown
     \\  reset       <name|idx>  Hard reset guest
     \\  rename      <name|idx> <new-name>  Rename a VM
+    \\  set         <name|idx> <field> <value>  Set a config field
+    \\              (field: mem|cpu|cpu_sockets|network|notes|boot_order|vnc_port|spice_port)
     \\  cad         <name|idx>  Send Ctrl+Alt+Del to guest
     \\  snapshot list    <name|idx>        List snapshots
     \\  snapshot take    <name|idx> <tag>  Take a snapshot
@@ -232,6 +234,15 @@ fn run(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "migrate")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdMigrate(allocator, &conn, idx, args[1], args[2], init.io);
+    } else if (std.mem.eql(u8, command, "set")) {
+        if (!isSettableField(args[1])) {
+            var sb: [256]u8 = undefined;
+            const m = std.fmt.bufPrintZ(&sb, "Error: unknown field '{s}' (settable: {s})\n", .{ args[1], SETTABLE_FIELDS_HELP }) catch "Error: unknown field\n";
+            fdWrite(c.STDERR_FILENO, m);
+            std.process.exit(EXIT_USAGE);
+        }
+        const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
+        return cmdSet(allocator, &conn, idx, args[1], args[2], init.io);
     } else {
         // Single-target VM operations: start/stop/restart/clone/linked-clone/
         // delete/suspend/pause/resume/shutdown/reset/cad/export.
@@ -288,6 +299,7 @@ fn commandArity(command: []const u8) ?usize {
     for (one) |k| if (std.mem.eql(u8, command, k)) return 1;
     if (std.mem.eql(u8, command, "rename")) return 2;
     if (std.mem.eql(u8, command, "migrate")) return 3; // target host port
+    if (std.mem.eql(u8, command, "set")) return 3; // target field value
     if (std.mem.eql(u8, command, "create")) return 4; // name mem cpu disk
     return null;
 }
@@ -557,6 +569,40 @@ fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "rename VM [{d}] -> {s}: {s}\n", .{ idx, new_name, resp });
+    fdWrite(c.STDOUT_FILENO, line);
+}
+
+/// Fields `vmrun set` accepts. A curated, stable subset of the daemon's save
+/// keys (handleSave) whose names and semantics are unlikely to drift; keeping
+/// it small avoids the silent no-op a typo'd or server-unknown key would cause.
+const SETTABLE_FIELDS = [_][]const u8{
+    "mem", "cpu", "cpu_sockets", "network", "notes", "boot_order", "vnc_port", "spice_port",
+};
+const SETTABLE_FIELDS_HELP = "mem, cpu, cpu_sockets, network, notes, boot_order, vnc_port, spice_port";
+
+/// Pure: is `field` one this CLI will forward to the daemon's save endpoint?
+fn isSettableField(field: []const u8) bool {
+    for (SETTABLE_FIELDS) |f| {
+        if (std.mem.eql(u8, f, field)) return true;
+    }
+    return false;
+}
+
+/// Update one config field of VM `idx` via a partial save (POST /api/vms/<id>).
+/// handleSave applies only the keys present in the body, so a single field is
+/// changed and the rest are untouched. The field is allowlisted by the caller.
+fn cmdSet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, field: []const u8, value: []const u8, io: std.Io) !void {
+    _ = io;
+    var path_buf: [48]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}", .{idx});
+    var val_enc_buf: [768]u8 = undefined;
+    const enc = try urlencode.percentEncode(&val_enc_buf, value);
+    var body_buf: [832]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "{s}={s}", .{ field, enc });
+    const resp = try sendRequest(allocator, conn, "POST", path, body);
+    defer allocator.free(resp);
+    var buf: [256]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "set VM [{d}] {s}={s}: {s}\n", .{ idx, field, value, resp });
     fdWrite(c.STDOUT_FILENO, line);
 }
 
@@ -973,6 +1019,32 @@ test "commandArity: create takes four args" {
 
 test "commandArity: migrate takes three args" {
     try std.testing.expectEqual(@as(?usize, 3), commandArity("migrate"));
+}
+
+test "commandArity: set takes three args" {
+    try std.testing.expectEqual(@as(?usize, 3), commandArity("set"));
+}
+
+test "isSettableField: allowlist membership" {
+    try std.testing.expect(isSettableField("mem"));
+    try std.testing.expect(isSettableField("vnc_port"));
+    try std.testing.expect(isSettableField("boot_order"));
+    try std.testing.expect(!isSettableField("disk")); // not safely settable post-create
+    try std.testing.expect(!isSettableField("name")); // use rename
+    try std.testing.expect(!isSettableField(""));
+    try std.testing.expect(!isSettableField("mem ")); // exact match only
+}
+
+test "fuzz: isSettableField never panics on arbitrary input" {
+    var prng = std.Random.DefaultPrng.init(0x5E77_AB1E);
+    const rnd = prng.random();
+    var buf: [64]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        _ = isSettableField(buf[0..len]);
+    }
 }
 
 test "commandArity: snapshot is not covered (subcommand-dependent)" {
