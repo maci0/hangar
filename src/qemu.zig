@@ -291,6 +291,7 @@ const ArgBuffers = struct {
     nic_dev_buf: [vm.MAX_NICS][192]u8 = [_][192]u8{[_]u8{0} ** 192} ** vm.MAX_NICS,
     floppy_buf: [vm.MAX_PATH + 64]u8 = undefined,
     disp_buf: [32]u8 = undefined,
+    watchdog_buf: [32]u8 = undefined,
 };
 
 /// Append an additional network adapter ("netN") for `mode`. `.none` is a
@@ -600,10 +601,13 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     }
 
     if (config.watchdog != .none) {
-        try args.append(alloc, "-watchdog");
-        try args.append(alloc, "i6300esb");
-        try args.append(alloc, "-watchdog-action");
-        try args.append(alloc, std.mem.span(config.watchdog.toStr()));
+        // Modern QEMU (the legacy `-watchdog`/`-watchdog-action` were removed):
+        // `-device i6300esb -action watchdog=<action>`.
+        try args.append(alloc, "-device");
+        try args.append(alloc, "i6300esb,id=watchdog0");
+        try args.append(alloc, "-action");
+        const wd_str = try std.fmt.bufPrint(&bufs.watchdog_buf, "watchdog={s}", .{std.mem.span(config.watchdog.toStr())});
+        try args.append(alloc, wd_str);
     }
 
     if (config.tpm) {
@@ -701,6 +705,12 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, ovmf);
     }
 
+    // Audiodev backend: route to the SPICE client when the display is SPICE
+    // (the only path that carries host audio in this headless manager), else a
+    // dummy `none` backend so the guest still sees the sound card without
+    // depending on a host audio system. The old hard-coded `sdl` backend is
+    // rarely compiled in and made QEMU reject the command line outright.
+    const audiodev_arg: []const u8 = if (config.display == .spice) "spice,id=snd0" else "none,id=snd0";
     switch (config.audio) {
         .hda => {
             try args.append(alloc, "-device");
@@ -711,7 +721,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
             // codec attaches to a null backend and the guest gets no sound.
             try args.append(alloc, "hda-duplex,audiodev=snd0");
             try args.append(alloc, "-audiodev");
-            try args.append(alloc, "sdl,id=snd0");
+            try args.append(alloc, audiodev_arg);
         },
         .ac97 => {
             try args.append(alloc, "-device");
@@ -719,7 +729,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
             // audiodev= modern QEMU binds it to a null backend and emits no sound.
             try args.append(alloc, "AC97,audiodev=snd0");
             try args.append(alloc, "-audiodev");
-            try args.append(alloc, "sdl,id=snd0");
+            try args.append(alloc, audiodev_arg);
         },
         .none => {},
     }
@@ -1791,6 +1801,27 @@ test "qemu: buildScriptStr with audio.none omits audio args" {
     try expect(!has(s, "AC97"));
 }
 
+test "qemu: audio uses a portable backend, never the rarely-built sdl" {
+    // Default (non-spice display): dummy `none` backend — always valid, never
+    // rejected, guest still gets the sound card.
+    var cfg = vm.VmConfig{};
+    cfg.audio = .hda;
+    cfg.display = .vnc;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "-audiodev"));
+    try expect(has(s, "none,id=snd0"));
+    try expect(!has(s, "sdl,id=snd0"));
+
+    // SPICE display routes audio to the SPICE client.
+    var cfg2 = vm.VmConfig{};
+    cfg2.audio = .ac97;
+    cfg2.display = .spice;
+    const s2 = try buildScriptStr(&cfg2, talloc);
+    defer talloc.free(s2);
+    try expect(has(s2, "spice,id=snd0"));
+}
+
 test "qemu: buildScriptStr with saved state includes -incoming" {
     var cfg = vm.VmConfig{};
     cfg.setSavedStatePath("/tmp/state.bin");
@@ -2124,10 +2155,14 @@ test "qemu: buildScriptStr with watchdog emits watchdog args" {
     cfg.watchdog = .reset;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
-    try expect(has(s, "-watchdog"));
-    try expect(has(s, "i6300esb"));
-    try expect(has(s, "-watchdog-action"));
-    try expect(has(s, "reset"));
+    // Modern QEMU form: -device i6300esb + -action watchdog=<action>.
+    try expect(has(s, "-device"));
+    try expect(has(s, "i6300esb,id=watchdog0"));
+    try expect(has(s, "-action"));
+    try expect(has(s, "watchdog=reset"));
+    // The removed legacy flags must not appear.
+    try expect(!has(s, "-watchdog "));
+    try expect(!has(s, "-watchdog-action"));
 }
 
 test "qemu: buildScriptStr with watchdog none omits watchdog args" {
