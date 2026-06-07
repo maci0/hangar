@@ -3036,61 +3036,106 @@ fn validateSnapshotTag(tag: []const u8) bool {
 }
 
 fn handleSnapshotTake(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.hasDisk()) return "no disk";
-    if (v.isAlive()) return "vm running";
-    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
-    const body = req[body_start + 4 ..];
-    var tag: []const u8 = "";
-    var pairs = std.mem.splitScalar(u8, body, '&');
-    while (pairs.next()) |pair| {
-        var kv = std.mem.splitScalar(u8, pair, '=');
-        const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
-        if (std.mem.eql(u8, key, "tag")) {
-            tag = val;
-        }
-    }
-    if (tag.len == 0) return "no name";
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    const decoded = urlencode.urlDecode(&decode_buf, tag);
-    if (!validateSnapshotTag(decoded)) return "no name";
-    if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot take", e, v.getNameSlice());
-            return "create err";
-        };
-    } else {
-        qemu.snapshotCreate(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot take", e, v.getNameSlice());
-            return "create err";
-        };
+    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var disk_len: usize = 0;
+    var name_len: usize = 0;
+    var decoded: []const u8 = "";
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
+        if (idx >= appstate.vm_count) return "invalid idx";
+        const v = &appstate.vms[idx];
+        if (!v.hasDisk()) return "no disk";
+        if (v.isAlive()) return "vm running";
+        const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
+        const body = req[body_start + 4 ..];
+        var tag: []const u8 = "";
+        var pairs = std.mem.splitScalar(u8, body, '&');
+        while (pairs.next()) |pair| {
+            var kv = std.mem.splitScalar(u8, pair, '=');
+            const key = kv.next() orelse continue;
+            const val = kv.next() orelse continue;
+            if (std.mem.eql(u8, key, "tag")) tag = val;
+        }
+        if (tag.len == 0) return "no name";
+        decoded = urlencode.urlDecode(&decode_buf, tag);
+        if (!validateSnapshotTag(decoded)) return "no name";
+        const nm = v.getNameSlice();
+        if (nm.len <= name_buf.len) {
+            @memcpy(name_buf[0..nm.len], nm);
+            name_len = nm.len;
+        }
+        // A non-alive VM has no live VMM handle (stop/suspend destroys it), so the
+        // create runs via offline qemu-img below — outside the lock. Keep the rare
+        // handle path (fast QMP) under the lock to avoid a use-after-free if a
+        // concurrent delete frees the config the handle points at.
+        if (appstate.getVmmHandle(idx)) |h| {
+            appstate.g_vmm.snapshotCreateFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
+                logOpErr("snapshot take", e, name_buf[0..name_len]);
+                return "create err";
+            };
+            logAudit("snapshot take", name_buf[0..name_len]);
+            return "ok";
+        }
+        const dp = v.getDiskPathSlice();
+        if (dp.len == 0 or dp.len >= disk_buf.len) return "create err";
+        @memcpy(disk_buf[0..dp.len], dp);
+        disk_len = dp.len;
     }
-    logAudit("snapshot take", v.getNameSlice());
+
+    // Offline snapshot via qemu-img with the lock released — it can take seconds
+    // on a large image and must not stall every other handler / the poll thread.
+    qemu.snapshotCreate(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
+        logOpErr("snapshot take", e, name_buf[0..name_len]);
+        return "create err";
+    };
+    logAudit("snapshot take", name_buf[0..name_len]);
     return "ok";
 }
 
 fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "GET /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.hasDisk()) return "no disk";
-    const n: usize = if (appstate.getVmmHandle(idx)) |h|
-        appstate.g_vmm.snapshotListFn(h, v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch |e| blk: {
-            logOpErr("snapshot list", e, v.getNameSlice());
-            break :blk 0;
+    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var disk_len: usize = 0;
+    var name_len: usize = 0;
+    var n: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "GET /api/vms/") orelse return "invalid";
+        if (idx >= appstate.vm_count) return "invalid idx";
+        const v = &appstate.vms[idx];
+        if (!v.hasDisk()) return "no disk";
+        const nm = v.getNameSlice();
+        if (nm.len <= name_buf.len) {
+            @memcpy(name_buf[0..nm.len], nm);
+            name_len = nm.len;
         }
-    else
-        qemu.snapshotList(v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch |e| blk: {
-            logOpErr("snapshot list", e, v.getNameSlice());
+        if (appstate.getVmmHandle(idx)) |h| {
+            // Live VM: QMP list under the lock (fast; handle must not outlive lock).
+            n = appstate.g_vmm.snapshotListFn(h, v.getDiskPathSlice(), raw_buf, std.heap.page_allocator) catch |e| blk: {
+                logOpErr("snapshot list", e, name_buf[0..name_len]);
+                break :blk 0;
+            };
+        } else {
+            // Stopped VM: defer the qemu-img read until after unlock.
+            const dp = v.getDiskPathSlice();
+            if (dp.len == 0 or dp.len >= disk_buf.len) return "no disk";
+            @memcpy(disk_buf[0..dp.len], dp);
+            disk_len = dp.len;
+        }
+    }
+
+    // Offline qemu-img list with the lock released (it reads the image header).
+    if (disk_len > 0) {
+        n = qemu.snapshotList(disk_buf[0..disk_len], raw_buf, std.heap.page_allocator) catch |e| blk: {
+            logOpErr("snapshot list", e, name_buf[0..name_len]);
             break :blk 0;
         };
+    }
     if (n == 0 or n > raw_buf.len) return "(none)";
 
     const nodes = snapparse.parse(raw_buf[0..n]);
@@ -3110,80 +3155,114 @@ fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
 }
 
 fn handleSnapshotRevert(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.hasDisk()) return "no disk";
-    if (v.isAlive()) return "vm running";
-    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
-    const body = req[body_start + 4 ..];
-    var tag: []const u8 = "";
-    var pairs = std.mem.splitScalar(u8, body, '&');
-    while (pairs.next()) |pair| {
-        var kv = std.mem.splitScalar(u8, pair, '=');
-        const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
-        if (std.mem.eql(u8, key, "tag")) {
-            tag = val;
-        }
-    }
-    if (tag.len == 0) return "no name";
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    const decoded = urlencode.urlDecode(&decode_buf, tag);
-    if (!validateSnapshotTag(decoded)) return "no name";
-    if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot revert", e, v.getNameSlice());
-            return "apply err";
-        };
-    } else {
-        qemu.snapshotApply(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot revert", e, v.getNameSlice());
-            return "apply err";
-        };
+    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var disk_len: usize = 0;
+    var name_len: usize = 0;
+    var decoded: []const u8 = "";
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
+        if (idx >= appstate.vm_count) return "invalid idx";
+        const v = &appstate.vms[idx];
+        if (!v.hasDisk()) return "no disk";
+        if (v.isAlive()) return "vm running";
+        const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
+        const body = req[body_start + 4 ..];
+        var tag: []const u8 = "";
+        var pairs = std.mem.splitScalar(u8, body, '&');
+        while (pairs.next()) |pair| {
+            var kv = std.mem.splitScalar(u8, pair, '=');
+            const key = kv.next() orelse continue;
+            const val = kv.next() orelse continue;
+            if (std.mem.eql(u8, key, "tag")) tag = val;
+        }
+        if (tag.len == 0) return "no name";
+        decoded = urlencode.urlDecode(&decode_buf, tag);
+        if (!validateSnapshotTag(decoded)) return "no name";
+        const nm = v.getNameSlice();
+        if (nm.len <= name_buf.len) {
+            @memcpy(name_buf[0..nm.len], nm);
+            name_len = nm.len;
+        }
+        // See handleSnapshotTake: handle path (rare) under lock, qemu-img unlocked.
+        if (appstate.getVmmHandle(idx)) |h| {
+            appstate.g_vmm.snapshotApplyFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
+                logOpErr("snapshot revert", e, name_buf[0..name_len]);
+                return "apply err";
+            };
+            logAudit("snapshot revert", name_buf[0..name_len]);
+            return "ok";
+        }
+        const dp = v.getDiskPathSlice();
+        if (dp.len == 0 or dp.len >= disk_buf.len) return "apply err";
+        @memcpy(disk_buf[0..dp.len], dp);
+        disk_len = dp.len;
     }
-    logAudit("snapshot revert", v.getNameSlice());
+
+    qemu.snapshotApply(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
+        logOpErr("snapshot revert", e, name_buf[0..name_len]);
+        return "apply err";
+    };
+    logAudit("snapshot revert", name_buf[0..name_len]);
     return "ok";
 }
 
 fn handleSnapshotDelete(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.hasDisk()) return "no disk";
-    if (v.isAlive()) return "vm running";
-    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
-    const body = req[body_start + 4 ..];
-    var tag: []const u8 = "";
-    var pairs = std.mem.splitScalar(u8, body, '&');
-    while (pairs.next()) |pair| {
-        var kv = std.mem.splitScalar(u8, pair, '=');
-        const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
-        if (std.mem.eql(u8, key, "tag")) {
-            tag = val;
-        }
-    }
-    if (tag.len == 0) return "no name";
     var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    const decoded = urlencode.urlDecode(&decode_buf, tag);
-    if (!validateSnapshotTag(decoded)) return "no name";
-    if (appstate.getVmmHandle(idx)) |h| {
-        appstate.g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot delete", e, v.getNameSlice());
-            return "delete err";
-        };
-    } else {
-        qemu.snapshotDelete(v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot delete", e, v.getNameSlice());
-            return "delete err";
-        };
+    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var disk_len: usize = 0;
+    var name_len: usize = 0;
+    var decoded: []const u8 = "";
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
+        if (idx >= appstate.vm_count) return "invalid idx";
+        const v = &appstate.vms[idx];
+        if (!v.hasDisk()) return "no disk";
+        if (v.isAlive()) return "vm running";
+        const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
+        const body = req[body_start + 4 ..];
+        var tag: []const u8 = "";
+        var pairs = std.mem.splitScalar(u8, body, '&');
+        while (pairs.next()) |pair| {
+            var kv = std.mem.splitScalar(u8, pair, '=');
+            const key = kv.next() orelse continue;
+            const val = kv.next() orelse continue;
+            if (std.mem.eql(u8, key, "tag")) tag = val;
+        }
+        if (tag.len == 0) return "no name";
+        decoded = urlencode.urlDecode(&decode_buf, tag);
+        if (!validateSnapshotTag(decoded)) return "no name";
+        const nm = v.getNameSlice();
+        if (nm.len <= name_buf.len) {
+            @memcpy(name_buf[0..nm.len], nm);
+            name_len = nm.len;
+        }
+        // See handleSnapshotTake: handle path (rare) under lock, qemu-img unlocked.
+        if (appstate.getVmmHandle(idx)) |h| {
+            appstate.g_vmm.snapshotDeleteFn(h, v.getDiskPathSlice(), decoded, std.heap.page_allocator) catch |e| {
+                logOpErr("snapshot delete", e, name_buf[0..name_len]);
+                return "delete err";
+            };
+            logAudit("snapshot delete", name_buf[0..name_len]);
+            return "ok";
+        }
+        const dp = v.getDiskPathSlice();
+        if (dp.len == 0 or dp.len >= disk_buf.len) return "delete err";
+        @memcpy(disk_buf[0..dp.len], dp);
+        disk_len = dp.len;
     }
-    logAudit("snapshot delete", v.getNameSlice());
+
+    qemu.snapshotDelete(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
+        logOpErr("snapshot delete", e, name_buf[0..name_len]);
+        return "delete err";
+    };
+    logAudit("snapshot delete", name_buf[0..name_len]);
     return "ok";
 }
 
