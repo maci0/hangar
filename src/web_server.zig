@@ -12,6 +12,17 @@ const vnc = @import("vnc_client.zig");
 const catalog = @import("catalog.zig");
 const framebuffer = @import("framebuffer.zig");
 const httpreq = @import("httpreq.zig");
+const wlog = @import("wlog.zig");
+// Structured logging lives in wlog.zig; alias so call sites read unchanged.
+const LogLevel = wlog.LogLevel;
+const logAt = wlog.logAt;
+const logErr = wlog.logErr;
+const logWarn = wlog.logWarn;
+const logSaveErr = wlog.logSaveErr;
+const logReqErr = wlog.logReqErr;
+const sanitizeLogName = wlog.sanitizeLogName;
+const logAudit = wlog.logAudit;
+const logOpErr = wlog.logOpErr;
 // Pure HTTP request/route parsers live in httpreq.zig; alias them so the ~40
 // call sites below read unchanged.
 const routeExact = httpreq.routeExact;
@@ -290,115 +301,6 @@ fn checkAuth(req: []const u8) bool {
     // Compare against the custom token if set, else the built-in API_KEY.
     const expected = if (auth_token_len > 0) auth_token[0..auth_token_len] else API_KEY;
     return secretEql(provided, expected);
-}
-
-const LogLevel = enum {
-    info,
-    warn,
-    err,
-
-    fn tag(self: LogLevel) []const u8 {
-        return switch (self) {
-            .info => "info",
-            .warn => "warn",
-            .err => "error",
-        };
-    }
-};
-
-/// Log a message to stderr as a single timestamped, leveled line.
-///
-/// Format: `[<epoch_seconds>] hangar <level>: <msg>\n`. Emitting one write
-/// (rather than separate body + newline writes) keeps concurrent log lines
-/// from interleaving and gives operators a parseable, time-ordered record.
-/// `msg` must be server-controlled text — callers never echo untrusted request
-/// data here, so a single line cannot be split by injected newlines.
-fn logAt(level: LogLevel, msg: []const u8) void {
-    var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-    const epoch: i64 = @intCast(ts.sec);
-    const lvl = level.tag();
-
-    var buf: [512]u8 = undefined;
-    const line = std.fmt.bufPrint(&buf, "[{d}] hangar {s}: {s}\n", .{ epoch, lvl, msg }) catch blk: {
-        // Message too long for the buffer — emit a truncated, still-leveled line.
-        var head_buf: [32]u8 = undefined;
-        const head = std.fmt.bufPrint(&head_buf, "[?] hangar {s}: ", .{lvl}) catch "[?] hangar log: ";
-        const room = buf.len - head.len - 1;
-        const clipped = if (msg.len > room) msg[0..room] else msg;
-        @memcpy(buf[0..head.len], head);
-        @memcpy(buf[head.len .. head.len + clipped.len], clipped);
-        buf[head.len + clipped.len] = '\n';
-        break :blk buf[0 .. head.len + clipped.len + 1];
-    };
-    _ = std.c.write(2, line.ptr, line.len);
-}
-
-/// Log an error-level line (operator action likely required).
-fn logErr(msg: []const u8) void {
-    logAt(.err, msg);
-}
-
-/// Log a `persist.save` failure including the underlying error name so an
-/// operator can tell apart a full disk (NoSpaceLeft), a permissions problem
-/// (AccessDenied), and a missing HOME (HomeNotFound) from the log alone.
-/// `context` is an optional prefix (e.g. "liveness: "); pass "" for none.
-fn logSaveErr(context: []const u8, e: anyerror) void {
-    var ebuf: [128]u8 = undefined;
-    logErr(std.fmt.bufPrint(&ebuf, "{s}persist.save failed: {s}", .{ context, @errorName(e) }) catch "persist.save failed");
-}
-
-/// Log a warn-level line (audit/security events such as rejected auth).
-fn logWarn(msg: []const u8) void {
-    logAt(.warn, msg);
-}
-
-/// Log a request-handler failure with the underlying error name and the
-/// sanitized request line. The WebSocket-proxy, download, and export handlers
-/// return a 500 to the client on failure; without this the daemon log stays
-/// silent, so an operator seeing "VNC proxy failed" in the browser has no way
-/// to tell a refused connection from a broken pipe or a missing VM. `context`
-/// is a short static label (e.g. "VNC proxy failed"); `req` is the raw request
-/// line, sanitized before logging. Format: `<context>: <ErrorName> [<reqline>]`.
-fn logReqErr(context: []const u8, e: anyerror, req: []const u8) void {
-    var rl_buf: [128]u8 = undefined;
-    var eb: [320]u8 = undefined;
-    logErr(std.fmt.bufPrint(&eb, "{s}: {s} [{s}]", .{ context, @errorName(e), requestLine(req, &rl_buf) }) catch context);
-}
-
-/// Copy a user-controlled VM name into `out`, replacing every non-printable
-/// byte with '?' so it cannot inject newlines into a log line. Returns the
-/// populated, bounded slice.
-fn sanitizeLogName(out: []u8, name: []const u8) []const u8 {
-    const n = @min(name.len, out.len);
-    for (name[0..n], 0..) |ch, i| {
-        out[i] = if (ch >= 0x20 and ch < 0x7f) ch else '?';
-    }
-    return out[0..n];
-}
-
-/// Log an info-level audit line for a destructive state transition (power,
-/// delete, snapshot revert). The VM name is user-controlled, so it is
-/// sanitized to prevent log-line injection. Format: `audit: <action> vm="<name>"`.
-fn logAudit(action: []const u8, vm_name: []const u8) void {
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    const safe = sanitizeLogName(&name_buf, vm_name);
-    var msg: [320]u8 = undefined;
-    logAt(.info, std.fmt.bufPrint(&msg, "audit: {s} vm=\"{s}\"", .{ action, safe }) catch action);
-}
-
-/// Log an error-level line for a failed destructive QMP/disk operation,
-/// including the underlying error name and the (sanitized) VM name. Handlers
-/// return a short token ("create err", "qmp err") to the browser; without this
-/// the daemon log stays silent, so an operator cannot tell a full disk
-/// (NoSpaceLeft) from a locked image or a missing `qemu-img` at 3 AM. `op` is a
-/// short static label (e.g. "snapshot take"). Format:
-/// `<op> failed: <ErrorName> vm="<name>"`.
-fn logOpErr(op: []const u8, e: anyerror, vm_name: []const u8) void {
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    const safe = sanitizeLogName(&name_buf, vm_name);
-    var msg: [320]u8 = undefined;
-    logErr(std.fmt.bufPrint(&msg, "{s} failed: {s} vm=\"{s}\"", .{ op, @errorName(e), safe }) catch op);
 }
 
 /// Copy the HTTP request line (method + path, up to the first CR/LF) into
