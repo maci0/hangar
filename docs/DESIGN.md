@@ -37,6 +37,26 @@
 `hangar-webui` and `vmrun` are clients of it. There is no native FLTK
 frontend and no `src/main.zig` — the FLTK GUI was removed.
 
+### web_server.zig decomposition
+
+`web_server.zig` is the router + VM CRUD/lifecycle core. Cohesive handler
+groups and leaf HTTP utilities live in their own modules that it imports
+(leaf helpers are aliased so call sites read unchanged):
+
+```
+  web_server.zig (router · dispatch · VM CRUD + lifecycle · renders · main)
+    │
+    ├─ HTTP leaf utils:  httpreq (req/route parse) · httpresp (status + writer)
+    │                    wlog (logging) · netutil (socket consts) · auth (key/host/WS gate)
+    └─ handler groups:   snapshots · migrate · disk · cdrom · guestagent
+                         streams (screenshot/download/upload/exportOva)
+                         wsproxy (vnc/spice/serial relays) · catalog · framebuffer
+```
+
+Uniform `POST /api/vms/<id>/<action>` routes dispatch via a comptime
+`post_routes` table; create/save form fields apply via `@field`-driven tables
+(`applyBoolField`/`applyEnumField`/`applyStrField`).
+
 ## Web UI Layout
 
 Dark theme (`#0e0f12` background, `#1b1d21` surface) with WS7-style
