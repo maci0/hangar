@@ -16,6 +16,7 @@ const snapshots = @import("snapshots.zig");
 const migrate = @import("migrate.zig");
 const disk = @import("disk.zig");
 const cdrom = @import("cdrom.zig");
+const guestagent = @import("guestagent.zig");
 const wlog = @import("wlog.zig");
 // Structured logging lives in wlog.zig; alias so call sites read unchanged.
 const LogLevel = wlog.LogLevel;
@@ -803,7 +804,7 @@ fn serveHtml(conn: c.fd_t) void {
     }
     if (parseVmIdxSuffix(req, "GET /api/vms/", "/guestinfo") != null) {
         var gi_buf: [640]u8 = undefined;
-        writeHttpResponse(conn, HTTP_OK, "application/json; charset=utf-8", handleGuestInfo(req, &gi_buf));
+        writeHttpResponse(conn, HTTP_OK, "application/json; charset=utf-8", guestagent.query(req, &gi_buf));
         return;
     }
     if (parseVmIdxSuffix(req, "POST /api/vms/", "/export") != null) {
@@ -2810,81 +2811,6 @@ fn handleReset(req: []const u8) ![]const u8 {
 /// unit-testable independent of the QEMU spawn.
 fn shouldAutostart(v: *const vm.VmConfig) bool {
     return v.host_autostart and v.hasDisk();
-}
-
-/// Reject a CD/ISO path that could inject `-drive` options (comma) or HMP/control
-/// bytes. Empty is allowed by callers that mean "eject".
-/// Extract non-loopback IPv4 addresses from a qemu-guest-agent
-/// `guest-network-get-interfaces` reply into `out` as a comma-separated list.
-/// Pure (no I/O) so it is unit-testable against a captured GA response.
-fn parseGuestIpv4s(json: []const u8, out: []u8) []const u8 {
-    var w: usize = 0;
-    var cur = json;
-    const key = "\"ip-address\":\"";
-    while (std.mem.indexOf(u8, cur, key)) |at| {
-        const after = cur[at + key.len ..];
-        const end = std.mem.indexOfScalar(u8, after, '"') orelse break;
-        const addr = after[0..end];
-        cur = after[end..];
-        // IPv4 only (has '.', no ':'); skip loopback.
-        if (std.mem.indexOfScalar(u8, addr, ':') != null) continue;
-        if (std.mem.indexOfScalar(u8, addr, '.') == null) continue;
-        if (std.mem.startsWith(u8, addr, "127.")) continue;
-        if (w != 0) {
-            if (w >= out.len) break;
-            out[w] = ',';
-            w += 1;
-        }
-        if (w + addr.len > out.len) break;
-        @memcpy(out[w .. w + addr.len], addr);
-        w += addr.len;
-    }
-    return out[0..w];
-}
-
-/// Query the guest's IPv4 addresses via the qemu-guest-agent socket and return
-/// them as `{"ips":"a,b"}`. Empty when the VM is stopped, the agent isn't
-/// running, or it doesn't answer within the timeout (best-effort, never hangs).
-fn handleGuestInfo(req: []const u8, out: []u8) []const u8 {
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var name_len: usize = 0;
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "GET /api/vms/") orelse return "{\"ips\":\"\"}";
-        if (idx >= appstate.vm_count) return "{\"ips\":\"\"}";
-        const v = &appstate.vms[idx];
-        if (!v.isAlive() or !v.guest_agent) return "{\"ips\":\"\"}";
-        const nm = v.getNameSlice();
-        if (nm.len == 0 or nm.len > name_buf.len) return "{\"ips\":\"\"}";
-        @memcpy(name_buf[0..nm.len], nm);
-        name_len = nm.len;
-    }
-
-    var sock_buf: [128]u8 = undefined;
-    const sock = std.fmt.bufPrint(&sock_buf, "/tmp/hangar-ga-{s}.sock", .{name_buf[0..name_len]}) catch return "{\"ips\":\"\"}";
-    const stream = usock.UnixStream.connect(sock) catch return "{\"ips\":\"\"}";
-    defer stream.close();
-    // Bound the read so a missing/unresponsive agent can't pin the thread.
-    const tv: c.timeval = .{ .sec = 2, .usec = 0 };
-    _ = c.setsockopt(stream.fd, SOL_SOCKET, SO_RCVTIMEO, @ptrCast(&tv), @sizeOf(c.timeval));
-    _ = stream.write("{\"execute\":\"guest-network-get-interfaces\"}\n") catch return "{\"ips\":\"\"}";
-    // The reply (newline-terminated QGA JSON) can span multiple reads on a
-    // multi-NIC guest; a single read() would truncate it and silently drop
-    // addresses. Accumulate until the terminating newline, buffer full, or the
-    // 2s read timeout fires.
-    var resp: [16384]u8 = undefined;
-    var total: usize = 0;
-    while (total < resp.len) {
-        const n = stream.read(resp[total..]) catch break;
-        if (n == 0) break;
-        total += n;
-        if (std.mem.indexOfScalar(u8, resp[0..total], '\n') != null) break;
-    }
-    if (total == 0) return "{\"ips\":\"\"}";
-    var ip_buf: [512]u8 = undefined;
-    const ips = parseGuestIpv4s(resp[0..total], &ip_buf);
-    return std.fmt.bufPrint(out, "{{\"ips\":\"{s}\"}}", .{ips}) catch "{\"ips\":\"\"}";
 }
 
 /// Capture the running guest's display and stream it back as PNG (QMP
@@ -6007,26 +5933,26 @@ test "handleDelete: idx out of range returns 'invalid idx'" {
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
-test "parseGuestIpv4s: extracts non-loopback IPv4s from a GA reply" {
+test "guestagent.parseIpv4s: extracts non-loopback IPv4s from a GA reply" {
     const sample =
         \\{"return":[{"name":"lo","ip-addresses":[{"ip-address-type":"ipv4","ip-address":"127.0.0.1","prefix":8}]},{"name":"eth0","ip-addresses":[{"ip-address-type":"ipv4","ip-address":"10.0.2.15","prefix":24},{"ip-address-type":"ipv6","ip-address":"fe80::1","prefix":64}]}]}
     ;
     var out: [256]u8 = undefined;
-    const ips = parseGuestIpv4s(sample, &out);
+    const ips = guestagent.parseIpv4s(sample, &out);
     try std.testing.expectEqualStrings("10.0.2.15", ips); // loopback + ipv6 excluded
 }
 
-test "parseGuestIpv4s: empty when no addresses" {
+test "guestagent.parseIpv4s: empty when no addresses" {
     var out: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("", parseGuestIpv4s("{\"return\":[]}", &out));
+    try std.testing.expectEqualStrings("", guestagent.parseIpv4s("{\"return\":[]}", &out));
 }
 
-test "parseGuestIpv4s: joins multiple IPv4s with commas" {
+test "guestagent.parseIpv4s: joins multiple IPv4s with commas" {
     const sample =
         \\[{"ip-address":"192.168.1.5"},{"ip-address":"10.1.1.2"}]
     ;
     var out: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("192.168.1.5,10.1.1.2", parseGuestIpv4s(sample, &out));
+    try std.testing.expectEqualStrings("192.168.1.5,10.1.1.2", guestagent.parseIpv4s(sample, &out));
 }
 
 test "cleanupVmTempFiles removes name-derived temp artifacts" {
