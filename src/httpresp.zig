@@ -35,6 +35,105 @@ pub fn jsonErr(buf: []u8, msg: []const u8) []const u8 {
     return std.fmt.bufPrint(buf, "{{\"error\":\"{s}\"}}", .{msg}) catch "{\"error\":\"internal\"}";
 }
 
+/// Result of `jsonEscape`: the escaped slice + whether output was truncated to
+/// fit the buffer (callers that must not emit broken JSON check this).
+pub const EscapeResult = struct {
+    escaped: []const u8,
+    truncated: bool,
+};
+
+/// Escape a string for safe inclusion in a JSON string value. Escapes `"` `\`
+/// `\n` `\r` `\t` and control chars (→ `\u00XX`). Writes into `buf`; sets
+/// `truncated` if `buf` was too small (output stops at the last whole escape).
+pub fn jsonEscape(buf: []u8, s: []const u8) EscapeResult {
+    if (s.len == 0) return .{ .escaped = "", .truncated = false };
+    var wi: usize = 0;
+    var truncated = false;
+    for (s) |ch| {
+        switch (ch) {
+            '"' => {
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = '"';
+                wi += 1;
+            },
+            '\\' => {
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = '\\';
+                wi += 1;
+            },
+            '\n' => {
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = 'n';
+                wi += 1;
+            },
+            '\r' => {
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = 'r';
+                wi += 1;
+            },
+            '\t' => {
+                if (wi + 2 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = 't';
+                wi += 1;
+            },
+            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
+                // Control character → \u00XX
+                if (wi + 6 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = '\\';
+                wi += 1;
+                buf[wi] = 'u';
+                wi += 1;
+                buf[wi] = '0';
+                wi += 1;
+                buf[wi] = '0';
+                wi += 1;
+                const hex = "0123456789abcdef";
+                buf[wi] = hex[ch >> 4];
+                wi += 1;
+                buf[wi] = hex[ch & 0x0F];
+                wi += 1;
+            },
+            else => {
+                if (wi + 1 > buf.len) {
+                    truncated = true;
+                    break;
+                }
+                buf[wi] = ch;
+                wi += 1;
+            },
+        }
+    }
+    return .{ .escaped = buf[0..wi], .truncated = truncated };
+}
+
 /// True if a handler status token denotes a server-side fault (→ HTTP 500)
 /// rather than a client mistake (→ 400). The central dispatch error mapper and
 /// the upload error reply both classify tokens through this one list.
@@ -144,4 +243,13 @@ pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []cons
 test "httpresp: jsonErr wraps the message" {
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("{\"error\":\"nope\"}", jsonErr(&buf, "nope"));
+}
+
+test "httpresp: jsonEscape escapes quotes/backslash/control, flags truncation" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("a\\\"b", jsonEscape(&buf, "a\"b").escaped);
+    try std.testing.expectEqualStrings("\\n\\t\\\\", jsonEscape(&buf, "\n\t\\").escaped);
+    try std.testing.expectEqualStrings("\\u0000", jsonEscape(&buf, "\x00").escaped);
+    var tiny: [1]u8 = undefined;
+    try std.testing.expect(jsonEscape(&tiny, "\"x").truncated);
 }

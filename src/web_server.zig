@@ -100,6 +100,8 @@ const jsonErr = httpresp.jsonErr;
 const writeHttpResponse = httpresp.writeHttpResponse;
 const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
 const isServerErrToken = httpresp.isServerErrToken;
+const EscapeResult = httpresp.EscapeResult;
+const jsonEscape = httpresp.jsonEscape;
 
 const DEFAULT_PORT: u16 = transport.DEFAULT_PORT; // KV_PORT default
 const CONFIG_RAW_MAX = 4 * 1024 * 1024;
@@ -2343,102 +2345,6 @@ fn bodyVal(body: []const u8, key: []const u8) []const u8 {
     return "";
 }
 
-/// Escape a string for safe inclusion in a JSON string value.
-/// Writes the escaped result into `buf` and returns the escaped slice.
-/// Escapes: \" \\ \n \r \t and control characters (→ \\u00XX).
-const EscapeResult = struct {
-    escaped: []const u8,
-    truncated: bool,
-};
-
-fn jsonEscape(buf: []u8, s: []const u8) EscapeResult {
-    if (s.len == 0) return .{ .escaped = "", .truncated = false };
-    var wi: usize = 0;
-    var truncated = false;
-    for (s) |ch| {
-        switch (ch) {
-            '"' => {
-                if (wi + 2 > buf.len) {
-                    truncated = true;
-                    break;
-                }
-                buf[wi] = '\\';
-                wi += 1;
-                buf[wi] = '"';
-                wi += 1;
-            },
-            '\\' => {
-                if (wi + 2 > buf.len) {
-                    truncated = true;
-                    break;
-                }
-                buf[wi] = '\\';
-                wi += 1;
-                buf[wi] = '\\';
-                wi += 1;
-            },
-            '\n' => {
-                if (wi + 2 > buf.len) {
-                    truncated = true;
-                    break;
-                }
-                buf[wi] = '\\';
-                wi += 1;
-                buf[wi] = 'n';
-                wi += 1;
-            },
-            '\r' => {
-                if (wi + 2 > buf.len) {
-                    truncated = true;
-                    break;
-                }
-                buf[wi] = '\\';
-                wi += 1;
-                buf[wi] = 'r';
-                wi += 1;
-            },
-            '\t' => {
-                if (wi + 2 > buf.len) {
-                    truncated = true;
-                    break;
-                }
-                buf[wi] = '\\';
-                wi += 1;
-                buf[wi] = 't';
-                wi += 1;
-            },
-            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
-                // Control character → \\u00XX
-                if (wi + 6 > buf.len) {
-                    truncated = true;
-                    break;
-                }
-                buf[wi] = '\\';
-                wi += 1;
-                buf[wi] = 'u';
-                wi += 1;
-                buf[wi] = '0';
-                wi += 1;
-                buf[wi] = '0';
-                wi += 1;
-                const hex = "0123456789abcdef";
-                buf[wi] = hex[ch >> 4];
-                wi += 1;
-                buf[wi] = hex[ch & 0x0F];
-                wi += 1;
-            },
-            else => {
-                if (wi + 1 > buf.len) {
-                    truncated = true;
-                    break;
-                }
-                buf[wi] = ch;
-                wi += 1;
-            },
-        }
-    }
-    return .{ .escaped = buf[0..wi], .truncated = truncated };
-}
 
 /// Wrapper around jsonEscape that logs truncation. Returns only the escaped slice
 /// so call sites remain concise: escapeJson(&esc, s, "field_name")
