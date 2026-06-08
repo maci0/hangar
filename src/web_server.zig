@@ -497,6 +497,28 @@ fn acceptLoop(fd: c.fd_t) void {
     }
 }
 
+/// Boolean VmConfig form fields whose key equals the field name and whose value
+/// is "1" (true) / else (false). Driven by @field so create + save share one
+/// definition (autoprotect is excluded — create also sets a has_* sentinel).
+const bool_form_fields = [_][]const u8{
+    "guest_tools",           "enable_3d",   "embed_display", "enable_serial",
+    "virtio_rng",            "favorite",    "guest_agent",   "tpm",
+    "secure_boot",           "hyperv_enlightenments", "hugepages", "ballooning",
+    "host_autostart",
+};
+
+/// Set a boolean VmConfig field from a form key/value via @field. Returns true if
+/// `key` named one of bool_form_fields. Shared by handleNewVm and handleSave.
+fn applyBoolField(v: *vm.VmConfig, key: []const u8, val: []const u8) bool {
+    inline for (bool_form_fields) |f| {
+        if (std.mem.eql(u8, key, f)) {
+            @field(v, f) = std.mem.eql(u8, val, "1");
+            return true;
+        }
+    }
+    return false;
+}
+
 /// A VM-scoped POST handler: takes the raw request, returns a status token.
 /// (These handlers catch their own errors and return a token, so the error set
 /// is effectively empty; the alias type widens it for the table.)
@@ -1972,7 +1994,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             cfg.setUsbDevice(val);
         }
         if (std.mem.eql(u8, key, "usb_policy")) cfg.usb_policy = vm.UsbPolicy.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.usb_policy.toIndex());
-        if (std.mem.eql(u8, key, "guest_tools")) cfg.guest_tools = std.mem.eql(u8, val, "1");
+        _ = applyBoolField(&cfg, key, val);
         if (std.mem.eql(u8, key, "autoprotect")) {
             cfg.autoprotect = std.mem.eql(u8, val, "1");
             has_autoprotect = true;
@@ -2001,7 +2023,6 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "notes")) cfg.setNotes(val);
         if (std.mem.eql(u8, key, "tags")) cfg.setTags(val);
         if (std.mem.eql(u8, key, "cloud_init")) cfg.setCloudInit(val);
-        if (std.mem.eql(u8, key, "enable_3d")) cfg.enable_3d = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "gpu_device")) cfg.gpu_device = vm.GpuDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.gpu_device.toIndex());
         if (std.mem.eql(u8, key, "display")) cfg.display = vm.DisplayType.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.display.toIndex());
         if (std.mem.eql(u8, key, "display_resolution")) cfg.display_resolution = vm.DisplayResolution.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.display_resolution.toIndex());
@@ -2013,7 +2034,6 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "enable_kvm")) {
             if (std.mem.eql(u8, val, "1")) cfg.accel = .auto else cfg.accel = .tcg;
         }
-        if (std.mem.eql(u8, key, "embed_display")) cfg.embed_display = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "vnc_port")) {
             const p = std.fmt.parseInt(u16, val, 10) catch cfg.vnc_port;
             if (vm.isValidDisplayPort(p)) {
@@ -2028,21 +2048,11 @@ fn handleNewVm(req: []const u8) ![]const u8 {
                 has_spice_port = true;
             }
         }
-        if (std.mem.eql(u8, key, "enable_serial")) cfg.enable_serial = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "virtio_rng")) cfg.virtio_rng = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "num_displays")) cfg.num_displays = @max(1, @min(vm.MAX_DISPLAYS, std.fmt.parseInt(u32, val, 10) catch cfg.num_displays));
-        if (std.mem.eql(u8, key, "favorite")) cfg.favorite = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "guest_agent")) cfg.guest_agent = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "watchdog")) cfg.watchdog = vm.WatchdogAction.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.watchdog.toIndex());
-        if (std.mem.eql(u8, key, "tpm")) cfg.tpm = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "secure_boot")) cfg.secure_boot = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "hyperv_enlightenments")) cfg.hyperv_enlightenments = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "hugepages")) cfg.hugepages = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "io_threads")) cfg.io_threads = std.fmt.parseInt(u32, val, 10) catch cfg.io_threads;
         if (std.mem.eql(u8, key, "disk_bps_throttle")) cfg.disk_bps_throttle = std.fmt.parseInt(u64, val, 10) catch cfg.disk_bps_throttle;
         if (std.mem.eql(u8, key, "disk_iops_throttle")) cfg.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch cfg.disk_iops_throttle;
-        if (std.mem.eql(u8, key, "ballooning")) cfg.ballooning = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "host_autostart")) cfg.host_autostart = std.mem.eql(u8, val, "1");
         // Extra NICs (4-8)
         // NICs 4-8 (mode + mac), comptime-unrolled over the slot number.
         inline for (4..vm.MAX_NICS + 1) |n| {
@@ -2483,7 +2493,7 @@ fn handleSave(req: []const u8) ![]const u8 {
             v.setUsbDevice(val);
         }
         if (std.mem.eql(u8, key, "usb_policy")) v.usb_policy = vm.UsbPolicy.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.usb_policy.toIndex());
-        if (std.mem.eql(u8, key, "guest_tools")) v.guest_tools = std.mem.eql(u8, val, "1");
+        _ = applyBoolField(v, key, val);
         if (std.mem.eql(u8, key, "autoprotect")) v.autoprotect = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "ap_interval")) v.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_interval_min));
         if (std.mem.eql(u8, key, "ap_max")) v.autoprotect_max = @max(1, @min(1000, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_max));
@@ -2509,7 +2519,6 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "notes")) v.setNotes(val);
         if (std.mem.eql(u8, key, "tags")) v.setTags(val);
         if (std.mem.eql(u8, key, "cloud_init")) v.setCloudInit(val);
-        if (std.mem.eql(u8, key, "enable_3d")) v.enable_3d = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "gpu_device")) v.gpu_device = vm.GpuDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.gpu_device.toIndex());
         if (std.mem.eql(u8, key, "display")) v.display = vm.DisplayType.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.display.toIndex());
         if (std.mem.eql(u8, key, "display_resolution")) v.display_resolution = vm.DisplayResolution.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.display_resolution.toIndex());
@@ -2521,7 +2530,6 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "enable_kvm")) {
             if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg;
         }
-        if (std.mem.eql(u8, key, "embed_display")) v.embed_display = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "vnc_port")) {
             const p = std.fmt.parseInt(u16, val, 10) catch v.vnc_port;
             if (vm.isValidDisplayPort(p)) v.vnc_port = p;
@@ -2530,21 +2538,11 @@ fn handleSave(req: []const u8) ![]const u8 {
             const p = std.fmt.parseInt(u16, val, 10) catch v.spice_port;
             if (vm.isValidDisplayPort(p)) v.spice_port = p;
         }
-        if (std.mem.eql(u8, key, "enable_serial")) v.enable_serial = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "virtio_rng")) v.virtio_rng = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(vm.MAX_DISPLAYS, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
-        if (std.mem.eql(u8, key, "favorite")) v.favorite = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "guest_agent")) v.guest_agent = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "watchdog")) v.watchdog = vm.WatchdogAction.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.watchdog.toIndex());
-        if (std.mem.eql(u8, key, "tpm")) v.tpm = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "secure_boot")) v.secure_boot = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "hyperv_enlightenments")) v.hyperv_enlightenments = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "hugepages")) v.hugepages = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "io_threads")) v.io_threads = std.fmt.parseInt(u32, val, 10) catch v.io_threads;
         if (std.mem.eql(u8, key, "disk_bps_throttle")) v.disk_bps_throttle = std.fmt.parseInt(u64, val, 10) catch v.disk_bps_throttle;
         if (std.mem.eql(u8, key, "disk_iops_throttle")) v.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch v.disk_iops_throttle;
-        if (std.mem.eql(u8, key, "ballooning")) v.ballooning = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "host_autostart")) v.host_autostart = std.mem.eql(u8, val, "1");
         // Extra NICs (4-8)
         // NICs 4-8 (mode + mac), comptime-unrolled over the slot number.
         inline for (4..vm.MAX_NICS + 1) |n| {
