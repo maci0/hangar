@@ -55,17 +55,23 @@ const transport = @import("transport.zig");
 extern fn time(t: ?*c_long) c_long;
 
 // HTTP status codes
-const HTTP_OK: u16 = 200;
-const HTTP_CREATED: u16 = 201;
-const HTTP_BAD_REQUEST: u16 = 400;
-const HTTP_UNAUTHORIZED: u16 = 401;
-const HTTP_FORBIDDEN: u16 = 403;
-const HTTP_NOT_FOUND: u16 = 404;
-const HTTP_METHOD_NOT_ALLOWED: u16 = 405;
-const HTTP_CONFLICT: u16 = 409;
-const HTTP_PAYLOAD_TOO_LARGE: u16 = 413;
-const HTTP_TOO_MANY_REQUESTS: u16 = 429;
-const HTTP_INTERNAL_ERROR: u16 = 500;
+const httpresp = @import("httpresp.zig");
+// HTTP status codes + response writers live in httpresp.zig; alias so the many
+// call sites below read unchanged.
+const HTTP_OK = httpresp.HTTP_OK;
+const HTTP_CREATED = httpresp.HTTP_CREATED;
+const HTTP_BAD_REQUEST = httpresp.HTTP_BAD_REQUEST;
+const HTTP_UNAUTHORIZED = httpresp.HTTP_UNAUTHORIZED;
+const HTTP_FORBIDDEN = httpresp.HTTP_FORBIDDEN;
+const HTTP_NOT_FOUND = httpresp.HTTP_NOT_FOUND;
+const HTTP_METHOD_NOT_ALLOWED = httpresp.HTTP_METHOD_NOT_ALLOWED;
+const HTTP_CONFLICT = httpresp.HTTP_CONFLICT;
+const HTTP_PAYLOAD_TOO_LARGE = httpresp.HTTP_PAYLOAD_TOO_LARGE;
+const HTTP_TOO_MANY_REQUESTS = httpresp.HTTP_TOO_MANY_REQUESTS;
+const HTTP_INTERNAL_ERROR = httpresp.HTTP_INTERNAL_ERROR;
+const writeAll = httpresp.writeAll;
+const jsonErr = httpresp.jsonErr;
+const writeHttpResponse = httpresp.writeHttpResponse;
 
 const API_KEY: []const u8 = transport.DEFAULT_API_KEY; // built-in X-API-Key default
 const DEFAULT_PORT: u16 = transport.DEFAULT_PORT; // KV_PORT default
@@ -313,23 +319,6 @@ fn checkAuth(req: []const u8) bool {
 /// client-controlled, so sanitizing here lets error logs carry route context
 /// (which VM / operation failed) without risking log-line injection.
 /// Write exactly `len` bytes to fd, retrying on short writes. Returns false on failure.
-fn writeAll(conn: c.fd_t, buf: [*]const u8, len: usize) bool {
-    var written: usize = 0;
-    while (written < len) {
-        const n = c.write(conn, buf + written, len - written);
-        if (n <= 0) return false;
-        written += @intCast(n);
-    }
-    return true;
-}
-
-/// Format an error message as a JSON object: {"error":"<msg>"}.
-/// Returns a slice of `buf`; buffer must be at least msg.len + 12 bytes
-/// (the `{"error":""}` wrapper). Falls back to a static string if it overflows.
-fn jsonErr(buf: []u8, msg: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "{{\"error\":\"{s}\"}}", .{msg}) catch "{\"error\":\"internal\"}";
-}
-
 /// True if `s` exactly equals any token in `set`.
 fn anyEql(s: []const u8, set: []const []const u8) bool {
     for (set) |t| {
@@ -368,67 +357,6 @@ fn isServerErrToken(response: []const u8) bool {
 /// via a CORS-permitted `X-API-Key` preflight, issue state-changing POSTs
 /// (delete/create/power) cross-origin. Omitting it makes the browser block all
 /// cross-origin reads and the preflight, closing that CSRF/exfiltration path.
-fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8) void {
-    const status_line: []const u8 = switch (status) {
-        HTTP_OK => "HTTP/1.1 200 OK\r\n",
-        HTTP_CREATED => "HTTP/1.1 201 Created\r\n",
-        HTTP_BAD_REQUEST => "HTTP/1.1 400 Bad Request\r\n",
-        HTTP_UNAUTHORIZED => "HTTP/1.1 401 Unauthorized\r\n",
-        HTTP_FORBIDDEN => "HTTP/1.1 403 Forbidden\r\n",
-        HTTP_NOT_FOUND => "HTTP/1.1 404 Not Found\r\n",
-        HTTP_METHOD_NOT_ALLOWED => "HTTP/1.1 405 Method Not Allowed\r\n",
-        HTTP_CONFLICT => "HTTP/1.1 409 Conflict\r\n",
-        HTTP_PAYLOAD_TOO_LARGE => "HTTP/1.1 413 Payload Too Large\r\n",
-        HTTP_TOO_MANY_REQUESTS => "HTTP/1.1 429 Too Many Requests\r\n",
-        HTTP_INTERNAL_ERROR => "HTTP/1.1 500 Internal Server Error\r\n",
-        else => "HTTP/1.1 500 Internal Server Error\r\n",
-    };
-    // Assemble the full header block in one buffer so the response costs two
-    // write() syscalls (headers + body) instead of ~11 small writes. The header
-    // set — status line, fixed security headers, content-type, content-length —
-    // is well under 1 KiB even with the CSP string.
-    var hbuf: [1024]u8 = undefined;
-    var hlen: usize = 0;
-    const append = struct {
-        fn add(b: []u8, n: *usize, s: []const u8) void {
-            if (n.* + s.len > b.len) return; // header set is bounded; never trips
-            @memcpy(b[n.*..][0..s.len], s);
-            n.* += s.len;
-        }
-    }.add;
-
-    append(&hbuf, &hlen, status_line);
-    append(&hbuf, &hlen, "X-Content-Type-Options: nosniff\r\n");
-    append(&hbuf, &hlen, "X-Frame-Options: DENY\r\n");
-    append(&hbuf, &hlen, "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'\r\n");
-    append(&hbuf, &hlen, "Content-Type: ");
-    append(&hbuf, &hlen, ct);
-    append(&hbuf, &hlen, "\r\nServer: hangar");
-    if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null or std.mem.indexOf(u8, ct, "image/svg+xml") != null) {
-        append(&hbuf, &hlen, "\r\nCache-Control: public, max-age=86400");
-    } else {
-        // Dynamic responses (API JSON, errors) carry auth-gated VM state — disk
-        // paths, MACs, notes. Forbid browser/proxy caching so they are never
-        // persisted to a shared-machine disk cache or replayed from history
-        // (CWE-525).
-        append(&hbuf, &hlen, "\r\nCache-Control: no-store");
-    }
-    if (status == HTTP_TOO_MANY_REQUESTS) {
-        // Rate-limit window is 1 second; tell clients/proxies when to retry.
-        append(&hbuf, &hlen, "\r\nRetry-After: 1");
-    }
-    if (status == HTTP_METHOD_NOT_ALLOWED) {
-        // RFC 9110: a 405 response must list the supported methods.
-        append(&hbuf, &hlen, "\r\nAllow: GET, POST, OPTIONS");
-    }
-    append(&hbuf, &hlen, "\r\nContent-Length: ");
-    var len_buf: [16]u8 = undefined;
-    append(&hbuf, &hlen, std.fmt.bufPrint(&len_buf, "{d}", .{body.len}) catch "0");
-    append(&hbuf, &hlen, "\r\nConnection: close\r\n\r\n");
-
-    if (!writeAll(conn, hbuf[0..hlen].ptr, hlen)) return;
-    _ = writeAll(conn, body.ptr, body.len); // best effort for body
-}
 
 /// Auth-gate a WebSocket route. On failure, logs the rejected `route` and
 /// writes a 401, returning false; returns true when the request is authorized.

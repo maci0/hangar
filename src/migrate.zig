@@ -14,11 +14,11 @@ const parseIdx = httpreq.parseIdx;
 const logOpErr = wlog.logOpErr;
 const logAudit = wlog.logAudit;
 
-// HTTP status codes (kept local to avoid importing web_server).
-const HTTP_OK: u16 = 200;
-const HTTP_NOT_FOUND: u16 = 404;
-const HTTP_CONFLICT: u16 = 409;
-const HTTP_INTERNAL_ERROR: u16 = 500;
+const httpresp = @import("httpresp.zig");
+const HTTP_OK = httpresp.HTTP_OK;
+const HTTP_NOT_FOUND = httpresp.HTTP_NOT_FOUND;
+const HTTP_CONFLICT = httpresp.HTTP_CONFLICT;
+const HTTP_INTERNAL_ERROR = httpresp.HTTP_INTERNAL_ERROR;
 
 /// A migration destination must be a `tcp:` URI free of `..`, control bytes, and
 /// JSON-breaking quotes/backslashes (it is echoed into a QMP command + a JSON
