@@ -2138,51 +2138,22 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "ballooning")) cfg.ballooning = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "host_autostart")) cfg.host_autostart = std.mem.eql(u8, val, "1");
         // Extra NICs (4-8)
-        if (std.mem.eql(u8, key, "nic4")) cfg.nics[3].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic4_mac")) {
-            if (vm.isValidMac(val)) cfg.setNicMacAny(3, val);
+        // NICs 4-8 (mode + mac), comptime-unrolled over the slot number.
+        inline for (4..vm.MAX_NICS + 1) |n| {
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}", .{n}))) cfg.nics[n - 1].mode = vm.NetworkMode.fromStr(val);
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}_mac", .{n}))) {
+                if (vm.isValidMac(val)) cfg.setNicMacAny(n - 1, val);
+            }
         }
-        if (std.mem.eql(u8, key, "nic5")) cfg.nics[4].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic5_mac")) {
-            if (vm.isValidMac(val)) cfg.setNicMacAny(4, val);
+        // Extra disks (path/size/format per slot), comptime-unrolled.
+        inline for (0..vm.MAX_EXTRA_DISKS) |i| {
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_path", .{i}))) {
+                if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+                cfg.setExtraDiskPath(i, val);
+            }
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_size", .{i}))) cfg.extra_disks[i].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_format", .{i}))) cfg.extra_disks[i].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[i].format.toIndex());
         }
-        if (std.mem.eql(u8, key, "nic6")) cfg.nics[5].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic6_mac")) {
-            if (vm.isValidMac(val)) cfg.setNicMacAny(5, val);
-        }
-        if (std.mem.eql(u8, key, "nic7")) cfg.nics[6].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic7_mac")) {
-            if (vm.isValidMac(val)) cfg.setNicMacAny(6, val);
-        }
-        if (std.mem.eql(u8, key, "nic8")) cfg.nics[7].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic8_mac")) {
-            if (vm.isValidMac(val)) cfg.setNicMacAny(7, val);
-        }
-        // Extra disks (4 slots)
-        if (std.mem.eql(u8, key, "extra0_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            cfg.setExtraDiskPath(0, val);
-        }
-        if (std.mem.eql(u8, key, "extra0_size")) cfg.extra_disks[0].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-        if (std.mem.eql(u8, key, "extra0_format")) cfg.extra_disks[0].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[0].format.toIndex());
-        if (std.mem.eql(u8, key, "extra1_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            cfg.setExtraDiskPath(1, val);
-        }
-        if (std.mem.eql(u8, key, "extra1_size")) cfg.extra_disks[1].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-        if (std.mem.eql(u8, key, "extra1_format")) cfg.extra_disks[1].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[1].format.toIndex());
-        if (std.mem.eql(u8, key, "extra2_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            cfg.setExtraDiskPath(2, val);
-        }
-        if (std.mem.eql(u8, key, "extra2_size")) cfg.extra_disks[2].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-        if (std.mem.eql(u8, key, "extra2_format")) cfg.extra_disks[2].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[2].format.toIndex());
-        if (std.mem.eql(u8, key, "extra3_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            cfg.setExtraDiskPath(3, val);
-        }
-        if (std.mem.eql(u8, key, "extra3_size")) cfg.extra_disks[3].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-        if (std.mem.eql(u8, key, "extra3_format")) cfg.extra_disks[3].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[3].format.toIndex());
     }
 
     // Apply defaults for fields not explicitly provided. Reading prefs/ports
@@ -2669,51 +2640,22 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "ballooning")) v.ballooning = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "host_autostart")) v.host_autostart = std.mem.eql(u8, val, "1");
         // Extra NICs (4-8)
-        if (std.mem.eql(u8, key, "nic4")) v.nics[3].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic4_mac")) {
-            if (vm.isValidMac(val)) v.setNicMacAny(3, val);
+        // NICs 4-8 (mode + mac), comptime-unrolled over the slot number.
+        inline for (4..vm.MAX_NICS + 1) |n| {
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}", .{n}))) v.nics[n - 1].mode = vm.NetworkMode.fromStr(val);
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}_mac", .{n}))) {
+                if (vm.isValidMac(val)) v.setNicMacAny(n - 1, val);
+            }
         }
-        if (std.mem.eql(u8, key, "nic5")) v.nics[4].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic5_mac")) {
-            if (vm.isValidMac(val)) v.setNicMacAny(4, val);
+        // Extra disks (path/size/format per slot), comptime-unrolled.
+        inline for (0..vm.MAX_EXTRA_DISKS) |i| {
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_path", .{i}))) {
+                if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+                v.setExtraDiskPath(i, val);
+            }
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_size", .{i}))) v.extra_disks[i].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
+            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_format", .{i}))) v.extra_disks[i].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[i].format.toIndex());
         }
-        if (std.mem.eql(u8, key, "nic6")) v.nics[5].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic6_mac")) {
-            if (vm.isValidMac(val)) v.setNicMacAny(5, val);
-        }
-        if (std.mem.eql(u8, key, "nic7")) v.nics[6].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic7_mac")) {
-            if (vm.isValidMac(val)) v.setNicMacAny(6, val);
-        }
-        if (std.mem.eql(u8, key, "nic8")) v.nics[7].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic8_mac")) {
-            if (vm.isValidMac(val)) v.setNicMacAny(7, val);
-        }
-        // Extra disks (4 slots)
-        if (std.mem.eql(u8, key, "extra0_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            v.setExtraDiskPath(0, val);
-        }
-        if (std.mem.eql(u8, key, "extra0_size")) v.extra_disks[0].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-        if (std.mem.eql(u8, key, "extra0_format")) v.extra_disks[0].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[0].format.toIndex());
-        if (std.mem.eql(u8, key, "extra1_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            v.setExtraDiskPath(1, val);
-        }
-        if (std.mem.eql(u8, key, "extra1_size")) v.extra_disks[1].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-        if (std.mem.eql(u8, key, "extra1_format")) v.extra_disks[1].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[1].format.toIndex());
-        if (std.mem.eql(u8, key, "extra2_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            v.setExtraDiskPath(2, val);
-        }
-        if (std.mem.eql(u8, key, "extra2_size")) v.extra_disks[2].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-        if (std.mem.eql(u8, key, "extra2_format")) v.extra_disks[2].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[2].format.toIndex());
-        if (std.mem.eql(u8, key, "extra3_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            v.setExtraDiskPath(3, val);
-        }
-        if (std.mem.eql(u8, key, "extra3_size")) v.extra_disks[3].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-        if (std.mem.eql(u8, key, "extra3_format")) v.extra_disks[3].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[3].format.toIndex());
     }
     // Settings edits change disk paths, NIC modes, and display ports — data
     // modifications an operator must be able to reconstruct after the fact. Every
