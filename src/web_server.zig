@@ -14,6 +14,7 @@ const framebuffer = @import("framebuffer.zig");
 const httpreq = @import("httpreq.zig");
 const snapshots = @import("snapshots.zig");
 const migrate = @import("migrate.zig");
+const disk = @import("disk.zig");
 const wlog = @import("wlog.zig");
 // Structured logging lives in wlog.zig; alias so call sites read unchanged.
 const LogLevel = wlog.LogLevel;
@@ -517,8 +518,8 @@ const post_routes = [_]struct { suffix: []const u8, handler: ApiHandler }{
     .{ .suffix = "/shutdown", .handler = handleShutdown },
     .{ .suffix = "/reset", .handler = handleReset },
     .{ .suffix = "/cad", .handler = handleCad },
-    .{ .suffix = "/disk/resize", .handler = handleResizeDisk },
-    .{ .suffix = "/disk/compact", .handler = handleCompactDisk },
+    .{ .suffix = "/disk/resize", .handler = disk.resize },
+    .{ .suffix = "/disk/compact", .handler = disk.compact },
     .{ .suffix = "/cdrom/eject", .handler = handleCdromEject },
     .{ .suffix = "/cdrom", .handler = handleCdromChange },
     .{ .suffix = "/snapshots/revert", .handler = snapshots.revert },
@@ -716,7 +717,7 @@ fn serveHtml(conn: c.fd_t) void {
     }
     if (parseVmIdxSuffix(req, "GET /api/vms/", "/diskinfo") != null) {
         var di_buf: [160]u8 = undefined;
-        const body = handleDiskInfo(req, &di_buf);
+        const body = disk.info(req, &di_buf);
         // The body is already a JSON object; pick a status that matches it rather
         // than always 200 (an error body served as 200 is misleading to clients).
         const di_status: u16 = if (!std.mem.startsWith(u8, body, "{\"error\""))
@@ -2996,26 +2997,6 @@ fn handleGuestInfo(req: []const u8, out: []u8) []const u8 {
     return std.fmt.bufPrint(out, "{{\"ips\":\"{s}\"}}", .{ips}) catch "{\"ips\":\"\"}";
 }
 
-/// Report a VM's primary-disk virtual + actual (on-disk allocated) byte sizes
-/// via `qemu-img info`. Captures the disk path under the lock, runs qemu-img with
-/// it released. Returns a JSON object into `out`.
-fn handleDiskInfo(req: []const u8, out: []u8) []const u8 {
-    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var disk_len: usize = 0;
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "GET /api/vms/") orelse return "{\"error\":\"invalid\"}";
-        if (idx >= appstate.vm_count) return "{\"error\":\"invalid idx\"}";
-        const dp = appstate.vms[idx].getDiskPathSlice();
-        if (dp.len == 0 or dp.len >= disk_buf.len) return "{\"error\":\"no disk\"}";
-        @memcpy(disk_buf[0..dp.len], dp);
-        disk_len = dp.len;
-    }
-    const info = qemu.diskInfo(disk_buf[0..disk_len], std.heap.page_allocator) orelse return "{\"error\":\"unavailable\"}";
-    return std.fmt.bufPrint(out, "{{\"virtual_bytes\":{d},\"actual_bytes\":{d}}}", .{ info.virtual_bytes, info.actual_bytes }) catch "{\"error\":\"render\"}";
-}
-
 /// Capture the running guest's display and stream it back as PNG (QMP
 /// screendump). Only meaningful for a running VM; a stopped VM gets 409.
 fn handleScreenshot(conn: c.fd_t, req: []const u8) void {
@@ -3102,102 +3083,6 @@ fn handleScreenshot(conn: c.fd_t, req: []const u8) void {
         if (!writeAll(conn, &sbuf, @intCast(n))) return;
     }
     logAudit("screenshot", name_buf[0..name_len]);
-}
-
-/// Grow a VM's primary disk image (qemu-img resize). Stopped VMs only (resizing
-/// a live qcow2 risks corruption), grow-only (shrinking a qcow2 truncates guest
-/// data). Validates + copies the disk path under the lock, runs qemu-img with the
-/// lock released, then records the new size.
-/// Compact a VM's primary disk (qemu-img convert in place). Stopped VMs only
-/// (the image is rewritten). Reclaims qcow2 space freed inside the guest; virtual
-/// size is unchanged.
-fn handleCompactDisk(req: []const u8) ![]const u8 {
-    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var disk_len: usize = 0;
-    var name_len: usize = 0;
-    var fmt: vm.DiskFormat = .qcow2;
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-        if (idx >= appstate.vm_count) return "invalid idx";
-        const v = &appstate.vms[idx];
-        if (!v.hasDisk()) return "no disk";
-        if (v.isAlive()) return "vm running";
-        const dp = v.getDiskPathSlice();
-        if (dp.len == 0 or dp.len >= disk_buf.len) return "compact err";
-        @memcpy(disk_buf[0..dp.len], dp);
-        disk_len = dp.len;
-        const nm = v.getNameSlice();
-        @memcpy(name_buf[0..nm.len], nm);
-        name_len = nm.len;
-        fmt = v.disk_format;
-    }
-    qemu.compactDiskImage(disk_buf[0..disk_len], fmt, std.heap.page_allocator) catch |e| {
-        logOpErr("disk compact", e, name_buf[0..name_len]);
-        return "compact err";
-    };
-    logAudit("disk compact", name_buf[0..name_len]);
-    return "ok";
-}
-
-fn handleResizeDisk(req: []const u8) ![]const u8 {
-    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var disk_len: usize = 0;
-    var name_len: usize = 0;
-    var idx_saved: usize = 0;
-    var new_gb: u32 = 0;
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-        if (idx >= appstate.vm_count) return "invalid idx";
-        const v = &appstate.vms[idx];
-        if (!v.hasDisk()) return "no disk";
-        if (v.isAlive()) return "vm running";
-        const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
-        const body = req[body_start + 4 ..];
-        var size_str: []const u8 = "";
-        var pairs = std.mem.splitScalar(u8, body, '&');
-        while (pairs.next()) |pair| {
-            var kv = std.mem.splitScalar(u8, pair, '=');
-            const key = kv.next() orelse continue;
-            const val = kv.next() orelse continue;
-            if (std.mem.eql(u8, key, "size")) size_str = val;
-        }
-        const parsed = std.fmt.parseInt(u32, size_str, 10) catch return "bad size";
-        new_gb = vm.clampDiskSize(parsed);
-        if (new_gb <= v.disk_size_gb) return "shrink not allowed"; // grow only
-        const dp = v.getDiskPathSlice();
-        if (dp.len == 0 or dp.len >= disk_buf.len) return "resize err";
-        @memcpy(disk_buf[0..dp.len], dp);
-        disk_len = dp.len;
-        const nm = v.getNameSlice();
-        @memcpy(name_buf[0..nm.len], nm);
-        name_len = nm.len;
-        idx_saved = idx;
-    }
-
-    qemu.resizeDiskImage(disk_buf[0..disk_len], new_gb, std.heap.page_allocator) catch |e| {
-        logOpErr("disk resize", e, name_buf[0..name_len]);
-        return "resize err";
-    };
-
-    // Record the new size, re-validating the VM didn't move/disappear while
-    // unlocked. If it did, the image is already grown — report success.
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    if (idx_saved < appstate.vm_count and std.mem.eql(u8, appstate.vms[idx_saved].getNameSlice(), name_buf[0..name_len])) {
-        appstate.vms[idx_saved].disk_size_gb = new_gb;
-        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-            logSaveErr("handleResizeDisk: ", e);
-            return "save failed";
-        };
-    }
-    logAudit("disk resize", name_buf[0..name_len]);
-    return "ok";
 }
 
 fn handleImport(req: []const u8) ![]const u8 {
