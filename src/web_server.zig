@@ -541,6 +541,27 @@ fn applyEnumField(v: *vm.VmConfig, key: []const u8, val: []const u8) bool {
     return false;
 }
 
+/// Free-text VmConfig form fields applied through a (bounds-checked) setter
+/// method. The setter is invoked by name via @field on the type — no validation
+/// here, so only setters that safely accept arbitrary text belong in this table.
+const str_form_fields = [_]struct { key: []const u8, setter: []const u8 }{
+    .{ .key = "portfw", .setter = "setPortForwards" },
+    .{ .key = "notes", .setter = "setNotes" },
+    .{ .key = "tags", .setter = "setTags" },
+    .{ .key = "cloud_init", .setter = "setCloudInit" },
+};
+
+/// Apply a free-text field by calling its setter via @field. Returns true if matched.
+fn applyStrField(v: *vm.VmConfig, key: []const u8, val: []const u8) bool {
+    inline for (str_form_fields) |f| {
+        if (std.mem.eql(u8, key, f.key)) {
+            @field(vm.VmConfig, f.setter)(v, val);
+            return true;
+        }
+    }
+    return false;
+}
+
 /// A VM-scoped POST handler: takes the raw request, returns a status token.
 /// (These handlers catch their own errors and return a token, so the error set
 /// is effectively empty; the alias type widens it for the table.)
@@ -2038,10 +2059,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "nic3_mac")) {
             if (vm.isValidMac(val)) cfg.setNic3Mac(val);
         }
-        if (std.mem.eql(u8, key, "portfw")) cfg.setPortForwards(val);
-        if (std.mem.eql(u8, key, "notes")) cfg.setNotes(val);
-        if (std.mem.eql(u8, key, "tags")) cfg.setTags(val);
-        if (std.mem.eql(u8, key, "cloud_init")) cfg.setCloudInit(val);
+        _ = applyStrField(&cfg, key, val);
         if (std.mem.eql(u8, key, "accel")) cfg.accel = form_parsers.parseAccel(val);
         if (std.mem.eql(u8, key, "enable_kvm")) {
             if (std.mem.eql(u8, val, "1")) cfg.accel = .auto else cfg.accel = .tcg;
@@ -2523,10 +2541,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "nic3_mac")) {
             if (vm.isValidMac(val)) v.setNic3Mac(val);
         }
-        if (std.mem.eql(u8, key, "portfw")) v.setPortForwards(val);
-        if (std.mem.eql(u8, key, "notes")) v.setNotes(val);
-        if (std.mem.eql(u8, key, "tags")) v.setTags(val);
-        if (std.mem.eql(u8, key, "cloud_init")) v.setCloudInit(val);
+        _ = applyStrField(v, key, val);
         if (std.mem.eql(u8, key, "accel")) v.accel = form_parsers.parseAccel(val);
         if (std.mem.eql(u8, key, "enable_kvm")) {
             if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg;
