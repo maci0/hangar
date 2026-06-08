@@ -15,6 +15,7 @@ const httpreq = @import("httpreq.zig");
 const snapshots = @import("snapshots.zig");
 const migrate = @import("migrate.zig");
 const disk = @import("disk.zig");
+const cdrom = @import("cdrom.zig");
 const wlog = @import("wlog.zig");
 // Structured logging lives in wlog.zig; alias so call sites read unchanged.
 const LogLevel = wlog.LogLevel;
@@ -520,8 +521,8 @@ const post_routes = [_]struct { suffix: []const u8, handler: ApiHandler }{
     .{ .suffix = "/cad", .handler = handleCad },
     .{ .suffix = "/disk/resize", .handler = disk.resize },
     .{ .suffix = "/disk/compact", .handler = disk.compact },
-    .{ .suffix = "/cdrom/eject", .handler = handleCdromEject },
-    .{ .suffix = "/cdrom", .handler = handleCdromChange },
+    .{ .suffix = "/cdrom/eject", .handler = cdrom.eject },
+    .{ .suffix = "/cdrom", .handler = cdrom.change },
     .{ .suffix = "/snapshots/revert", .handler = snapshots.revert },
     .{ .suffix = "/snapshots/delete", .handler = snapshots.delete },
     .{ .suffix = "/snapshots", .handler = snapshots.take },
@@ -2800,130 +2801,6 @@ fn shouldAutostart(v: *const vm.VmConfig) bool {
 
 /// Reject a CD/ISO path that could inject `-drive` options (comma) or HMP/control
 /// bytes. Empty is allowed by callers that mean "eject".
-fn isSafeCdPath(p: []const u8) bool {
-    if (std.mem.indexOf(u8, p, "..") != null) return false;
-    for (p) |ch| {
-        if (ch == ',' or ch < 0x20 or ch == 0x7f) return false;
-    }
-    return true;
-}
-
-/// Change the mounted CD/ISO. A running VM swaps media live via QMP; a stopped VM
-/// just records the new iso_path (mounted on next boot). Empty path on a running
-/// VM is handled by handleCdromEject instead.
-fn handleCdromChange(req: []const u8) ![]const u8 {
-    var decode_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var name_len: usize = 0;
-    var idx_saved: usize = 0;
-    var was_alive = false;
-    var decoded: []const u8 = "";
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-        if (idx >= appstate.vm_count) return "invalid idx";
-        const v = &appstate.vms[idx];
-        const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
-        const body = req[body_start + 4 ..];
-        var path: []const u8 = "";
-        var pairs = std.mem.splitScalar(u8, body, '&');
-        while (pairs.next()) |pair| {
-            var kv = std.mem.splitScalar(u8, pair, '=');
-            const key = kv.next() orelse continue;
-            const val = kv.next() orelse continue;
-            if (std.mem.eql(u8, key, "path")) path = val;
-        }
-        if (path.len == 0) return "no path";
-        decoded = urlencode.urlDecode(&decode_buf, path);
-        if (decoded.len == 0 or !isSafeCdPath(decoded)) return "bad path";
-        was_alive = v.isAlive();
-        const nm = v.getNameSlice();
-        if (nm.len > name_buf.len) return "change err";
-        @memcpy(name_buf[0..nm.len], nm);
-        name_len = nm.len;
-        idx_saved = idx;
-        if (was_alive and !qmp.isPathSafeName(nm)) return "change err";
-    }
-
-    if (was_alive) {
-        var client = qmp.QmpClient{};
-        var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse return "change err";
-        client.connect(sock) catch |e| {
-            logOpErr("cdrom change", e, name_buf[0..name_len]);
-            return "change err";
-        };
-        defer client.disconnect();
-        client.changeCdrom(decoded) catch |e| {
-            logOpErr("cdrom change", e, name_buf[0..name_len]);
-            return "change err";
-        };
-    } else {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        if (idx_saved < appstate.vm_count and std.mem.eql(u8, appstate.vms[idx_saved].getNameSlice(), name_buf[0..name_len])) {
-            appstate.vms[idx_saved].setIsoPath(decoded);
-            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-                logSaveErr("handleCdromChange: ", e);
-                return "save failed";
-            };
-        }
-    }
-    logAudit("cdrom change", name_buf[0..name_len]);
-    return "ok";
-}
-
-/// Eject the mounted CD/ISO. Running VM ejects live via QMP; stopped VM clears
-/// its iso_path.
-fn handleCdromEject(req: []const u8) ![]const u8 {
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var name_len: usize = 0;
-    var idx_saved: usize = 0;
-    var was_alive = false;
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-        if (idx >= appstate.vm_count) return "invalid idx";
-        const v = &appstate.vms[idx];
-        was_alive = v.isAlive();
-        const nm = v.getNameSlice();
-        if (nm.len > name_buf.len) return "eject err";
-        @memcpy(name_buf[0..nm.len], nm);
-        name_len = nm.len;
-        idx_saved = idx;
-        if (was_alive and !qmp.isPathSafeName(nm)) return "eject err";
-    }
-
-    if (was_alive) {
-        var client = qmp.QmpClient{};
-        var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse return "eject err";
-        client.connect(sock) catch |e| {
-            logOpErr("cdrom eject", e, name_buf[0..name_len]);
-            return "eject err";
-        };
-        defer client.disconnect();
-        client.ejectCdrom() catch |e| {
-            logOpErr("cdrom eject", e, name_buf[0..name_len]);
-            return "eject err";
-        };
-    } else {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        if (idx_saved < appstate.vm_count and std.mem.eql(u8, appstate.vms[idx_saved].getNameSlice(), name_buf[0..name_len])) {
-            appstate.vms[idx_saved].clearIsoPath();
-            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-                logSaveErr("handleCdromEject: ", e);
-                return "save failed";
-            };
-        }
-    }
-    logAudit("cdrom eject", name_buf[0..name_len]);
-    return "ok";
-}
-
 /// Extract non-loopback IPv4 addresses from a qemu-guest-agent
 /// `guest-network-get-interfaces` reply into `out` as a comma-separated list.
 /// Pure (no I/O) so it is unit-testable against a captured GA response.
