@@ -6,6 +6,10 @@ const std = @import("std");
 const c = std.c;
 const vm = @import("vm.zig");
 const qmp = @import("qmp.zig");
+const qemu = @import("qemu.zig");
+const ovf = @import("ovf.zig");
+const appio = @import("appio.zig");
+const urlencode = @import("urlencode.zig");
 const appstate = @import("appstate.zig");
 const persist = @import("persist.zig");
 const httpreq = @import("httpreq.zig");
@@ -418,6 +422,248 @@ pub fn upload(conn: c.fd_t, initial: []const u8) void {
     }
     logAudit("disk upload", name_buf[0..name_len]);
     writeHttpResponse(conn, HTTP_OK, "text/plain", "ok");
+}
+
+/// Byte size of a file, or 0 if it can't be stat'd. Fills the OVF descriptor's
+/// `ovf:size` from the converted VMDKs (strict importers validate it).
+fn fileByteSize(path: []const u8) u64 {
+    var pbuf: [vm.MAX_PATH + 1]u8 = undefined;
+    if (path.len >= pbuf.len) return 0;
+    @memcpy(pbuf[0..path.len], path);
+    pbuf[path.len] = 0;
+    const fd = c.open(@ptrCast(&pbuf), .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return 0;
+    defer _ = c.close(fd);
+    const end = c.lseek(fd, 0, 2); // SEEK_END
+    if (end < 0) return 0;
+    return @intCast(end);
+}
+
+/// Create an OVF+VMDK export, tar+gzip it, and stream the OVA as a download.
+/// Captures all needed VM fields under the lock, then runs the (minutes-long)
+/// qemu-img conversions / tar / stream with it released.
+pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
+    var disk1_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var disk1_path_len: usize = 0;
+    var disk2_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var disk2_path_len: usize = 0;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var name_len: usize = 0;
+    var export_name_buf: [vm.MAX_NAME]u8 = undefined;
+    var export_name_len: usize = 0;
+    var disk_format: vm.DiskFormat = undefined;
+    var disk2_format: vm.DiskFormat = undefined;
+    var disk_size_gb: u32 = 0;
+    var disk2_size_gb: u32 = 0;
+    var has_disk2: bool = false;
+    var has_network: bool = false;
+    var cpu_cores: u32 = 0;
+    var memory_mb: u32 = 0;
+    var idx: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        idx = parseIdx(req, "POST /api/vms/") orelse {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
+            return;
+        };
+        if (idx >= appstate.vm_count) {
+            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
+            return;
+        }
+        const v = &appstate.vms[idx];
+
+        const body: []const u8 = if (std.mem.indexOf(u8, req, "\r\n\r\n")) |bs| req[bs + 4 ..] else "";
+        var raw_name: []const u8 = "";
+        var pairs = std.mem.splitScalar(u8, body, '&');
+        while (pairs.next()) |pair| {
+            var kv = std.mem.splitScalar(u8, pair, '=');
+            const key = kv.next() orelse continue;
+            const val = kv.next() orelse continue;
+            if (std.mem.eql(u8, key, "name")) raw_name = val;
+        }
+        var name_decode_buf: [vm.MAX_NAME]u8 = undefined;
+        const export_name: []const u8 = if (raw_name.len > 0) blk: {
+            const decoded = urlencode.urlDecode(&name_decode_buf, raw_name);
+            if (!vm.isValidVmName(decoded) or std.mem.indexOf(u8, decoded, "..") != null) {
+                writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
+                return;
+            }
+            break :blk decoded;
+        } else v.getNameSlice();
+        if (export_name.len > export_name_buf.len) {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
+            return;
+        }
+        @memcpy(export_name_buf[0..export_name.len], export_name);
+        export_name_len = export_name.len;
+
+        const d1 = v.getDiskPathSlice();
+        if (d1.len > disk1_path_buf.len - 1) {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"bad disk path\"}");
+            return;
+        }
+        @memcpy(disk1_path_buf[0..d1.len], d1);
+        disk1_path_len = d1.len;
+
+        has_disk2 = v.hasDisk2();
+        if (has_disk2) {
+            const d2 = v.getDisk2PathSlice();
+            if (d2.len > disk2_path_buf.len - 1) {
+                writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"bad disk2 path\"}");
+                return;
+            }
+            @memcpy(disk2_path_buf[0..d2.len], d2);
+            disk2_path_len = d2.len;
+        }
+
+        const nm = v.getNameSlice();
+        if (nm.len <= name_buf.len) {
+            @memcpy(name_buf[0..nm.len], nm);
+            name_len = nm.len;
+        }
+
+        disk_format = v.disk_format;
+        disk2_format = v.disk2_format;
+        disk_size_gb = v.disk_size_gb;
+        disk2_size_gb = v.disk2_size_gb;
+        has_network = v.nics[0].mode != .none;
+        cpu_cores = v.cpu_cores;
+        memory_mb = v.memory_mb;
+    }
+
+    const disk1_path: []const u8 = disk1_path_buf[0..disk1_path_len];
+    const disk2_path: []const u8 = disk2_path_buf[0..disk2_path_len];
+    const export_name: []const u8 = export_name_buf[0..export_name_len];
+
+    // Per-export unique directory to avoid races with concurrent exports.
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    var dir_buf: [128]u8 = undefined;
+    const dir_path = std.fmt.bufPrintZ(&dir_buf, "/tmp/ovf_export.{d}.{d}.{d}", .{ idx, std.c.getpid(), ts.nsec }) catch return;
+    _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
+        logErr("export: deleteTree (pre-create) failed");
+    };
+    std.Io.Dir.cwd().createDirPath(appio.io(), dir_path) catch {
+        logErr("failed to create export dir");
+        return error.ExportFailed;
+    };
+    var dir_cleanup: bool = true;
+    defer if (dir_cleanup) {
+        _ = std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
+            logErr("export: deleteTree cleanup failed");
+        };
+    };
+
+    var tar_buf: [160]u8 = undefined;
+    const tar_path = std.fmt.bufPrintZ(&tar_buf, "/tmp/ovf_export.{d}.{d}.{d}.tar.gz", .{ idx, std.c.getpid(), ts.nsec }) catch return;
+    var tar_cleanup: bool = false;
+    defer if (tar_cleanup) {
+        _ = c.unlink(tar_path);
+    };
+
+    const vmdk_name = "disk1.vmdk";
+    var path_buf: [vm.MAX_PATH]u8 = undefined;
+    const vmdk_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, vmdk_name }) catch return;
+
+    qemu.convertDiskImage(disk1_path, disk_format, vmdk_path, .vmdk, std.heap.page_allocator) catch {
+        logErr("export: disk1 conversion failed");
+        return error.ExportFailed;
+    };
+    const vmdk1_size = fileByteSize(vmdk_path);
+
+    var disk2_href: []const u8 = "";
+    var disk2_cap: u64 = 0;
+    var disk2_size: u64 = 0;
+    if (has_disk2) {
+        disk2_href = "disk2.vmdk";
+        disk2_cap = @as(u64, disk2_size_gb) * 1024 * 1024 * 1024;
+        const d2_path = std.fmt.bufPrint(&path_buf, "{s}/disk2.vmdk", .{dir_path}) catch return;
+        qemu.convertDiskImage(disk2_path, disk2_format, d2_path, .vmdk, std.heap.page_allocator) catch {
+            logErr("export: disk2 conversion failed");
+            return error.ExportFailed;
+        };
+        disk2_size = fileByteSize(d2_path);
+    }
+
+    const disk_cap = @as(u64, disk_size_gb) * 1024 * 1024 * 1024;
+    const spec = ovf.Spec{
+        .name = export_name,
+        .cpu_cores = cpu_cores,
+        .memory_mb = memory_mb,
+        .disk_capacity_bytes = disk_cap,
+        .vmdk_href = vmdk_name,
+        .vmdk_size_bytes = vmdk1_size,
+        .has_network = has_network,
+        .disk2_href = disk2_href,
+        .disk2_capacity_bytes = disk2_cap,
+        .disk2_size_bytes = disk2_size,
+    };
+    var ovf_buf: [ovf.max_descriptor_len]u8 = undefined;
+    const xml = ovf.buildDescriptor(spec, &ovf_buf) catch {
+        logErr("export: OVF descriptor build failed");
+        return error.ExportFailed;
+    };
+
+    const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, export_name });
+    defer std.heap.page_allocator.free(ovf_path);
+    std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch {
+        logErr("export: failed to write OVF file");
+        return error.ExportFailed;
+    };
+
+    {
+        const tar_argv = [_][]const u8{ "tar", "-czf", tar_path, "-C", dir_path, "." };
+        qemu.runWait(&tar_argv, std.heap.page_allocator, null) catch {
+            logErr("export: tar+gzip failed");
+            return error.ExportFailed;
+        };
+        tar_cleanup = true;
+    }
+
+    const tar_fd = c.open(tar_path, .{ .ACCMODE = .RDONLY });
+    if (tar_fd < 0) return;
+    defer _ = c.close(tar_fd);
+
+    const seek_end = c.lseek(tar_fd, 0, 2);
+    if (seek_end < 0) return;
+    const file_size: u64 = @intCast(seek_end);
+    if (c.lseek(tar_fd, 0, 0) < 0) return;
+
+    const raw_filename = std.fmt.bufPrint(&path_buf, "{s}.ova", .{export_name}) catch "export.ova";
+    var fname_buf2: [256]u8 = undefined;
+    const filename = sanitizeHeaderValue(&fname_buf2, raw_filename);
+    var cd_header: [512]u8 = undefined;
+    const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{filename}) catch return;
+
+    var hdr_buf: [1024]u8 = undefined;
+    const headers = std.fmt.bufPrint(
+        &hdr_buf,
+        "HTTP/1.1 200 OK\r\n" ++
+            "Content-Type: application/octet-stream\r\n" ++
+            "X-Content-Type-Options: nosniff\r\n" ++
+            "Cache-Control: no-store\r\n" ++
+            "Content-Disposition: {s}\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n\r\n",
+        .{ cd, file_size },
+    ) catch return;
+    if (!writeAll(conn, headers.ptr, headers.len)) return error.BrokenPipe;
+
+    var buf: [65536]u8 = undefined;
+    while (true) {
+        const n = c.read(tar_fd, &buf, buf.len);
+        if (n <= 0) break;
+        if (!writeAll(conn, &buf, @intCast(n))) return error.BrokenPipe;
+    }
+
+    std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
+        logErr("export cleanup deleteTree failed");
+    };
+    _ = c.unlink(tar_path);
+    dir_cleanup = false;
+    tar_cleanup = false;
+    logAudit("export", name_buf[0..name_len]);
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
