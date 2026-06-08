@@ -74,6 +74,7 @@ const writeAll = httpresp.writeAll;
 const jsonErr = httpresp.jsonErr;
 const writeHttpResponse = httpresp.writeHttpResponse;
 const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
+const isServerErrToken = httpresp.isServerErrToken;
 
 const API_KEY: []const u8 = transport.DEFAULT_API_KEY; // built-in X-API-Key default
 const DEFAULT_PORT: u16 = transport.DEFAULT_PORT; // KV_PORT default
@@ -334,20 +335,6 @@ fn anyEql(s: []const u8, set: []const []const u8) bool {
 /// rather than by substring: a substring test for "err" misclassifies legitimate
 /// `text/plain` data — e.g. a snapshot named `fix-error` in the snapshot list —
 /// as a server error.
-fn isServerErrToken(response: []const u8) bool {
-    if (std.mem.startsWith(u8, response, "start err")) return true; // incl. "start err: <detail>"
-    const tokens = [_][]const u8{
-        "apply err", "bd err",    "cad err",  "cancel err",
-        "create err", "delete err", "linkerr",  "migrate err",
-        "nameerr",   "path err",  "qmp err",  "sock err",
-        "write err", "change err", "eject err", "resize err",
-        "upload err", "save failed", "compact err",
-    };
-    for (tokens) |t| {
-        if (std.mem.eql(u8, response, t)) return true;
-    }
-    return false;
-}
 
 /// Write an HTTP response with status code, content type, security headers, and
 /// body. The shared security headers are emitted inline below.
@@ -599,7 +586,7 @@ fn serveHtml(conn: c.fd_t) void {
             writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
             return;
         }
-        handleUploadDiskStreaming(conn, req);
+        streams.upload(conn, req);
         return;
     }
 
@@ -2804,234 +2791,6 @@ fn handleCad(req: []const u8) ![]const u8 {
     };
     logAudit("ctrl-alt-del", nb[0..nl]);
     return "ok";
-}
-
-/// Reply to an upload with the unified JSON error mapping (client mistakes 400,
-/// server faults 500) and close.
-fn uploadErr(conn: c.fd_t, token: []const u8) void {
-    const s: u16 = if (std.mem.eql(u8, token, "upload err") or std.mem.eql(u8, token, "write err") or std.mem.eql(u8, token, "save failed") or isServerErrToken(token))
-        HTTP_INTERNAL_ERROR
-    else
-        HTTP_BAD_REQUEST;
-    var jb: [256]u8 = undefined;
-    writeHttpResponse(conn, s, "application/json; charset=utf-8", jsonErr(&jb, token));
-}
-
-/// Extract the filename from a multipart part's Content-Disposition headers.
-/// Handles quoted (`filename="x"`) and unquoted (`filename=x`) forms. Returns ""
-/// when absent. The returned slice points into `part_headers`.
-fn parseUploadFilename(part_headers: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, part_headers, "filename=\"")) |fn_start| {
-        const fn_val = part_headers[fn_start + "filename=\"".len ..];
-        if (std.mem.indexOfScalar(u8, fn_val, '"')) |fn_end| {
-            if (fn_end > 0) return fn_val[0..fn_end];
-        }
-    } else if (std.mem.indexOf(u8, part_headers, "filename=")) |fn_start| {
-        const fn_val = part_headers[fn_start + "filename=".len ..];
-        var fn_end: usize = fn_val.len;
-        if (std.mem.indexOfScalar(u8, fn_val, ';')) |semi| fn_end = semi;
-        if (std.mem.indexOfScalar(u8, fn_val, '\r')) |cr| {
-            if (cr < fn_end) fn_end = cr;
-        }
-        if (std.mem.indexOfScalar(u8, fn_val, '\n')) |nl| {
-            if (nl < fn_end) fn_end = nl;
-        }
-        if (fn_end > 0) return std.mem.trimEnd(u8, fn_val[0..fn_end], " \t");
-    }
-    return "";
-}
-
-/// Accept a multipart/form-data disk2 upload, STREAMING the file body straight
-/// to disk. `initial` is the first read of the request (HTTP headers + multipart
-/// part headers + the start of the file bytes — all small enough to be in the
-/// first 64 KB); the remaining file bytes are read directly from `conn`, so the
-/// upload is not capped at the request-buffer size. Writes its own response.
-fn handleUploadDiskStreaming(conn: c.fd_t, initial: []const u8) void {
-    const idx = parseIdx(initial, "POST /api/vms/") orelse return uploadErr(conn, "invalid");
-    const content_length = parseContentLength(initial) orelse return uploadErr(conn, "no content-length");
-    const hdr_end = std.mem.indexOf(u8, initial, "\r\n\r\n") orelse return uploadErr(conn, "no body");
-    const headers = initial[0..hdr_end];
-    const ct_val = findHeader(headers, "content-type: ") orelse return uploadErr(conn, "no boundary");
-    const ct_prefix = "multipart/form-data; boundary=";
-    if (ct_val.len < ct_prefix.len or !std.ascii.eqlIgnoreCase(ct_val[0..ct_prefix.len], ct_prefix)) return uploadErr(conn, "no boundary");
-    const boundary = ct_val[ct_prefix.len..];
-    if (boundary.len == 0 or boundary.len > 200) return uploadErr(conn, "no boundary");
-
-    // Honor Expect: 100-continue. curl/libcurl withhold a large body until the
-    // server sends "100 Continue"; without this the body never arrives in the
-    // first read and the parse below fails. (Browsers' fetch doesn't use Expect.)
-    if (findHeader(headers, "expect: ")) |exv| {
-        if (std.ascii.indexOfIgnoreCase(exv, "100-continue") != null) {
-            const cont = "HTTP/1.1 100 Continue\r\n\r\n";
-            _ = writeAll(conn, cont, cont.len);
-        }
-    }
-
-    const body_off = hdr_end + 4;
-    var bd_buf: [256]u8 = undefined;
-    const full_bd = std.fmt.bufPrint(&bd_buf, "--{s}", .{boundary}) catch return uploadErr(conn, "bd err");
-
-    // Accumulate the multipart prefix (opening boundary + part headers + start of
-    // the file bytes) into pbuf, reading from the socket as needed — it may not
-    // all be in `initial` (e.g. after a 100-continue, the body arrives only now).
-    var pbuf: [65536 + 256]u8 = undefined;
-    var plen: usize = 0;
-    var body_seen: usize = 0; // multipart-body bytes consumed so far
-    {
-        const seed = initial[body_off..];
-        const sn = @min(seed.len, pbuf.len);
-        @memcpy(pbuf[0..sn], seed[0..sn]);
-        plen = sn;
-        body_seen = sn;
-    }
-    var data_pos: usize = 0; // offset in pbuf where the file bytes begin
-    var filename: []const u8 = "";
-    while (true) {
-        const pb = pbuf[0..plen];
-        if (std.mem.indexOf(u8, pb, full_bd)) |fb| {
-            var p = fb + full_bd.len;
-            if (p < pb.len and pb[p] == '\r') p += 1;
-            if (p < pb.len and pb[p] == '\n') p += 1;
-            if (std.mem.indexOf(u8, pb[p..], "\r\n\r\n")) |phe| {
-                data_pos = p + phe + 4;
-                filename = parseUploadFilename(pb[p..][0..phe]);
-                break;
-            } else if (std.mem.indexOf(u8, pb[p..], "\n\n")) |phe2| {
-                data_pos = p + phe2 + 2;
-                filename = parseUploadFilename(pb[p..][0..phe2]);
-                break;
-            }
-        }
-        if (plen >= pbuf.len or body_seen >= content_length) return uploadErr(conn, "no headers end");
-        const want = @min(pbuf.len - plen, content_length - body_seen);
-        const n = c.read(conn, pbuf[plen..].ptr, want);
-        if (n <= 0) return uploadErr(conn, "upload err");
-        plen += @intCast(n);
-        body_seen += @intCast(n);
-    }
-
-    // Reject path traversal + QEMU -drive comma/control injection (CWE-88).
-    if (filename.len == 0) return uploadErr(conn, "no filename");
-    for (filename) |ch| {
-        if (ch == '/' or ch == '\\' or ch == ',' or ch < 0x20) return uploadErr(conn, "bad filename");
-    }
-    if (std.mem.indexOf(u8, filename, "..") != null) return uploadErr(conn, "bad filename");
-
-    // Compute dest path under the lock (same as the old buffered handler), copy
-    // it + the VM name out, then release the lock before the streamed write.
-    var dest_buf: [vm.MAX_PATH]u8 = undefined;
-    var dest: []const u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var name_len: usize = 0;
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        if (idx >= appstate.vm_count) return uploadErr(conn, "invalid idx");
-        const v = &appstate.vms[idx];
-        const primary = v.getDiskPathSlice();
-        if (primary.len == 0) return uploadErr(conn, "no primary disk");
-        const ext = std.fs.path.extension(primary);
-        const dir = std.fs.path.dirname(primary) orelse ".";
-        const basename = std.fs.path.basename(primary);
-        dest = (if (filename.len > 0)
-            std.fmt.bufPrint(&dest_buf, "{s}/{s}", .{ dir, filename })
-        else if (ext.len > 0 and ext.len < 16)
-            std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2{s}", .{ dir, basename[0 .. basename.len - ext.len], ext })
-        else
-            std.fmt.bufPrint(&dest_buf, "{s}/{s}_disk2", .{ dir, basename })) catch return uploadErr(conn, "path err");
-        if (std.mem.eql(u8, dest, primary)) return uploadErr(conn, "name collides with primary disk");
-        const nm = v.getNameSlice();
-        name_len = @min(nm.len, name_buf.len);
-        @memcpy(name_buf[0..name_len], nm[0..name_len]);
-    }
-
-    // Open the destination, then stream the file body to it with the lock
-    // released (it can be many GB).
-    var dest_z: [vm.MAX_PATH + 1]u8 = undefined;
-    if (dest.len >= dest_z.len) return uploadErr(conn, "path err");
-    @memcpy(dest_z[0..dest.len], dest);
-    dest_z[dest.len] = 0;
-    const out_fd = std.c.open(@ptrCast(&dest_z), .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
-    if (out_fd < 0) {
-        logOpErr("disk upload", error.AccessDenied, name_buf[0..name_len]);
-        return uploadErr(conn, "write err");
-    }
-
-    // Hold-back delimiter stream: write file bytes but never the closing boundary
-    // (`\r\n--<boundary>`), which may straddle two reads — retain the last
-    // (marker-1) bytes until the next read confirms they aren't the boundary.
-    var marker_buf: [256]u8 = undefined;
-    const marker = std.fmt.bufPrint(&marker_buf, "\r\n--{s}", .{boundary}) catch {
-        _ = std.c.close(out_fd);
-        return uploadErr(conn, "bd err");
-    };
-    const keep = marker.len - 1;
-    var work: [65536 + 256]u8 = undefined;
-    var hold: [256]u8 = undefined;
-    var hold_len: usize = 0;
-    var first = true;
-    var done = false;
-
-    while (true) {
-        @memcpy(work[0..hold_len], hold[0..hold_len]);
-        var total = hold_len;
-        if (first) {
-            // The file bytes already accumulated in pbuf (after the part headers).
-            const chunk = pbuf[data_pos..plen];
-            @memcpy(work[hold_len..][0..chunk.len], chunk);
-            total += chunk.len;
-            first = false;
-        } else {
-            if (body_seen >= content_length) break; // body exhausted, no closing boundary
-            const want = @min(work.len - hold_len, content_length - body_seen);
-            const n = c.read(conn, work[hold_len..].ptr, want);
-            if (n <= 0) break;
-            total += @intCast(n);
-            body_seen += @intCast(n);
-        }
-        if (std.mem.indexOf(u8, work[0..total], marker)) |mi| {
-            if (!writeAll(out_fd, &work, mi)) {
-                _ = std.c.close(out_fd);
-                _ = c.unlink(@ptrCast(&dest_z));
-                return uploadErr(conn, "write err");
-            }
-            done = true;
-            break;
-        }
-        if (total > keep) {
-            if (!writeAll(out_fd, &work, total - keep)) {
-                _ = std.c.close(out_fd);
-                _ = c.unlink(@ptrCast(&dest_z));
-                return uploadErr(conn, "write err");
-            }
-            hold_len = keep;
-            @memcpy(hold[0..keep], work[total - keep .. total]);
-        } else {
-            hold_len = total;
-            @memcpy(hold[0..total], work[0..total]);
-        }
-    }
-    _ = std.c.close(out_fd);
-    if (!done) {
-        // Never saw the closing boundary — truncated/malformed upload.
-        _ = c.unlink(@ptrCast(&dest_z));
-        return uploadErr(conn, "upload err");
-    }
-
-    // Record the new disk2 path, re-validating the VM under the lock.
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        if (idx < appstate.vm_count and std.mem.eql(u8, appstate.vms[idx].getNameSlice(), name_buf[0..name_len])) {
-            appstate.vms[idx].setDisk2Path(dest);
-            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-                logSaveErr("handleUploadDiskStreaming: ", e);
-                return uploadErr(conn, "save failed");
-            };
-        }
-    }
-    logAudit("disk upload", name_buf[0..name_len]);
-    writeHttpResponse(conn, HTTP_OK, "text/plain", "ok");
 }
 
 /// Byte size of a file, or 0 if it can't be stat'd. Used to fill the OVF
@@ -6415,7 +6174,7 @@ test "fuzz: handleUploadDisk multipart parser never panics on structured input" 
             if (quoted) "\"" else "",
             bnd[0..bnd_len],
         }) catch {
-            handleUploadDiskStreaming(-1, "POST /api/vms/0/disk2 HTTP/1.1\r\n\r\n");
+            streams.upload(-1, "POST /api/vms/0/disk2 HTTP/1.1\r\n\r\n");
             continue;
         };
 
@@ -6426,7 +6185,7 @@ test "fuzz: handleUploadDisk multipart parser never panics on structured input" 
             msg[rnd.uintLessThan(usize, msg.len)] = rnd.int(u8);
         }
 
-        handleUploadDiskStreaming(-1, msg);
+        streams.upload(-1, msg);
     }
 
     // The parser path must not have mutated shared state (no write reached:

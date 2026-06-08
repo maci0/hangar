@@ -35,6 +35,24 @@ pub fn jsonErr(buf: []u8, msg: []const u8) []const u8 {
     return std.fmt.bufPrint(buf, "{{\"error\":\"{s}\"}}", .{msg}) catch "{\"error\":\"internal\"}";
 }
 
+/// True if a handler status token denotes a server-side fault (→ HTTP 500)
+/// rather than a client mistake (→ 400). The central dispatch error mapper and
+/// the upload error reply both classify tokens through this one list.
+pub fn isServerErrToken(response: []const u8) bool {
+    if (std.mem.startsWith(u8, response, "start err")) return true; // incl. "start err: <detail>"
+    const tokens = [_][]const u8{
+        "apply err",  "bd err",     "cad err",   "cancel err",
+        "create err", "delete err", "linkerr",   "migrate err",
+        "nameerr",    "path err",   "qmp err",   "sock err",
+        "write err",  "change err", "eject err", "resize err",
+        "upload err", "save failed", "compact err",
+    };
+    for (tokens) |t| {
+        if (std.mem.eql(u8, response, t)) return true;
+    }
+    return false;
+}
+
 /// Sanitize a value for safe inclusion in a response header: drop CR/LF (header
 /// injection) and turn `"` into `'` (so it can't break a quoted parameter like
 /// Content-Disposition filename="..."). Returns a slice of `buf`.
