@@ -447,7 +447,7 @@ e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
 	for(const f of fields){if(f.s!==undefined){current={id:secId(f.s),title:f.s,fields:[]};sections.push(current);continue;}if(!current){current={id:'general',title:'General',fields:[]};sections.push(current);}current.fields.push(f);}
 	if(!sections.some(function(s){return s.id===settingsCategory;}))settingsCategory=sections.length?sections[0].id:'basic';
 	function renderField(f){const[lbl,id,type,val]=f;const attrs=f.length>4?f[4]:'';var out='<div class="field-group" data-field-id="'+id+'">';if(lbl)out+=`<label for="${id}">${lbl}</label>`;
-	if(type==='disk2actions'){out+='<span class="inline-actions"><button type="button" class="btn" data-action="resizeDisk">Resize Primary Disk</button><button type="button" class="btn" data-action="disk2upload">Upload Disk 2</button><button type="button" class="btn" data-action="disk2download">Download Disk 2</button></span>';}
+	if(type==='disk2actions'){out+='<span class="inline-actions"><button type="button" class="btn" data-action="resizeDisk">Resize Primary Disk</button><button type="button" class="btn" data-action="compactDisk">Compact Primary Disk</button><button type="button" class="btn" data-action="disk2upload">Upload Disk 2</button><button type="button" class="btn" data-action="disk2download">Download Disk 2</button></span>';}
 	if(type==='cdactions'){out+='<span class="inline-actions"><button type="button" class="btn" data-action="changeCd">Change CD/ISO</button><button type="button" class="btn" data-action="ejectCd">Eject CD/ISO</button></span>';}
 	else if(type==='select'&&selects[id]){out+=`<select id="${id}" data-field="${id}">`;for(const[ov,ol]of selects[id])out+=`<option value="${ov}"${ov===String(val)?' selected':''}>${ol}</option>`;out+='</select>';}
 	else if(type==='textarea'){out+=`<textarea id="${id}" data-field="${id}" rows="6" spellcheck="false" ${attrs}>${escHtml(String(val))}</textarea>`;}
@@ -494,6 +494,7 @@ async function loadDiskInfo(idx){const el=document.getElementById('diskUsageVal'
 async function takeScreenshot(){if(sel===null)return;try{const r=await fetch('/api/vms/'+sel+'/screenshot',{headers:{'X-API-Key':API_KEY}});if(!r.ok){let t='';try{const j=await r.json();t=j.error||'';}catch(e){}showToast('Screenshot failed: '+(t||('HTTP '+r.status)),'error');return;}const b=await r.blob();const u=URL.createObjectURL(b);window.open(u,'_blank');setTimeout(function(){URL.revokeObjectURL(u);},10000);}catch(e){showToast('Screenshot failed','error');}}
 async function changeCd(){if(sel===null)return;const cur=(document.getElementById('e_iso_path')||{}).value||vms[sel].iso_path||'';const p=await showPromptDialog('Path to the CD/ISO image to mount:',cur);if(p===null||p==='')return;const r=await apiPost('/api/vms/'+sel+'/cdrom','path='+encodeURIComponent(p));if(r){await refresh();setStatus('CD/ISO changed.'+(vms[sel].status==='running'?'':' Mounts on next boot.'));}}
 async function ejectCd(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/cdrom/eject','');if(r){await refresh();setStatus('CD/ISO ejected.');}}
+async function compactDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before compacting its disk','warn');return;}if(!await showConfirmDialog('Compact the primary disk? This rewrites the image to reclaim freed space (VM must stay off during the operation).'))return;const r=await apiPost('/api/vms/'+sel+'/disk/compact','');if(r){await refresh();setStatus('Primary disk compacted.');}}
 async function resizeDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before resizing its disk','warn');return;}const cur=parseInt(v.disk,10)||0;const n=await showPromptDialog('New primary disk size in GB (grow only; current '+cur+' GB):',String(cur));if(n===null)return;const gb=parseInt(n,10);if(!Number.isFinite(gb)||gb<=cur){showToast('Enter a size larger than '+cur+' GB','error');return;}const r=await apiPost('/api/vms/'+sel+'/disk/resize','size='+gb);if(r){await refresh();setStatus('Primary disk resized to '+gb+' GB.');}}
 // ── VNet Editor ──
 let vnetsData=[],vnetIdx=-1;
@@ -1153,6 +1154,7 @@ var actionHandlers={
 	 disk2upload:function(){uploadDisk2();},
 	 disk2download:function(){downloadDisk2();},
 	 resizeDisk:function(){resizeDisk();},
+	 compactDisk:function(){compactDisk();},
 	 changeCd:function(){changeCd();},
 	 ejectCd:function(){ejectCd();},
 	 takeScreenshot:function(){takeScreenshot();},

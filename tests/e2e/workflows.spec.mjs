@@ -196,6 +196,18 @@ test('RTC clock policy saves and round-trips (localtime for Windows guests)', as
     expect(detail.rtc).toBe(1);
 });
 
+test('disk compact rewrites the image and keeps it valid (stopped VM)', async ({ page }) => {
+    const idx = await createVm(page, 'wf-compact');
+    const before = (await list(page))[idx].disk; // virtual GB
+    const r = await api(page, 'POST', `/api/vms/${idx}/disk/compact`, '');
+    expect(r.ok, `compact: ${r.status} ${r.text}`).toBe(true);
+    // Virtual size is unchanged; diskinfo must still parse the rewritten image.
+    const di = await page.evaluate(async (i) => (await (await fetch(`/api/vms/${i}/diskinfo`)).json()), idx);
+    expect(di.error, `diskinfo after compact: ${di.error}`).toBeUndefined();
+    expect(di.virtual_bytes).toBeGreaterThan(0);
+    expect((await list(page))[await indexOf(page, 'wf-compact')].disk).toBe(before);
+});
+
 test('write-action without the API key is rejected (401)', async ({ page }) => {
     const idx = await createVm(page, 'wf-auth');
     const r = await page.evaluate(async (i) => {

@@ -1196,6 +1196,33 @@ pub fn resizeDiskImage(path: []const u8, new_size_gb: u32, allocator: std.mem.Al
     runWait(&args, allocator, null) catch return QemuError.DiskImageCreationFailed;
 }
 
+/// Compact a disk image in place: `qemu-img convert` to a sibling temp file
+/// (which drops unreferenced clusters, reclaiming space freed inside the guest),
+/// then atomically rename over the original. Same format in and out. The VM must
+/// be stopped (the image is rewritten). Virtual size is unchanged; only the
+/// on-disk allocated size shrinks. Leaves the original intact on any failure.
+pub fn compactDiskImage(path: []const u8, format: vm.DiskFormat, allocator: std.mem.Allocator) !void {
+    var tmp_buf: [vm.MAX_PATH + 16]u8 = undefined;
+    const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}.compacting", .{path}) catch return QemuError.DiskImageCreationFailed;
+    const fmt = std.mem.span(format.toStr());
+    const args = [_][]const u8{ "qemu-img", "convert", "-f", fmt, "-O", fmt, path, tmp };
+    runWait(&args, allocator, null) catch {
+        _ = std.c.unlink(tmp.ptr);
+        return QemuError.DiskImageCreationFailed;
+    };
+    var src_z: [vm.MAX_PATH + 1]u8 = undefined;
+    if (path.len >= src_z.len) {
+        _ = std.c.unlink(tmp.ptr);
+        return QemuError.DiskImageCreationFailed;
+    }
+    @memcpy(src_z[0..path.len], path);
+    src_z[path.len] = 0;
+    if (std.c.rename(tmp.ptr, @ptrCast(&src_z)) != 0) {
+        _ = std.c.unlink(tmp.ptr);
+        return QemuError.DiskImageCreationFailed;
+    }
+}
+
 /// Convert a disk image to a different format using `qemu-img convert`.
 /// Used by OVF export to produce a VMDK stream-optimized image suitable
 /// for ESXi / VMware Workstation import.
@@ -2512,6 +2539,20 @@ test "qemu: tpm does not emit an unbootable bare tpmdev" {
     defer talloc.free(s);
     try expect(!has(s, "-tpmdev"));
     try expect(!has(s, "tpm-tis"));
+}
+
+test "qemu: compactDiskImage rewrites the image in place, preserving validity" {
+    const alloc = std.heap.page_allocator;
+    runWait(&.{ "qemu-img", "--version" }, alloc, null) catch return; // skip if absent
+    const path = "/tmp/hangar-compact-test.qcow2";
+    defer std.Io.Dir.cwd().deleteFile(appio.io(), path) catch {};
+    createDiskImage(path, 1, .qcow2, alloc) catch return;
+    try compactDiskImage(path, .qcow2, alloc);
+    // The image still exists, is valid (qemu-img info parses it), and the temp is gone.
+    var out: [4096]u8 = undefined;
+    const n = runCapture(&.{ "qemu-img", "info", "--output=json", path }, &out, alloc) catch 0;
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.Io.Dir.cwd().access(appio.io(), "/tmp/hangar-compact-test.qcow2.compacting", .{}) == error.FileNotFound);
 }
 
 test "qemu: -rtc emits the configured clock base" {

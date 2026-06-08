@@ -90,6 +90,7 @@ which still require auth: `disk2/download`, `framebuffer`, `screenshot`,
 | GET | `/api/vms/<id>/screenshot` | Running guest display as PNG (QMP screendump) |
 | GET | `/api/vms/<id>/guestinfo` | Guest IPv4 addresses (qemu-guest-agent) |
 | POST | `/api/vms/<id>/disk/resize` | Grow the primary disk (stopped, grow-only) |
+| POST | `/api/vms/<id>/disk/compact` | Compact the primary disk (stopped; reclaim qcow2 space) |
 | POST | `/api/vms/<id>/cdrom` · `/api/vms/<id>/cdrom/eject` | Change / eject CD-ISO (live via QMP, or stopped) |
 | GET | `/api/vms/<id>/disk2/download` · POST `/api/vms/<id>/disk2` | Download / upload (streamed) secondary disk |
 | POST | `/api/vms/<id>/export` | Export OVF (streamed tarball) |
@@ -122,6 +123,7 @@ mode, or `KV_API_KEY` if set). A VM is addressed by name or list index.
 | `clone` / `linked-clone` `<name\|idx>` | Clone (full / qcow2 backing) |
 | `rename <name\|idx> <new-name>` | Rename |
 | `resize <name\|idx> <new-gb>` | Grow the primary disk (stopped VM) |
+| `compact <name\|idx>` | Compact the primary disk (stopped VM) |
 | `cd <name\|idx> <iso-path>` · `eject <name\|idx>` | Change / eject the CD/ISO |
 | `set <name\|idx> <field> <value>` | Set one config field (mem, cpu, cpu_sockets, network, notes, tags, boot_order, vnc_port, spice_port) |
 | `delete <name\|idx>` | Delete |

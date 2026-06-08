@@ -460,7 +460,7 @@ fn isServerErrToken(response: []const u8) bool {
         "create err", "delete err", "linkerr",  "migrate err",
         "nameerr",   "path err",  "qmp err",  "sock err",
         "write err", "change err", "eject err", "resize err",
-        "upload err", "save failed",
+        "upload err", "save failed", "compact err",
     };
     for (tokens) |t| {
         if (std.mem.eql(u8, response, t)) return true;
@@ -956,6 +956,9 @@ fn serveHtml(conn: c.fd_t) void {
         // Snapshots: longer suffixes before the bare `/snapshots`.
     } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/disk/resize") != null) {
         response = try handleResizeDisk(req);
+        content_type = "text/plain";
+    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/disk/compact") != null) {
+        response = try handleCompactDisk(req);
         content_type = "text/plain";
     } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/cdrom/eject") != null) {
         response = try handleCdromEject(req);
@@ -3345,6 +3348,40 @@ fn handleScreenshot(conn: c.fd_t, req: []const u8) void {
 /// a live qcow2 risks corruption), grow-only (shrinking a qcow2 truncates guest
 /// data). Validates + copies the disk path under the lock, runs qemu-img with the
 /// lock released, then records the new size.
+/// Compact a VM's primary disk (qemu-img convert in place). Stopped VMs only
+/// (the image is rewritten). Reclaims qcow2 space freed inside the guest; virtual
+/// size is unchanged.
+fn handleCompactDisk(req: []const u8) ![]const u8 {
+    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var disk_len: usize = 0;
+    var name_len: usize = 0;
+    var fmt: vm.DiskFormat = .qcow2;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
+        if (idx >= appstate.vm_count) return "invalid idx";
+        const v = &appstate.vms[idx];
+        if (!v.hasDisk()) return "no disk";
+        if (v.isAlive()) return "vm running";
+        const dp = v.getDiskPathSlice();
+        if (dp.len == 0 or dp.len >= disk_buf.len) return "compact err";
+        @memcpy(disk_buf[0..dp.len], dp);
+        disk_len = dp.len;
+        const nm = v.getNameSlice();
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
+        fmt = v.disk_format;
+    }
+    qemu.compactDiskImage(disk_buf[0..disk_len], fmt, std.heap.page_allocator) catch |e| {
+        logOpErr("disk compact", e, name_buf[0..name_len]);
+        return "compact err";
+    };
+    logAudit("disk compact", name_buf[0..name_len]);
+    return "ok";
+}
+
 fn handleResizeDisk(req: []const u8) ![]const u8 {
     var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
     var name_buf: [vm.MAX_NAME]u8 = undefined;
