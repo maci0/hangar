@@ -93,6 +93,15 @@ expect_contains "list shows renamed"       'runVM2'        "$VMRUN" "$URL" list
 # set a field (partial update), then confirm it took via info.
 expect_contains "set mem"                  'ok'            "$VMRUN" "$URL" set runVM2 mem 2048
 expect_contains "info reflects set mem"    'Memory:  2048 MB' "$VMRUN" "$URL" info runVM2
+# disk maintenance + introspection (stopped VM).
+expect_contains "set rtc localtime"        'ok'            "$VMRUN" "$URL" set runVM2 rtc 1
+expect_contains "compact disk"             'ok'            "$VMRUN" "$URL" compact runVM2
+expect_contains "diskinfo virtual size"    'virtual_bytes' "$VMRUN" "$URL" diskinfo runVM2
+expect_contains "guestinfo (no agent)"     'ips'           "$VMRUN" "$URL" guestinfo runVM2
+# quickstart from a catalog template, then confirm it was created.
+expect_contains "quickstart ubuntu"        'ok'            "$VMRUN" "$URL" quickstart ubuntu2404
+expect_contains "list shows quickstart VM" 'Ubuntu 24.04'  "$VMRUN" "$URL" list
+expect_fails    "quickstart unknown slug"                  "$VMRUN" "$URL" quickstart nope
 
 echo ""
 echo "=== vmrun over Unix socket ==="

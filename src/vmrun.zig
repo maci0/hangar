@@ -58,6 +58,9 @@ const usage =
     \\  cd          <name|idx> <iso-path>  Change the mounted CD/ISO
     \\  eject       <name|idx>             Eject the mounted CD/ISO
     \\  compact     <name|idx>             Compact the primary disk (stopped VM)
+    \\  diskinfo    <name|idx>             Show disk virtual + actual sizes
+    \\  guestinfo   <name|idx>             Show guest IPs (qemu-guest-agent)
+    \\  quickstart  <catalog-slug>         Create a VM from a built-in template
     \\  set         <name|idx> <field> <value>  Set a config field
     \\              (field: mem|cpu|cpu_sockets|network|notes|boot_order|vnc_port|spice_port)
     \\  cad         <name|idx>  Send Ctrl+Alt+Del to guest
@@ -219,6 +222,8 @@ fn run(init: std.process.Init) !void {
         return cmdImport(allocator, &conn, args[0], init.io);
     } else if (std.mem.eql(u8, command, "create")) {
         return cmdCreate(allocator, &conn, args[0], args[1], args[2], args[3], init.io);
+    } else if (std.mem.eql(u8, command, "quickstart")) {
+        return cmdQuickstart(allocator, &conn, args[0], init.io);
     } else if (std.mem.eql(u8, command, "snapshot")) {
         const sub = args[0];
         const target = args[1];
@@ -295,6 +300,10 @@ fn run(init: std.process.Init) !void {
             return cmdLog(allocator, &conn, idx, init.io);
         } else if (std.mem.eql(u8, command, "info")) {
             return cmdInfo(allocator, &conn, idx, init.io);
+        } else if (std.mem.eql(u8, command, "guestinfo")) {
+            return cmdSimpleGet(allocator, &conn, idx, "/api/vms/{d}/guestinfo", "guest", init.io);
+        } else if (std.mem.eql(u8, command, "diskinfo")) {
+            return cmdSimpleGet(allocator, &conn, idx, "/api/vms/{d}/diskinfo", "disk", init.io);
         } else {
             return cmdExport(allocator, &conn, idx, init.io);
         }
@@ -319,6 +328,9 @@ fn commandArity(command: []const u8) ?usize {
     if (std.mem.eql(u8, command, "cd")) return 2; // target iso-path
     if (std.mem.eql(u8, command, "eject")) return 1; // target
     if (std.mem.eql(u8, command, "compact")) return 1; // target
+    if (std.mem.eql(u8, command, "guestinfo")) return 1; // target
+    if (std.mem.eql(u8, command, "diskinfo")) return 1; // target
+    if (std.mem.eql(u8, command, "quickstart")) return 1; // catalog slug
     if (std.mem.eql(u8, command, "migrate")) return 3; // target host port
     if (std.mem.eql(u8, command, "set")) return 3; // target field value
     if (std.mem.eql(u8, command, "create")) return 4; // name mem cpu disk
@@ -611,6 +623,30 @@ fn cmdResize(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     var buf: [128]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "resize VM [{d}] -> {s} GB: {s}\n", .{ idx, new_gb, resp });
     fdWrite(c.STDOUT_FILENO, line);
+}
+
+/// GET /api/vms/<idx><suffix-fmt> and print "<label> VM [idx]: <resp>".
+fn cmdSimpleGet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, label: []const u8, io: std.Io) !void {
+    _ = io;
+    var path_buf: [48]u8 = undefined;
+    const url = try std.fmt.bufPrint(&path_buf, path_fmt, .{idx});
+    const resp = try sendRequest(allocator, conn, "GET", url, null);
+    defer allocator.free(resp);
+    var b: [640]u8 = undefined;
+    fdWrite(c.STDOUT_FILENO, std.fmt.bufPrint(&b, "{s} [{d}]: {s}\n", .{ label, idx, resp }) catch "ok\n");
+}
+
+/// Create a VM from a catalog template slug (POST /api/vms/quickstart/<slug>).
+fn cmdQuickstart(allocator: std.mem.Allocator, conn: *transport.Connection, slug: []const u8, io: std.Io) !void {
+    _ = io;
+    var path_buf: [96]u8 = undefined;
+    var enc_buf: [128]u8 = undefined;
+    const enc = try urlencode.percentEncode(&enc_buf, slug);
+    const url = try std.fmt.bufPrint(&path_buf, "/api/vms/quickstart/{s}", .{enc});
+    const resp = try sendRequest(allocator, conn, "POST", url, "");
+    defer allocator.free(resp);
+    var b: [128]u8 = undefined;
+    fdWrite(c.STDOUT_FILENO, std.fmt.bufPrint(&b, "quickstart {s}: {s}\n", .{ slug, resp }) catch "ok\n");
 }
 
 /// POST to /api/vms/<idx><suffix> with no body and print "<label> VM [idx]: <resp>".
@@ -1141,6 +1177,12 @@ test "commandArity: cd takes two args, eject/compact one" {
     try std.testing.expectEqual(@as(?usize, 2), commandArity("cd"));
     try std.testing.expectEqual(@as(?usize, 1), commandArity("eject"));
     try std.testing.expectEqual(@as(?usize, 1), commandArity("compact"));
+}
+
+test "commandArity: guestinfo/diskinfo/quickstart take one arg" {
+    try std.testing.expectEqual(@as(?usize, 1), commandArity("guestinfo"));
+    try std.testing.expectEqual(@as(?usize, 1), commandArity("diskinfo"));
+    try std.testing.expectEqual(@as(?usize, 1), commandArity("quickstart"));
 }
 
 test "commandArity: set takes three args" {

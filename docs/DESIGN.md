@@ -124,8 +124,10 @@ mode, or `KV_API_KEY` if set). A VM is addressed by name or list index.
 | `rename <name\|idx> <new-name>` | Rename |
 | `resize <name\|idx> <new-gb>` | Grow the primary disk (stopped VM) |
 | `compact <name\|idx>` | Compact the primary disk (stopped VM) |
+| `diskinfo <name\|idx>` · `guestinfo <name\|idx>` | Disk sizes / guest IPs |
+| `quickstart <catalog-slug>` | Create a VM from a built-in template |
 | `cd <name\|idx> <iso-path>` · `eject <name\|idx>` | Change / eject the CD/ISO |
-| `set <name\|idx> <field> <value>` | Set one config field (mem, cpu, cpu_sockets, network, notes, tags, boot_order, vnc_port, spice_port) |
+| `set <name\|idx> <field> <value>` | Set one config field (mem, cpu, cpu_sockets, network, notes, tags, boot_order, rtc, vnc_port, spice_port) |
 | `delete <name\|idx>` | Delete |
 | `snapshot list\|take\|revert\|delete <name\|idx> [tag]` | Snapshots |
 | `import <disk-path>` | Import an existing disk image |
