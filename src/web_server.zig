@@ -57,6 +57,15 @@ extern fn time(t: ?*c_long) c_long;
 
 // HTTP status codes
 const httpresp = @import("httpresp.zig");
+const auth = @import("auth.zig");
+// Auth lives in auth.zig; alias so call sites + main read unchanged.
+const API_KEY = auth.API_KEY;
+const checkAuth = auth.checkAuth;
+const isAuthExempt = auth.isAuthExempt;
+const wsAuthOk = auth.wsAuthOk;
+const hostHeaderOk = auth.hostHeaderOk;
+const validApiKey = auth.validApiKey;
+const secretEql = auth.secretEql;
 // HTTP status codes + response writers live in httpresp.zig; alias so the many
 // call sites below read unchanged.
 const HTTP_OK = httpresp.HTTP_OK;
@@ -76,10 +85,7 @@ const writeHttpResponse = httpresp.writeHttpResponse;
 const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
 const isServerErrToken = httpresp.isServerErrToken;
 
-const API_KEY: []const u8 = transport.DEFAULT_API_KEY; // built-in X-API-Key default
 const DEFAULT_PORT: u16 = transport.DEFAULT_PORT; // KV_PORT default
-var auth_token: [64]u8 = [_]u8{0} ** 64;
-var auth_token_len: usize = 0;
 const CONFIG_RAW_MAX = 4 * 1024 * 1024;
 
 // Server socket fds for shutdown signaling.
@@ -181,48 +187,6 @@ fn rateLimitCheck() bool {
     return false;
 }
 
-/// Check whether a URL path is exempt from API-key auth.
-/// Uses exact path matching against the extracted path (not the raw request
-/// line) to prevent path-traversal auth bypass via prefix injection.
-fn isAuthExempt(method_get: bool, path: []const u8) bool {
-    if (!method_get) return false; // only GET endpoints are exempt
-    // Exact paths
-    if (std.mem.eql(u8, path, "/")) return true;
-    if (std.mem.eql(u8, path, "/app.js")) return true;
-    if (std.mem.eql(u8, path, "/novnc.js")) return true;
-    if (std.mem.eql(u8, path, "/spice.js")) return true;
-    if (std.mem.eql(u8, path, "/app.css")) return true;
-    if (std.mem.startsWith(u8, path, "/favicon")) return true;
-    if (std.mem.eql(u8, path, "/api/vms")) return true;
-    if (std.mem.eql(u8, path, "/api/capabilities")) return true;
-    if (std.mem.eql(u8, path, "/api/health")) return true;
-    if (std.mem.eql(u8, path, "/api/config")) return true;
-    if (std.mem.eql(u8, path, "/api/catalog")) return true;
-    if (std.mem.eql(u8, path, "/api/networks")) return true;
-    // Prefix paths — ensure the prefix ends at a path boundary
-    if (std.mem.startsWith(u8, path, "/api/vms/")) {
-        // Strip any query string so suffix checks match regardless of `?...`.
-        const p = if (std.mem.indexOfScalar(u8, path, '?')) |q| path[0..q] else path;
-        // The disk-image download streams raw guest disk bytes (filesystems,
-        // credentials, ...). It must never be exempt: when KV_API_KEY is set the
-        // daemon binds all interfaces, so exempting it would let an
-        // unauthenticated remote client exfiltrate the disk image.
-        if (std.mem.endsWith(u8, p, "/disk2/download")) return false;
-        // The framebuffer and migrate-status read endpoints stay auth-required,
-        // matching the pre-refactor posture.
-        if (std.mem.endsWith(u8, p, "/framebuffer")) return false;
-        if (std.mem.endsWith(u8, p, "/migrate")) return false;
-        // Screenshot exposes the guest display — require auth like framebuffer.
-        if (std.mem.endsWith(u8, p, "/screenshot")) return false;
-        // Guest IPs are sensitive — require auth.
-        if (std.mem.endsWith(u8, p, "/guestinfo")) return false;
-        // Detail, /log, and /snapshots are read-only and exempt.
-        return true;
-    }
-    // POST /api/vms/quickstart/ creates a VM (state-changing) — it must require
-    // auth. Since it is POST, the early return above already covers it.
-    return false;
-}
 
 fn clampPref(v: []const u8, fallback: u32, lo: u32, hi: u32) u32 {
     const val = std.fmt.parseInt(u32, v, 10) catch return fallback;
@@ -248,74 +212,9 @@ fn sanitizeSlug(name: []const u8, out: []u8) []const u8 {
     return out[0..n];
 }
 
-/// Length-checked, constant-time byte-slice equality. The length is not secret
-/// (key bounds are public, 1-64 bytes), but the comparison must not early-exit
-/// on the first differing byte: `checkAuth` runs on the network-exposed daemon,
-/// where `std.mem.eql`'s short-circuit would leak the secret via response timing.
-fn secretEql(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    var diff: u8 = 0;
-    for (a, b) |x, y| diff |= x ^ y;
-    return diff == 0;
-}
 
-/// Validate a `KV_API_KEY` value: 1-64 bytes of printable ASCII (no control
-/// chars, no spaces). Rejecting whitespace/control bytes fails fast on the
-/// common footgun of `export KV_API_KEY=$(cat keyfile)` leaving a trailing
-/// newline — that byte would otherwise be embedded into the client's
-/// `X-API-Key:` header (see `transport.buildHttpRequest`) and silently corrupt
-/// request framing while the daemon binds all interfaces with a mismatched key.
-fn validApiKey(key: []const u8) bool {
-    if (key.len == 0 or key.len > 64) return false;
-    for (key) |ch| {
-        if (ch <= 0x20 or ch == 0x7f) return false;
-    }
-    return true;
-}
 
-/// Validate the request's `Host` header against the loopback allowlist.
-///
-/// Only enforced in loopback mode (no custom `KV_API_KEY`), where the daemon
-/// binds the IPv4-mapped loopback (`::ffff:127.0.0.1`) and accepts the
-/// publicly-known built-in key. Without
-/// this, a DNS-rebinding attack defeats the same-origin/CORS protection: a page
-/// the victim visits rebinds its own hostname to `127.0.0.1`, becomes
-/// same-origin with the daemon (so no CORS preflight blocks a custom header),
-/// and drives every state-changing endpoint with `X-API-Key: hangar`
-/// (CWE-350 / CWE-1385). A real browser only ever sends `Host: localhost:PORT`
-/// or `Host: 127.0.0.1:PORT` for a loopback connection, so rejecting any other
-/// host closes the rebinding hole without affecting legitimate local use.
-///
-/// When a custom key is set (the daemon is intentionally exposed on all
-/// interfaces) the host is operator-defined and the secret key — not the
-/// origin — is the control, so the check is skipped.
-fn hostHeaderOk(req: []const u8) bool {
-    if (auth_token_len > 0) return true; // exposed mode: secret key gates access
-    const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse req.len;
-    const host = findHeader(req[0..hdr_end], "Host: ") orelse return false;
-    // Strip the optional ":port" suffix (IPv6 literals are bracketed, so a
-    // ']' marks the end of the address before any port colon).
-    const addr = if (std.mem.lastIndexOfScalar(u8, host, ']')) |rb|
-        host[0 .. rb + 1]
-    else if (std.mem.indexOfScalar(u8, host, ':')) |colon|
-        host[0..colon]
-    else
-        host;
-    return std.ascii.eqlIgnoreCase(addr, "localhost") or
-        std.mem.eql(u8, addr, "127.0.0.1") or
-        std.mem.eql(u8, addr, "[::1]") or
-        std.mem.eql(u8, addr, "::1");
-}
 
-fn checkAuth(req: []const u8) bool {
-    const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return false;
-    const headers = req[0..hdr_end];
-
-    const provided = findHeader(headers, "X-API-Key: ") orelse return false;
-    // Compare against the custom token if set, else the built-in API_KEY.
-    const expected = if (auth_token_len > 0) auth_token[0..auth_token_len] else API_KEY;
-    return secretEql(provided, expected);
-}
 
 /// Copy the HTTP request line (method + path, up to the first CR/LF) into
 /// `out`, replacing every non-printable byte with '?'. Request data is
@@ -347,24 +246,6 @@ fn anyEql(s: []const u8, set: []const []const u8) bool {
 /// (delete/create/power) cross-origin. Omitting it makes the browser block all
 /// cross-origin reads and the preflight, closing that CSRF/exfiltration path.
 
-/// Auth-gate a WebSocket route. On failure, logs the rejected `route` and
-/// writes a 401, returning false; returns true when the request is authorized.
-fn wsAuthOk(conn: c.fd_t, req: []const u8, route: []const u8) bool {
-    // Browsers cannot set request headers on a WebSocket handshake, so the UI's
-    // console/serial sockets carry no X-API-Key. In loopback mode (no KV_API_KEY)
-    // the daemon binds ::1 only and hostHeaderOk has already required a loopback
-    // Host, so the origin is gated without the key — allow the upgrade, otherwise
-    // the embedded VNC/SPICE/serial console never connects. When KV_API_KEY is
-    // set the daemon is exposed and these routes stay key-gated (browser console
-    // is then local/CLI-only, matching the write-action policy).
-    if (auth_token_len == 0) return true;
-    if (checkAuth(req)) return true;
-    var buf: [64]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "auth rejected: GET {s}", .{route}) catch "auth rejected: GET /ws";
-    logWarn(msg);
-    writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
-    return false;
-}
 
 /// Signal the server to shut down by closing/halting its listen sockets.
 /// Safe to call from any thread — unblocks blocking accept() calls.
@@ -3680,20 +3561,20 @@ test "wsAuthOk: loopback (no KV_API_KEY) allows keyless WebSocket upgrade" {
     // The browser cannot send X-API-Key on a WS handshake; in loopback mode the
     // upgrade must still be allowed (hostHeaderOk already gated the origin) or the
     // console/serial console never connects.
-    const prev = auth_token_len;
-    auth_token_len = 0;
-    defer auth_token_len = prev;
+    const prev = auth.token_len;
+    auth.token_len = 0;
+    defer auth.token_len = prev;
     // No X-API-Key header, conn=-1 (only touched on the failure path, which we
     // don't take here).
     try std.testing.expect(wsAuthOk(-1, "GET /ws/vnc/0 HTTP/1.1\r\nHost: localhost\r\n\r\n", "/ws/vnc"));
 }
 
 test "wsAuthOk: exposed (KV_API_KEY set) still requires the key" {
-    auth_token_len = 6;
-    @memcpy(auth_token[0..6], "secret");
+    auth.token_len = 6;
+    @memcpy(auth.token[0..6], "secret");
     defer {
-        auth_token_len = 0;
-        @memset(&auth_token, 0);
+        auth.token_len = 0;
+        @memset(&auth.token, 0);
     }
     // Correct key upgrades; the no-key path would write a 401 to conn, so only
     // assert the accepting case here.
@@ -3701,11 +3582,11 @@ test "wsAuthOk: exposed (KV_API_KEY set) still requires the key" {
 }
 
 test "checkAuth: accepts correct custom auth token" {
-    auth_token_len = 6;
-    @memcpy(auth_token[0..6], "secret");
+    auth.token_len = 6;
+    @memcpy(auth.token[0..6], "secret");
     defer {
-        auth_token_len = 0;
-        @memset(&auth_token, 0);
+        auth.token_len = 0;
+        @memset(&auth.token, 0);
     }
 
     // X-API-Key precedes another header → value terminated by the CR scan,
@@ -3715,11 +3596,11 @@ test "checkAuth: accepts correct custom auth token" {
 }
 
 test "checkAuth: rejects wrong custom auth token" {
-    auth_token_len = 6;
-    @memcpy(auth_token[0..6], "secret");
+    auth.token_len = 6;
+    @memcpy(auth.token[0..6], "secret");
     defer {
-        auth_token_len = 0;
-        @memset(&auth_token, 0);
+        auth.token_len = 0;
+        @memset(&auth.token, 0);
     }
 
     const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: wrong!\r\n\r\n";
@@ -3733,11 +3614,11 @@ test "checkAuth: key at end with no trailing CR uses rest of request" {
 }
 
 test "checkAuth: custom token at end with no trailing CR" {
-    auth_token_len = 6;
-    @memcpy(auth_token[0..6], "secret");
+    auth.token_len = 6;
+    @memcpy(auth.token[0..6], "secret");
     defer {
-        auth_token_len = 0;
-        @memset(&auth_token, 0);
+        auth.token_len = 0;
+        @memset(&auth.token, 0);
     }
 
     const req = "GET /api/vms HTTP/1.1\r\nHost: localhost\r\nX-API-Key: secret\r\n\r\n";
@@ -3768,11 +3649,11 @@ test "hostHeaderOk: loopback mode accepts loopback hosts, rejects rebinding" {
 }
 
 test "hostHeaderOk: exposed mode (custom key) skips host validation" {
-    auth_token_len = 6;
-    @memcpy(auth_token[0..6], "secret");
+    auth.token_len = 6;
+    @memcpy(auth.token[0..6], "secret");
     defer {
-        auth_token_len = 0;
-        @memset(&auth_token, 0);
+        auth.token_len = 0;
+        @memset(&auth.token, 0);
     }
     // With a real key set the daemon is intentionally exposed; any host passes.
     try std.testing.expect(hostHeaderOk("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"));
@@ -4790,8 +4671,8 @@ pub fn main(init: std.process.Init) !void {
             // interfaces behind a secret everyone already knows.
             logErr("WARNING: KV_API_KEY equals the built-in default — keeping loopback-only binding. Set KV_API_KEY to a strong, unique secret to expose Hangar on all interfaces.");
         } else {
-            auth_token_len = key.len;
-            @memcpy(auth_token[0..key.len], key);
+            auth.token_len = key.len;
+            @memcpy(auth.token[0..key.len], key);
         }
     } else {
         // No custom key: the built-in default API key is in effect. Confine the
@@ -4802,7 +4683,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // Only expose the daemon beyond loopback when a real API key is configured.
-    const expose_all = auth_token_len > 0;
+    const expose_all = auth.token_len > 0;
 
     const port: u16 = if (appio.getenv("KV_PORT")) |env| blk: {
         const p = std.fmt.parseInt(u16, env, 10) catch {
