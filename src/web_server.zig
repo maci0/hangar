@@ -73,6 +73,7 @@ const HTTP_INTERNAL_ERROR = httpresp.HTTP_INTERNAL_ERROR;
 const writeAll = httpresp.writeAll;
 const jsonErr = httpresp.jsonErr;
 const writeHttpResponse = httpresp.writeHttpResponse;
+const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
 
 const API_KEY: []const u8 = transport.DEFAULT_API_KEY; // built-in X-API-Key default
 const DEFAULT_PORT: u16 = transport.DEFAULT_PORT; // KV_PORT default
@@ -693,7 +694,7 @@ fn serveHtml(conn: c.fd_t) void {
 
     // ── File download (streaming) routes — handled after auth ──
     if (parseVmIdxSuffix(req, "GET /api/vms/", "/disk2/download") != null) {
-        handleDisk2Download(conn, req) catch |e| {
+        streams.download(conn, req) catch |e| {
             logReqErr("disk2 download failed", e, req);
             // Error path uses the unified JSON envelope like the rest of the API,
             // even though the success path streams binary (octet-stream). A
@@ -2805,109 +2806,6 @@ fn handleCad(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-/// Validate a live-migration destination URI supplied by an API client.
-///
-/// Only the documented `tcp:host:port` form the UI sends is accepted. QEMU's
-/// `migrate` command accepts other schemes — notably `exec:`, which runs its
-/// argument through `/bin/sh` — so accepting an arbitrary URI would hand any
-/// authenticated client host command execution. The value is also interpolated
-/// unescaped into a QMP JSON string by `qmp.liveMigrate`, so `"`/`\` (which
-/// would break out of that string) and control characters are rejected.
-/// Stream the disk2 image file to the client as a download.
-fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
-    // Snapshot the disk path + name under the lock, then release it before any
-    // filesystem I/O. Streaming a multi-GB disk image while holding vms_mutex
-    // would freeze every other handler and the liveness/autoprotect tickers for
-    // the whole transfer (project rule: never hold a lock across I/O).
-    var path_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var name_len: usize = 0;
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        // Reply with a real HTTP status on every failure path. A bare `return`
-        // here closes the socket with no response, so the client sees an empty
-        // reply it cannot tell apart from a network drop instead of a 400/404.
-        const idx = parseIdx(req, "GET /api/vms/") orelse {
-            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
-            return;
-        };
-        if (idx >= appstate.vm_count) {
-            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
-            return;
-        }
-        const v = &appstate.vms[idx];
-        if (!v.hasDisk2()) {
-            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no disk2\"}");
-            return;
-        }
-        const dp = std.mem.span(v.getDisk2Path());
-        if (dp.len == 0 or dp.len >= path_buf.len) {
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"bad disk2 path\"}");
-            return;
-        }
-        @memcpy(path_buf[0..dp.len], dp);
-        path_buf[dp.len] = 0;
-        const nm = v.getNameSlice();
-        if (nm.len <= name_buf.len) {
-            @memcpy(name_buf[0..nm.len], nm);
-            name_len = nm.len;
-        }
-    }
-
-    const disk2_path: [*:0]const u8 = @ptrCast(&path_buf);
-    const fd = c.open(disk2_path, .{ .ACCMODE = .RDONLY });
-    if (fd < 0) {
-        // The disk2 file is recorded on the VM but cannot be opened (deleted out
-        // from under us, permissions, bad path). Without this line a failed
-        // download is a silent dead end — the client gets nothing and nothing
-        // explains why.
-        var nb: [vm.MAX_NAME]u8 = undefined;
-        var eb: [256]u8 = undefined;
-        logErr(std.fmt.bufPrint(&eb, "disk2 download: open failed vm=\"{s}\"", .{sanitizeLogName(&nb, name_buf[0..name_len])}) catch "disk2 download: open failed");
-        writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"disk2 open failed\"}");
-        return;
-    }
-    defer _ = c.close(fd);
-
-    const seek_end = c.lseek(fd, 0, 2); // SEEK_END = 2
-    if (seek_end < 0) return;
-    const file_size: u64 = @intCast(seek_end);
-    if (c.lseek(fd, 0, 0) < 0) return; // SEEK_SET = 0
-
-    const basename = std.fs.path.basename(std.mem.span(disk2_path));
-    var fname_buf: [256]u8 = undefined;
-    const safename = sanitizeHeaderValue(&fname_buf, basename);
-    var cd_header: [512]u8 = undefined;
-    const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{safename}) catch return;
-
-    // Build response headers in one buffer, then write them at once.
-    var hdr_buf: [1024]u8 = undefined;
-    const headers = std.fmt.bufPrint(
-        &hdr_buf,
-        "HTTP/1.1 200 OK\r\n" ++
-            "Content-Type: application/octet-stream\r\n" ++
-            "X-Content-Type-Options: nosniff\r\n" ++
-            "Cache-Control: no-store\r\n" ++
-            "Content-Disposition: {s}\r\n" ++
-            "Content-Length: {d}\r\n" ++
-            "Connection: close\r\n\r\n",
-        .{ cd, file_size },
-    ) catch return;
-    if (!writeAll(conn, headers.ptr, headers.len)) return error.BrokenPipe;
-
-    // Stream the file payload, checking every write.
-    var buf: [65536]u8 = undefined;
-    while (true) {
-        const n = c.read(fd, &buf, buf.len);
-        if (n <= 0) break;
-        if (!writeAll(conn, &buf, @intCast(n))) return error.BrokenPipe;
-    }
-
-    // Audit the completed secondary-disk download: a VM disk image left the host.
-    logAudit("disk2 download", name_buf[0..name_len]);
-}
-
 /// Reply to an upload with the unified JSON error mapping (client mistakes 400,
 /// server faults 500) and close.
 fn uploadErr(conn: c.fd_t, token: []const u8) void {
@@ -3547,25 +3445,6 @@ fn escapeJson(buf: []u8, s: []const u8, field: []const u8) []const u8 {
 
 /// Strip dangerous characters from an HTTP header value.
 /// Replaces double-quote with single-quote and removes CR/LF.
-fn sanitizeHeaderValue(buf: []u8, s: []const u8) []const u8 {
-    if (s.len == 0) return "";
-    var wi: usize = 0;
-    for (s) |ch| {
-        if (wi >= buf.len) break;
-        switch (ch) {
-            '"' => {
-                buf[wi] = '\'';
-                wi += 1;
-            },
-            '\r', '\n' => {},
-            else => {
-                buf[wi] = ch;
-                wi += 1;
-            },
-        }
-    }
-    return buf[0..wi];
-}
 
 fn handleVnetsSave(req: []const u8) ![]const u8 {
     const body = getBody(req) orelse return "no body";

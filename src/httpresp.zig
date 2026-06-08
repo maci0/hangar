@@ -35,6 +35,29 @@ pub fn jsonErr(buf: []u8, msg: []const u8) []const u8 {
     return std.fmt.bufPrint(buf, "{{\"error\":\"{s}\"}}", .{msg}) catch "{\"error\":\"internal\"}";
 }
 
+/// Sanitize a value for safe inclusion in a response header: drop CR/LF (header
+/// injection) and turn `"` into `'` (so it can't break a quoted parameter like
+/// Content-Disposition filename="..."). Returns a slice of `buf`.
+pub fn sanitizeHeaderValue(buf: []u8, s: []const u8) []const u8 {
+    if (s.len == 0) return "";
+    var wi: usize = 0;
+    for (s) |ch| {
+        if (wi >= buf.len) break;
+        switch (ch) {
+            '"' => {
+                buf[wi] = '\'';
+                wi += 1;
+            },
+            '\r', '\n' => {},
+            else => {
+                buf[wi] = ch;
+                wi += 1;
+            },
+        }
+    }
+    return buf[0..wi];
+}
+
 /// Write a full HTTP/1.1 response (status line + security headers + content-type
 /// + caching policy + body) to the connection in two writes.
 pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8) void {

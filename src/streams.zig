@@ -16,7 +16,11 @@ const writeAll = httpresp.writeAll;
 const writeHttpResponse = httpresp.writeHttpResponse;
 const logOpErr = wlog.logOpErr;
 const logAudit = wlog.logAudit;
+const logErr = wlog.logErr;
+const sanitizeLogName = wlog.sanitizeLogName;
+const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
 const HTTP_BAD_REQUEST = httpresp.HTTP_BAD_REQUEST;
+const HTTP_NOT_FOUND = httpresp.HTTP_NOT_FOUND;
 const HTTP_CONFLICT = httpresp.HTTP_CONFLICT;
 const HTTP_INTERNAL_ERROR = httpresp.HTTP_INTERNAL_ERROR;
 
@@ -106,6 +110,87 @@ pub fn screenshot(conn: c.fd_t, req: []const u8) void {
         if (!writeAll(conn, &sbuf, @intCast(n))) return;
     }
     logAudit("screenshot", name_buf[0..name_len]);
+}
+
+/// Stream a VM's secondary-disk (disk2) image to the client as a download.
+/// Captures the path + name under the lock, then streams with it released.
+pub fn download(conn: c.fd_t, req: []const u8) !void {
+    var path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var name_len: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "GET /api/vms/") orelse {
+            writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
+            return;
+        };
+        if (idx >= appstate.vm_count) {
+            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
+            return;
+        }
+        const v = &appstate.vms[idx];
+        if (!v.hasDisk2()) {
+            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no disk2\"}");
+            return;
+        }
+        const dp = std.mem.span(v.getDisk2Path());
+        if (dp.len == 0 or dp.len >= path_buf.len) {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"bad disk2 path\"}");
+            return;
+        }
+        @memcpy(path_buf[0..dp.len], dp);
+        path_buf[dp.len] = 0;
+        const nm = v.getNameSlice();
+        if (nm.len <= name_buf.len) {
+            @memcpy(name_buf[0..nm.len], nm);
+            name_len = nm.len;
+        }
+    }
+
+    const disk2_path: [*:0]const u8 = @ptrCast(&path_buf);
+    const fd = c.open(disk2_path, .{ .ACCMODE = .RDONLY });
+    if (fd < 0) {
+        var nb: [vm.MAX_NAME]u8 = undefined;
+        var eb: [256]u8 = undefined;
+        logErr(std.fmt.bufPrint(&eb, "disk2 download: open failed vm=\"{s}\"", .{sanitizeLogName(&nb, name_buf[0..name_len])}) catch "disk2 download: open failed");
+        writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"disk2 open failed\"}");
+        return;
+    }
+    defer _ = c.close(fd);
+
+    const seek_end = c.lseek(fd, 0, 2); // SEEK_END
+    if (seek_end < 0) return;
+    const file_size: u64 = @intCast(seek_end);
+    if (c.lseek(fd, 0, 0) < 0) return; // SEEK_SET
+
+    const basename = std.fs.path.basename(std.mem.span(disk2_path));
+    var fname_buf: [256]u8 = undefined;
+    const safename = sanitizeHeaderValue(&fname_buf, basename);
+    var cd_header: [512]u8 = undefined;
+    const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{safename}) catch return;
+
+    var hdr_buf: [1024]u8 = undefined;
+    const headers = std.fmt.bufPrint(
+        &hdr_buf,
+        "HTTP/1.1 200 OK\r\n" ++
+            "Content-Type: application/octet-stream\r\n" ++
+            "X-Content-Type-Options: nosniff\r\n" ++
+            "Cache-Control: no-store\r\n" ++
+            "Content-Disposition: {s}\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n\r\n",
+        .{ cd, file_size },
+    ) catch return;
+    if (!writeAll(conn, headers.ptr, headers.len)) return error.BrokenPipe;
+
+    var buf: [65536]u8 = undefined;
+    while (true) {
+        const n = c.read(fd, &buf, buf.len);
+        if (n <= 0) break;
+        if (!writeAll(conn, &buf, @intCast(n))) return error.BrokenPipe;
+    }
+    logAudit("disk2 download", name_buf[0..name_len]);
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
