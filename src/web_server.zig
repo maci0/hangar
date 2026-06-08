@@ -591,6 +591,47 @@ fn acceptLoop(fd: c.fd_t) void {
     }
 }
 
+/// A VM-scoped POST handler: takes the raw request, returns a status token.
+/// (These handlers catch their own errors and return a token, so the error set
+/// is effectively empty; the alias type widens it for the table.)
+const ApiHandler = *const fn ([]const u8) anyerror![]const u8;
+
+/// Comptime dispatch table for the uniform `POST /api/vms/<id>/<suffix>` routes
+/// that all return a text/plain status token. Replaces ~18 near-identical
+/// if/else-if arms. ORDER MATTERS: longer suffixes precede the shorter prefixes
+/// they extend (e.g. `/snapshots/revert` before `/snapshots`, `/cdrom/eject`
+/// before `/cdrom`) because parseVmIdxSuffix accepts `/` as a segment boundary,
+/// so the first match in iteration order wins.
+const post_routes = [_]struct { suffix: []const u8, handler: ApiHandler }{
+    .{ .suffix = "/power", .handler = handlePower },
+    .{ .suffix = "/delete", .handler = handleDelete },
+    .{ .suffix = "/clone", .handler = handleClone },
+    .{ .suffix = "/rename", .handler = handleRename },
+    .{ .suffix = "/suspend", .handler = handleSuspend },
+    .{ .suffix = "/pause", .handler = handlePause },
+    .{ .suffix = "/resume", .handler = handleResume },
+    .{ .suffix = "/shutdown", .handler = handleShutdown },
+    .{ .suffix = "/reset", .handler = handleReset },
+    .{ .suffix = "/cad", .handler = handleCad },
+    .{ .suffix = "/disk/resize", .handler = handleResizeDisk },
+    .{ .suffix = "/disk/compact", .handler = handleCompactDisk },
+    .{ .suffix = "/cdrom/eject", .handler = handleCdromEject },
+    .{ .suffix = "/cdrom", .handler = handleCdromChange },
+    .{ .suffix = "/snapshots/revert", .handler = handleSnapshotRevert },
+    .{ .suffix = "/snapshots/delete", .handler = handleSnapshotDelete },
+    .{ .suffix = "/snapshots", .handler = handleSnapshotTake },
+    .{ .suffix = "/migrate/cancel", .handler = handleMigrateCancel },
+};
+
+/// Match `req` against the POST route table; returns the handler or null.
+fn lookupPostRoute(req: []const u8) ?ApiHandler {
+    if (!std.mem.startsWith(u8, req, "POST /api/vms/")) return null;
+    for (post_routes) |r| {
+        if (parseVmIdxSuffix(req, "POST /api/vms/", r.suffix) != null) return r.handler;
+    }
+    return null;
+}
+
 fn serveHtml(conn: c.fd_t) void {
     defer {
         _ = c.close(conn);
@@ -906,65 +947,18 @@ fn serveHtml(conn: c.fd_t) void {
         // central status mapper turns them into proper 4xx/5xx JSON instead of a
         // 200 "image" the browser silently renders as broken.
         content_type = if (std.mem.startsWith(u8, response, "BM")) "image/bmp" else "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/power") != null) {
-        response = try handlePower(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/delete") != null) {
-        response = try handleDelete(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/clone") != null) {
-        response = try handleClone(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/rename") != null) {
-        response = try handleRename(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/suspend") != null) {
-        response = try handleSuspend(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/pause") != null) {
-        response = try handlePause(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/resume") != null) {
-        response = try handleResume(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/shutdown") != null) {
-        response = try handleShutdown(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/reset") != null) {
-        response = try handleReset(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/cad") != null) {
-        response = try handleCad(req);
-        content_type = "text/plain";
-        // Snapshots: longer suffixes before the bare `/snapshots`.
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/disk/resize") != null) {
-        response = try handleResizeDisk(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/disk/compact") != null) {
-        response = try handleCompactDisk(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/cdrom/eject") != null) {
-        response = try handleCdromEject(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/cdrom") != null) {
-        response = try handleCdromChange(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/snapshots/revert") != null) {
-        response = try handleSnapshotRevert(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/snapshots/delete") != null) {
-        response = try handleSnapshotDelete(req);
-        content_type = "text/plain";
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/snapshots") != null) {
-        response = try handleSnapshotTake(req);
+    } else if (lookupPostRoute(req)) |h| {
+        // Comptime-table dispatch for the uniform POST status-token routes
+        // (power/delete/clone/.../snapshots/migrate-cancel). See post_routes.
+        response = h(req) catch |e| blk: {
+            logReqErr("api handler failed", e, req);
+            break :blk "internal err";
+        };
         content_type = "text/plain";
     } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/snapshots") != null) {
         response = handleSnapshotList(req, &snap_buf);
         content_type = "text/plain";
-        // Migrate: `/migrate/cancel` before `/migrate`.
-    } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/migrate/cancel") != null) {
-        response = try handleMigrateCancel(req);
-        content_type = "text/plain";
+        // POST /migrate/cancel is handled by the post_routes table above.
     } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/migrate") != null) {
         response = handleMigrateStatus(req, &snap_buf);
         content_type = "application/json; charset=utf-8";
