@@ -13,6 +13,7 @@ const catalog = @import("catalog.zig");
 const framebuffer = @import("framebuffer.zig");
 const httpreq = @import("httpreq.zig");
 const snapshots = @import("snapshots.zig");
+const migrate = @import("migrate.zig");
 const wlog = @import("wlog.zig");
 // Structured logging lives in wlog.zig; alias so call sites read unchanged.
 const LogLevel = wlog.LogLevel;
@@ -523,7 +524,7 @@ const post_routes = [_]struct { suffix: []const u8, handler: ApiHandler }{
     .{ .suffix = "/snapshots/revert", .handler = snapshots.revert },
     .{ .suffix = "/snapshots/delete", .handler = snapshots.delete },
     .{ .suffix = "/snapshots", .handler = snapshots.take },
-    .{ .suffix = "/migrate/cancel", .handler = handleMigrateCancel },
+    .{ .suffix = "/migrate/cancel", .handler = migrate.cancel },
 };
 
 /// Match `req` against the POST route table; returns the handler or null.
@@ -863,16 +864,16 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/plain";
         // POST /migrate/cancel is handled by the post_routes table above.
     } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/migrate") != null) {
-        response = handleMigrateStatus(req, &snap_buf);
+        response = migrate.status(req, &snap_buf);
         content_type = "application/json; charset=utf-8";
         // The status payload is JSON, so it bypasses the central text/plain error
         // mapper. Surface its error states as real HTTP codes — otherwise a bad
         // index or a failed QMP query both return 200 OK, indistinguishable from a
         // live migration to a programmatic client. The body is unchanged and the
         // web UI reads it regardless of status code, so this is non-breaking.
-        status = migrateStatusHttpCode(response);
+        status = migrate.statusHttpCode(response);
     } else if (parseVmIdxSuffix(req, "POST /api/vms/", "/migrate") != null) {
-        response = try handleMigrate(req);
+        response = try migrate.start(req);
         // The success body is a JSON object ({"status":"started"}); label it as
         // such for strict clients. Error returns are bare tokens ("no dest",
         // "qmp err", ...) kept on text/plain so the central error mapper turns
@@ -3270,113 +3271,6 @@ fn handleCad(req: []const u8) ![]const u8 {
 /// authenticated client host command execution. The value is also interpolated
 /// unescaped into a QMP JSON string by `qmp.liveMigrate`, so `"`/`\` (which
 /// would break out of that string) and control characters are rejected.
-fn isValidMigrateDest(dest: []const u8) bool {
-    if (!std.mem.startsWith(u8, dest, "tcp:")) return false;
-    if (std.mem.indexOf(u8, dest, "..") != null) return false;
-    for (dest) |ch| {
-        if (ch < 0x20) return false; // control characters
-        if (ch == '"' or ch == '\\') return false; // JSON string break-out
-    }
-    return true;
-}
-
-fn handleMigrate(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.isAlive()) return "not running";
-    // Parse dest= parameter from body.
-    const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
-    const body = req[body_start + 4 ..];
-    var dest: []const u8 = "";
-    var val_buf: [512]u8 = undefined;
-    var pairs = std.mem.splitScalar(u8, body, '&');
-    while (pairs.next()) |pair| {
-        var kv = std.mem.splitScalar(u8, pair, '=');
-        const key = kv.next() orelse continue;
-        const raw = kv.next() orelse continue;
-        if (std.mem.eql(u8, key, "dest")) {
-            dest = if (raw.len <= val_buf.len) urlencode.urlDecode(&val_buf, raw) else raw;
-        }
-    }
-    if (dest.len == 0) return "no dest";
-    if (!isValidMigrateDest(dest)) return "bad dest";
-    var client = qmp.QmpClient{};
-    var sock_buf: [256]u8 = undefined;
-    const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-    client.connect(sock) catch |e| {
-        logOpErr("migrate", e, v.getNameSlice());
-        return "qmp err";
-    };
-    defer client.disconnect();
-    logAudit("migrate", v.getNameSlice());
-    client.liveMigrate(dest) catch |e| {
-        logOpErr("migrate", e, v.getNameSlice());
-        return "migrate err";
-    };
-    return "{\"status\":\"started\"}";
-}
-
-/// Query current migration status for a VM.
-/// Map a `handleMigrateStatus` JSON body to an HTTP status code. A success
-/// payload (`{"status":"active"}`) stays 200; error payloads become the same
-/// 4xx/5xx codes the central text/plain mapper assigns to the equivalent tokens
-/// so the migrate-status endpoint reports failures consistently with the rest of
-/// the API. The body itself is left unchanged.
-fn migrateStatusHttpCode(body: []const u8) u16 {
-    if (std.mem.indexOf(u8, body, "\"status\":\"error\"") == null) return HTTP_OK;
-    if (std.mem.indexOf(u8, body, "invalid idx") != null or std.mem.indexOf(u8, body, "bad idx") != null) return HTTP_NOT_FOUND;
-    if (std.mem.indexOf(u8, body, "not running") != null) return HTTP_CONFLICT;
-    return HTTP_INTERNAL_ERROR;
-}
-
-fn handleMigrateStatus(req: []const u8, buf: []u8) []const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "GET /api/vms/") orelse return "{\"status\":\"error\",\"error\":\"invalid idx\"}";
-    if (idx >= appstate.vm_count) return "{\"status\":\"error\",\"error\":\"bad idx\"}";
-    const v = &appstate.vms[idx];
-    if (!v.isAlive()) return "{\"status\":\"error\",\"error\":\"not running\"}";
-
-    var client = qmp.QmpClient{};
-    var sock_buf: [256]u8 = undefined;
-    const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "{\"status\":\"error\",\"error\":\"no socket\"}";
-    client.connect(sock) catch return "{\"status\":\"error\",\"error\":\"qmp connect\"}";
-    defer client.disconnect();
-
-    var status_buf: [128]u8 = undefined;
-    const status = client.queryMigrateStatus(&status_buf) catch return "{\"status\":\"error\",\"error\":\"qmp query\"}";
-    const resp = std.fmt.bufPrint(buf, "{{\"status\":\"{s}\"}}", .{status}) catch return "{\"status\":\"error\"}";
-    return buf[0..resp.len];
-}
-
-/// Cancel an active migration.
-fn handleMigrateCancel(req: []const u8) ![]const u8 {
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
-    const v = &appstate.vms[idx];
-    if (!v.isAlive()) return "not running";
-
-    var client = qmp.QmpClient{};
-    var sock_buf: [256]u8 = undefined;
-    const sock = qmp.socketPath(v.getNameSlice(), &sock_buf) orelse return "sock err";
-    client.connect(sock) catch |e| {
-        logOpErr("migrate cancel", e, v.getNameSlice());
-        return "qmp err";
-    };
-    defer client.disconnect();
-    client.cancelMigrate() catch |e| {
-        logOpErr("migrate cancel", e, v.getNameSlice());
-        return "cancel err";
-    };
-    logAudit("migrate cancel", v.getNameSlice());
-    return "ok";
-}
-
 /// Stream the disk2 image file to the client as a download.
 fn handleDisk2Download(conn: c.fd_t, req: []const u8) !void {
     // Snapshot the disk path + name under the lock, then release it before any
@@ -6759,7 +6653,7 @@ test "handleCad: idx out of range returns 'invalid idx'" {
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
-test "handleMigrate: VM not running returns 'not running'" {
+test "migrate.start: VM not running returns 'not running'" {
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
     appstate.vm_count = 1;
@@ -6771,12 +6665,12 @@ test "handleMigrate: VM not running returns 'not running'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleMigrate("POST /api/vms/0/migrate HTTP/1.1");
+    const result = try migrate.start("POST /api/vms/0/migrate HTTP/1.1");
     // The handler checks isAlive() before body parse, so this hits "not running".
     try std.testing.expectEqualStrings("not running", result);
 }
 
-test "handleMigrate: idx out of range returns 'invalid idx'" {
+test "migrate.start: idx out of range returns 'invalid idx'" {
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
     appstate.vm_count = 0;
@@ -6786,27 +6680,27 @@ test "handleMigrate: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleMigrate("POST /api/vms/0/migrate HTTP/1.1\r\n\r\ndummy=1");
+    const result = try migrate.start("POST /api/vms/0/migrate HTTP/1.1\r\n\r\ndummy=1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
-test "isValidMigrateDest: accepts tcp targets, rejects injection" {
-    try std.testing.expect(isValidMigrateDest("tcp:10.0.0.2:4444"));
-    try std.testing.expect(isValidMigrateDest("tcp:[fe80::1]:4444"));
+test "migrate.isValidDest: accepts tcp targets, rejects injection" {
+    try std.testing.expect(migrate.isValidDest("tcp:10.0.0.2:4444"));
+    try std.testing.expect(migrate.isValidDest("tcp:[fe80::1]:4444"));
     // Non-tcp schemes — exec: would run a shell command on the host.
-    try std.testing.expect(!isValidMigrateDest("exec:touch /tmp/pwned"));
-    try std.testing.expect(!isValidMigrateDest("unix:/tmp/x.sock"));
-    try std.testing.expect(!isValidMigrateDest("fd:3"));
+    try std.testing.expect(!migrate.isValidDest("exec:touch /tmp/pwned"));
+    try std.testing.expect(!migrate.isValidDest("unix:/tmp/x.sock"));
+    try std.testing.expect(!migrate.isValidDest("fd:3"));
     // JSON string break-out via quote/backslash.
-    try std.testing.expect(!isValidMigrateDest("tcp:h\":4444"));
-    try std.testing.expect(!isValidMigrateDest("tcp:h\\:4444"));
+    try std.testing.expect(!migrate.isValidDest("tcp:h\":4444"));
+    try std.testing.expect(!migrate.isValidDest("tcp:h\\:4444"));
     // Control characters and traversal.
-    try std.testing.expect(!isValidMigrateDest("tcp:h\n:4444"));
-    try std.testing.expect(!isValidMigrateDest("tcp:../../x"));
-    try std.testing.expect(!isValidMigrateDest(""));
+    try std.testing.expect(!migrate.isValidDest("tcp:h\n:4444"));
+    try std.testing.expect(!migrate.isValidDest("tcp:../../x"));
+    try std.testing.expect(!migrate.isValidDest(""));
 }
 
-test "fuzz: isValidMigrateDest never crashes and never allows shell/JSON escape" {
+test "fuzz: migrate.isValidDest never crashes and never allows shell/JSON escape" {
     var prng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15);
     const rand = prng.random();
     var buf: [64]u8 = undefined;
@@ -6815,7 +6709,7 @@ test "fuzz: isValidMigrateDest never crashes and never allows shell/JSON escape"
         const len = rand.intRangeAtMost(usize, 0, buf.len);
         for (buf[0..len]) |*b| b.* = rand.int(u8);
         const dest = buf[0..len];
-        if (isValidMigrateDest(dest)) {
+        if (migrate.isValidDest(dest)) {
             // Any accepted value must be a clean tcp: target — no shell-exec
             // scheme, no characters that could break the QMP JSON string.
             try std.testing.expect(std.mem.startsWith(u8, dest, "tcp:"));
@@ -6825,13 +6719,13 @@ test "fuzz: isValidMigrateDest never crashes and never allows shell/JSON escape"
     }
 }
 
-test "handleMigrateStatus: missing prefix returns error JSON" {
+test "migrate.status: missing prefix returns error JSON" {
     var buf: [512]u8 = undefined;
-    const result = handleMigrateStatus("GET /api/other HTTP/1.1", &buf);
+    const result = migrate.status("GET /api/other HTTP/1.1", &buf);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"error\"") != null);
 }
 
-test "handleMigrateStatus: idx out of range returns error JSON" {
+test "migrate.status: idx out of range returns error JSON" {
     var buf: [512]u8 = undefined;
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
@@ -6842,21 +6736,21 @@ test "handleMigrateStatus: idx out of range returns error JSON" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = handleMigrateStatus("GET /api/vms/0/migrate HTTP/1.1", &buf);
+    const result = migrate.status("GET /api/vms/0/migrate HTTP/1.1", &buf);
     try std.testing.expect(std.mem.indexOf(u8, result, "\"error\"") != null);
 }
 
-test "migrateStatusHttpCode: maps status payloads to HTTP codes" {
-    try std.testing.expectEqual(HTTP_OK, migrateStatusHttpCode("{\"status\":\"active\"}"));
-    try std.testing.expectEqual(HTTP_OK, migrateStatusHttpCode("{\"status\":\"completed\"}"));
-    try std.testing.expectEqual(HTTP_NOT_FOUND, migrateStatusHttpCode("{\"status\":\"error\",\"error\":\"invalid idx\"}"));
-    try std.testing.expectEqual(HTTP_NOT_FOUND, migrateStatusHttpCode("{\"status\":\"error\",\"error\":\"bad idx\"}"));
-    try std.testing.expectEqual(HTTP_CONFLICT, migrateStatusHttpCode("{\"status\":\"error\",\"error\":\"not running\"}"));
-    try std.testing.expectEqual(HTTP_INTERNAL_ERROR, migrateStatusHttpCode("{\"status\":\"error\",\"error\":\"qmp query\"}"));
-    try std.testing.expectEqual(HTTP_INTERNAL_ERROR, migrateStatusHttpCode("{\"status\":\"error\"}"));
+test "migrate.statusHttpCode: maps status payloads to HTTP codes" {
+    try std.testing.expectEqual(HTTP_OK, migrate.statusHttpCode("{\"status\":\"active\"}"));
+    try std.testing.expectEqual(HTTP_OK, migrate.statusHttpCode("{\"status\":\"completed\"}"));
+    try std.testing.expectEqual(HTTP_NOT_FOUND, migrate.statusHttpCode("{\"status\":\"error\",\"error\":\"invalid idx\"}"));
+    try std.testing.expectEqual(HTTP_NOT_FOUND, migrate.statusHttpCode("{\"status\":\"error\",\"error\":\"bad idx\"}"));
+    try std.testing.expectEqual(HTTP_CONFLICT, migrate.statusHttpCode("{\"status\":\"error\",\"error\":\"not running\"}"));
+    try std.testing.expectEqual(HTTP_INTERNAL_ERROR, migrate.statusHttpCode("{\"status\":\"error\",\"error\":\"qmp query\"}"));
+    try std.testing.expectEqual(HTTP_INTERNAL_ERROR, migrate.statusHttpCode("{\"status\":\"error\"}"));
 }
 
-test "fuzz: migrateStatusHttpCode never panics and only ever returns mapped codes" {
+test "fuzz: migrate.statusHttpCode never panics and only ever returns mapped codes" {
     var prng = std.Random.DefaultPrng.init(0x9135_a7c2);
     const rnd = prng.random();
     const fragments = [_][]const u8{
@@ -6875,18 +6769,18 @@ test "fuzz: migrateStatusHttpCode never panics and only ever returns mapped code
             @memcpy(buf[len..][0..frag.len], frag);
             len += frag.len;
         }
-        const code = migrateStatusHttpCode(buf[0..len]);
+        const code = migrate.statusHttpCode(buf[0..len]);
         try std.testing.expect(code == HTTP_OK or code == HTTP_NOT_FOUND or
             code == HTTP_CONFLICT or code == HTTP_INTERNAL_ERROR);
     }
 }
 
-test "handleMigrateCancel: missing prefix returns 'invalid'" {
-    const result = try handleMigrateCancel("GET /api/other HTTP/1.1");
+test "migrate.cancel: missing prefix returns 'invalid'" {
+    const result = try migrate.cancel("GET /api/other HTTP/1.1");
     try std.testing.expectEqualStrings("invalid", result);
 }
 
-test "handleMigrateCancel: idx out of range returns 'invalid idx'" {
+test "migrate.cancel: idx out of range returns 'invalid idx'" {
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
     appstate.vm_count = 0;
@@ -6896,7 +6790,7 @@ test "handleMigrateCancel: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleMigrateCancel("POST /api/vms/0/migrate/cancel HTTP/1.1");
+    const result = try migrate.cancel("POST /api/vms/0/migrate/cancel HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -7017,13 +6911,13 @@ test "fuzz: idx-gated VM handlers never panic on random request-like input" {
         _ = handleRename(req) catch {};
         _ = handleClone(req) catch {};
         _ = handleCad(req) catch {};
-        _ = handleMigrate(req) catch {};
-        _ = handleMigrateCancel(req) catch {};
+        _ = migrate.start(req) catch {};
+        _ = migrate.cancel(req) catch {};
         _ = snapshots.take(req) catch {};
         _ = snapshots.revert(req) catch {};
         _ = snapshots.delete(req) catch {};
         _ = snapshots.list(req, &out);
-        _ = handleMigrateStatus(req, &out);
+        _ = migrate.status(req, &out);
     }
     // Table must be untouched: no handler created or removed a VM.
     try std.testing.expectEqual(@as(usize, 0), appstate.vm_count);
