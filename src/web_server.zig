@@ -12,6 +12,7 @@ const vnc = @import("vnc_client.zig");
 const catalog = @import("catalog.zig");
 const framebuffer = @import("framebuffer.zig");
 const httpreq = @import("httpreq.zig");
+const snapshots = @import("snapshots.zig");
 const wlog = @import("wlog.zig");
 // Structured logging lives in wlog.zig; alias so call sites read unchanged.
 const LogLevel = wlog.LogLevel;
@@ -519,9 +520,9 @@ const post_routes = [_]struct { suffix: []const u8, handler: ApiHandler }{
     .{ .suffix = "/disk/compact", .handler = handleCompactDisk },
     .{ .suffix = "/cdrom/eject", .handler = handleCdromEject },
     .{ .suffix = "/cdrom", .handler = handleCdromChange },
-    .{ .suffix = "/snapshots/revert", .handler = handleSnapshotRevert },
-    .{ .suffix = "/snapshots/delete", .handler = handleSnapshotDelete },
-    .{ .suffix = "/snapshots", .handler = handleSnapshotTake },
+    .{ .suffix = "/snapshots/revert", .handler = snapshots.revert },
+    .{ .suffix = "/snapshots/delete", .handler = snapshots.delete },
+    .{ .suffix = "/snapshots", .handler = snapshots.take },
     .{ .suffix = "/migrate/cancel", .handler = handleMigrateCancel },
 };
 
@@ -858,7 +859,7 @@ fn serveHtml(conn: c.fd_t) void {
         };
         content_type = "text/plain";
     } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/snapshots") != null) {
-        response = handleSnapshotList(req, &snap_buf);
+        response = snapshots.list(req, &snap_buf);
         content_type = "text/plain";
         // POST /migrate/cancel is handled by the post_routes table above.
     } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/migrate") != null) {
@@ -3198,262 +3199,6 @@ fn handleResizeDisk(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-const MAX_SNAPSHOT_TAG_LEN = 255;
-
-fn validateSnapshotTag(tag: []const u8) bool {
-    if (tag.len == 0 or tag.len > MAX_SNAPSHOT_TAG_LEN) return false;
-    for (tag) |b| {
-        if (b == 0) return false; // reject null bytes
-        if (b < 0x20) return false; // reject control characters
-    }
-    if (std.mem.indexOf(u8, tag, "..") != null) return false;
-    return true;
-}
-
-fn handleSnapshotTake(req: []const u8) ![]const u8 {
-    var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var disk_len: usize = 0;
-    var name_len: usize = 0;
-    var was_alive = false;
-    var decoded: []const u8 = "";
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-        if (idx >= appstate.vm_count) return "invalid idx";
-        const v = &appstate.vms[idx];
-        if (!v.hasDisk()) return "no disk";
-        const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
-        const body = req[body_start + 4 ..];
-        var tag: []const u8 = "";
-        var pairs = std.mem.splitScalar(u8, body, '&');
-        while (pairs.next()) |pair| {
-            var kv = std.mem.splitScalar(u8, pair, '=');
-            const key = kv.next() orelse continue;
-            const val = kv.next() orelse continue;
-            if (std.mem.eql(u8, key, "tag")) tag = val;
-        }
-        if (tag.len == 0) return "no name";
-        decoded = urlencode.urlDecode(&decode_buf, tag);
-        if (!validateSnapshotTag(decoded)) return "no name";
-        const nm = v.getNameSlice();
-        if (nm.len > name_buf.len) return "create err";
-        @memcpy(name_buf[0..nm.len], nm);
-        name_len = nm.len;
-        was_alive = v.isAlive();
-        if (was_alive) {
-            // Live VM: snapshot through its running QMP monitor (savevm) — the
-            // qcow2 is write-locked, so offline qemu-img would fail. Name must be
-            // QMP-socket-safe.
-            if (!qmp.isPathSafeName(nm)) return "create err";
-        } else {
-            const dp = v.getDiskPathSlice();
-            if (dp.len == 0 or dp.len >= disk_buf.len) return "create err";
-            @memcpy(disk_buf[0..dp.len], dp);
-            disk_len = dp.len;
-        }
-    }
-
-    // I/O with the lock released — it can take seconds and must not stall every
-    // other handler / the poll thread.
-    if (was_alive) {
-        var client = qmp.QmpClient{};
-        var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse return "create err";
-        client.connect(sock) catch |e| {
-            logOpErr("snapshot take", e, name_buf[0..name_len]);
-            return "create err";
-        };
-        defer client.disconnect();
-        client.saveSnapshot(decoded) catch |e| {
-            logOpErr("snapshot take", e, name_buf[0..name_len]);
-            return "create err";
-        };
-    } else {
-        qemu.snapshotCreate(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot take", e, name_buf[0..name_len]);
-            return "create err";
-        };
-    }
-    logAudit("snapshot take", name_buf[0..name_len]);
-    return "ok";
-}
-
-fn handleSnapshotList(req: []const u8, raw_buf: []u8) []const u8 {
-    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var disk_len: usize = 0;
-    var name_len: usize = 0;
-    var n: usize = 0;
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "GET /api/vms/") orelse return "invalid";
-        if (idx >= appstate.vm_count) return "invalid idx";
-        const v = &appstate.vms[idx];
-        if (!v.hasDisk()) return "no disk";
-        const nm = v.getNameSlice();
-        if (nm.len <= name_buf.len) {
-            @memcpy(name_buf[0..nm.len], nm);
-            name_len = nm.len;
-        }
-        // Capture the disk path and run qemu-img with the lock RELEASED for both
-        // running and stopped VMs — qemu-img is a blocking subprocess and must
-        // never run under vms_mutex (it would freeze every handler + the tickers).
-        // `-U` (in qemu.snapshotList) lets it read a running VM's locked image.
-        const dp = v.getDiskPathSlice();
-        if (dp.len == 0 or dp.len >= disk_buf.len) return "no disk";
-        @memcpy(disk_buf[0..dp.len], dp);
-        disk_len = dp.len;
-    }
-
-    // Offline qemu-img list with the lock released (it reads the image header).
-    if (disk_len > 0) {
-        n = qemu.snapshotList(disk_buf[0..disk_len], raw_buf, std.heap.page_allocator) catch |e| blk: {
-            logOpErr("snapshot list", e, name_buf[0..name_len]);
-            break :blk 0;
-        };
-    }
-    if (n == 0 or n > raw_buf.len) return "(none)";
-
-    const nodes = snapparse.parse(raw_buf[0..n]);
-    if (nodes.count == 0) return "(none)";
-
-    // Emit snapshot names one per line into raw_buf, reusing it for output.
-    var w: usize = 0;
-    for (0..nodes.count) |i| {
-        const name = nodes.nameSlice(i);
-        if (w + name.len + 1 > raw_buf.len) break;
-        @memcpy(raw_buf[w..][0..name.len], name);
-        w += name.len;
-        raw_buf[w] = '\n';
-        w += 1;
-    }
-    return raw_buf[0..w];
-}
-
-fn handleSnapshotRevert(req: []const u8) ![]const u8 {
-    var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var disk_len: usize = 0;
-    var name_len: usize = 0;
-    var decoded: []const u8 = "";
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-        if (idx >= appstate.vm_count) return "invalid idx";
-        const v = &appstate.vms[idx];
-        if (!v.hasDisk()) return "no disk";
-        if (v.isAlive()) return "vm running";
-        const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
-        const body = req[body_start + 4 ..];
-        var tag: []const u8 = "";
-        var pairs = std.mem.splitScalar(u8, body, '&');
-        while (pairs.next()) |pair| {
-            var kv = std.mem.splitScalar(u8, pair, '=');
-            const key = kv.next() orelse continue;
-            const val = kv.next() orelse continue;
-            if (std.mem.eql(u8, key, "tag")) tag = val;
-        }
-        if (tag.len == 0) return "no name";
-        decoded = urlencode.urlDecode(&decode_buf, tag);
-        if (!validateSnapshotTag(decoded)) return "no name";
-        const nm = v.getNameSlice();
-        if (nm.len <= name_buf.len) {
-            @memcpy(name_buf[0..nm.len], nm);
-            name_len = nm.len;
-        }
-        // The VM is guaranteed stopped (guarded above), so revert is always the
-        // offline qemu-img path. Capture the disk path and run it with the lock
-        // RELEASED — qemu-img is a blocking subprocess and must not run under
-        // vms_mutex (it would freeze the daemon). (The previous getVmmHandle
-        // branch ran qemu-img under the lock, since the handle is lazily created
-        // even for a stopped VM.)
-        const dp = v.getDiskPathSlice();
-        if (dp.len == 0 or dp.len >= disk_buf.len) return "apply err";
-        @memcpy(disk_buf[0..dp.len], dp);
-        disk_len = dp.len;
-    }
-
-    qemu.snapshotApply(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
-        logOpErr("snapshot revert", e, name_buf[0..name_len]);
-        return "apply err";
-    };
-    logAudit("snapshot revert", name_buf[0..name_len]);
-    return "ok";
-}
-
-fn handleSnapshotDelete(req: []const u8) ![]const u8 {
-    var decode_buf: [MAX_SNAPSHOT_TAG_LEN + 1]u8 = undefined;
-    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var disk_len: usize = 0;
-    var name_len: usize = 0;
-    var was_alive = false;
-    var decoded: []const u8 = "";
-    {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-        if (idx >= appstate.vm_count) return "invalid idx";
-        const v = &appstate.vms[idx];
-        if (!v.hasDisk()) return "no disk";
-        const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
-        const body = req[body_start + 4 ..];
-        var tag: []const u8 = "";
-        var pairs = std.mem.splitScalar(u8, body, '&');
-        while (pairs.next()) |pair| {
-            var kv = std.mem.splitScalar(u8, pair, '=');
-            const key = kv.next() orelse continue;
-            const val = kv.next() orelse continue;
-            if (std.mem.eql(u8, key, "tag")) tag = val;
-        }
-        if (tag.len == 0) return "no name";
-        decoded = urlencode.urlDecode(&decode_buf, tag);
-        if (!validateSnapshotTag(decoded)) return "no name";
-        const nm = v.getNameSlice();
-        if (nm.len > name_buf.len) return "delete err";
-        @memcpy(name_buf[0..nm.len], nm);
-        name_len = nm.len;
-        was_alive = v.isAlive();
-        if (was_alive) {
-            // Live VM: delete via QMP delvm (qcow2 is write-locked).
-            if (!qmp.isPathSafeName(nm)) return "delete err";
-        } else {
-            const dp = v.getDiskPathSlice();
-            if (dp.len == 0 or dp.len >= disk_buf.len) return "delete err";
-            @memcpy(disk_buf[0..dp.len], dp);
-            disk_len = dp.len;
-        }
-    }
-
-    if (was_alive) {
-        var client = qmp.QmpClient{};
-        var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse return "delete err";
-        client.connect(sock) catch |e| {
-            logOpErr("snapshot delete", e, name_buf[0..name_len]);
-            return "delete err";
-        };
-        defer client.disconnect();
-        client.deleteSnapshot(decoded) catch |e| {
-            logOpErr("snapshot delete", e, name_buf[0..name_len]);
-            return "delete err";
-        };
-    } else {
-        qemu.snapshotDelete(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot delete", e, name_buf[0..name_len]);
-            return "delete err";
-        };
-    }
-    logAudit("snapshot delete", name_buf[0..name_len]);
-    return "ok";
-}
-
 fn handleImport(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
@@ -5519,36 +5264,36 @@ test "fuzz: routeExact rejects boundary-confusable requests" {
 
 // ── Helper function tests ──────────────────────────────────────────
 
-test "validateSnapshotTag: valid tags" {
-    try std.testing.expect(validateSnapshotTag("snapshot1"));
-    try std.testing.expect(validateSnapshotTag("backup-2024-01-01"));
-    try std.testing.expect(validateSnapshotTag("a"));
-    try std.testing.expect(validateSnapshotTag("A" ** 255));
+test "snapshots.validateTag: valid tags" {
+    try std.testing.expect(snapshots.validateTag("snapshot1"));
+    try std.testing.expect(snapshots.validateTag("backup-2024-01-01"));
+    try std.testing.expect(snapshots.validateTag("a"));
+    try std.testing.expect(snapshots.validateTag("A" ** 255));
 }
 
-test "validateSnapshotTag: empty tag rejected" {
-    try std.testing.expect(!validateSnapshotTag(""));
+test "snapshots.validateTag: empty tag rejected" {
+    try std.testing.expect(!snapshots.validateTag(""));
 }
 
-test "validateSnapshotTag: too long tag rejected" {
+test "snapshots.validateTag: too long tag rejected" {
     var long: [256]u8 = [_]u8{'x'} ** 256;
-    try std.testing.expect(!validateSnapshotTag(&long));
+    try std.testing.expect(!snapshots.validateTag(&long));
 }
 
-test "validateSnapshotTag: control characters rejected" {
-    try std.testing.expect(!validateSnapshotTag("bad\x01"));
-    try std.testing.expect(!validateSnapshotTag("bad\x1f"));
-    try std.testing.expect(!validateSnapshotTag("\x00name"));
-    try std.testing.expect(!validateSnapshotTag("\x10middle"));
+test "snapshots.validateTag: control characters rejected" {
+    try std.testing.expect(!snapshots.validateTag("bad\x01"));
+    try std.testing.expect(!snapshots.validateTag("bad\x1f"));
+    try std.testing.expect(!snapshots.validateTag("\x00name"));
+    try std.testing.expect(!snapshots.validateTag("\x10middle"));
 }
 
-test "validateSnapshotTag: dot-dot path traversal rejected" {
-    try std.testing.expect(!validateSnapshotTag(".."));
-    try std.testing.expect(!validateSnapshotTag("../escape"));
-    try std.testing.expect(!validateSnapshotTag("snap/../etc"));
-    try std.testing.expect(!validateSnapshotTag("trailing.."));
+test "snapshots.validateTag: dot-dot path traversal rejected" {
+    try std.testing.expect(!snapshots.validateTag(".."));
+    try std.testing.expect(!snapshots.validateTag("../escape"));
+    try std.testing.expect(!snapshots.validateTag("snap/../etc"));
+    try std.testing.expect(!snapshots.validateTag("trailing.."));
     // A single dot is fine; only the ".." sequence is dangerous.
-    try std.testing.expect(validateSnapshotTag("v1.0"));
+    try std.testing.expect(snapshots.validateTag("v1.0"));
 }
 
 test "jsonEscape: escapes quotes and backslashes" {
@@ -5642,7 +5387,7 @@ test "jsonErr: buffer overflow falls back to default" {
 
 // ── Fuzz: helper functions ─────────────────────────────────────────
 
-test "fuzz: validateSnapshotTag never panics on random input" {
+test "fuzz: snapshots.validateTag never panics on random input" {
     var prng = std.Random.DefaultPrng.init(0xCAFE_F00D);
     const rnd = prng.random();
     var buf: [512]u8 = undefined;
@@ -5651,7 +5396,7 @@ test "fuzz: validateSnapshotTag never panics on random input" {
     while (iter < 4000) : (iter += 1) {
         const len = rnd.uintLessThan(usize, buf.len + 1);
         rnd.bytes(buf[0..len]);
-        _ = validateSnapshotTag(buf[0..len]);
+        _ = snapshots.validateTag(buf[0..len]);
     }
 }
 
@@ -6912,12 +6657,12 @@ test "handleReset: idx out of range returns 'invalid idx'" {
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
-test "handleSnapshotTake: missing prefix returns 'invalid'" {
-    const result = try handleSnapshotTake("GET /api/other HTTP/1.1");
+test "snapshots.take: missing prefix returns 'invalid'" {
+    const result = try snapshots.take("GET /api/other HTTP/1.1");
     try std.testing.expectEqualStrings("invalid", result);
 }
 
-test "handleSnapshotTake: idx out of range returns 'invalid idx'" {
+test "snapshots.take: idx out of range returns 'invalid idx'" {
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
     appstate.vm_count = 0;
@@ -6927,17 +6672,17 @@ test "handleSnapshotTake: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSnapshotTake("POST /api/vms/0/snapshots HTTP/1.1");
+    const result = try snapshots.take("POST /api/vms/0/snapshots HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
-test "handleSnapshotList: missing prefix returns error" {
+test "snapshots.list: missing prefix returns error" {
     var buf: [4096]u8 = undefined;
-    const result = handleSnapshotList("GET /api/other HTTP/1.1", &buf);
+    const result = snapshots.list("GET /api/other HTTP/1.1", &buf);
     try std.testing.expectEqualStrings("invalid", result);
 }
 
-test "handleSnapshotList: idx out of range returns error" {
+test "snapshots.list: idx out of range returns error" {
     var buf: [4096]u8 = undefined;
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
@@ -6948,16 +6693,16 @@ test "handleSnapshotList: idx out of range returns error" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = handleSnapshotList("GET /api/vms/0/snapshots HTTP/1.1", &buf);
+    const result = snapshots.list("GET /api/vms/0/snapshots HTTP/1.1", &buf);
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
-test "handleSnapshotRevert: missing prefix returns 'invalid'" {
-    const result = try handleSnapshotRevert("GET /api/other HTTP/1.1");
+test "snapshots.revert: missing prefix returns 'invalid'" {
+    const result = try snapshots.revert("GET /api/other HTTP/1.1");
     try std.testing.expectEqualStrings("invalid", result);
 }
 
-test "handleSnapshotRevert: idx out of range returns 'invalid idx'" {
+test "snapshots.revert: idx out of range returns 'invalid idx'" {
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
     appstate.vm_count = 0;
@@ -6967,16 +6712,16 @@ test "handleSnapshotRevert: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSnapshotRevert("POST /api/vms/0/snapshots/revert HTTP/1.1");
+    const result = try snapshots.revert("POST /api/vms/0/snapshots/revert HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
-test "handleSnapshotDelete: missing prefix returns 'invalid'" {
-    const result = try handleSnapshotDelete("GET /api/other HTTP/1.1");
+test "snapshots.delete: missing prefix returns 'invalid'" {
+    const result = try snapshots.delete("GET /api/other HTTP/1.1");
     try std.testing.expectEqualStrings("invalid", result);
 }
 
-test "handleSnapshotDelete: idx out of range returns 'invalid idx'" {
+test "snapshots.delete: idx out of range returns 'invalid idx'" {
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
     appstate.vm_count = 0;
@@ -6986,7 +6731,7 @@ test "handleSnapshotDelete: idx out of range returns 'invalid idx'" {
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleSnapshotDelete("POST /api/vms/0/snapshots/delete HTTP/1.1");
+    const result = try snapshots.delete("POST /api/vms/0/snapshots/delete HTTP/1.1");
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
@@ -7274,10 +7019,10 @@ test "fuzz: idx-gated VM handlers never panic on random request-like input" {
         _ = handleCad(req) catch {};
         _ = handleMigrate(req) catch {};
         _ = handleMigrateCancel(req) catch {};
-        _ = handleSnapshotTake(req) catch {};
-        _ = handleSnapshotRevert(req) catch {};
-        _ = handleSnapshotDelete(req) catch {};
-        _ = handleSnapshotList(req, &out);
+        _ = snapshots.take(req) catch {};
+        _ = snapshots.revert(req) catch {};
+        _ = snapshots.delete(req) catch {};
+        _ = snapshots.list(req, &out);
         _ = handleMigrateStatus(req, &out);
     }
     // Table must be untouched: no handler created or removed a VM.
