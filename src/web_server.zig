@@ -519,6 +519,28 @@ fn applyBoolField(v: *vm.VmConfig, key: []const u8, val: []const u8) bool {
     return false;
 }
 
+/// Combobox-index VmConfig enum form fields whose key equals the field name.
+/// The enum type is recovered from the field via @TypeOf, so adding a field is
+/// one entry here (no type to repeat).
+const enum_form_fields = [_][]const u8{
+    "disk_format", "disk_cache",  "usb_policy",         "disk2_format",
+    "gpu_device",  "display",     "display_resolution", "guest_os",
+    "audio",       "boot_order",  "rtc",                "watchdog",
+};
+
+/// Set a combobox-index enum field from a form key/value via @field + @TypeOf.
+/// Out-of-range / unparseable keeps the current value. Returns true if matched.
+fn applyEnumField(v: *vm.VmConfig, key: []const u8, val: []const u8) bool {
+    inline for (enum_form_fields) |f| {
+        if (std.mem.eql(u8, key, f)) {
+            const E = @TypeOf(@field(v, f));
+            @field(v, f) = E.fromIndex(std.fmt.parseInt(usize, val, 10) catch @field(v, f).toIndex());
+            return true;
+        }
+    }
+    return false;
+}
+
 /// A VM-scoped POST handler: takes the raw request, returns a status token.
 /// (These handlers catch their own errors and return a token, so the error set
 /// is effectively empty; the alias type widens it for the table.)
@@ -1971,8 +1993,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "cpu_sockets")) cfg.cpu_sockets = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, 1));
         if (std.mem.eql(u8, key, "cpu_model")) cfg.cpu_model = vm.CpuModel.fromStr(val);
         if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = vm.clampDiskSize(form_parsers.parseU32OrDefault(val, 20));
-        if (std.mem.eql(u8, key, "disk_format")) cfg.disk_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk_format.toIndex());
-        if (std.mem.eql(u8, key, "disk_cache")) cfg.disk_cache = vm.DiskCache.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk_cache.toIndex());
+        _ = applyEnumField(&cfg, key, val);
         if (std.mem.eql(u8, key, "iso_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setIsoPath(val);
@@ -1993,7 +2014,6 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setUsbDevice(val);
         }
-        if (std.mem.eql(u8, key, "usb_policy")) cfg.usb_policy = vm.UsbPolicy.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.usb_policy.toIndex());
         _ = applyBoolField(&cfg, key, val);
         if (std.mem.eql(u8, key, "autoprotect")) {
             cfg.autoprotect = std.mem.eql(u8, val, "1");
@@ -2006,7 +2026,6 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             cfg.setDisk2Path(val);
         }
         if (std.mem.eql(u8, key, "disk2_size")) cfg.disk2_size_gb = vm.clampOptionalDiskSize(std.fmt.parseInt(u32, val, 10) catch cfg.disk2_size_gb);
-        if (std.mem.eql(u8, key, "disk2_format")) cfg.disk2_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.disk2_format.toIndex());
         if (std.mem.eql(u8, key, "floppy")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             cfg.setFloppyPath(val);
@@ -2023,13 +2042,6 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "notes")) cfg.setNotes(val);
         if (std.mem.eql(u8, key, "tags")) cfg.setTags(val);
         if (std.mem.eql(u8, key, "cloud_init")) cfg.setCloudInit(val);
-        if (std.mem.eql(u8, key, "gpu_device")) cfg.gpu_device = vm.GpuDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.gpu_device.toIndex());
-        if (std.mem.eql(u8, key, "display")) cfg.display = vm.DisplayType.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.display.toIndex());
-        if (std.mem.eql(u8, key, "display_resolution")) cfg.display_resolution = vm.DisplayResolution.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.display_resolution.toIndex());
-        if (std.mem.eql(u8, key, "guest_os")) cfg.guest_os = vm.GuestOs.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.guest_os.toIndex());
-        if (std.mem.eql(u8, key, "audio")) cfg.audio = vm.AudioDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.audio.toIndex());
-        if (std.mem.eql(u8, key, "boot_order")) cfg.boot_order = vm.BootOrder.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.boot_order.toIndex());
-        if (std.mem.eql(u8, key, "rtc")) cfg.rtc = vm.RtcBase.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.rtc.toIndex());
         if (std.mem.eql(u8, key, "accel")) cfg.accel = form_parsers.parseAccel(val);
         if (std.mem.eql(u8, key, "enable_kvm")) {
             if (std.mem.eql(u8, val, "1")) cfg.accel = .auto else cfg.accel = .tcg;
@@ -2049,7 +2061,6 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             }
         }
         if (std.mem.eql(u8, key, "num_displays")) cfg.num_displays = @max(1, @min(vm.MAX_DISPLAYS, std.fmt.parseInt(u32, val, 10) catch cfg.num_displays));
-        if (std.mem.eql(u8, key, "watchdog")) cfg.watchdog = vm.WatchdogAction.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.watchdog.toIndex());
         if (std.mem.eql(u8, key, "io_threads")) cfg.io_threads = std.fmt.parseInt(u32, val, 10) catch cfg.io_threads;
         if (std.mem.eql(u8, key, "disk_bps_throttle")) cfg.disk_bps_throttle = std.fmt.parseInt(u64, val, 10) catch cfg.disk_bps_throttle;
         if (std.mem.eql(u8, key, "disk_iops_throttle")) cfg.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch cfg.disk_iops_throttle;
@@ -2473,8 +2484,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "cpu_sockets")) v.cpu_sockets = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch v.cpu_sockets);
         if (std.mem.eql(u8, key, "cpu_model")) v.cpu_model = vm.CpuModel.fromStr(val);
         if (std.mem.eql(u8, key, "disk")) v.disk_size_gb = vm.clampDiskSize(std.fmt.parseInt(u32, val, 10) catch v.disk_size_gb);
-        if (std.mem.eql(u8, key, "disk_format")) v.disk_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk_format.toIndex());
-        if (std.mem.eql(u8, key, "disk_cache")) v.disk_cache = vm.DiskCache.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk_cache.toIndex());
+        _ = applyEnumField(v, key, val);
         if (std.mem.eql(u8, key, "iso_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setIsoPath(val);
@@ -2492,7 +2502,6 @@ fn handleSave(req: []const u8) ![]const u8 {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setUsbDevice(val);
         }
-        if (std.mem.eql(u8, key, "usb_policy")) v.usb_policy = vm.UsbPolicy.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.usb_policy.toIndex());
         _ = applyBoolField(v, key, val);
         if (std.mem.eql(u8, key, "autoprotect")) v.autoprotect = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "ap_interval")) v.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_interval_min));
@@ -2502,7 +2511,6 @@ fn handleSave(req: []const u8) ![]const u8 {
             v.setDisk2Path(val);
         }
         if (std.mem.eql(u8, key, "disk2_size")) v.disk2_size_gb = vm.clampOptionalDiskSize(std.fmt.parseInt(u32, val, 10) catch v.disk2_size_gb);
-        if (std.mem.eql(u8, key, "disk2_format")) v.disk2_format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.disk2_format.toIndex());
         if (std.mem.eql(u8, key, "floppy")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
             v.setFloppyPath(val);
@@ -2519,13 +2527,6 @@ fn handleSave(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "notes")) v.setNotes(val);
         if (std.mem.eql(u8, key, "tags")) v.setTags(val);
         if (std.mem.eql(u8, key, "cloud_init")) v.setCloudInit(val);
-        if (std.mem.eql(u8, key, "gpu_device")) v.gpu_device = vm.GpuDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.gpu_device.toIndex());
-        if (std.mem.eql(u8, key, "display")) v.display = vm.DisplayType.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.display.toIndex());
-        if (std.mem.eql(u8, key, "display_resolution")) v.display_resolution = vm.DisplayResolution.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.display_resolution.toIndex());
-        if (std.mem.eql(u8, key, "guest_os")) v.guest_os = vm.GuestOs.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.guest_os.toIndex());
-        if (std.mem.eql(u8, key, "audio")) v.audio = vm.AudioDevice.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.audio.toIndex());
-        if (std.mem.eql(u8, key, "boot_order")) v.boot_order = vm.BootOrder.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.boot_order.toIndex());
-        if (std.mem.eql(u8, key, "rtc")) v.rtc = vm.RtcBase.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.rtc.toIndex());
         if (std.mem.eql(u8, key, "accel")) v.accel = form_parsers.parseAccel(val);
         if (std.mem.eql(u8, key, "enable_kvm")) {
             if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg;
@@ -2539,7 +2540,6 @@ fn handleSave(req: []const u8) ![]const u8 {
             if (vm.isValidDisplayPort(p)) v.spice_port = p;
         }
         if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(vm.MAX_DISPLAYS, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
-        if (std.mem.eql(u8, key, "watchdog")) v.watchdog = vm.WatchdogAction.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.watchdog.toIndex());
         if (std.mem.eql(u8, key, "io_threads")) v.io_threads = std.fmt.parseInt(u32, val, 10) catch v.io_threads;
         if (std.mem.eql(u8, key, "disk_bps_throttle")) v.disk_bps_throttle = std.fmt.parseInt(u64, val, 10) catch v.disk_bps_throttle;
         if (std.mem.eql(u8, key, "disk_iops_throttle")) v.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch v.disk_iops_throttle;
