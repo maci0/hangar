@@ -216,3 +216,29 @@ test('write-action without the API key is rejected (401)', async ({ page }) => {
     }, idx);
     expect(r).toBe(401);
 });
+
+test('toolbar dropdown is keyboard-operable: opens, focuses an item, Escape returns focus', async ({ page }) => {
+    await createVm(page, 'wf-kbd');
+    // Select the VM so the toolbar action menus enable.
+    await page.click('#vmlist .vm-item');
+    // Open the Tools menu from its trigger via the keyboard (Enter activates the button).
+    const trigger = page.locator('[data-menu="toolsMenu"]');
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#toolsMenu')).toHaveClass(/open/);
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    // Focus moved into the menu (onto an enabled item) on open.
+    const focusInMenu = await page.evaluate(() => !!document.activeElement?.closest('#toolsMenu'));
+    expect(focusInMenu).toBe(true);
+    // ArrowDown moves focus to a different menu item.
+    const before = await page.evaluate(() => document.activeElement?.textContent);
+    await page.keyboard.press('ArrowDown');
+    const after = await page.evaluate(() => document.activeElement?.textContent);
+    expect(after && after !== before).toBeTruthy();
+    expect(await page.evaluate(() => !!document.activeElement?.closest('#toolsMenu'))).toBe(true);
+    // Escape closes the menu and returns focus to the trigger button.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolsMenu')).not.toHaveClass(/open/);
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-menu'))).toBe('toolsMenu');
+});
