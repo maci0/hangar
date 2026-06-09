@@ -217,6 +217,22 @@ test('write-action without the API key is rejected (401)', async ({ page }) => {
     expect(r).toBe(401);
 });
 
+test('host dashboard shows inventory totals when no VM is selected', async ({ page }) => {
+    await createVm(page, 'wf-dash-a');
+    await createVm(page, 'wf-dash-b');
+    // No VM selected -> the summary panel renders the host dashboard.
+    await page.reload();
+    await expect(page.locator('#tabSummary .dash')).toBeVisible();
+    // "N virtual machines" reflects the inventory; capacity cards present.
+    await expect(page.locator('.dash-head')).toContainText('virtual machines');
+    const cards = page.locator('.dash-card');
+    expect(await cards.count()).toBeGreaterThanOrEqual(7); // 4 state + 3 capacity
+    // Clicking a sidebar VM leaves the dashboard for the detail view.
+    await page.click('#vmlist .vm-item');
+    await expect(page.locator('#tabSummary .dash')).toHaveCount(0);
+    await expect(page.locator('.vm-facts')).toBeVisible();
+});
+
 test('toolbar dropdown is keyboard-operable: opens, focuses an item, Escape returns focus', async ({ page }) => {
     await createVm(page, 'wf-kbd');
     // Select the VM so the toolbar action menus enable.

@@ -120,7 +120,7 @@ setServerDown(false);vms=normVmBools(await r.json());
 // already (re)started the console for the new VM — touching fb/serial here with
 // the stale prevStatus would flap it. Compare by name (indices shift on
 // delete/reorder).
-if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);}else{stopFb();stopSerial(true);}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
+if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);}else{stopFb();stopSerial(true);}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();else if(sel===null&&!document.querySelector('#tabSummary .dash:focus-within'))showEmptyState();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
 function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f)||(v.tags||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
@@ -153,13 +153,29 @@ function networkLabel(v){var n=(v&&v.net)||'user';if(n==='user')return 'NAT (use
 function displayInfo(v){var displayLabel=displayLabels[Number(v&&v.display)]||'Display';var gpuLabel=gpuLabels[Number(v&&v.gpu_device)]||'GPU';var embedLabel=v&&v.embed_display==='true'?'Embedded':'Native';var accelLabel=v&&v.enable_3d==='true'?'3D enabled':'2D';return {displayLabel:displayLabel,gpuLabel:gpuLabel,embedLabel:embedLabel,accelLabel:accelLabel};}
 async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;settingsDirty=false;}stopFb();stopSerial(true);sel=i;renderList();closeSidebar();closeToolbarMore();closeActionMenus();if(sel!==null){var v=vms[sel];if(v&&v.status==='running'&&embeddedDisplayCapable(v)&&activeTab!=='settings')activeTab='console';if(activeTab==='settings')editVm();else renderDetails();if(v&&v.status==='running'){startFb();startSerial(sel);}}else{showEmptyState();}updateCommandState();}
 async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}stopFb();stopSerial(true);sel=null;renderList();showEmptyState();updateCommandState();}
+// Host inventory dashboard shown when no VM is selected: state breakdown +
+// allocated-capacity totals + an attention list. Pure render from the polled vms[].
+function hostDashboardHtml(){
+  var st={running:0,stopped:0,paused:0,suspended:0};var vcpu=0,ram=0,disk=0,attention=[];
+  for(var i=0;i<vms.length;i++){var v=vms[i];st[v.status]=(st[v.status]||0)+1;
+    vcpu+=Number(v.cpu)||0;ram+=Number(v.mem)||0;disk+=Number(v.disk)||0;
+    if(summaryWarnings(v)!=='')attention.push(v.name);}
+  var ramGB=Math.round(ram/102.4)/10;
+  function card(n,l,cls){return '<div class="dash-card"><div class="dash-num '+(cls||'')+'">'+n+'</div><div class="dash-lbl">'+l+'</div></div>';}
+  var h='<div class="dash"><div class="dash-head"><h2>Inventory</h2><span class="muted">'+vms.length+' virtual machine'+(vms.length===1?'':'s')+'</span></div>';
+  h+='<div class="dash-cards">'+card(st.running||0,'Running','running')+card(st.stopped||0,'Stopped','')+card(st.paused||0,'Paused','paused')+card(st.suspended||0,'Suspended','suspended')+'</div>';
+  h+='<div class="dash-cards">'+card(vcpu,'vCPU allocated')+card(ramGB+' GB','RAM allocated')+card(disk+' GB','Disk provisioned')+'</div>';
+  if(attention.length){h+='<div class="dash-attention"><h3>Needs attention</h3><ul>';for(var a=0;a<attention.length;a++)h+='<li>'+escHtml(attention[a])+'</li>';h+='</ul></div>';}
+  h+='<div class="empty-actions" style="justify-content:flex-start;margin-top:18px"><button class="btn primary" data-action="newVm">＋ New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
+  return h;
+}
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
 const c=document.getElementById('tabConsole');const nm=document.getElementById('vmname');const tb=document.getElementById('tabBar');
 if(!t||!s||!nm||!tb)return;
-nm.textContent='Select a VM';document.title='Hangar — VM Manager';tb.style.display='none';
+nm.textContent=vms.length?'Overview':'Select a VM';document.title='Hangar — VM Manager';tb.style.display='none';
 t.style.display='block';s.style.display='none';if(c)c.style.display='none';activeTab='summary';
 t.setAttribute('aria-hidden','false');s.setAttribute('aria-hidden','true');if(c)c.setAttribute('aria-hidden','true');
-var empty='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p><div class="empty-actions"><button class="btn primary" data-action="newVm">＋ New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
+var empty=vms.length?hostDashboardHtml():'<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p><div class="empty-actions"><button class="btn primary" data-action="newVm">＋ New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
 t.innerHTML=empty;
 s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';
 if(c)c.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';
