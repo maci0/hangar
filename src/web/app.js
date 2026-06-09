@@ -175,41 +175,49 @@ nm.textContent=v.name;document.title='Hangar — '+v.name;
 var info=displayInfo(v);
 var videoMeta='<span>'+escHtml(info.embedLabel+' '+info.displayLabel)+'</span><span>'+escHtml(info.gpuLabel)+'</span><span>'+escHtml(info.accelLabel)+'</span>';
 if(tc){tc.innerHTML=embeddedDisplayCapable(v)?'<div class="console-empty compact"><strong>Console controls are above the VM header.</strong><span>Use Display Only for full-screen guest interaction.</span></div>':'<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}
-let h='<div class="summary-grid">';
-h+=`<div class="summary-card ${sc}"><div class="card-label">State</div><div class="card-value ${sc}">${escHtml(statusLabel(v.status))}</div></div>`;
-h+=`<div class="summary-card"><div class="card-label">Guest OS</div><div class="card-value">${escHtml(v.os)}</div></div>`;
-h+=`<div class="summary-card"><div class="card-label">Memory</div><div class="card-value">${escHtml(v.mem)} MB</div></div>`;
-h+=`<div class="summary-card"><div class="card-label">CPU</div><div class="card-value">${escHtml(v.cpu)} cores</div></div>`;
-h+=`<div class="summary-card"><div class="card-label">Hard Disk</div><div class="card-value">${escHtml(v.disk)} GB</div></div>`;
-h+=`<div class="summary-card"><div class="card-label">Video</div><div class="card-value video-value">${videoMeta}</div></div>`;
-if(v.iso_path)h+=`<div class="summary-card"><div class="card-label">CD/DVD</div><div class="card-value">${escHtml(v.iso_path)}</div></div>`;
-h+=`<div class="summary-card"><div class="card-label">Network</div><div class="card-value">${escHtml(networkLabel(v))}</div></div>`;
-if(v.mac)h+=`<div class="summary-card"><div class="card-label">MAC</div><div class="card-value">${escHtml(v.mac)}</div></div>`;
-if(v.nic2_mode&&v.nic2_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 2</div><div class="card-value">${escHtml(v.nic2_mode)}</div></div>`;
-if(v.nic3_mode&&v.nic3_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 3</div><div class="card-value">${escHtml(v.nic3_mode)}</div></div>`;
-if(v.nic4_mode&&v.nic4_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 4</div><div class="card-value">${escHtml(v.nic4_mode)}</div></div>`;
-if(v.nic5_mode&&v.nic5_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 5</div><div class="card-value">${escHtml(v.nic5_mode)}</div></div>`;
-if(v.nic6_mode&&v.nic6_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 6</div><div class="card-value">${escHtml(v.nic6_mode)}</div></div>`;
-if(v.nic7_mode&&v.nic7_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 7</div><div class="card-value">${escHtml(v.nic7_mode)}</div></div>`;
-if(v.nic8_mode&&v.nic8_mode!=='none')h+=`<div class="summary-card"><div class="card-label">NIC 8</div><div class="card-value">${escHtml(v.nic8_mode)}</div></div>`;
-if(v.shared_folder)h+=`<div class="summary-card"><div class="card-label">Shared Folder</div><div class="card-value">${escHtml(v.shared_folder)}</div></div>`;
-if(v.usb_device)h+=`<div class="summary-card"><div class="card-label">USB Device</div><div class="card-value">${escHtml(v.usb_device)}</div></div>`;
-if(v.guest_tools==='true')h+=`<div class="summary-card"><div class="card-label">Guest Tools</div><div class="card-value">✓ installed</div></div>`;
-if(v.autoprotect==='true')h+=`<div class="summary-card"><div class="card-label">AutoProtect</div><div class="card-value">every ${escHtml(v.autoprotect_interval)} min, keep ${escHtml(v.autoprotect_max)}</div></div>`;
-if(v.hasDisk2==='true')h+=`<div class="summary-card"><div class="card-label">Disk 2</div><div class="card-value">${escHtml(v.disk2_size)} GB</div></div>`;
-if(v.extra0_path&&v.extra0_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 1</div><div class="card-value">${escHtml(v.extra0_size)} GB</div></div>`;
-if(v.extra1_path&&v.extra1_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 2</div><div class="card-value">${escHtml(v.extra1_size)} GB</div></div>`;
-if(v.extra2_path&&v.extra2_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 3</div><div class="card-value">${escHtml(v.extra2_size)} GB</div></div>`;
-if(v.extra3_path&&v.extra3_path!=='')h+=`<div class="summary-card"><div class="card-label">Extra Disk 4</div><div class="card-value">${escHtml(v.extra3_size)} GB</div></div>`;
-if(v.hasDisk==='true')h+=`<div class="summary-card"><div class="card-label">Disk Usage</div><div class="card-value" id="diskUsageVal">…</div></div>`;
-if(v.status==='running')h+=`<div class="summary-card"><div class="card-label">Guest IP</div><div class="card-value" id="guestIpVal">…</div></div>`;
-if(v.hasFloppy==='true')h+=`<div class="summary-card"><div class="card-label">Floppy</div><div class="card-value">attached</div></div>`;
-if(v.port_forwards)h+=`<div class="summary-card"><div class="card-label">Port Forwards</div><div class="card-value">${escHtml(v.port_forwards)}</div></div>`;
-if(v.tags)h+=`<div class="summary-card"><div class="card-label">Tags</div><div class="card-value">${escHtml(v.tags)}</div></div>`;
-if(v.notes)h+=`<div class="summary-card"><div class="card-label">Notes</div><div class="card-value">${escHtml(v.notes)}</div></div>`;
-h+=summaryWarnings(v);
+function row(l,vv){return '<div class="srow"><dt>'+l+'</dt><dd>'+vv+'</dd></div>';}
+const memTxt=Number(v.mem)>=1024?(Math.round(Number(v.mem)/102.4)/10)+' GB':escHtml(v.mem)+' MB';
+let h='<div class="vm-facts">';
+h+='<span class="fact-badge '+sc+'">'+escHtml(statusLabel(v.status))+'</span>';
+h+='<span class="fact">'+escHtml(v.os)+'</span>';
+h+='<span class="fact"><b>'+escHtml(v.cpu)+'</b> vCPU</span>';
+h+='<span class="fact"><b>'+memTxt+'</b> RAM</span>';
+h+='<span class="fact"><b>'+escHtml(v.disk)+'</b> GB disk</span>';
+if(v.status==='running')h+='<span class="fact">IP <span id="guestIpVal">…</span></span>';
+h+='</div><div class="summary-sections">';
+// VM Hardware
+h+='<section class="sum-section"><h3>VM Hardware</h3><dl class="sum-dl">';
+h+=row('CPU',escHtml(v.cpu)+' cores'+(Number(v.cpu_sockets)>1?' · '+escHtml(v.cpu_sockets)+' sockets':''));
+h+=row('Memory',escHtml(v.mem)+' MB');
+h+=row('Hard Disk',escHtml(v.disk)+' GB'+(v.hasDisk==='true'?'<div class="usage" id="diskUsageVal">…</div>':''));
+if(v.hasDisk2==='true')h+=row('Disk 2',escHtml(v.disk2_size)+' GB');
+['extra0','extra1','extra2','extra3'].forEach(function(k,i){if(v[k+'_path'])h+=row('Extra Disk '+(i+1),escHtml(v[k+'_size'])+' GB');});
+if(v.iso_path)h+=row('CD/DVD',escHtml(v.iso_path));
+if(v.hasFloppy==='true')h+=row('Floppy','attached');
+h+=row('Network',escHtml(networkLabel(v))+(v.mac?' · '+escHtml(v.mac):''));
+[2,3,4,5,6,7,8].forEach(function(n){var m=v['nic'+n+'_mode'];if(m&&m!=='none')h+=row('NIC '+n,escHtml(m));});
+h+=row('Video',videoMeta);
+if(v.usb_device)h+=row('USB Device',escHtml(v.usb_device));
+h+='</dl></section>';
+// Guest & Tools
+h+='<section class="sum-section"><h3>Guest &amp; Tools</h3><dl class="sum-dl">';
+h+=row('Guest OS',escHtml(v.os));
+h+=row('Guest Tools',v.guest_tools==='true'?'<span class="ok">✓ installed</span>':'<span class="muted">not installed</span>');
+if(v.autoprotect==='true')h+=row('AutoProtect','every '+escHtml(v.autoprotect_interval)+' min · keep '+escHtml(v.autoprotect_max));
+h+='</dl></section>';
+// Options
+var opts='';
+if(v.shared_folder)opts+=row('Shared Folder',escHtml(v.shared_folder));
+if(v.port_forwards)opts+=row('Port Forwards',escHtml(v.port_forwards));
+if(opts)h+='<section class="sum-section"><h3>Options</h3><dl class="sum-dl">'+opts+'</dl></section>';
+// Tags
+if(v.tags){var chips=v.tags.split(',').map(function(t){return t.trim();}).filter(Boolean).map(function(t){return '<span class="tag-chip">'+escHtml(t)+'</span>';}).join('');h+='<section class="sum-section"><h3>Tags</h3><div class="tag-chips">'+chips+'</div></section>';}
+// Notes (full width)
+if(v.notes)h+='<section class="sum-section span2"><h3>Notes</h3><div class="sum-notes">'+escHtml(v.notes)+'</div></section>';
 h+='</div>';
-h+='<div class="summary-actions" style="margin-top:12px;display:flex;gap:8px"><button type="button" class="btn" data-action="viewLog">View QEMU Log</button>'+(v.status==='running'?'<button type="button" class="btn" data-action="takeScreenshot">Screenshot</button>':'')+'</div>';
+var warn=summaryWarnings(v);
+if(warn)h+='<div class="summary-grid" style="margin-top:14px">'+warn+'</div>';
+h+='<div class="summary-actions" style="margin-top:16px;display:flex;gap:8px"><button type="button" class="btn" data-action="viewLog">View QEMU Log</button>'+(v.status==='running'?'<button type="button" class="btn" data-action="takeScreenshot">Screenshot</button>':'')+'</div>';
 ts.innerHTML=h;
 if(v.hasDisk==='true')loadDiskInfo(sel);
 if(v.status==='running')loadGuestInfo(sel);
@@ -497,7 +505,7 @@ async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=docume
 function downloadDisk2(){if(sel===null)return;const a=document.createElement('a');a.href='/api/vms/'+sel+'/disk2/download';a.download=vms[sel].name+'_disk2.qcow2';document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);},1000);}
 function fmtBytes(n){if(!Number.isFinite(n)||n<0)return'?';const u=['B','KiB','MiB','GiB','TiB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++;}return(i===0?x:x.toFixed(1))+' '+u[i];}
 async function loadGuestInfo(idx){const el=document.getElementById('guestIpVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/guestinfo',{headers:{'X-API-Key':API_KEY}});if(!r.ok)throw 0;const j=await r.json();if(sel===idx&&document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent=(j.ips&&j.ips.length)?j.ips:'(guest agent not responding)';}catch(e){if(document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent='unavailable';}}
-async function loadDiskInfo(idx){const el=document.getElementById('diskUsageVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/diskinfo');if(!r.ok)throw 0;const j=await r.json();if(j.error)throw 0;if(sel===idx&&document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent=fmtBytes(j.actual_bytes)+' used / '+fmtBytes(j.virtual_bytes);}catch(e){if(document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent='unavailable';}}
+async function loadDiskInfo(idx){const el=document.getElementById('diskUsageVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/diskinfo');if(!r.ok)throw 0;const j=await r.json();if(j.error)throw 0;if(sel===idx&&document.getElementById('diskUsageVal')){var pct=j.virtual_bytes>0?Math.min(100,Math.round(j.actual_bytes/j.virtual_bytes*100)):0;document.getElementById('diskUsageVal').innerHTML='<div class="ubar"><span style="width:'+pct+'%"></span></div><div class="ubar-txt">'+fmtBytes(j.actual_bytes)+' used / '+fmtBytes(j.virtual_bytes)+' ('+pct+'%)</div>';}}catch(e){if(document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent='unavailable';}}
 async function takeScreenshot(){if(sel===null)return;try{const r=await fetch('/api/vms/'+sel+'/screenshot',{headers:{'X-API-Key':API_KEY}});if(!r.ok){let t='';try{const j=await r.json();t=j.error||'';}catch(e){}showToast('Screenshot failed: '+(t||('HTTP '+r.status)),'error');return;}const b=await r.blob();const u=URL.createObjectURL(b);window.open(u,'_blank');setTimeout(function(){URL.revokeObjectURL(u);},10000);}catch(e){showToast('Screenshot failed','error');}}
 async function changeCd(){if(sel===null)return;const cur=(document.getElementById('e_iso_path')||{}).value||vms[sel].iso_path||'';const p=await showPromptDialog('Path to the CD/ISO image to mount:',cur);if(p===null||p==='')return;const r=await apiPost('/api/vms/'+sel+'/cdrom','path='+encodeURIComponent(p));if(r){await refresh();setStatus('CD/ISO changed.'+(vms[sel].status==='running'?'':' Mounts on next boot.'));}}
 async function ejectCd(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/cdrom/eject','');if(r){await refresh();setStatus('CD/ISO ejected.');}}

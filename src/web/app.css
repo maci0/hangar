@@ -1009,3 +1009,31 @@ body.displayonly .displayonly-bar{display:flex}
 .displayonly-exit:hover{background:rgba(255,255,255,.22)}
 .displayonly-exit:focus-visible{outline:2px solid #fff;outline-offset:2px}
 @media(hover:none){body.displayonly .displayonly-bar{opacity:1;pointer-events:auto}}
+
+/* ── vSphere-style VM summary: state/hardware strip + grouped sections ── */
+.vm-facts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 18px}
+.vm-facts .fact{font-size:13px;color:var(--text-muted);background:var(--surface);border:1px solid var(--border-soft);border-radius:999px;padding:5px 13px}
+.vm-facts .fact b{color:var(--text);font-weight:650}
+.fact-badge{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:5px 13px;border-radius:999px;border:1px solid var(--border);color:var(--text-dim)}
+.fact-badge.running{color:var(--success);border-color:var(--success);background:rgba(59,210,143,.12)}
+.fact-badge.paused{color:var(--pause);border-color:var(--pause);background:rgba(241,168,93,.12)}
+.fact-badge.suspended{color:var(--warn);border-color:var(--warn);background:rgba(240,202,88,.12)}
+.summary-sections{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px;align-items:start}
+.sum-section{background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius);padding:15px 18px}
+.sum-section.span2{grid-column:1/-1}
+.sum-section>h3{margin:0 0 8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)}
+.sum-dl{margin:0;display:flex;flex-direction:column}
+.srow{display:flex;justify-content:space-between;gap:16px;padding:8px 0;border-top:1px solid var(--border-soft)}
+.srow:first-child{border-top:0}
+.srow dt{color:var(--text-muted);font-size:13px;flex:0 0 auto}
+.srow dd{margin:0;color:var(--text);font-size:13px;font-weight:550;text-align:right;word-break:break-word;max-width:64%}
+.srow dd .video-value,.srow dd>span{display:inline}
+.srow dd .ok{color:var(--success);font-weight:650}
+.srow dd .muted{color:var(--text-dim);font-weight:500}
+.usage{margin-top:6px}
+.ubar{height:6px;background:var(--border-soft);border-radius:3px;overflow:hidden}
+.ubar span{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width 300ms ease}
+.ubar-txt{margin-top:4px;font-size:11px;color:var(--text-dim)}
+.tag-chips{display:flex;flex-wrap:wrap;gap:6px}
+.tag-chip{font-size:12px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);border-radius:999px;padding:3px 11px;font-weight:600}
+.sum-notes{white-space:pre-wrap;color:var(--text-muted);font-size:13px;line-height:1.55}
