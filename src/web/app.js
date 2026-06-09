@@ -53,6 +53,7 @@ function normVmBools(arr){if(Array.isArray(arr)){for(var i=0;i<arr.length;i++){v
 var openActionMenu=null;
 var actionMenuTrigger=null; // the toolbar button that opened the current menu, for keyboard focus-return
 var dashSort={col:'name',dir:1}; // host-dashboard inventory-table sort state
+var selectMode=false; var checkedNames=new Set(); // sidebar multi-select bulk-ops state
 var settingsCategory='compute';
 var displayLabels=['GTK','SDL','SPICE','VNC','None'];
 var gpuLabels=['Virtio-GPU (virgl 3D)','Virtio-VGA (virgl 3D)','Virtio-GPU','Virtio-VGA','QXL','Standard VGA'];
@@ -128,17 +129,19 @@ function renderList(filter){const e=document.getElementById('vmlist');if(!e)retu
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f)||(v.tags||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
 let hasFavs=false,hasNon=false,maxMem=16384;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;const m=x.v.mem||0;if(m>maxMem)maxMem=m;}
 function vmBars(v){var barMem=v.mem||1024;var memPct=Math.min(100,Math.round(barMem/maxMem*100));var cpu=v.cpu||1;var ch='',cs=Math.min(cpu,8);for(var j=0;j<cs;j++)ch+='<span class="cpu-dot"></span>';if(cpu>8)ch+='<span class="cpu-plus">+</span>';return '<div class="vm-bars" aria-hidden="true"><span class="vm-bar-cpu">'+ch+'</span><span class="vm-bar-mem"><span class="vm-bar-fill" style="width:'+memPct+'%"></span><span class="vm-bar-mem-label">'+barMem+'MB</span></span></div>';}
-for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;
-const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
-h+=`<div class="vm-item${sel===x.i?' active':''}${transitioningIdx===x.i?' transitioning':''}" role="option" aria-selected="${sel===x.i?'true':'false'}" data-vm-index="${x.i}" tabindex="0" data-action="select" draggable="true"><span class="dot ${dotCls}" role="img" aria-label="${dotLabel}"></span> ${escHtml(x.v.name)}<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites">★</button>${vmBars(x.v)}</div>`;}}
+function vmItemHtml(x){
+ const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
+ const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
+ const star=x.fav?'<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites">★</button>':'<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites">☆</button>';
+ const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-name="'+escHtml(x.v.name)+'"'+(checkedNames.has(x.v.name)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
+ return '<div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="option" aria-selected="'+(sel===x.i?'true':'false')+'" data-vm-index="'+x.i+'" tabindex="0" data-action="select" draggable="true">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'"></span> '+escHtml(x.v.name)+star+vmBars(x.v)+'</div>';
+}
+for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;h+=vmItemHtml(x);}}
 if(hasFavs&&hasNon)h+='<div role="separator" aria-hidden="true" style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
-if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;
-const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
-const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
-h+=`<div class="vm-item${sel===x.i?' active':''}${transitioningIdx===x.i?' transitioning':''}" role="option" aria-selected="${sel===x.i?'true':'false'}" data-vm-index="${x.i}" tabindex="0" data-action="select" draggable="true"><span class="dot ${dotCls}" role="img" aria-label="${dotLabel}"></span> ${escHtml(x.v.name)}<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites">☆</button>${vmBars(x.v)}</div>`;}}}
+if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;h+=vmItemHtml(x);}}}
 if(!h){if(f)h='<div class="sidebar-empty"><p>No matching VMs</p><button class="btn" data-action="clearSearch">Clear search</button></div>';else h='<div class="sidebar-empty"><p>No virtual machines yet</p><button class="btn primary" data-action="newVm">＋ New VM</button></div>';}
 e.innerHTML=h;
+updateBulkBar();
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+(cnt===1?' virtual machine':' virtual machines');if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
 if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+' — '+v.status;if(v.started&&v.started>0&&v.status==='running'){const elapsed=Math.floor(Date.now()/1000)-v.started;const days=Math.floor(elapsed/86400);const hrs=Math.floor((elapsed%86400)/3600);const mins=Math.floor((elapsed%3600)/60);const secs=elapsed%60;st+=' | Uptime: '+(days>0?days+'d ':'')+hrs+':'+String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');}st+='    |    '+parts;var sb=document.getElementById('statusbar');if(sb)sb.textContent=st;}
@@ -714,6 +717,42 @@ function renderPalette(filter){var all=paletteCommands();var f=(filter||'').toLo
 function movePalette(d){if(!paletteItems.length)return;paletteSel=(paletteSel+d+paletteItems.length)%paletteItems.length;var lis=document.querySelectorAll('#paletteList li[data-pidx]');for(var i=0;i<lis.length;i++)lis[i].classList.toggle('sel',i===paletteSel);if(lis[paletteSel])lis[paletteSel].scrollIntoView({block:'nearest'});}
 function runPalette(i){var it=paletteItems[i];if(!it)return;closePalette();if(it.run){it.run();}else if(it.vm){var idx=idxByName(it.vm);if(idx>=0)select(idx);}}
 
+// ── Sidebar multi-select + bulk operations ──
+function toggleSelectMode(){selectMode=!selectMode;if(!selectMode)checkedNames.clear();var t=document.getElementById('selectToggle');if(t)t.setAttribute('aria-pressed',selectMode?'true':'false');var sv=document.getElementById('search');renderList(sv?sv.value.toLowerCase():'');}
+function updateBulkBar(){var bar=document.getElementById('bulkBar');if(!bar)return;bar.hidden=!selectMode;var c=document.getElementById('bulkCount');if(c)c.textContent=checkedNames.size+' selected';}
+// Run `fn(idx,name)` for each checked VM, re-syncing vms[] from the server before
+// each so an index stays correct even as earlier deletes shift the list.
+async function bulkRun(label,fn){
+  var names=Array.from(checkedNames);if(!names.length){showToast('No VMs selected','warn');return;}
+  var ok=0,fail=0;
+  for(var i=0;i<names.length;i++){
+    try{var rr=await fetch('/api/vms');if(rr.ok)vms=await rr.json();}catch(e){}
+    var idx=idxByName(names[i]);if(idx<0){continue;}
+    try{var r=await fn(idx,names[i]);if(r)ok++;else fail++;}catch(e){fail++;}
+  }
+  setStatus(label+': '+ok+' ok'+(fail?(', '+fail+' failed'):''));
+  await refresh();
+}
+async function doBulkPower(on){
+  if(!checkedNames.size){showToast('No VMs selected','warn');return;}
+  var verb=on?'Power on':'Power off';
+  if(!(await showConfirmDialog(verb+' '+checkedNames.size+' selected VM(s)?',on?{okLabel:'Power On'}:{danger:true,okLabel:'Power Off'})))return;
+  await bulkRun(verb,function(idx){var v=vms[idx];var running=(v.status==='running'||v.status==='paused');if((on&&running)||(!on&&!running))return Promise.resolve(true);return apiPost('/api/vms/'+idx+'/power');});
+}
+async function doBulkSnapshot(){
+  if(!checkedNames.size){showToast('No VMs selected','warn');return;}
+  var tag=await showPromptDialog('Snapshot name for '+checkedNames.size+' selected VM(s):','bulk-snapshot');
+  if(tag===null)return;tag=tag.trim();if(!tag){showToast('Enter a snapshot name','warn');return;}
+  if(/[\x00-\x1f]|\.\./.test(tag)||tag.length>255){showToast('Snapshot name is invalid','error');return;}
+  await bulkRun('Snapshot',function(idx){return apiPost('/api/vms/'+idx+'/snapshots','tag='+encodeURIComponent(tag));});
+}
+async function doBulkDelete(){
+  if(!checkedNames.size){showToast('No VMs selected','warn');return;}
+  if(!(await showConfirmDialog('Delete '+checkedNames.size+' selected VM(s)? Undo restores them one at a time.',{danger:true,okLabel:'Delete'})))return;
+  await bulkRun('Delete',function(idx){return apiPost('/api/vms/'+idx+'/delete');});
+  checkedNames.clear();updateBulkBar();
+}
+
 document.addEventListener('keydown',async function(e){var shift=e.shiftKey;
 if((e.ctrlKey||e.metaKey)&&e.key==='s'&&activeTab==='settings'&&sel!==null){e.preventDefault();saveVm();return;}
 if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K')){e.preventDefault();openPalette();return;}
@@ -1227,6 +1266,11 @@ var actionHandlers={
  vnetSaveAll:function(){vnetSaveAll();},
  select:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);},
 	 sortInv:function(el){var c=el.getAttribute('data-col');if(!c)return;if(dashSort.col===c)dashSort.dir=-dashSort.dir;else{dashSort.col=c;dashSort.dir=1;}showEmptyState();},
+	 toggleSelectMode:function(){toggleSelectMode();},
+	 toggleCheck:function(el){var n=el.getAttribute('data-vm-name');if(!n)return;if(el.checked)checkedNames.add(n);else checkedNames.delete(n);updateBulkBar();},
+	 bulkPower:function(el){doBulkPower(el.getAttribute('data-on')==='1');},
+	 bulkSnapshot:function(){doBulkSnapshot();},
+	 bulkDelete:function(){doBulkDelete();},
  toggleFavorite:function(el){var parent=el.closest('.vm-item');if(!parent)return;var i=parseInt(parent.getAttribute('data-vm-index'),10);if(!isNaN(i))toggleFavorite(i);},
  revertSnapshot:function(el){revertSnapshot(el.getAttribute('data-snap-tag')||'');},
  deleteSnapshot:function(el){deleteSnapshot(el.getAttribute('data-snap-tag')||'');},

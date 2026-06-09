@@ -1076,3 +1076,15 @@ body.displayonly .displayonly-bar{display:flex}
 #paletteList li{padding:9px 14px;border-radius:8px;cursor:pointer;font-size:14px;color:var(--text-muted)}
 #paletteList li.sel{background:var(--accent-soft);color:var(--text)}
 #paletteList li.palette-empty{color:var(--text-dim);cursor:default}
+
+/* ── Sidebar multi-select + bulk bar ── */
+.sidebar-header .select-toggle{margin-left:auto;background:transparent;border:1px solid var(--border-soft);color:var(--text-muted);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:14px;line-height:1}
+.sidebar-header .select-toggle[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.sidebar-header .select-toggle:hover{border-color:var(--border-hover);color:var(--text)}
+.vm-item.selectable{padding-left:8px}
+.vm-check{margin-right:8px;cursor:pointer;flex:0 0 auto;accent-color:var(--accent)}
+.bulk-bar{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-top:1px solid var(--border);background:var(--bg-alt)}
+.bulk-bar[hidden]{display:none}
+.bulk-count{font-size:12px;color:var(--text-muted);font-weight:600}
+.bulk-actions{display:flex;flex-wrap:wrap;gap:6px}
+.bulk-actions .btn{padding:5px 9px;font-size:12px}

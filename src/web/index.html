@@ -35,6 +35,7 @@
   <div class="sidebar-header">
     <div class="logo" aria-hidden="true">H</div>
     <h2>Hangar</h2>
+    <button id="selectToggle" class="select-toggle" data-action="toggleSelectMode" aria-pressed="false" title="Select multiple VMs (bulk actions)" aria-label="Select multiple VMs">☑</button>
   </div>
   <div class="search-wrap">
     <input id="search" type="search" placeholder="Search VMs…" data-action="filterList" aria-label="Search VMs" autocomplete="off">
@@ -44,6 +45,16 @@
     <div class="empty-state" style="padding:40px 20px;text-align:center">
       <p style="color:var(--text-dim);font-size:12px">No VMs</p>
     </div>
+  </div>
+  <div id="bulkBar" class="bulk-bar" hidden role="toolbar" aria-label="Bulk actions">
+    <span id="bulkCount" class="bulk-count">0 selected</span>
+    <div class="bulk-actions">
+      <button class="btn" data-action="bulkPower" data-on="1" title="Power on selected">▶ On</button>
+      <button class="btn" data-action="bulkPower" data-on="0" title="Power off selected">⏻ Off</button>
+      <button class="btn" data-action="bulkSnapshot" title="Snapshot selected">⛶ Snap</button>
+      <button class="btn danger" data-action="bulkDelete" title="Delete selected">🗑 Delete</button>
+    </div>
+    <button class="btn" data-action="toggleSelectMode" title="Exit select mode">Done</button>
   </div>
 </aside>
 

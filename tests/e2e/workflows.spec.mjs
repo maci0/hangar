@@ -233,6 +233,22 @@ test('host dashboard shows inventory totals when no VM is selected', async ({ pa
     await expect(page.locator('.vm-facts')).toBeVisible();
 });
 
+test('multi-select bulk delete removes only the checked VMs', async ({ page }) => {
+    await createVm(page, 'wf-bulk-1');
+    await createVm(page, 'wf-bulk-2');
+    await createVm(page, 'wf-bulk-keep');
+    await page.reload();
+    await page.click('#selectToggle');
+    await page.check('.vm-check[data-vm-name="wf-bulk-1"]');
+    await page.check('.vm-check[data-vm-name="wf-bulk-2"]');
+    await expect(page.locator('#bulkCount')).toHaveText('2 selected');
+    await page.click('[data-action="bulkDelete"]');
+    await page.locator('#confirmOkBtn').click(); // custom confirm dialog
+    await expect.poll(() => indexOf(page, 'wf-bulk-1')).toBe(-1);
+    expect(await indexOf(page, 'wf-bulk-2')).toBe(-1);
+    expect(await indexOf(page, 'wf-bulk-keep')).toBeGreaterThanOrEqual(0);
+});
+
 test('command palette (Ctrl+K) opens, filters, runs a command, and closes', async ({ page }) => {
     await createVm(page, 'wf-pal');
     await page.reload();
