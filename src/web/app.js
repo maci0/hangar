@@ -960,10 +960,10 @@ function startVnc(idx, displayEl) {
       updateDisplayBadge('connected', 'vnc');
       startDisplayPresenter(displayEl, 'vnc');
     });
-    rfb.addEventListener('disconnect', function(e) {
+    rfb.addEventListener('disconnect', function() {
       stopFb();
     });
-    rfb.addEventListener('credentialsrequired', function(e) {
+    rfb.addEventListener('credentialsrequired', function() {
       rfb.sendCredentials({ password: '' });
     });
     rfb.scaleViewport = true;
