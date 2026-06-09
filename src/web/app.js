@@ -38,6 +38,7 @@ function cycleTheme(){
  syncThemeButtons(next);
  showToast('Theme: '+next.charAt(0).toUpperCase()+next.slice(1),'info',{duration:2000});
 }
+window.cycleTheme=cycleTheme; // expose to global scope: the toolbar theme button + command palette (outside this IIFE) call it
 })();
 var vms=[]; var sel=null; var activeTab='summary'; var transitioningIdx=null; var refreshBusy=false;
 // VMs are addressed by list index, but the background poll replaces vms[] wholesale.
@@ -677,8 +678,45 @@ var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventList
     ctxMenu.appendChild(mi);});
 });
 // ── Keyboard Shortcuts ──
+// ── Command palette (Ctrl+K): fuzzy command + jump-to-VM launcher ──
+var paletteItems=[],paletteSel=0,palettePrevFocus=null;
+function paletteCommands(){
+  var c=[{label:'New VM',run:newVm},{label:'Import VM',run:importGuest},{label:'VM Catalog',run:openCatalog},{label:'Virtual Network Editor',run:openVnets},{label:'Preferences',run:openPrefs},{label:'Keyboard Shortcuts',run:showShortcutsModal},{label:'Toggle Theme',run:window.cycleTheme},{label:'Refresh Inventory',run:refresh}];
+  if(sel!==null&&sel<vms.length){var v=vms[sel];var on=(v.status==='running'||v.status==='paused');
+    c.push({label:(on?'Power Off — ':'Power On — ')+v.name,run:powerToggle});
+    c.push({label:'Settings — '+v.name,run:editVm});
+    c.push({label:'Take Snapshot — '+v.name,run:takeSnapshot});
+    c.push({label:'Clone — '+v.name,run:cloneGuest});
+    c.push({label:'Rename — '+v.name,run:renameGuest});
+    c.push({label:'Delete — '+v.name,run:deleteVm});}
+  for(var i=0;i<vms.length;i++)c.push({label:'Go to '+vms[i].name,vm:vms[i].name});
+  return c;
+}
+function ensurePalette(){
+  if(document.getElementById('palette'))return;
+  var o=document.createElement('div');o.id='palette';o.className='palette-overlay';o.hidden=true;
+  o.innerHTML='<div class="palette" role="dialog" aria-label="Command palette"><input id="paletteInput" type="text" placeholder="Type a command or VM name…" aria-label="Command palette" autocomplete="off"><ul id="paletteList" role="listbox" aria-label="Commands"></ul></div>';
+  document.body.appendChild(o);
+  o.addEventListener('click',function(e){if(e.target===o)closePalette();});
+  var inp=o.querySelector('#paletteInput');
+  inp.addEventListener('input',function(){renderPalette(inp.value);});
+  inp.addEventListener('keydown',function(e){
+    if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closePalette();}
+    else if(e.key==='ArrowDown'){e.preventDefault();e.stopPropagation();movePalette(1);}
+    else if(e.key==='ArrowUp'){e.preventDefault();e.stopPropagation();movePalette(-1);}
+    else if(e.key==='Enter'){e.preventDefault();e.stopPropagation();runPalette(paletteSel);}
+  });
+  o.querySelector('#paletteList').addEventListener('click',function(e){var li=e.target.closest('li[data-pidx]');if(li)runPalette(parseInt(li.getAttribute('data-pidx'),10));});
+}
+function openPalette(){ensurePalette();palettePrevFocus=document.activeElement;var o=document.getElementById('palette');var inp=o.querySelector('#paletteInput');o.hidden=false;inp.value='';renderPalette('');inp.focus();}
+function closePalette(){var o=document.getElementById('palette');if(o)o.hidden=true;if(palettePrevFocus&&palettePrevFocus.focus)palettePrevFocus.focus();}
+function renderPalette(filter){var all=paletteCommands();var f=(filter||'').toLowerCase().trim();paletteItems=f?all.filter(function(it){return it.label.toLowerCase().indexOf(f)>=0;}):all;paletteSel=0;var ul=document.getElementById('paletteList');if(!ul)return;var h='';for(var i=0;i<paletteItems.length;i++)h+='<li role="option" data-pidx="'+i+'" class="'+(i===0?'sel':'')+'">'+escHtml(paletteItems[i].label)+'</li>';ul.innerHTML=h||'<li class="palette-empty">No matches</li>';}
+function movePalette(d){if(!paletteItems.length)return;paletteSel=(paletteSel+d+paletteItems.length)%paletteItems.length;var lis=document.querySelectorAll('#paletteList li[data-pidx]');for(var i=0;i<lis.length;i++)lis[i].classList.toggle('sel',i===paletteSel);if(lis[paletteSel])lis[paletteSel].scrollIntoView({block:'nearest'});}
+function runPalette(i){var it=paletteItems[i];if(!it)return;closePalette();if(it.run){it.run();}else if(it.vm){var idx=idxByName(it.vm);if(idx>=0)select(idx);}}
+
 document.addEventListener('keydown',async function(e){var shift=e.shiftKey;
 if((e.ctrlKey||e.metaKey)&&e.key==='s'&&activeTab==='settings'&&sel!==null){e.preventDefault();saveVm();return;}
+if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K')){e.preventDefault();openPalette();return;}
 if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
 if(openActionMenu&&(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Home'||e.key==='End')){var om=document.getElementById(openActionMenu);if(om&&om.contains(e.target)){e.preventDefault();var its=Array.prototype.slice.call(om.querySelectorAll('.menu-item:not([disabled])'));if(!its.length)return;var ci=its.indexOf(e.target);var ni;if(e.key==='Home')ni=0;else if(e.key==='End')ni=its.length-1;else if(e.key==='ArrowDown')ni=ci<0?0:(ci+1)%its.length;else ni=ci<=0?its.length-1:ci-1;its[ni].focus();return;}}
 if(e.key==='ArrowUp'||e.key==='ArrowDown'){var listEl=document.getElementById('vmlist');if(listEl&&listEl.contains(e.target)){e.preventDefault();var dir=e.key==='ArrowUp'?-1:1;var idx=sel===null?(dir<0?vms.length-1:0):Math.max(0,Math.min(vms.length-1,sel+dir));Promise.resolve(select(idx)).then(function(){var ni=document.querySelector('#vmlist .vm-item[data-vm-index="'+idx+'"]');if(ni)ni.focus();});return;}}
@@ -1199,7 +1237,7 @@ var actionHandlers={
  dismissBanner:function(){var b=document.getElementById('connbanner');if(b)b.style.display='none';serverDown=false;setStatus('');},
  cancelMigrate:function(){cancelMigrate();},
  applyTheme:function(el){pendingTheme=el.value;window.applyTheme(el.value);},
- toggleTheme:function(){cycleTheme();},
+ toggleTheme:function(){window.cycleTheme();},
  filterList:function(){filterList();},
  onVnetSelect:function(){onVnetSelect();},
 	 disk2upload:function(){uploadDisk2();},

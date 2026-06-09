@@ -233,6 +233,25 @@ test('host dashboard shows inventory totals when no VM is selected', async ({ pa
     await expect(page.locator('.vm-facts')).toBeVisible();
 });
 
+test('command palette (Ctrl+K) opens, filters, runs a command, and closes', async ({ page }) => {
+    await createVm(page, 'wf-pal');
+    await page.reload();
+    await page.keyboard.press('Control+k');
+    await expect(page.locator('#palette')).toBeVisible();
+    expect(await page.locator('#paletteList li[data-pidx]').count()).toBeGreaterThan(3);
+    await page.fill('#paletteInput', 'catalog');
+    await expect(page.locator('#paletteList')).toContainText('VM Catalog');
+    await page.keyboard.press('Enter'); // runs the top match → opens the catalog dialog
+    await expect(page.locator('#catalogdlg')).toBeVisible();
+    await expect(page.locator('#palette')).toBeHidden();
+    await page.keyboard.press('Escape'); // close catalog
+    // Reopen and dismiss with Escape.
+    await page.keyboard.press('Control+k');
+    await expect(page.locator('#palette')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#palette')).toBeHidden();
+});
+
 test('inventory table lists VMs, sorts by a column, and selects a row', async ({ page }) => {
     await createVm(page, 'wf-inv-zzz');
     await createVm(page, 'wf-inv-aaa');

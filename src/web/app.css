@@ -1066,3 +1066,13 @@ body.displayonly .displayonly-bar{display:flex}
 .sdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--text-dim);vertical-align:middle}
 .sdot.running{background:var(--success)} .sdot.paused{background:var(--pause)} .sdot.suspended{background:var(--warn)}
 .tag-chip.sm{font-size:11px;padding:1px 8px;margin-right:4px}
+
+/* ── Command palette (Ctrl+K) ── */
+.palette-overlay{position:fixed;inset:0;background:var(--backdrop-overlay);display:flex;align-items:flex-start;justify-content:center;padding-top:12vh;z-index:1000}
+.palette-overlay[hidden]{display:none}
+.palette{width:min(560px,92vw);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);overflow:hidden}
+#paletteInput{width:100%;box-sizing:border-box;border:0;border-bottom:1px solid var(--border-soft);background:transparent;color:var(--text);font-size:16px;padding:16px 18px;outline:none}
+#paletteList{list-style:none;margin:0;padding:6px;max-height:52vh;overflow:auto}
+#paletteList li{padding:9px 14px;border-radius:8px;cursor:pointer;font-size:14px;color:var(--text-muted)}
+#paletteList li.sel{background:var(--accent-soft);color:var(--text)}
+#paletteList li.palette-empty{color:var(--text-dim);cursor:default}
