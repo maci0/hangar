@@ -645,7 +645,7 @@ var dialogFocusStack=[];
 var FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 function trapFocus(dlg){if(dlg._trapFocusHandler)return;var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}};dlg._trapFocusHandler=onKey;dlg.addEventListener('keydown',onKey);first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
 function releaseFocus(dlg){var handler=dlg._trapFocusHandler;if(handler){dlg.removeEventListener('keydown',handler);delete dlg._trapFocusHandler;}dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
-['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','catalogdlg','migratedlg','logdlg','shortcutsdlg','confirmdlg','promptdlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};var origClose=dlg.close;dlg.close=function(){if(dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
+['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','catalogdlg','migratedlg','logdlg','shortcutsdlg','confirmdlg','promptdlg','topodlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;dlg.showModal=function(){trapFocus(dlg);origShow.call(dlg);};var origClose=dlg.close;dlg.close=function(){if(dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
 // ── Enter in a dialog input triggers its primary action ──
 [{id:'newdlg',fn:createVm},{id:'migratedlg',fn:doMigrate},{id:'snapdlg',fn:takeSnapshotFromDlg},{id:'prefsdlg',fn:savePrefs}].forEach(function(o){var d=document.getElementById(o.id);if(!d)return;d.addEventListener('keydown',function(e){if(e.key!=='Enter')return;var t=e.target;if(t&&t.tagName==='INPUT'&&t.type!=='button'&&!t.readOnly){e.preventDefault();o.fn();}});});
 // ── New VM dialog: live inline validation (mirrors the Settings form) ──
@@ -740,6 +740,44 @@ function closePalette(){var o=document.getElementById('palette');if(o)o.hidden=t
 function renderPalette(filter){var all=paletteCommands();var f=(filter||'').toLowerCase().trim();paletteItems=f?all.filter(function(it){return it.label.toLowerCase().indexOf(f)>=0;}):all;paletteSel=0;var ul=document.getElementById('paletteList');if(!ul)return;var h='';for(var i=0;i<paletteItems.length;i++)h+='<li role="option" data-pidx="'+i+'" class="'+(i===0?'sel':'')+'">'+escHtml(paletteItems[i].label)+'</li>';ul.innerHTML=h||'<li class="palette-empty">No matches</li>';}
 function movePalette(d){if(!paletteItems.length)return;paletteSel=(paletteSel+d+paletteItems.length)%paletteItems.length;var lis=document.querySelectorAll('#paletteList li[data-pidx]');for(var i=0;i<lis.length;i++)lis[i].classList.toggle('sel',i===paletteSel);if(lis[paletteSel])lis[paletteSel].scrollIntoView({block:'nearest'});}
 function runPalette(i){var it=paletteItems[i];if(!it)return;closePalette();if(it.run){it.run();}else if(it.vm){var idx=idxByName(it.vm);if(idx>=0)select(idx);}}
+
+// ── Visual network topology (elkjs auto-layout → SVG) ──
+function modeLabel(m){return m==='user'?'NAT (user)':m==='gvproxy'?'gvproxy':m==='bridge'?'Bridged':m==='none'?'Isolated':m;}
+function vmModes(v){var m=[v.net||'user'];for(var i=2;i<=8;i++){var nm=v['nic'+i+'_mode'];if(nm&&nm!=='none')m.push(nm);}return m.filter(Boolean);}
+function buildTopologyGraph(){
+ var children=[],edges=[],meta={},seen={},eid=0,modesUsed={},anyUplink=false;
+ function addNode(id,label,kind,act){if(seen[id])return;seen[id]=1;var w=Math.max(96,Math.round(label.length*7.2)+26);children.push({id:id,width:w,height:38,labels:[{text:label}]});meta[id]={kind:kind,act:act,label:label};}
+ function addEdge(a,b){edges.push({id:'e'+(eid++),sources:[a],targets:[b]});}
+ for(var i=0;i<vms.length;i++){var v=vms[i];var vid='vm:'+v.name;addNode(vid,v.name,'vm '+(v.status||''),'data-action="topoSelectVm" data-vm-name="'+escHtml(v.name)+'"');
+  var modes=vmModes(v),dd={};for(var k=0;k<modes.length;k++){var mode=modes[k];if(dd[mode])continue;dd[mode]=1;var mid='mode:'+mode;addNode(mid,modeLabel(mode),'net','');modesUsed[mode]=1;addEdge(vid,mid);}}
+ if(vnetsData&&vnetsData.networks)for(var n=0;n<vnetsData.networks.length;n++){var net=vnetsData.networks[n];var nid='net:'+net.name;addNode(nid,net.name+' · '+net.type,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(net.name)+'"');addEdge(nid,'host');anyUplink=true;}
+ Object.keys(modesUsed).forEach(function(m){if(m!=='none'){addEdge('mode:'+m,'host');anyUplink=true;}});
+ if(anyUplink)addNode('host','Host / Physical','host','');
+ return {graph:{id:'root',layoutOptions:{'elk.algorithm':'layered','elk.direction':'RIGHT','elk.spacing.nodeNode':'22','elk.layered.spacing.nodeNodeBetweenLayers':'80'},children:children,edges:edges},meta:meta};
+}
+function topoSvg(res,meta){
+ var W=Math.ceil(res.width||800),H=Math.ceil(res.height||400);
+ var s='<svg viewBox="0 0 '+W+' '+H+'" class="topo-svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Network topology diagram">';
+ (res.edges||[]).forEach(function(e){(e.sections||[]).forEach(function(sec){var pts=[sec.startPoint].concat(sec.bendPoints||[]).concat([sec.endPoint]);var d=pts.map(function(p,i){return (i?'L':'M')+Math.round(p.x)+' '+Math.round(p.y);}).join(' ');s+='<path class="topo-edge" d="'+d+'"/>';});});
+ (res.children||[]).forEach(function(nd){var m=meta[nd.id]||{};var lab=m.label||nd.id;
+  s+='<g class="topo-node '+(m.kind||'')+'" '+(m.act||'')+' transform="translate('+Math.round(nd.x)+','+Math.round(nd.y)+')" tabindex="0" role="button" aria-label="'+escHtml(lab)+'">';
+  s+='<rect width="'+nd.width+'" height="'+nd.height+'" rx="9"/>';
+  s+='<text x="'+(nd.width/2)+'" y="'+(nd.height/2+4)+'" text-anchor="middle">'+escHtml(lab)+'</text></g>';});
+ return s+'</svg>';
+}
+async function openTopology(){var d=document.getElementById('topodlg');if(d&&!d.open)d.showModal();await renderTopology();}
+async function renderTopology(){
+ var wrap=document.getElementById('topoWrap');if(!wrap)return;
+ if(typeof ELK==='undefined'){wrap.innerHTML='<div class="topo-loading">Layout engine unavailable.</div>';return;}
+ try{await loadVnets();}catch(e){}
+ var built=buildTopologyGraph();
+ if(!built.graph.children.length){wrap.innerHTML='<div class="topo-loading">No VMs or networks to display.</div>';return;}
+ wrap.innerHTML='<div class="topo-loading">Computing layout…</div>';
+ try{var elk=new ELK();var res=await elk.layout(built.graph);wrap.innerHTML=topoSvg(res,built.meta);}
+ catch(e){wrap.innerHTML='<div class="topo-loading">Layout failed: '+escHtml((e&&e.message)||'error')+'</div>';}
+}
+function topoSelectVm(name){var d=document.getElementById('topodlg');if(d)d.close();var vd=document.getElementById('vnetdlg');if(vd&&vd.open)vd.close();var idx=idxByName(name);if(idx>=0)select(idx);}
+function topoEditNet(name){var d=document.getElementById('topodlg');if(d)d.close();var vd=document.getElementById('vnetdlg');if(vd&&!vd.open)vd.showModal();if(vnetsData&&vnetsData.networks){for(var i=0;i<vnetsData.networks.length;i++){if(vnetsData.networks[i].name===name){vnetIdx=i;var s=document.getElementById('vnet_sel');if(s)s.value=String(i);showVnetFields(i);break;}}}}
 
 // ── Sidebar multi-select + bulk operations ──
 function toggleSelectMode(){selectMode=!selectMode;if(!selectMode)checkedNames.clear();var t=document.getElementById('selectToggle');if(t)t.setAttribute('aria-pressed',selectMode?'true':'false');var sv=document.getElementById('search');renderList(sv?sv.value.toLowerCase():'');}
@@ -1297,6 +1335,9 @@ var actionHandlers={
 	 bulkDelete:function(){doBulkDelete();},
 	 toggleFolder:function(el){var f=el.getAttribute('data-folder');if(f===null)return;setFolderOpen(f,!folderOpen(f));filterList();},
 	 moveToFolder:function(){moveToFolder();},
+	 openTopology:function(){openTopology();},
+	 topoSelectVm:function(el){topoSelectVm(el.getAttribute('data-vm-name'));},
+	 topoEditNet:function(el){topoEditNet(el.getAttribute('data-net-name'));},
  toggleFavorite:function(el){var parent=el.closest('.vm-item');if(!parent)return;var i=parseInt(parent.getAttribute('data-vm-index'),10);if(!isNaN(i))toggleFavorite(i);},
  revertSnapshot:function(el){revertSnapshot(el.getAttribute('data-snap-tag')||'');},
  deleteSnapshot:function(el){deleteSnapshot(el.getAttribute('data-snap-tag')||'');},

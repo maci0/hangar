@@ -233,6 +233,19 @@ test('host dashboard shows inventory totals when no VM is selected', async ({ pa
     await expect(page.locator('.vm-facts')).toBeVisible();
 });
 
+test('network topology renders VMs/networks/host via elkjs and a VM node selects', async ({ page }) => {
+    await createVm(page, 'wf-topo-vm');
+    await page.reload();
+    await page.evaluate(() => openTopology());
+    await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
+    expect(await page.locator('.topo-node').count()).toBeGreaterThan(1);
+    await expect(page.locator('.topo-node.host')).toHaveCount(1); // host uplink node
+    // Clicking a VM node closes the topology and selects that VM.
+    await page.locator('.topo-node.vm').first().click();
+    await expect(page.locator('#topodlg')).toBeHidden();
+    await expect(page.locator('.vm-facts')).toBeVisible();
+});
+
 test('VM folders: a folder: tag groups the VM in a collapsible sidebar tree', async ({ page }) => {
     await createVm(page, 'wf-fld-a');
     const idx = await indexOf(page, 'wf-fld-a');

@@ -1097,3 +1097,24 @@ body.displayonly .displayonly-bar{display:flex}
 .folder-name{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .folder-count{font-size:11px;color:var(--text-dim);background:var(--bg-alt);border-radius:999px;padding:1px 8px}
 .folder-body{margin-left:10px;border-left:1px solid var(--border-soft);padding-left:4px}
+
+/* ── Network topology (elkjs SVG) ── */
+.topo-wrap{margin:8px 24px;min-height:280px;max-height:64vh;overflow:auto;background:var(--bg-alt);border:1px solid var(--border-soft);border-radius:var(--radius)}
+.topo-loading{padding:40px;text-align:center;color:var(--text-dim);font-size:13px}
+.topo-svg{display:block;width:100%;height:auto;padding:14px}
+.topo-edge{fill:none;stroke:var(--border-hover);stroke-width:1.5}
+.topo-node{cursor:default}
+.topo-node rect{fill:var(--surface);stroke:var(--border);stroke-width:1.5}
+.topo-node text{fill:var(--text);font-size:13px;font-family:inherit}
+.topo-node.vm{cursor:pointer}
+.topo-node.vm rect{fill:var(--surface);stroke:var(--border-hover)}
+.topo-node.vm.running rect{stroke:var(--success)}
+.topo-node.vm.paused rect{stroke:var(--pause)}
+.topo-node.vm:hover rect{stroke:var(--accent);stroke-width:2}
+.topo-node.net rect{fill:var(--accent-soft);stroke:var(--accent)}
+.topo-node.net text{fill:var(--accent)}
+.topo-node.vnet{cursor:pointer}
+.topo-node.vnet rect{fill:rgba(91,140,255,.14);stroke:#5b8cff}
+.topo-node.vnet:hover rect{stroke-width:2}
+.topo-node.host rect{fill:var(--bg);stroke:var(--text-dim);stroke-dasharray:4 3}
+.topo-node.host text{fill:var(--text-muted)}

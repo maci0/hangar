@@ -798,6 +798,9 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (routeExact(req, "GET /spice.js")) {
         response = spice_js;
         content_type = "application/javascript; charset=utf-8";
+    } else if (routeExact(req, "GET /elk.js")) {
+        response = elk_js;
+        content_type = "application/javascript; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET / ")) {
         response = index_html;
         content_type = "text/html; charset=utf-8";
@@ -2099,6 +2102,7 @@ const app_css = @embedFile("web/app.css");
 const app_js = @embedFile("web/app.js");
 const novnc_js = @embedFile("web/novnc.js");
 const spice_js = @embedFile("web/spice.js");
+const elk_js = @embedFile("web/elk.js");
 
 /// Background thread: periodically check liveness of running VMs and reap dead ones.
 fn livenessTicker() void {

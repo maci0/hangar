@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1"
+  },
+  "dependencies": {
+    "elkjs": "^0.11.1"
   }
 }
