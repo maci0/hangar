@@ -1088,3 +1088,12 @@ body.displayonly .displayonly-bar{display:flex}
 .bulk-count{font-size:12px;color:var(--text-muted);font-weight:600}
 .bulk-actions{display:flex;flex-wrap:wrap;gap:6px}
 .bulk-actions .btn{padding:5px 9px;font-size:12px}
+
+/* ── Sidebar VM folders (tag-based tree) ── */
+.folder-hdr{display:flex;align-items:center;gap:7px;padding:6px 10px;cursor:pointer;color:var(--text-muted);font-size:13px;border-radius:8px;user-select:none}
+.folder-hdr:hover{background:var(--accent-soft);color:var(--text)}
+.folder-caret{display:inline-block;transition:transform 150ms ease;font-size:10px;color:var(--text-dim)}
+.folder-hdr.open .folder-caret{transform:rotate(90deg)}
+.folder-name{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.folder-count{font-size:11px;color:var(--text-dim);background:var(--bg-alt);border-radius:999px;padding:1px 8px}
+.folder-body{margin-left:10px;border-left:1px solid var(--border-soft);padding-left:4px}

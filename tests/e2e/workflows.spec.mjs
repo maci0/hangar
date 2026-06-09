@@ -233,6 +233,22 @@ test('host dashboard shows inventory totals when no VM is selected', async ({ pa
     await expect(page.locator('.vm-facts')).toBeVisible();
 });
 
+test('VM folders: a folder: tag groups the VM in a collapsible sidebar tree', async ({ page }) => {
+    await createVm(page, 'wf-fld-a');
+    const idx = await indexOf(page, 'wf-fld-a');
+    await api(page, 'POST', `/api/vms/${idx}`, 'tags=' + encodeURIComponent('folder:TestFolder,prod'));
+    await page.reload();
+    const hdr = page.locator('.folder-hdr[data-folder="TestFolder"]');
+    await expect(hdr).toBeVisible();
+    await expect(hdr).toHaveClass(/open/);
+    await expect(page.locator('.folder-body')).toContainText('wf-fld-a');
+    // The structural folder: tag is hidden from the VM's visible tag chips.
+    await api(page, 'GET', `/api/vms`, null); // ensure list loaded
+    // Collapse the folder.
+    await hdr.click();
+    await expect(page.locator('.folder-hdr[data-folder="TestFolder"]')).not.toHaveClass(/open/);
+});
+
 test('multi-select bulk delete removes only the checked VMs', async ({ page }) => {
     await createVm(page, 'wf-bulk-1');
     await createVm(page, 'wf-bulk-2');

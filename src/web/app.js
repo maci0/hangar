@@ -125,6 +125,20 @@ setServerDown(false);vms=normVmBools(await r.json());
 // delete/reorder).
 if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);}else{stopFb();stopSerial(true);}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();else if(sel===null&&!document.querySelector('#tabSummary .dash:focus-within'))showEmptyState();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
 function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
+// VM folders are a `folder:<path>` tag convention (no backend change). The sidebar
+// groups non-favorite VMs into collapsible folders; open/closed persists locally.
+function vmFolder(v){if(!v.tags)return '';var parts=v.tags.split(',');for(var i=0;i<parts.length;i++){var t=parts[i].trim();if(t.toLowerCase().indexOf('folder:')===0)return t.slice(7).trim();}return '';}
+// User-facing tags exclude the structural folder:<path> tag.
+function visibleTags(t){return (t||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s&&s.toLowerCase().indexOf('folder:')!==0;});}
+function folderOpen(f){try{var c=JSON.parse(localStorage.getItem('hangar.folders')||'{}');return c[f]!==false;}catch(e){return true;}}
+function setFolderOpen(f,o){try{var c=JSON.parse(localStorage.getItem('hangar.folders')||'{}');c[f]=o;localStorage.setItem('hangar.folders',JSON.stringify(c));}catch(e){}}
+function folderList(){var s={};for(var i=0;i<vms.length;i++){var f=vmFolder(vms[i]);if(f)s[f]=1;}return Object.keys(s).sort();}
+async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[sel];var cur=vmFolder(v);
+  var f=await showPromptDialog('Move "'+v.name+'" to folder (blank = none):',cur);if(f===null)return;f=f.trim();
+  var parts=(v.tags||'').split(',').map(function(t){return t.trim();}).filter(function(t){return t&&t.toLowerCase().indexOf('folder:')!==0;});
+  if(f)parts.push('folder:'+f);
+  var r=await apiPost('/api/vms/'+sel,'tags='+encodeURIComponent(parts.join(',')));
+  if(r){await refresh();setStatus(f?('Moved to '+escHtml(f)):'Removed from folder');}}
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f)||(v.tags||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
 let hasFavs=false,hasNon=false,maxMem=16384;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;const m=x.v.mem||0;if(m>maxMem)maxMem=m;}
@@ -136,9 +150,16 @@ function vmItemHtml(x){
  const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-name="'+escHtml(x.v.name)+'"'+(checkedNames.has(x.v.name)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
  return '<div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="option" aria-selected="'+(sel===x.i?'true':'false')+'" data-vm-index="'+x.i+'" tabindex="0" data-action="select" draggable="true">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'"></span> '+escHtml(x.v.name)+star+vmBars(x.v)+'</div>';
 }
-for(const pass of[0,1]){if(pass===0){for(const x of viz){if(!x.show||!x.fav)continue;h+=vmItemHtml(x);}}
+for(const x of viz){if(!x.show||!x.fav)continue;h+=vmItemHtml(x);}
 if(hasFavs&&hasNon)h+='<div role="separator" aria-hidden="true" style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
-if(pass===1){for(const x of viz){if(!x.show||x.fav)continue;h+=vmItemHtml(x);}}}
+// Non-favorites: group into collapsible folders (folder:<path> tag); ungrouped last.
+const groups={},order=[],ungrouped=[];
+for(const x of viz){if(!x.show||x.fav)continue;const fld=vmFolder(x.v);if(fld){if(!groups[fld]){groups[fld]=[];order.push(fld);}groups[fld].push(x);}else ungrouped.push(x);}
+order.sort();
+for(const fld of order){const open=folderOpen(fld);
+ h+='<div class="folder-hdr'+(open?' open':'')+'" data-action="toggleFolder" data-folder="'+escHtml(fld)+'" role="button" tabindex="0" aria-expanded="'+open+'"><span class="folder-caret" aria-hidden="true">▸</span><span class="folder-name">'+escHtml(fld)+'</span><span class="folder-count">'+groups[fld].length+'</span></div>';
+ if(open){h+='<div class="folder-body">';for(const x of groups[fld])h+=vmItemHtml(x);h+='</div>';}}
+for(const x of ungrouped)h+=vmItemHtml(x);
 if(!h){if(f)h='<div class="sidebar-empty"><p>No matching VMs</p><button class="btn" data-action="clearSearch">Clear search</button></div>';else h='<div class="sidebar-empty"><p>No virtual machines yet</p><button class="btn primary" data-action="newVm">＋ New VM</button></div>';}
 e.innerHTML=h;
 updateBulkBar();
@@ -185,7 +206,7 @@ function hostDashboardHtml(){
     h+='<td class="inv-name">'+escHtml(v.name)+'</td>';
     h+='<td><span class="sdot '+v.status+'"></span>'+escHtml(statusLabel(v.status))+'</td>';
     h+='<td>'+escHtml(v.os)+'</td><td>'+escHtml(v.cpu)+'</td><td>'+mt+'</td><td>'+escHtml(v.disk)+' GB</td>';
-    h+='<td>'+(v.tags?v.tags.split(',').map(function(t){return '<span class="tag-chip sm">'+escHtml(t.trim())+'</span>';}).join(''):'')+'</td>';
+    h+='<td>'+visibleTags(v.tags).map(function(t){return '<span class="tag-chip sm">'+escHtml(t)+'</span>';}).join('')+'</td>';
     h+='</tr>';});
   h+='</tbody></table></div>';
   h+='<div class="empty-actions" style="justify-content:flex-start;margin-top:18px"><button class="btn primary" data-action="newVm">＋ New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
@@ -249,7 +270,9 @@ if(v.shared_folder)opts+=row('Shared Folder',escHtml(v.shared_folder));
 if(v.port_forwards)opts+=row('Port Forwards',escHtml(v.port_forwards));
 if(opts)h+='<section class="sum-section"><h3>Options</h3><dl class="sum-dl">'+opts+'</dl></section>';
 // Tags
-if(v.tags){var chips=v.tags.split(',').map(function(t){return t.trim();}).filter(Boolean).map(function(t){return '<span class="tag-chip">'+escHtml(t)+'</span>';}).join('');h+='<section class="sum-section"><h3>Tags</h3><div class="tag-chips">'+chips+'</div></section>';}
+var vtags=visibleTags(v.tags);
+if(vtags.length){var chips=vtags.map(function(t){return '<span class="tag-chip">'+escHtml(t)+'</span>';}).join('');h+='<section class="sum-section"><h3>Tags</h3><div class="tag-chips">'+chips+'</div></section>';}
+var vfld=vmFolder(v);if(vfld)h+='<section class="sum-section"><h3>Folder</h3><div class="sum-dl"><div class="srow"><dt>Path</dt><dd>'+escHtml(vfld)+'</dd></div></div></section>';
 // Notes (full width)
 if(v.notes)h+='<section class="sum-section span2"><h3>Notes</h3><div class="sum-notes">'+escHtml(v.notes)+'</div></section>';
 h+='</div>';
@@ -691,6 +714,7 @@ function paletteCommands(){
     c.push({label:'Take Snapshot — '+v.name,run:takeSnapshot});
     c.push({label:'Clone — '+v.name,run:cloneGuest});
     c.push({label:'Rename — '+v.name,run:renameGuest});
+    c.push({label:'Move to Folder — '+v.name,run:moveToFolder});
     c.push({label:'Delete — '+v.name,run:deleteVm});}
   for(var i=0;i<vms.length;i++)c.push({label:'Go to '+vms[i].name,vm:vms[i].name});
   return c;
@@ -1271,6 +1295,8 @@ var actionHandlers={
 	 bulkPower:function(el){doBulkPower(el.getAttribute('data-on')==='1');},
 	 bulkSnapshot:function(){doBulkSnapshot();},
 	 bulkDelete:function(){doBulkDelete();},
+	 toggleFolder:function(el){var f=el.getAttribute('data-folder');if(f===null)return;setFolderOpen(f,!folderOpen(f));filterList();},
+	 moveToFolder:function(){moveToFolder();},
  toggleFavorite:function(el){var parent=el.closest('.vm-item');if(!parent)return;var i=parseInt(parent.getAttribute('data-vm-index'),10);if(!isNaN(i))toggleFavorite(i);},
  revertSnapshot:function(el){revertSnapshot(el.getAttribute('data-snap-tag')||'');},
  deleteSnapshot:function(el){deleteSnapshot(el.getAttribute('data-snap-tag')||'');},
