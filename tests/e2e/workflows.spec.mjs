@@ -233,6 +233,26 @@ test('host dashboard shows inventory totals when no VM is selected', async ({ pa
     await expect(page.locator('.vm-facts')).toBeVisible();
 });
 
+test('inventory table lists VMs, sorts by a column, and selects a row', async ({ page }) => {
+    await createVm(page, 'wf-inv-zzz');
+    await createVm(page, 'wf-inv-aaa');
+    await page.reload();
+    const rows = page.locator('.inv tbody tr');
+    expect(await rows.count()).toBeGreaterThanOrEqual(2);
+    // Default sort is name ascending: find the Name column header, click to toggle desc.
+    const nameRows = () => page.locator('.inv tbody tr td.inv-name').allTextContents();
+    const asc = await nameRows();
+    const sortedAsc = [...asc].sort();
+    expect(asc).toEqual(sortedAsc);
+    await page.click('.inv thead th[data-col="name"]');
+    const desc = await nameRows();
+    expect(desc).toEqual([...asc].reverse());
+    // Clicking a row selects that VM (leaves the dashboard for the detail view).
+    await page.click('.inv tbody tr');
+    await expect(page.locator('#tabSummary .dash')).toHaveCount(0);
+    await expect(page.locator('.vm-facts')).toBeVisible();
+});
+
 test('toolbar dropdown is keyboard-operable: opens, focuses an item, Escape returns focus', async ({ page }) => {
     await createVm(page, 'wf-kbd');
     // Select the VM so the toolbar action menus enable.

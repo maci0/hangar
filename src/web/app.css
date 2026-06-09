@@ -1039,7 +1039,7 @@ body.displayonly .displayonly-bar{display:flex}
 .sum-notes{white-space:pre-wrap;color:var(--text-muted);font-size:13px;line-height:1.55}
 
 /* ── Host inventory dashboard (no-VM-selected view) ── */
-.dash{max-width:760px}
+.dash{max-width:1100px}
 .dash-head{display:flex;align-items:baseline;gap:12px;margin-bottom:18px}
 .dash-head h2{margin:0;font-size:22px}
 .dash-head .muted{color:var(--text-dim);font-size:13px}
@@ -1052,3 +1052,17 @@ body.displayonly .displayonly-bar{display:flex}
 .dash-attention h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--warn)}
 .dash-attention ul{margin:0;padding-left:18px}
 .dash-attention li{font-size:13px;color:var(--text-muted);padding:2px 0}
+
+/* ── Inventory table (host dashboard) ── */
+.inv-wrap{margin-top:16px;border:1px solid var(--border-soft);border-radius:var(--radius);overflow:hidden}
+.inv{width:100%;border-collapse:collapse;font-size:13px}
+.inv thead th{text-align:left;padding:10px 14px;background:var(--bg-alt);color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;user-select:none;white-space:nowrap;border-bottom:1px solid var(--border-soft)}
+.inv thead th:hover{color:var(--text)}
+.inv tbody tr{cursor:pointer;border-top:1px solid var(--border-soft)}
+.inv tbody tr:first-child{border-top:0}
+.inv tbody tr:hover{background:var(--accent-soft)}
+.inv td{padding:9px 14px;color:var(--text);vertical-align:middle}
+.inv td.inv-name{font-weight:600}
+.sdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--text-dim);vertical-align:middle}
+.sdot.running{background:var(--success)} .sdot.paused{background:var(--pause)} .sdot.suspended{background:var(--warn)}
+.tag-chip.sm{font-size:11px;padding:1px 8px;margin-right:4px}

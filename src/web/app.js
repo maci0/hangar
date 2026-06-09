@@ -51,6 +51,7 @@ function idxByName(n){for(var i=0;i<vms.length;i++){if(vms[i].name===n)return i;
 function normVmBools(arr){if(Array.isArray(arr)){for(var i=0;i<arr.length;i++){var v=arr[i];if(v&&typeof v==='object'){for(var k in v){if(typeof v[k]==='boolean')v[k]=v[k]?'true':'false';}}}}return arr;}
 var openActionMenu=null;
 var actionMenuTrigger=null; // the toolbar button that opened the current menu, for keyboard focus-return
+var dashSort={col:'name',dir:1}; // host-dashboard inventory-table sort state
 var settingsCategory='compute';
 var displayLabels=['GTK','SDL','SPICE','VNC','None'];
 var gpuLabels=['Virtio-GPU (virgl 3D)','Virtio-VGA (virgl 3D)','Virtio-GPU','Virtio-VGA','QXL','Standard VGA'];
@@ -166,6 +167,23 @@ function hostDashboardHtml(){
   h+='<div class="dash-cards">'+card(st.running||0,'Running','running')+card(st.stopped||0,'Stopped','')+card(st.paused||0,'Paused','paused')+card(st.suspended||0,'Suspended','suspended')+'</div>';
   h+='<div class="dash-cards">'+card(vcpu,'vCPU allocated')+card(ramGB+' GB','RAM allocated')+card(disk+' GB','Disk provisioned')+'</div>';
   if(attention.length){h+='<div class="dash-attention"><h3>Needs attention</h3><ul>';for(var a=0;a<attention.length;a++)h+='<li>'+escHtml(attention[a])+'</li>';h+='</ul></div>';}
+  // Sortable inventory table (vSphere "VMs" grid). Rows reuse the select handler.
+  var cols=[['name','Name'],['status','State'],['os','Guest OS'],['cpu','vCPU'],['mem','RAM'],['disk','Disk'],['tags','Tags']];
+  var rows=vms.map(function(v,i){return {v:v,i:i};});
+  rows.sort(function(a,b){var c=dashSort.col,d=dashSort.dir,x=a.v[c],y=b.v[c];
+    if(c==='cpu'||c==='mem'||c==='disk'){return ((Number(x)||0)-(Number(y)||0))*d;}
+    x=(x||'').toString().toLowerCase();y=(y||'').toString().toLowerCase();return x<y?-d:x>y?d:0;});
+  h+='<div class="inv-wrap"><table class="inv"><thead><tr>';
+  cols.forEach(function(c){var ar=dashSort.col===c[0]?(dashSort.dir>0?' ▲':' ▼'):'';h+='<th data-action="sortInv" data-col="'+c[0]+'" tabindex="0" role="button">'+c[1]+ar+'</th>';});
+  h+='</tr></thead><tbody>';
+  rows.forEach(function(r){var v=r.v;var mt=Number(v.mem)>=1024?(Math.round(Number(v.mem)/102.4)/10)+' GB':(escHtml(v.mem)+' MB');
+    h+='<tr data-action="select" data-vm-index="'+r.i+'" tabindex="0">';
+    h+='<td class="inv-name">'+escHtml(v.name)+'</td>';
+    h+='<td><span class="sdot '+v.status+'"></span>'+escHtml(statusLabel(v.status))+'</td>';
+    h+='<td>'+escHtml(v.os)+'</td><td>'+escHtml(v.cpu)+'</td><td>'+mt+'</td><td>'+escHtml(v.disk)+' GB</td>';
+    h+='<td>'+(v.tags?v.tags.split(',').map(function(t){return '<span class="tag-chip sm">'+escHtml(t.trim())+'</span>';}).join(''):'')+'</td>';
+    h+='</tr>';});
+  h+='</tbody></table></div>';
   h+='<div class="empty-actions" style="justify-content:flex-start;margin-top:18px"><button class="btn primary" data-action="newVm">＋ New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
   return h;
 }
@@ -1170,6 +1188,7 @@ var actionHandlers={
  vnetDefaults:function(){vnetDefaults();},vnetSaveCurrent:function(){vnetSaveCurrent();},
  vnetSaveAll:function(){vnetSaveAll();},
  select:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);},
+	 sortInv:function(el){var c=el.getAttribute('data-col');if(!c)return;if(dashSort.col===c)dashSort.dir=-dashSort.dir;else{dashSort.col=c;dashSort.dir=1;}showEmptyState();},
  toggleFavorite:function(el){var parent=el.closest('.vm-item');if(!parent)return;var i=parseInt(parent.getAttribute('data-vm-index'),10);if(!isNaN(i))toggleFavorite(i);},
  revertSnapshot:function(el){revertSnapshot(el.getAttribute('data-snap-tag')||'');},
  deleteSnapshot:function(el){deleteSnapshot(el.getAttribute('data-snap-tag')||'');},
