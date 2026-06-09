@@ -781,14 +781,17 @@ function topoEditNet(name){var d=document.getElementById('topodlg');if(d)d.close
 
 // ── Sidebar multi-select + bulk operations ──
 function toggleSelectMode(){selectMode=!selectMode;if(!selectMode)checkedNames.clear();var t=document.getElementById('selectToggle');if(t)t.setAttribute('aria-pressed',selectMode?'true':'false');var sv=document.getElementById('search');renderList(sv?sv.value.toLowerCase():'');}
-function updateBulkBar(){var bar=document.getElementById('bulkBar');if(!bar)return;bar.hidden=!selectMode;var c=document.getElementById('bulkCount');if(c)c.textContent=checkedNames.size+' selected';}
+function updateBulkBar(){var bar=document.getElementById('bulkBar');if(!bar)return;bar.hidden=!selectMode;
+ // Prune names of VMs deleted/renamed elsewhere so the count never over-reports.
+ if(selectMode&&checkedNames.size)checkedNames.forEach(function(n){if(idxByName(n)<0)checkedNames.delete(n);});
+ var c=document.getElementById('bulkCount');if(c)c.textContent=checkedNames.size+' selected';}
 // Run `fn(idx,name)` for each checked VM, re-syncing vms[] from the server before
 // each so an index stays correct even as earlier deletes shift the list.
 async function bulkRun(label,fn){
   var names=Array.from(checkedNames);if(!names.length){showToast('No VMs selected','warn');return;}
   var ok=0,fail=0;
   for(var i=0;i<names.length;i++){
-    try{var rr=await fetch('/api/vms');if(rr.ok)vms=await rr.json();}catch(e){}
+    try{var rr=await fetch('/api/vms');if(rr.ok)vms=normVmBools(await rr.json());}catch(e){}
     var idx=idxByName(names[i]);if(idx<0){continue;}
     try{var r=await fn(idx,names[i]);if(r)ok++;else fail++;}catch(e){fail++;}
   }
