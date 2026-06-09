@@ -44,9 +44,9 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     var iso_buf: [vm.MAX_PATH]u8 = undefined;
     const iso_e = if (v.hasIso()) escapeJson(&iso_buf, v.getIsoPathSlice(), "iso_path") else "";
 
-    var notes_buf: [4096 * 2]u8 = undefined;
+    var notes_buf: [4096 * 6]u8 = undefined; // 6x: worst-case \u00XX escape of every byte
     const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice(), "notes") else "";
-    var tags_buf: [512]u8 = undefined;
+    var tags_buf: [256 * 6]u8 = undefined; // 6x: worst-case \u00XX escape of every byte
     const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice(), "tags") else "";
 
     var sf_buf: [vm.MAX_PATH]u8 = undefined;
@@ -206,6 +206,9 @@ pub fn renderJson(buf: []u8) usize {
         var iso_buf: [vm.MAX_PATH]u8 = undefined;
         const iso_e = if (v.hasIso()) escapeJson(&iso_buf, v.getIsoPathSlice(), "iso_path") else "";
 
+        // List is display-only (settings form reads the detail endpoint), so keep
+        // the per-VM list buffers modest; over-long escaped notes truncate here
+        // (cosmetic) rather than inflating the per-VM list-overflow budget.
         var notes_buf: [4096 * 2]u8 = undefined;
         const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice(), "notes") else "";
 
@@ -224,7 +227,7 @@ pub fn renderJson(buf: []u8) usize {
         var pf_buf: [1024]u8 = undefined;
         const pf_e = if (v.hasPortForwards()) escapeJson(&pf_buf, v.getPortForwardsSlice(), "port_forwards") else "";
 
-        var tags_buf: [512]u8 = undefined;
+        var tags_buf: [512]u8 = undefined; // display-only (see notes_buf above)
         const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice(), "tags") else "";
 
         // First block: up through tags
