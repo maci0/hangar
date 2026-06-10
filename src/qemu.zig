@@ -91,7 +91,9 @@ pub fn parseJsonU64(text: []const u8, key: []const u8) ?u64 {
 /// image, via `qemu-img info --output=json`. Returns null if it can't be read.
 pub fn diskInfo(path: []const u8, allocator: std.mem.Allocator) ?struct { virtual_bytes: u64, actual_bytes: u64 } {
     var out: [8192]u8 = undefined;
-    const n = runCapture(&.{ "qemu-img", "info", "--output=json", path }, &out, allocator) catch return null;
+    // `-U` (force-share) lets qemu-img read the image while the VM is running and
+    // holds the qcow2 lock; without it, info on a live guest fails → "unavailable".
+    const n = runCapture(&.{ "qemu-img", "info", "-U", "--output=json", path }, &out, allocator) catch return null;
     if (n == 0 or n > out.len) return null;
     const text = out[0..n];
     const v = parseJsonU64(text, "\"virtual-size\"") orelse return null;
