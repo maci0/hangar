@@ -233,7 +233,7 @@ if(activeTab==='console'&&!(v.status==='running'&&embeddedDisplayCapable(v)))act
 syncTabPanels();
 nm.textContent=v.name;document.title='Hangar — '+v.name;
 var info=displayInfo(v);
-var videoMeta='<span>'+escHtml(info.embedLabel+' '+info.displayLabel)+'</span><span>'+escHtml(info.gpuLabel)+'</span><span>'+escHtml(info.accelLabel)+'</span>';
+var videoMeta=escHtml(info.embedLabel+' '+info.displayLabel)+' · '+escHtml(info.gpuLabel)+' · '+escHtml(info.accelLabel);
 if(tc){tc.innerHTML=embeddedDisplayCapable(v)?'<div class="console-empty compact"><strong>Console controls are above the VM header.</strong><span>Use Display Only for full-screen guest interaction.</span></div>':'<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}
 function row(l,vv){return '<div class="srow"><dt>'+l+'</dt><dd>'+vv+'</dd></div>';}
 const memTxt=Number(v.mem)>=1024?(Math.round(Number(v.mem)/102.4)/10)+' GB':escHtml(v.mem)+' MB';
