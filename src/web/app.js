@@ -255,6 +255,7 @@ if(v.hasDisk2==='true')h+=row('Disk 2',escHtml(v.disk2_size)+' GB');
 if(v.iso_path)h+=row('CD/DVD',escHtml(v.iso_path));
 if(v.hasFloppy==='true')h+=row('Floppy','attached');
 h+=row('Network',escHtml(networkLabel(v))+(v.mac?' · '+escHtml(v.mac):''));
+  if(v.vnet)h+=row('Virtual Network',escHtml(v.vnet));
 [2,3,4,5,6,7,8].forEach(function(n){var m=v['nic'+n+'_mode'];if(m&&m!=='none')h+=row('NIC '+n,escHtml(m));});
 h+=row('Video',videoMeta);
 if(v.usb_device)h+=row('USB Device',escHtml(v.usb_device));
@@ -432,7 +433,7 @@ const fields=[
 ['Disk Cache','e_disk_cache','select',v.disk_cache||0],
 ['ISO Path','e_iso_path','text',v.iso_path||''],['','','cdactions',''],['Firmware','e_firmware','select',v.fw||'bios'],
 ['Boot Order','e_boot_order','select',v.boot_order||0],['RTC Clock','e_rtc','select',v.rtc||0],
-{s:'Network &amp; Boot'},['Network','e_network','select',v.net||'user'],['MAC Address','e_mac_address','text',v.mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
+{s:'Network &amp; Boot'},['Network','e_network','select',v.net||'user'],['Virtual Network','e_vnet','text',v.vnet||'','placeholder="bind to a virtual network name (optional)"'],['MAC Address','e_mac_address','text',v.mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
 ['NIC 2','e_nic2','select',v.nic2_mode||'none'],['NIC 2 MAC','e_nic2_mac','text',v.nic2_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
 ['NIC 3','e_nic3','select',v.nic3_mode||'none'],['NIC 3 MAC','e_nic3_mac','text',v.nic3_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
 ['NIC 4','e_nic4','select',v.nic4_mode||'none'],['NIC 4 MAC','e_nic4_mac','text',v.nic4_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
@@ -552,7 +553,7 @@ async function saveVm(){const idx=sel;if(idx===null)return;const btn=document.ge
 if(!validateSettings(true)){var bad=document.querySelector('#tabSettings .invalid');if(bad){var panel=bad.closest('.settings-panel');if(panel)setSettingsCategory(panel.getAttribute('data-settings-panel')||settingsCategory);bad.focus({preventScroll:false});}if(btn){btn.disabled=false;btn.textContent='Save Changes';}showToast('Fix highlighted settings before saving.','error');return;}
 saveInFlight=true;
 const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
-const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
+const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','vnet','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
 'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','extra0_path','extra0_size','extra0_format','extra1_path','extra1_size','extra1_format','extra2_path','extra2_size','extra2_format','extra3_path','extra3_size','extra3_format','floppy','nic2','nic2_mac','nic3','nic3_mac','nic4','nic4_mac','nic5','nic5_mac','nic6','nic6_mac','nic7','nic7_mac','nic8','nic8_mac','portfw','notes','tags','cloud_init',
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order','rtc',
 'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
@@ -747,9 +748,12 @@ function modeLabel(m){return m==='user'?'NAT (user)':m==='gvproxy'?'gvproxy':m==
 function vmModes(v){var m=[v.net||'user'];for(var i=2;i<=8;i++){var nm=v['nic'+i+'_mode'];if(nm&&nm!=='none')m.push(nm);}return m.filter(Boolean);}
 function buildTopologyGraph(){
  var children=[],edges=[],meta={},seen={},eid=0,modesUsed={},anyUplink=false;
+ var edgeSeen={};
  function addNode(id,label,kind,act){if(seen[id])return;seen[id]=1;var w=Math.max(96,Math.round(label.length*7.2)+26);children.push({id:id,width:w,height:38,labels:[{text:label}]});meta[id]={kind:kind,act:act,label:label};}
- function addEdge(a,b){edges.push({id:'e'+(eid++),sources:[a],targets:[b]});}
+ function addEdge(a,b){var key=a+'>'+b;if(edgeSeen[key])return;edgeSeen[key]=1;edges.push({id:'e'+(eid++),sources:[a],targets:[b]});}
  for(var i=0;i<vms.length;i++){var v=vms[i];var vid='vm:'+v.name;addNode(vid,v.name,'vm '+(v.status||''),'data-action="topoSelectVm" data-vm-name="'+escHtml(v.name)+'"');
+  // Explicit vnet binding: draw the real VM -> named virtual-network edge.
+  if(v.vnet){var bnid='net:'+v.vnet;addNode(bnid,v.vnet,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(v.vnet)+'"');addEdge(vid,bnid);addEdge(bnid,'host');anyUplink=true;}
   var modes=vmModes(v),dd={};for(var k=0;k<modes.length;k++){var mode=modes[k];if(dd[mode])continue;dd[mode]=1;var mid='mode:'+mode;addNode(mid,modeLabel(mode),'net','');modesUsed[mode]=1;addEdge(vid,mid);}}
  if(vnetsData&&vnetsData.networks)for(var n=0;n<vnetsData.networks.length;n++){var net=vnetsData.networks[n];var nid='net:'+net.name;addNode(nid,net.name+' · '+net.type,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(net.name)+'"');addEdge(nid,'host');anyUplink=true;}
  Object.keys(modesUsed).forEach(function(m){if(m!=='none'){addEdge('mode:'+m,'host');anyUplink=true;}});

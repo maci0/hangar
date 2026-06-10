@@ -61,6 +61,7 @@ const VmJson = struct {
     notes: []const u8 = "",
     tags: []const u8 = "",
     folder: []const u8 = "",
+    vnet: []const u8 = "",
     cloud_init: []const u8 = "",
     port_forwards: []const u8 = "",
     saved_state_path: []const u8 = "",
@@ -157,6 +158,7 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.setNotes(j.notes);
     cfg.setTags(j.tags);
     cfg.setFolder(j.folder);
+    cfg.setVnet(j.vnet);
     cfg.setCloudInit(j.cloud_init);
     cfg.setPortForwards(j.port_forwards);
     cfg.setSavedStatePath(j.saved_state_path);
@@ -339,6 +341,10 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"folder\": ");
     try emitJsonStr(list, alloc, cfg.getFolderSlice());
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"vnet\": ");
+    try emitJsonStr(list, alloc, cfg.getVnetSlice());
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"cloud_init\": ");
@@ -932,6 +938,11 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
         } else if (std.mem.eql(u8, key, "folder")) {
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.setFolder(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "vnet")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setVnet(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "cloud_init")) {
@@ -1634,6 +1645,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.setNotes("These are test notes\nfor the VM.");
     original.setTags("prod,web,critical");
     original.setFolder("Production/Web");
+    original.setVnet("VMnet8");
     original.setCloudInit("#cloud-config\npackages:\n  - vim\n");
     original.setPortForwards("8080:80,2222:22");
     original.setSavedStatePath("/tmp/state.bin");
@@ -1722,6 +1734,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .notes = original.getNotesSlice(),
         .tags = original.getTagsSlice(),
         .folder = original.getFolderSlice(),
+        .vnet = original.getVnetSlice(),
         .cloud_init = original.getCloudInitSlice(),
         .port_forwards = original.getPortForwardsSlice(),
         .saved_state_path = original.getSavedStatePathSlice(),
@@ -1812,6 +1825,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqualStrings("These are test notes\nfor the VM.", restored.getNotesSlice());
     try std.testing.expectEqualStrings("prod,web,critical", restored.getTagsSlice());
     try std.testing.expectEqualStrings("Production/Web", restored.getFolderSlice());
+    try std.testing.expectEqualStrings("VMnet8", restored.getVnetSlice());
     try std.testing.expectEqualStrings("#cloud-config\npackages:\n  - vim\n", restored.getCloudInitSlice());
     try std.testing.expectEqualStrings("8080:80,2222:22", restored.getPortForwardsSlice());
     try std.testing.expectEqualStrings("/tmp/state.bin", restored.getSavedStatePathSlice());

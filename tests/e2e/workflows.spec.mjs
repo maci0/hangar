@@ -233,6 +233,18 @@ test('host dashboard shows inventory totals when no VM is selected', async ({ pa
     await expect(page.locator('.vm-facts')).toBeVisible();
 });
 
+test('VM vnet binding round-trips and links the VM to that network in the topology', async ({ page }) => {
+    await createVm(page, 'wf-vnet');
+    const idx = await indexOf(page, 'wf-vnet');
+    await api(page, 'POST', `/api/vms/${idx}`, 'vnet=VMnet8');
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-vnet')].vnet).toBe('VMnet8');
+    await page.reload();
+    await page.evaluate(() => openTopology());
+    await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
+    // The bound virtual network appears as a node the VM connects to.
+    await expect(page.locator('.topo-node.vnet').filter({ hasText: 'VMnet8' })).toHaveCount(1);
+});
+
 test('network topology renders VMs/networks/host via elkjs and a VM node selects', async ({ page }) => {
     await createVm(page, 'wf-topo-vm');
     await page.reload();

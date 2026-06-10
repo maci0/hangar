@@ -52,6 +52,8 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     const folder_e = if (v.folder_len > 0) escapeJson(&folder_buf, v.getFolderSlice(), "folder") else "";
     var id_buf: [64]u8 = undefined;
     const id_e = escapeJson(&id_buf, v.getIdSlice(), "id");
+    var vnet_buf: [256]u8 = undefined;
+    const vnet_e = if (v.vnet_len > 0) escapeJson(&vnet_buf, v.getVnetSlice(), "vnet") else "";
 
     var sf_buf: [vm.MAX_PATH]u8 = undefined;
     const sf_e = if (v.hasSharedFolder()) escapeJson(&sf_buf, v.getSharedFolderSlice(), "shared_folder") else "";
@@ -179,7 +181,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     // it into its own buffer. This part closes the JSON object.
     var ci_esc: [vm.MAX_CLOUD_INIT * 3]u8 = undefined;
     const ci_e = if (v.hasCloudInit()) escapeJson(&ci_esc, v.getCloudInitSlice(), "cloud_init") else "";
-    const part2e = std.fmt.bufPrint(buf[w..], ",\"cloud_init\":\"{s}\",\"id\":\"{s}\"}}", .{ ci_e, id_e }) catch return error.RenderFailed;
+    const part2e = std.fmt.bufPrint(buf[w..], ",\"cloud_init\":\"{s}\",\"id\":\"{s}\",\"vnet\":\"{s}\"}}", .{ ci_e, id_e, vnet_e }) catch return error.RenderFailed;
     w += part2e.len;
 
     return buf[0..w];
@@ -237,6 +239,8 @@ pub fn renderJson(buf: []u8) usize {
         const folder_e = if (v.folder_len > 0) escapeJson(&folder_buf, v.getFolderSlice(), "folder") else "";
         var id_buf: [64]u8 = undefined;
         const id_e = escapeJson(&id_buf, v.getIdSlice(), "id");
+        var vnet_buf: [256]u8 = undefined;
+        const vnet_e = if (v.vnet_len > 0) escapeJson(&vnet_buf, v.getVnetSlice(), "vnet") else "";
 
         // First block: up through tags
         const part1 = std.fmt.bufPrint(buf[w..],
@@ -340,7 +344,7 @@ pub fn renderJson(buf: []u8) usize {
         const ex3_e = if (v.hasExtraDisk(3)) escapeJson(&ex3_buf, v.getExtraDiskPathSlice(3), "extra3_path") else "";
 
         const part2d = std.fmt.bufPrint(buf[w..],
-            \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d},"id":"{s}"}}
+            \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d},"id":"{s}","vnet":"{s}"}}
         , .{
             ex0_e,
             v.extra_disks[0].size_gb,
@@ -355,6 +359,7 @@ pub fn renderJson(buf: []u8) usize {
             v.extra_disks[3].size_gb,
             v.extra_disks[3].format.toIndex(),
             id_e,
+            vnet_e,
         }) catch {
             w = buf.len;
             break;

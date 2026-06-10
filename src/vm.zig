@@ -1106,6 +1106,12 @@ pub const VmConfig = struct {
     folder_buf: [128]u8 = [_]u8{0} ** 128,
     folder_len: u16 = 0,
 
+    // ── Primary NIC's virtual-network binding (a VirtualNetwork name; empty =
+    //    none — the NIC connects by its raw mode only). Makes the VM↔vnet link
+    //    explicit (topology, future per-vnet config). ──
+    vnet_buf: [64]u8 = [_]u8{0} ** 64,
+    vnet_len: u16 = 0,
+
     // ── cloud-init user-data (NoCloud). When non-empty, a seed ISO is built and
     //    attached so a cloud-init guest auto-configures on first boot. ──
     cloud_init_buf: [MAX_CLOUD_INIT]u8 = [_]u8{0} ** MAX_CLOUD_INIT,
@@ -1387,6 +1393,17 @@ pub const VmConfig = struct {
         @memcpy(self.folder_buf[0..len], s[0..len]);
         self.folder_buf[len] = 0;
         self.folder_len = len;
+    }
+
+    pub fn getVnetSlice(self: *const VmConfig) []const u8 {
+        return self.vnet_buf[0..self.vnet_len];
+    }
+
+    pub fn setVnet(self: *VmConfig, s: []const u8) void {
+        const len: u16 = @intCast(@min(s.len, self.vnet_buf.len - 1));
+        @memcpy(self.vnet_buf[0..len], s[0..len]);
+        self.vnet_buf[len] = 0;
+        self.vnet_len = len;
     }
 
     pub fn getCloudInitSlice(self: *const VmConfig) []const u8 {
