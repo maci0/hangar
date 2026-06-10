@@ -1143,8 +1143,12 @@ function startVnc(idx, displayEl) {
   const url = proto + '//' + location.host + '/ws/vnc/' + idx;
 
   try {
-    if (typeof noVNC === 'undefined') { showToast('VNC client failed to load','error'); return; }
-    rfb = new noVNC.RFB(displayEl, url, {});
+    // The vendored noVNC bundle exposes the RFB class as its `default` export
+    // (noVNC.default), not noVNC.RFB. Accept either so a bundle update can't
+    // silently break the console again.
+    var RFBClass = (typeof noVNC !== 'undefined' && noVNC) ? (noVNC.default || noVNC.RFB) : null;
+    if (typeof RFBClass !== 'function') { showToast('VNC client failed to load','error'); return; }
+    rfb = new RFBClass(displayEl, url, {});
     rfb.addEventListener('connect', function() {
       displayEl.classList.remove('loading');
       displayEl.classList.add('connected');
