@@ -276,6 +276,24 @@ test('VM folders: the folder field groups the VM in a collapsible sidebar tree',
     await expect(page.locator('.folder-hdr[data-folder="TestFolder"]')).not.toHaveClass(/open/);
 });
 
+test('live console: embedded VNC canvas and serial panel connect for a running VM', async ({ page }) => {
+    // Regression test for the WebSocket console: the 101 upgrade response once
+    // used a Zig multiline literal (literal "\r" text, not CRLF), so browsers
+    // never completed any WS handshake and VNC/SPICE/serial were all dead.
+    await api(page, 'POST', '/api/vms', 'name=wf-live&mem=1024&cpu=1&disk=1&display=vnc&embed_display=true&enable_serial=true&firmware=bios');
+    const idx = await indexOf(page, 'wf-live');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    await api(page, 'POST', `/api/vms/${idx}/power`, '');
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-live')].status, { timeout: 25000 }).toBe('running');
+    await page.reload();
+    await page.locator('.vm-item', { hasText: 'wf-live' }).first().click();
+    // noVNC must complete the RFB handshake and size its canvas from the guest.
+    await expect.poll(() => page.evaluate(() => { const c = document.querySelector('#display canvas'); return c ? c.width : 0; }), { timeout: 20000 }).toBeGreaterThan(0);
+    // The serial relay shares the same upgrade path; the panel shows when connected.
+    await expect(page.locator('#serialpanel')).toBeVisible({ timeout: 10000 });
+    await api(page, 'POST', `/api/vms/${idx}/power`, ''); // power off
+});
+
 test('stable VM id is assigned and survives a rename', async ({ page }) => {
     await createVm(page, 'wf-id-a');
     const idx = await indexOf(page, 'wf-id-a');

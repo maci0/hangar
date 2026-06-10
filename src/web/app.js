@@ -560,7 +560,7 @@ const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','d
 'guest_agent','virtio_rng','tpm','secure_boot','hyperv_enlightenments','hugepages','watchdog','ballooning','host_autostart',
 'io_threads','disk_bps_throttle','disk_iops_throttle']
 .map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
-try{const r=await apiPost('/api/vms/'+idx,body);if(r){settingsDirty=false;await refresh();switchTab('summary');setStatus('Settings saved.');}
+try{const r=await apiPost('/api/vms/'+idx,body);if(r){settingsDirty=false;saveInFlight=false;/* refresh() no-ops while saveInFlight — clear it first or the summary renders stale data */await refresh();switchTab('summary');setStatus('Settings saved.');}
 else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}
 saveInFlight=false;
 for(let i=0;i<formEls.length;i++)formEls[i].disabled=false;}}

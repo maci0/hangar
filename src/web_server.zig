@@ -306,10 +306,12 @@ const bool_form_fields = [_][]const u8{
 
 /// Set a boolean VmConfig field from a form key/value via @field. Returns true if
 /// `key` named one of bool_form_fields. Shared by handleNewVm and handleSave.
+/// Accepts "1" or "true" as true (the bundled UI sends "1"; API clients commonly
+/// send "true" — silently parsing that as false cost a debugging session).
 fn applyBoolField(v: *vm.VmConfig, key: []const u8, val: []const u8) bool {
     inline for (bool_form_fields) |f| {
         if (std.mem.eql(u8, key, f)) {
-            @field(v, f) = std.mem.eql(u8, val, "1");
+            @field(v, f) = std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true");
             return true;
         }
     }
