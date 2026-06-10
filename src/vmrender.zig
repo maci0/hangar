@@ -48,6 +48,8 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice(), "notes") else "";
     var tags_buf: [256 * 6]u8 = undefined; // 6x: worst-case \u00XX escape of every byte
     const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice(), "tags") else "";
+    var folder_buf: [128 * 6]u8 = undefined;
+    const folder_e = if (v.folder_len > 0) escapeJson(&folder_buf, v.getFolderSlice(), "folder") else "";
 
     var sf_buf: [vm.MAX_PATH]u8 = undefined;
     const sf_e = if (v.hasSharedFolder()) escapeJson(&sf_buf, v.getSharedFolderSlice(), "shared_folder") else "";
@@ -66,7 +68,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 
     // First 32 fields
     const part1 = std.fmt.bufPrint(buf[w..],
-        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}","tags":"{s}"
+        \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}","tags":"{s}","folder":"{s}"
     , .{
         idx,                                    name_e,                               std.mem.span(v.status.toStr()),       std.mem.span(v.guest_os.label()),
         v.memory_mb,                            v.cpu_cores,                          v.cpu_sockets,                        v.disk_size_gb,
@@ -75,7 +77,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         sf_e,                                   usb_e,                                v.usb_policy.toIndex(),               if (v.guest_tools) "true" else "false",
         if (v.autoprotect) "true" else "false", v.autoprotect_interval_min,           v.autoprotect_max,                    if (v.hasDisk2()) "true" else "false",
         v.disk2_size_gb,                        d2_e,                                 v.disk2_format.toIndex(),             if (v.hasFloppy()) "true" else "false",
-        flp_e,                                  pf_e,                                 tags_e,
+        flp_e,                                  pf_e,                                 tags_e,                               folder_e,
     }) catch return error.RenderFailed;
     w += part1.len;
 
@@ -229,10 +231,12 @@ pub fn renderJson(buf: []u8) usize {
 
         var tags_buf: [512]u8 = undefined; // display-only (see notes_buf above)
         const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice(), "tags") else "";
+        var folder_buf: [256]u8 = undefined;
+        const folder_e = if (v.folder_len > 0) escapeJson(&folder_buf, v.getFolderSlice(), "folder") else "";
 
         // First block: up through tags
         const part1 = std.fmt.bufPrint(buf[w..],
-            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}","tags":"{s}"
+            \\{{"idx":{d},"name":"{s}","status":"{s}","os":"{s}","mem":{d},"cpu":{d},"cpu_sockets":{d},"disk":{d},"disk_format":{d},"disk_cache":{d},"net":"{s}","fw":"{s}","hasIso":{s},"hasDisk":{s},"iso_path":"{s}","notes":"{s}","shared_folder":"{s}","usb_device":"{s}","usb_policy":{d},"guest_tools":{s},"autoprotect":{s},"autoprotect_interval":{d},"autoprotect_max":{d},"hasDisk2":{s},"disk2_size":{d},"disk2_path":"{s}","disk2_format":{d},"hasFloppy":{s},"floppy_path":"{s}","port_forwards":"{s}","tags":"{s}","folder":"{s}"
         , .{
             i,                                      name_e,                               std.mem.span(v.status.toStr()),       std.mem.span(v.guest_os.label()),
             v.memory_mb,                            v.cpu_cores,                          v.cpu_sockets,                        v.disk_size_gb,
@@ -241,7 +245,7 @@ pub fn renderJson(buf: []u8) usize {
             sf_e,                                   usb_e,                                v.usb_policy.toIndex(),               if (v.guest_tools) "true" else "false",
             if (v.autoprotect) "true" else "false", v.autoprotect_interval_min,           v.autoprotect_max,                    if (v.hasDisk2()) "true" else "false",
             v.disk2_size_gb,                        d2_e,                                 v.disk2_format.toIndex(),             if (v.hasFloppy()) "true" else "false",
-            flp_e,                                  pf_e,                                 tags_e,
+            flp_e,                                  pf_e,                                 tags_e,                               folder_e,
         }) catch {
             w = buf.len;
             break;

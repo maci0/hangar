@@ -127,7 +127,7 @@ if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel
 function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
 // VM folders are a `folder:<path>` tag convention (no backend change). The sidebar
 // groups non-favorite VMs into collapsible folders; open/closed persists locally.
-function vmFolder(v){if(!v.tags)return '';var parts=v.tags.split(',');for(var i=0;i<parts.length;i++){var t=parts[i].trim();if(t.toLowerCase().indexOf('folder:')===0)return t.slice(7).trim();}return '';}
+function vmFolder(v){return (v&&v.folder)?v.folder.trim():'';}
 // User-facing tags exclude the structural folder:<path> tag.
 function visibleTags(t){return (t||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s&&s.toLowerCase().indexOf('folder:')!==0;});}
 function folderOpen(f){try{var c=JSON.parse(localStorage.getItem('hangar.folders')||'{}');return c[f]!==false;}catch(e){return true;}}
@@ -135,9 +135,7 @@ function setFolderOpen(f,o){try{var c=JSON.parse(localStorage.getItem('hangar.fo
 function folderList(){var s={};for(var i=0;i<vms.length;i++){var f=vmFolder(vms[i]);if(f)s[f]=1;}return Object.keys(s).sort();}
 async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[sel];var cur=vmFolder(v);
   var f=await showPromptDialog('Move "'+v.name+'" to folder (blank = none):',cur);if(f===null)return;f=f.trim();
-  var parts=(v.tags||'').split(',').map(function(t){return t.trim();}).filter(function(t){return t&&t.toLowerCase().indexOf('folder:')!==0;});
-  if(f)parts.push('folder:'+f);
-  var r=await apiPost('/api/vms/'+sel,'tags='+encodeURIComponent(parts.join(',')));
+  var r=await apiPost('/api/vms/'+sel,'folder='+encodeURIComponent(f));
   if(r){await refresh();setStatus(f?('Moved to '+escHtml(f)):'Removed from folder');}}
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f)||(v.tags||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));

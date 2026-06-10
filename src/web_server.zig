@@ -345,6 +345,7 @@ const str_form_fields = [_]struct { key: []const u8, setter: []const u8 }{
     .{ .key = "portfw", .setter = "setPortForwards" },
     .{ .key = "notes", .setter = "setNotes" },
     .{ .key = "tags", .setter = "setTags" },
+    .{ .key = "folder", .setter = "setFolder" },
     .{ .key = "cloud_init", .setter = "setCloudInit" },
 };
 

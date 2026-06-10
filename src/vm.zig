@@ -1098,6 +1098,10 @@ pub const VmConfig = struct {
     tags_buf: [256]u8 = [_]u8{0} ** 256,
     tags_len: u16 = 0,
 
+    // ── Folder (inventory-tree path, e.g. "Production/Web"; empty = ungrouped) ──
+    folder_buf: [128]u8 = [_]u8{0} ** 128,
+    folder_len: u16 = 0,
+
     // ── cloud-init user-data (NoCloud). When non-empty, a seed ISO is built and
     //    attached so a cloud-init guest auto-configures on first boot. ──
     cloud_init_buf: [MAX_CLOUD_INIT]u8 = [_]u8{0} ** MAX_CLOUD_INIT,
@@ -1349,6 +1353,17 @@ pub const VmConfig = struct {
         @memcpy(self.tags_buf[0..len], s[0..len]);
         self.tags_buf[len] = 0;
         self.tags_len = len;
+    }
+
+    pub fn getFolderSlice(self: *const VmConfig) []const u8 {
+        return self.folder_buf[0..self.folder_len];
+    }
+
+    pub fn setFolder(self: *VmConfig, s: []const u8) void {
+        const len: u16 = @intCast(@min(s.len, self.folder_buf.len - 1));
+        @memcpy(self.folder_buf[0..len], s[0..len]);
+        self.folder_buf[len] = 0;
+        self.folder_len = len;
     }
 
     pub fn getCloudInitSlice(self: *const VmConfig) []const u8 {

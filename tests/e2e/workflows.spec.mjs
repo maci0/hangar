@@ -246,10 +246,12 @@ test('network topology renders VMs/networks/host via elkjs and a VM node selects
     await expect(page.locator('.vm-facts')).toBeVisible();
 });
 
-test('VM folders: a folder: tag groups the VM in a collapsible sidebar tree', async ({ page }) => {
+test('VM folders: the folder field groups the VM in a collapsible sidebar tree', async ({ page }) => {
     await createVm(page, 'wf-fld-a');
     const idx = await indexOf(page, 'wf-fld-a');
-    await api(page, 'POST', `/api/vms/${idx}`, 'tags=' + encodeURIComponent('folder:TestFolder,prod'));
+    await api(page, 'POST', `/api/vms/${idx}`, 'folder=TestFolder&tags=prod');
+    // The folder field round-trips through the list JSON.
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-fld-a')].folder).toBe('TestFolder');
     await page.reload();
     const hdr = page.locator('.folder-hdr[data-folder="TestFolder"]');
     await expect(hdr).toBeVisible();
