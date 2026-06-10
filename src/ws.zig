@@ -58,17 +58,19 @@ pub fn parseUpgrade(req: []const u8) ?[29]u8 {
     return accept;
 }
 
+/// Format the HTTP 101 Switching Protocols response for a WebSocket upgrade.
+/// MUST use a normal string literal: Zig multiline (`\\`) literals do not
+/// process escapes, so a `\r` inside one is the two characters backslash+r —
+/// browsers then never see a real CRLF header terminator and the WebSocket
+/// stays in CONNECTING forever (this silently broke VNC/SPICE/serial consoles).
+pub fn formatUpgradeResponse(buf: []u8, accept_key: [29]u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {s}\r\n\r\n", .{accept_key[0..28]}) catch error.WriteFailed;
+}
+
 /// Write the HTTP 101 Switching Protocols response for a WebSocket upgrade.
 pub fn writeUpgradeResponse(fd: c.fd_t, accept_key: [29]u8) !void {
     var buf: [256]u8 = undefined;
-    const resp = std.fmt.bufPrint(&buf,
-        \\HTTP/1.1 101 Switching Protocols\r
-        \\Upgrade: websocket\r
-        \\Connection: Upgrade\r
-        \\Sec-WebSocket-Accept: {s}\r
-        \\\r
-        \\
-    , .{accept_key[0..28]}) catch return error.WriteFailed;
+    const resp = try formatUpgradeResponse(&buf, accept_key);
     _ = c.write(fd, resp.ptr, resp.len);
 }
 
@@ -264,6 +266,40 @@ test "parseUpgrade: valid WebSocket request" {
     try std.testing.expect(accept != null);
     // Known answer: base64(sha1("dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
     try std.testing.expectEqualStrings("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", accept.?[0..28]);
+}
+
+test "formatUpgradeResponse: real CRLF line endings and terminator (RFC 6455)" {
+    const req = "GET /ws/vnc/0 HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    const accept = parseUpgrade(req).?;
+    var buf: [256]u8 = undefined;
+    const resp = try formatUpgradeResponse(&buf, accept);
+    // Every line must end in a REAL CR+LF — a literal backslash-r (from a Zig
+    // multiline string) leaves browsers waiting for end-of-headers forever.
+    try std.testing.expect(std.mem.indexOf(u8, resp, "\\r") == null);
+    try std.testing.expect(std.mem.startsWith(u8, resp, "HTTP/1.1 101 Switching Protocols\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, resp, "Upgrade: websocket\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "Connection: Upgrade\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n") != null);
+    try std.testing.expect(std.mem.endsWith(u8, resp, "\r\n\r\n"));
+}
+
+fn fuzzByteIsPrintable(b: u8) bool {
+    return b == '\r' or b == '\n' or (b >= 0x20 and b < 0x7f);
+}
+
+test "fuzz: formatUpgradeResponse output is printable HTTP for random accept keys" {
+    var prng = std.Random.DefaultPrng.init(0xC0FFEE01);
+    const random = prng.random();
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
+        var key: [29]u8 = undefined;
+        for (&key) |*kb| kb.* = random.intRangeAtMost(u8, 0x21, 0x7e); // printable, no spaces
+        key[28] = 0;
+        var buf: [256]u8 = undefined;
+        const resp = try formatUpgradeResponse(&buf, key);
+        try std.testing.expect(std.mem.endsWith(u8, resp, "\r\n\r\n"));
+        for (resp) |rb| try std.testing.expect(fuzzByteIsPrintable(rb));
+    }
 }
 
 test "parseUpgrade: missing key returns null" {

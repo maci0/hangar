@@ -52,7 +52,7 @@ pub fn vnc(conn: c.fd_t, req: []const u8) !void {
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
     addr.port = std.mem.nativeToBig(u16, vnc_port);
-    addr.addr = std.mem.nativeToBig(u32, @bitCast([4]u8{ 127, 0, 0, 1 }));
+    addr.addr = netutil.LOOPBACK_V4;
 
     if (c.connect(vnc_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) < 0) {
         logWarn("ws/vnc: connect to VM VNC port failed");
@@ -175,7 +175,7 @@ pub fn spice(conn: c.fd_t, req: []const u8) !void {
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
     addr.port = std.mem.nativeToBig(u16, spice_port);
-    addr.addr = std.mem.nativeToBig(u32, @bitCast([4]u8{ 127, 0, 0, 1 }));
+    addr.addr = netutil.LOOPBACK_V4;
 
     if (c.connect(spice_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) < 0) {
         logWarn("ws/spice: connect to VM SPICE port failed");

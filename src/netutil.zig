@@ -19,6 +19,13 @@ pub const IPV6_V6ONLY: c_int = 26;
 pub const IPPROTO_TCP: c_int = 6;
 pub const TCP_NODELAY: c_int = 1;
 
+/// 127.0.0.1 in the in_addr wire format (big-endian byte order in memory).
+/// `[4]u8{127,0,0,1}` bit-cast to u32 IS already network byte order — do NOT
+/// apply nativeToBig on top: the double swap produces 1.0.0.127, a black-hole
+/// address whose SYNs hang forever (this exact bug silently broke the VNC and
+/// SPICE WebSocket relays).
+pub const LOOPBACK_V4: u32 = @bitCast([4]u8{ 127, 0, 0, 1 });
+
 /// Disable Nagle on a TCP socket. Interactive VNC/SPICE relay traffic is
 /// dominated by small mouse/keyboard packets; without this, Nagle coalescing
 /// adds up to ~40ms of latency per input event. Best-effort — failure is
@@ -46,7 +53,7 @@ pub fn portInUse(port: u16) bool {
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = @intCast(AF_INET);
     addr.port = std.mem.nativeToBig(u16, port);
-    addr.addr = std.mem.nativeToBig(u32, @bitCast([4]u8{ 127, 0, 0, 1 }));
+    addr.addr = LOOPBACK_V4;
     return c.connect(fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) == 0;
 }
 
@@ -56,7 +63,7 @@ test "netutil: portInUse — a listening port reads as in-use, a refused one fre
     if (fd < 0) return error.SkipZigTest;
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = @intCast(AF_INET);
-    addr.addr = std.mem.nativeToBig(u32, @bitCast([4]u8{ 127, 0, 0, 1 }));
+    addr.addr = LOOPBACK_V4;
     addr.port = 0; // OS-assigned ephemeral
     if (c.bind(fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) != 0 or c.listen(fd, 1) != 0) {
         _ = c.close(fd);
@@ -72,6 +79,12 @@ test "netutil: portInUse — a listening port reads as in-use, a refused one fre
     try std.testing.expect(portInUse(port)); // listener is up
     _ = c.close(fd);
     try std.testing.expect(!portInUse(port)); // gone → connect refused
+}
+
+test "netutil: LOOPBACK_V4 has network byte order (127 first in memory)" {
+    const bytes: [4]u8 = @bitCast(LOOPBACK_V4);
+    try std.testing.expectEqual(@as(u8, 127), bytes[0]);
+    try std.testing.expectEqual(@as(u8, 1), bytes[3]);
 }
 
 test "netutil: constants have their documented POSIX/Linux values" {
