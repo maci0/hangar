@@ -902,6 +902,41 @@ fn serveConfigRawAlloc() ?[]u8 {
 /// Thread-local because each accepted HTTP connection runs in its own thread.
 threadlocal var start_err_buf: [640]u8 = undefined;
 
+/// Scan for a display port that is free both in this daemon's VM list and at the
+/// OS level (actually bindable). `findUnusedVncPort` only avoids in-daemon
+/// clashes, so a stale/external listener on the assigned port would make QEMU
+/// fail to bind. Returns null if the whole range is taken.
+fn freeBindableDisplayPort(skip_idx: usize) ?u16 {
+    var port: u16 = vm.VNC_PORT_MIN;
+    while (port <= vm.DISPLAY_PORT_MAX) : (port += 1) {
+        var used = false;
+        for (appstate.vms[0..appstate.vm_count], 0..) |*o, i| {
+            if (i == skip_idx) continue;
+            if (o.vnc_port == port or o.spice_port == port) {
+                used = true;
+                break;
+            }
+        }
+        if (used) continue;
+        if (!netutil.portInUse(port)) return port;
+    }
+    return null;
+}
+
+/// Before launching QEMU, make sure the VM's VNC/SPICE port is actually bindable;
+/// if an external process holds it, reassign to a free+bindable one so power-on
+/// doesn't fail (and the WS proxy, which dials the same field, stays correct).
+/// Caller holds `vms_mutex`.
+fn ensureBindableDisplayPorts(idx: usize) void {
+    const v = &appstate.vms[idx];
+    if (v.display == .vnc and netutil.portInUse(v.vnc_port)) {
+        if (freeBindableDisplayPort(idx)) |p| v.vnc_port = p;
+    }
+    if (v.display == .spice and netutil.portInUse(v.spice_port)) {
+        if (freeBindableDisplayPort(idx)) |p| v.spice_port = p;
+    }
+}
+
 fn handlePower(req: []const u8) ![]const u8 {
     // Hold the lock across the whole operation. The VMM handle (and the
     // VmConfig it points at) can be freed by a concurrent delete/clone/suspend
@@ -931,7 +966,10 @@ fn handlePower(req: []const u8) ![]const u8 {
             qemu.reapVm(v);
         }
     } else {
-        // Start the VM.
+        // Start the VM. Re-home the display port if an external process grabbed
+        // it since assignment, so QEMU can bind and the WS console proxy (which
+        // dials the same field) connects to the right port.
+        ensureBindableDisplayPorts(idx);
         if (vmm_handle) |h| {
             appstate.g_vmm.startFn(h, @ptrCast(v)) catch |e| {
                 logOpErr("power on", e, vm_name_buf[0..vm_name.len]);
