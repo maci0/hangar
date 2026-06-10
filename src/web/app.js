@@ -798,7 +798,7 @@ async function bulkRun(label,fn){
   for(var i=0;i<ids.length;i++){
     try{var rr=await fetch('/api/vms');if(rr.ok)vms=normVmBools(await rr.json());}catch(e){}
     var idx=idxById(ids[i]);if(idx<0){continue;}
-    try{var r=await fn(idx,names[i]);if(r)ok++;else fail++;}catch(e){fail++;}
+    try{var r=await fn(idx,ids[i]);if(r)ok++;else fail++;}catch(e){fail++;}
   }
   setStatus(label+': '+ok+' ok'+(fail?(', '+fail+' failed'):''));
   await refresh();
