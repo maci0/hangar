@@ -9,7 +9,7 @@ var DEBUG=false;
 var API_KEY='hangar';
 var logDebug=DEBUG?function(t,a){console.warn(t,a);}:function(){};
 (function(){
-const saved=localStorage.getItem('hangar-theme')||'system';
+const saved=localStorage.getItem('hangar-theme')||'dark';
 window.hangarTheme=saved;
 window.applyTheme=function(t){
  window.hangarTheme=t;
@@ -161,7 +161,7 @@ for(const fld of order){const open=folderOpen(fld);
  h+='<div class="folder-hdr'+(open?' open':'')+'" data-action="toggleFolder" data-folder="'+escHtml(fld)+'" role="button" tabindex="0" aria-expanded="'+open+'"><span class="folder-caret" aria-hidden="true">▸</span><span class="folder-name">'+escHtml(fld)+'</span><span class="folder-count">'+groups[fld].length+'</span></div>';
  if(open){h+='<div class="folder-body">';for(const x of groups[fld])h+=vmItemHtml(x);h+='</div>';}}
 for(const x of ungrouped)h+=vmItemHtml(x);
-if(!h){if(f)h='<div class="sidebar-empty"><p>No matching VMs</p><button class="btn" data-action="clearSearch">Clear search</button></div>';else h='<div class="sidebar-empty"><p>No virtual machines yet</p><button class="btn primary" data-action="newVm">＋ New VM</button></div>';}
+if(!h){if(f)h='<div class="sidebar-empty"><p>No matching VMs</p><button class="btn" data-action="clearSearch">Clear search</button></div>';else h='<div class="sidebar-empty"><p>No virtual machines yet</p><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>New VM</button></div>';}
 e.innerHTML=h;
 updateBulkBar();
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
@@ -210,7 +210,7 @@ function hostDashboardHtml(){
     h+='<td>'+visibleTags(v.tags).map(function(t){return '<span class="tag-chip sm">'+escHtml(t)+'</span>';}).join('')+'</td>';
     h+='</tr>';});
   h+='</tbody></table></div>';
-  h+='<div class="empty-actions" style="justify-content:flex-start;margin-top:18px"><button class="btn primary" data-action="newVm">＋ New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
+  h+='<div class="empty-actions" style="justify-content:flex-start;margin-top:18px"><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
   return h;
 }
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
@@ -219,7 +219,7 @@ if(!t||!s||!nm||!tb)return;
 nm.textContent=vms.length?'Overview':'Select a VM';document.title='Hangar — VM Manager';tb.style.display='none';
 t.style.display='block';s.style.display='none';if(c)c.style.display='none';activeTab='summary';
 t.setAttribute('aria-hidden','false');s.setAttribute('aria-hidden','true');if(c)c.setAttribute('aria-hidden','true');
-var empty=vms.length?hostDashboardHtml():'<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p><div class="empty-actions"><button class="btn primary" data-action="newVm">＋ New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
+var empty=vms.length?hostDashboardHtml():'<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p><div class="empty-actions"><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
 t.innerHTML=empty;
 s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';
 if(c)c.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';
@@ -376,8 +376,8 @@ case'batch-start':return vms.some(function(x){return x.status==='stopped'||x.sta
 case'batch-stop':return vms.some(function(x){return x.status==='running'||x.status==='paused';});
 default:return true;}}
 function disabledReason(name,v){if(!v&&name!=='batch-start'&&name!=='batch-stop')return 'Select a VM first';if(name==='display')return 'Requires a running VM with embedded VNC or SPICE display';if(name==='serial')return 'Requires a running VM with serial enabled';if(name==='resume')return 'Only paused or suspended VMs can resume';if(name==='shutdown'||name==='reset'||name==='pause'||name==='suspend'||name==='cad'||name==='migrate')return 'Requires a running VM';if(name==='hard-power')return 'Requires a running or paused VM';if(name==='batch-start')return 'No stopped VMs';if(name==='batch-stop')return 'No running VMs';return 'Unavailable';}
-function updatePowerBtn(){const b=document.getElementById('powerbtn');if(!b)return;const v=selectedVm();b.removeAttribute('aria-busy');b.disabled=!v;if(!v){b.textContent='▶ Power On';b.className='btn primary keep-mobile';b.title='Select a VM first';return;}
-if(v.status==='running'||v.status==='paused'){b.textContent='⏹ Power Off';b.className='btn danger keep-mobile';b.title='Hard power off selected VM';}else{b.textContent='▶ Power On';b.className='btn primary keep-mobile';b.title='Power on selected VM';}}
+function updatePowerBtn(){const b=document.getElementById('powerbtn');if(!b)return;const v=selectedVm();b.removeAttribute('aria-busy');b.disabled=!v;var pi='<svg class="ico" aria-hidden="true"><use href="#i-power"/></svg>';if(!v){b.innerHTML=pi+'Power On';b.className='btn primary keep-mobile';b.title='Select a VM first';return;}
+if(v.status==='running'||v.status==='paused'){b.innerHTML=pi+'Power Off';b.className='btn danger keep-mobile';b.title='Hard power off selected VM';}else{b.innerHTML=pi+'Power On';b.className='btn primary keep-mobile';b.title='Power on selected VM';}}
 function updateCommandState(){updatePowerBtn();var v=selectedVm();var nodes=document.querySelectorAll('[data-vm-action]');for(var i=0;i<nodes.length;i++){var n=nodes[i];var name=n.getAttribute('data-vm-action');var ok=actionAllowed(name,v);n.disabled=!ok;n.setAttribute('aria-disabled',ok?'false':'true');if(!ok){n.title=disabledReason(name,v);n.setAttribute('data-disabled-title','1');}else if(n.getAttribute('data-disabled-title')==='1'){n.removeAttribute('title');n.removeAttribute('data-disabled-title');}}
 var tabBar=document.getElementById('tabBar');if(tabBar&&v){var consoleBtn=tabBar.querySelector('[data-tab="console"]');if(consoleBtn){consoleBtn.disabled=!(v.status==='running'&&embeddedDisplayCapable(v));consoleBtn.title=consoleBtn.disabled?'Console requires a running embedded VNC or SPICE display':'Open VM console';}}}
 function newVm(){['n_name','n_mem','n_cpu','n_disk'].forEach(function(id){var e=document.getElementById('err_'+id);if(e)e.textContent='';var f=document.getElementById(id);if(f)f.classList.remove('invalid');});var d=document.getElementById('newdlg');if(d)d.showModal();}
