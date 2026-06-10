@@ -46,6 +46,9 @@ var vms=[]; var sel=null; var activeTab='summary'; var transitioningIdx=null; va
 // index-addressed request whose target was captured before an await, so a
 // concurrent reorder/delete can't make the request hit a different VM. -1 if gone.
 function idxByName(n){for(var i=0;i<vms.length;i++){if(vms[i].name===n)return i;}return -1;}
+// Resolve current index by stable id — survives rename (preferred for tracking a
+// VM across the poll for destructive/long-running actions).
+function idxById(id){if(!id)return -1;for(var i=0;i<vms.length;i++){if(vms[i].id===id)return i;}return -1;}
 // The /api/vms response encodes config flags as JSON booleans (true/false), but
 // every consumer below compares them as the strings 'true'/'false'. Coerce any
 // boolean-valued property back to that string form so the comparisons hold.
@@ -53,7 +56,7 @@ function normVmBools(arr){if(Array.isArray(arr)){for(var i=0;i<arr.length;i++){v
 var openActionMenu=null;
 var actionMenuTrigger=null; // the toolbar button that opened the current menu, for keyboard focus-return
 var dashSort={col:'name',dir:1}; // host-dashboard inventory-table sort state
-var selectMode=false; var checkedNames=new Set(); // sidebar multi-select bulk-ops state
+var selectMode=false; var checkedIds=new Set(); // sidebar multi-select bulk-ops state
 var settingsCategory='compute';
 var displayLabels=['GTK','SDL','SPICE','VNC','None'];
 var gpuLabels=['Virtio-GPU (virgl 3D)','Virtio-VGA (virgl 3D)','Virtio-GPU','Virtio-VGA','QXL','Standard VGA'];
@@ -145,7 +148,7 @@ function vmItemHtml(x){
  const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
  const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
  const star=x.fav?'<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites">★</button>':'<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites">☆</button>';
- const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-name="'+escHtml(x.v.name)+'"'+(checkedNames.has(x.v.name)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
+ const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-id="'+escHtml(x.v.id)+'"'+(checkedIds.has(x.v.id)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
  return '<div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="option" aria-selected="'+(sel===x.i?'true':'false')+'" data-vm-index="'+x.i+'" tabindex="0" data-action="select" draggable="true">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'"></span> '+escHtml(x.v.name)+star+vmBars(x.v)+'</div>';
 }
 for(const x of viz){if(!x.show||!x.fav)continue;h+=vmItemHtml(x);}
@@ -330,15 +333,15 @@ async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/vm
 async function migrateGuest(){if(sel===null)return;var vm=vms[sel];var mv=document.getElementById('migrate_vmname');if(mv)mv.textContent=vm.name;var md=document.getElementById('migratedlg');if(md){updateMigUri();md.showModal();}}
 function updateMigUri(){var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');var uri=document.getElementById('mig_uri');if(host&&port&&uri){var h=host.value.trim();uri.value=h?('tcp:'+h+':'+port.value):'';}}
 var migrating=false;
-async function doMigrate(){if(sel===null||migrating)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value,10)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;migrating=true;migName=vms[sel].name;var resp=await apiPost('/api/vms/'+sel+'/migrate','dest='+encodeURIComponent(dest));if(!resp){migrating=false;migName=null;return;}var j=await resp.json();if(!j||j.status!=='started'){showToast('Migration failed to start','error');migrating=false;migName=null;return;}var md=document.getElementById('migratedlg');if(md)md.close();showMigProgress();pollMigStatus();}
+async function doMigrate(){if(sel===null||migrating)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value,10)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;migrating=true;migId=vms[sel].id;var resp=await apiPost('/api/vms/'+sel+'/migrate','dest='+encodeURIComponent(dest));if(!resp){migrating=false;migId=null;return;}var j=await resp.json();if(!j||j.status!=='started'){showToast('Migration failed to start','error');migrating=false;migId=null;return;}var md=document.getElementById('migratedlg');if(md)md.close();showMigProgress();pollMigStatus();}
 var migPollTimer=null;
-var migName=null;
+var migId=null;
 var migPollFails=0;
 var MIG_POLL_MAX_FAILS=5;
 function showMigProgress(){migPollFails=0;var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar&&info){bar.style.display='block';bar.removeAttribute('aria-valuenow');info.style.display='inline';info.textContent='Migration in progress...';var fill=bar.firstElementChild;if(fill)fill.style.width='0%';}if(cancel)cancel.style.display='inline';}
-function hideMigProgress(){migrating=false;migName=null;migPollFails=0;if(migPollTimer){clearTimeout(migPollTimer);migPollTimer=null;}var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar)bar.style.display='none';if(info)info.style.display='none';if(cancel)cancel.style.display='none';}
-async function pollMigStatus(){if(migName===null){hideMigProgress();return;}
-var mi=idxByName(migName);if(mi<0){showToast('Migrating VM no longer in the list','warn');hideMigProgress();return;}
+function hideMigProgress(){migrating=false;migId=null;migPollFails=0;if(migPollTimer){clearTimeout(migPollTimer);migPollTimer=null;}var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar)bar.style.display='none';if(info)info.style.display='none';if(cancel)cancel.style.display='none';}
+async function pollMigStatus(){if(migId===null){hideMigProgress();return;}
+var mi=idxById(migId);if(mi<0){showToast('Migrating VM no longer in the list','warn');hideMigProgress();return;}
 var t='';try{var ctl=new AbortController();var tid=setTimeout(function(){ctl.abort();},10000);var resp=await fetch('/api/vms/'+mi+'/migrate',{signal:ctl.signal});clearTimeout(tid);t=await resp.text();}catch(e){}
 var info=document.getElementById('mig_pct');var bar=document.getElementById('mig_progress');
 if(!info||!bar)return;
@@ -358,7 +361,7 @@ if(typeof s.pct==='number'&&fill){var pc=Math.min(100,Math.max(0,s.pct));fill.st
 info.textContent='Migration '+s.status+'...';
 }catch(e){info.textContent='Migration polling error';}
 migPollTimer=setTimeout(pollMigStatus,500);}
-async function cancelMigrate(){if(migName===null)return;var mi=idxByName(migName);if(mi<0){hideMigProgress();return;}var r=await apiPost('/api/vms/'+mi+'/migrate/cancel','');if(r){var info=document.getElementById('mig_pct');if(info)info.textContent='Cancelling...';setStatus('Migration cancel requested');}}
+async function cancelMigrate(){if(migId===null)return;var mi=idxById(migId);if(mi<0){hideMigProgress();return;}var r=await apiPost('/api/vms/'+mi+'/migrate/cancel','');if(r){var info=document.getElementById('mig_pct');if(info)info.textContent='Cancelling...';setStatus('Migration cancel requested');}}
 function summaryWarnings(v){var warnings=[];if(v.embed_display==='true'&&!embeddedDisplayCapable(v))warnings.push('Embedded display is enabled, but browser console requires VNC or SPICE.');if(v.enable_3d==='true'&&(Number(v.gpu_device)===0||Number(v.gpu_device)===1)&&v.embed_display==='true'&&Number(v.display)===3)warnings.push('Virgl 3D cannot use embedded VNC; use embedded SPICE or disable 3D.');if(v.net==='none')warnings.push('Network adapter is disconnected.');if(v.net==='gvproxy')warnings.push('gvproxy networking requires a gvproxy daemon listening on /tmp/hangar-gvproxy-qemu.sock.');if(v.net==='bridge')warnings.push('Bridged networking requires a configured host bridge (e.g. br0).');if(!warnings.length)return'';var h='<div class="summary-card warning-card"><div class="card-label">Attention</div><div class="card-value">';for(var i=0;i<warnings.length;i++)h+='<div>'+escHtml(warnings[i])+'</div>';return h+'</div></div>';}
 function actionAllowed(name,v){var has=!!v;var running=v&&v.status==='running';var paused=v&&v.status==='paused';switch(name){
 case'settings':case'rename':case'clone':case'export':case'delete':case'snapshot':return has;
@@ -778,42 +781,42 @@ function topoSelectVm(name){var d=document.getElementById('topodlg');if(d)d.clos
 function topoEditNet(name){var d=document.getElementById('topodlg');if(d)d.close();var vd=document.getElementById('vnetdlg');if(vd&&!vd.open)vd.showModal();if(vnetsData&&vnetsData.networks){for(var i=0;i<vnetsData.networks.length;i++){if(vnetsData.networks[i].name===name){vnetIdx=i;var s=document.getElementById('vnet_sel');if(s)s.value=String(i);showVnetFields(i);break;}}}}
 
 // ── Sidebar multi-select + bulk operations ──
-function toggleSelectMode(){selectMode=!selectMode;if(!selectMode)checkedNames.clear();var t=document.getElementById('selectToggle');if(t)t.setAttribute('aria-pressed',selectMode?'true':'false');var sv=document.getElementById('search');renderList(sv?sv.value.toLowerCase():'');}
+function toggleSelectMode(){selectMode=!selectMode;if(!selectMode)checkedIds.clear();var t=document.getElementById('selectToggle');if(t)t.setAttribute('aria-pressed',selectMode?'true':'false');var sv=document.getElementById('search');renderList(sv?sv.value.toLowerCase():'');}
 function updateBulkBar(){var bar=document.getElementById('bulkBar');if(!bar)return;bar.hidden=!selectMode;
  // Prune names of VMs deleted/renamed elsewhere so the count never over-reports.
- if(selectMode&&checkedNames.size)checkedNames.forEach(function(n){if(idxByName(n)<0)checkedNames.delete(n);});
- var c=document.getElementById('bulkCount');if(c)c.textContent=checkedNames.size+' selected';}
+ if(selectMode&&checkedIds.size)checkedIds.forEach(function(n){if(idxById(n)<0)checkedIds.delete(n);});
+ var c=document.getElementById('bulkCount');if(c)c.textContent=checkedIds.size+' selected';}
 // Run `fn(idx,name)` for each checked VM, re-syncing vms[] from the server before
 // each so an index stays correct even as earlier deletes shift the list.
 async function bulkRun(label,fn){
-  var names=Array.from(checkedNames);if(!names.length){showToast('No VMs selected','warn');return;}
+  var ids=Array.from(checkedIds);if(!ids.length){showToast('No VMs selected','warn');return;}
   var ok=0,fail=0;
-  for(var i=0;i<names.length;i++){
+  for(var i=0;i<ids.length;i++){
     try{var rr=await fetch('/api/vms');if(rr.ok)vms=normVmBools(await rr.json());}catch(e){}
-    var idx=idxByName(names[i]);if(idx<0){continue;}
+    var idx=idxById(ids[i]);if(idx<0){continue;}
     try{var r=await fn(idx,names[i]);if(r)ok++;else fail++;}catch(e){fail++;}
   }
   setStatus(label+': '+ok+' ok'+(fail?(', '+fail+' failed'):''));
   await refresh();
 }
 async function doBulkPower(on){
-  if(!checkedNames.size){showToast('No VMs selected','warn');return;}
+  if(!checkedIds.size){showToast('No VMs selected','warn');return;}
   var verb=on?'Power on':'Power off';
-  if(!(await showConfirmDialog(verb+' '+checkedNames.size+' selected VM(s)?',on?{okLabel:'Power On'}:{danger:true,okLabel:'Power Off'})))return;
+  if(!(await showConfirmDialog(verb+' '+checkedIds.size+' selected VM(s)?',on?{okLabel:'Power On'}:{danger:true,okLabel:'Power Off'})))return;
   await bulkRun(verb,function(idx){var v=vms[idx];var running=(v.status==='running'||v.status==='paused');if((on&&running)||(!on&&!running))return Promise.resolve(true);return apiPost('/api/vms/'+idx+'/power');});
 }
 async function doBulkSnapshot(){
-  if(!checkedNames.size){showToast('No VMs selected','warn');return;}
-  var tag=await showPromptDialog('Snapshot name for '+checkedNames.size+' selected VM(s):','bulk-snapshot');
+  if(!checkedIds.size){showToast('No VMs selected','warn');return;}
+  var tag=await showPromptDialog('Snapshot name for '+checkedIds.size+' selected VM(s):','bulk-snapshot');
   if(tag===null)return;tag=tag.trim();if(!tag){showToast('Enter a snapshot name','warn');return;}
   if(/[\x00-\x1f]|\.\./.test(tag)||tag.length>255){showToast('Snapshot name is invalid','error');return;}
   await bulkRun('Snapshot',function(idx){return apiPost('/api/vms/'+idx+'/snapshots','tag='+encodeURIComponent(tag));});
 }
 async function doBulkDelete(){
-  if(!checkedNames.size){showToast('No VMs selected','warn');return;}
-  if(!(await showConfirmDialog('Delete '+checkedNames.size+' selected VM(s)? Undo restores them one at a time.',{danger:true,okLabel:'Delete'})))return;
+  if(!checkedIds.size){showToast('No VMs selected','warn');return;}
+  if(!(await showConfirmDialog('Delete '+checkedIds.size+' selected VM(s)? Undo restores them one at a time.',{danger:true,okLabel:'Delete'})))return;
   await bulkRun('Delete',function(idx){return apiPost('/api/vms/'+idx+'/delete');});
-  checkedNames.clear();updateBulkBar();
+  checkedIds.clear();updateBulkBar();
 }
 
 document.addEventListener('keydown',async function(e){var shift=e.shiftKey;
@@ -1330,7 +1333,7 @@ var actionHandlers={
  select:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);},
 	 sortInv:function(el){var c=el.getAttribute('data-col');if(!c)return;if(dashSort.col===c)dashSort.dir=-dashSort.dir;else{dashSort.col=c;dashSort.dir=1;}showEmptyState();},
 	 toggleSelectMode:function(){toggleSelectMode();},
-	 toggleCheck:function(el){var n=el.getAttribute('data-vm-name');if(!n)return;if(el.checked)checkedNames.add(n);else checkedNames.delete(n);updateBulkBar();},
+	 toggleCheck:function(el){var n=el.getAttribute('data-vm-id');if(!n)return;if(el.checked)checkedIds.add(n);else checkedIds.delete(n);updateBulkBar();},
 	 bulkPower:function(el){doBulkPower(el.getAttribute('data-on')==='1');},
 	 bulkSnapshot:function(){doBulkSnapshot();},
 	 bulkDelete:function(){doBulkDelete();},

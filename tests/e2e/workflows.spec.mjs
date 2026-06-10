@@ -264,14 +264,25 @@ test('VM folders: the folder field groups the VM in a collapsible sidebar tree',
     await expect(page.locator('.folder-hdr[data-folder="TestFolder"]')).not.toHaveClass(/open/);
 });
 
+test('stable VM id is assigned and survives a rename', async ({ page }) => {
+    await createVm(page, 'wf-id-a');
+    const idx = await indexOf(page, 'wf-id-a');
+    const before = (await list(page))[idx].id;
+    expect(before, 'a 16-hex-char id should be assigned at create').toMatch(/^[0-9a-f]{16}$/);
+    await api(page, 'POST', `/api/vms/${idx}/rename`, 'name=wf-id-renamed');
+    await expect.poll(() => indexOf(page, 'wf-id-renamed')).toBeGreaterThanOrEqual(0);
+    const after = (await list(page))[await indexOf(page, 'wf-id-renamed')].id;
+    expect(after, 'id must be stable across rename').toBe(before);
+});
+
 test('multi-select bulk delete removes only the checked VMs', async ({ page }) => {
     await createVm(page, 'wf-bulk-1');
     await createVm(page, 'wf-bulk-2');
     await createVm(page, 'wf-bulk-keep');
     await page.reload();
     await page.click('#selectToggle');
-    await page.check('.vm-check[data-vm-name="wf-bulk-1"]');
-    await page.check('.vm-check[data-vm-name="wf-bulk-2"]');
+    await page.locator('.vm-item', { hasText: 'wf-bulk-1' }).locator('.vm-check').check();
+    await page.locator('.vm-item', { hasText: 'wf-bulk-2' }).locator('.vm-check').check();
     await expect(page.locator('#bulkCount')).toHaveText('2 selected');
     await page.click('[data-action="bulkDelete"]');
     await page.locator('#confirmOkBtn').click(); // custom confirm dialog

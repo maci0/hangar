@@ -1075,6 +1075,10 @@ pub const Prefs = struct {
 /// a plain array without heap allocation.  Runtime state (`status`, `pid`)
 /// is kept alongside config but should *not* be persisted.
 pub const VmConfig = struct {
+    // ── Stable identity (immutable, survives rename/reorder) ──────
+    id_buf: [32]u8 = [_]u8{0} ** 32,
+    id_len: u16 = 0,
+
     // ── Name ──────────────────────────────────────────────────────
     name_buf: [MAX_NAME + 1]u8 = [_]u8{0} ** (MAX_NAME + 1),
     name_len: u16 = 0,
@@ -1353,6 +1357,25 @@ pub const VmConfig = struct {
         @memcpy(self.tags_buf[0..len], s[0..len]);
         self.tags_buf[len] = 0;
         self.tags_len = len;
+    }
+
+    pub fn getIdSlice(self: *const VmConfig) []const u8 {
+        return self.id_buf[0..self.id_len];
+    }
+
+    pub fn setId(self: *VmConfig, s: []const u8) void {
+        const len: u16 = @intCast(@min(s.len, self.id_buf.len));
+        @memcpy(self.id_buf[0..len], s[0..len]);
+        self.id_len = len;
+    }
+
+    /// Generate a stable id if one is not already set (idempotent backfill on
+    /// load + assignment on create). Uses the clock + a monotonic counter so two
+    /// VMs created in the same nanosecond still differ.
+    pub fn ensureId(self: *VmConfig) void {
+        if (self.id_len != 0) return;
+        var buf: [16]u8 = undefined;
+        self.setId(generateId(&buf));
     }
 
     pub fn getFolderSlice(self: *const VmConfig) []const u8 {
@@ -1661,6 +1684,24 @@ pub const VmConfig = struct {
 };
 
 /// Generates a random unicast, locally-administered MAC address.
+var id_counter: u64 = 0;
+/// Generate a 16-hex-char stable VM id into `buf` (8 random bytes). Seeded from
+/// the monotonic clock XOR a process-monotonic counter so same-nanosecond
+/// creations stay distinct.
+pub fn generateId(buf: *[16]u8) []const u8 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    id_counter +%= 1;
+    const seed: u64 = (@as(u64, @bitCast(@as(i64, ts.sec))) << 20) ^
+        @as(u64, @bitCast(@as(i64, ts.nsec))) ^
+        (id_counter *% 0x9E3779B97F4A7C15);
+    var prng = std.Random.DefaultPrng.init(seed);
+    const random = prng.random();
+    var b: [8]u8 = undefined;
+    random.bytes(&b);
+    return std.fmt.bufPrint(buf, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7] }) catch "0000000000000000";
+}
+
 pub fn generateMacAddress(buf: *[18]u8) [*:0]const u8 {
     // Seed from the monotonic clock. 0.16 moved `std.time.milliTimestamp`
     // behind the `Io` interface, so we read the clock via libc directly.
@@ -1823,6 +1864,28 @@ test "VmConfig: mac address round-trip" {
     cfg.clearMacAddress();
     try std.testing.expect(!cfg.hasMacAddress());
     try std.testing.expectEqual(@as(usize, 0), cfg.getMacAddressSlice().len);
+}
+
+test "generateId: 16 lowercase-hex chars, distinct across calls" {
+    var a: [16]u8 = undefined;
+    var b: [16]u8 = undefined;
+    const id1 = generateId(&a);
+    const id2 = generateId(&b);
+    try std.testing.expectEqual(@as(usize, 16), id1.len);
+    for (id1) |c| try std.testing.expect((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f'));
+    try std.testing.expect(!std.mem.eql(u8, id1, id2)); // monotonic counter differs the seed
+}
+
+test "ensureId assigns once and is idempotent" {
+    var cfg = VmConfig{};
+    try std.testing.expectEqual(@as(u16, 0), cfg.id_len);
+    cfg.ensureId();
+    try std.testing.expect(cfg.id_len == 16);
+    var saved: [32]u8 = undefined;
+    const first = cfg.getIdSlice();
+    @memcpy(saved[0..first.len], first);
+    cfg.ensureId(); // no-op when already set
+    try std.testing.expectEqualStrings(saved[0..first.len], cfg.getIdSlice());
 }
 
 test "generateMacAddress format" {

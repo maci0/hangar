@@ -46,6 +46,7 @@ pub fn loadDegraded() bool {
 /// Flat VM config — used as an intermediate representation for the
 /// `fromVmJson` conversion and for the round-trip test.
 const VmJson = struct {
+    id: []const u8 = "",
     name: []const u8 = "",
     cpu_cores: u32 = 2,
     cpu_sockets: u32 = 1,
@@ -142,6 +143,7 @@ const VmJson = struct {
 fn fromVmJson(j: *const VmJson) vm.VmConfig {
     var cfg = vm.VmConfig{};
     cfg.setName(j.name);
+    cfg.setId(j.id);
     cfg.cpu_cores = j.cpu_cores;
     cfg.cpu_sockets = j.cpu_sockets;
     cfg.cpu_model = vm.CpuModel.fromStr(j.cpu_model);
@@ -226,6 +228,7 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.ballooning = j.ballooning;
     cfg.host_autostart = j.host_autostart;
     cfg.num_displays = j.num_displays;
+    cfg.ensureId(); // backfill a stable id for VMs persisted before ids existed
     return cfg;
 }
 
@@ -277,6 +280,10 @@ fn emitBool(list: *List, alloc: std.mem.Allocator, val: bool) !void {
 /// Append a single VM config as a JSON object.
 fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !void {
     try emit(list, alloc, "\n    {\n");
+
+    try emit(list, alloc, "      \"id\": ");
+    try emitJsonStr(list, alloc, cfg.getIdSlice());
+    try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"name\": ");
     try emitJsonStr(list, alloc, cfg.getNameSlice());
@@ -887,7 +894,12 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
         cur = skipWs(cur[1..]);
 
         // Parse value based on key
-        if (std.mem.eql(u8, key, "name")) {
+        if (std.mem.eql(u8, key, "id")) {
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setId(r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "name")) {
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.setName(r.value);
                 cur = r.rest;
@@ -1607,6 +1619,7 @@ test "save refuses to overwrite when load read failed" {
 
 test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     var original = vm.VmConfig{};
+    original.setId("deadbeefcafe0001");
     original.setName("TestVM");
     original.cpu_cores = 4;
     original.cpu_sockets = 2;
@@ -1694,6 +1707,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.usb_policy = .usb3;
 
     const json = VmJson{
+        .id = original.getIdSlice(),
         .name = original.getNameSlice(),
         .cpu_cores = original.cpu_cores,
         .cpu_sockets = original.cpu_sockets,
@@ -1784,6 +1798,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     const restored = fromVmJson(&json);
 
     try std.testing.expectEqualStrings("TestVM", restored.getNameSlice());
+    try std.testing.expectEqualStrings("deadbeefcafe0001", restored.getIdSlice());
     try std.testing.expectEqual(@as(u32, 4), restored.cpu_cores);
     try std.testing.expectEqual(@as(u32, 2), restored.cpu_sockets);
     try std.testing.expectEqual(vm.CpuModel.Skylake_Server, restored.cpu_model);

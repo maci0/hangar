@@ -1253,6 +1253,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     }
     if (!has_vnc_port) cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     if (!has_spice_port) cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+    cfg.ensureId();
     appstate.vms[appstate.vm_count] = cfg;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
@@ -1325,6 +1326,7 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
     cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
 
+    cfg.ensureId();
     appstate.vms[appstate.vm_count] = cfg;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
@@ -1401,6 +1403,8 @@ fn handleClone(req: []const u8) ![]const u8 {
     if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
     clone.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     clone.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+    clone.id_len = 0; // a clone is a new VM — give it its own stable id
+    clone.ensureId();
     appstate.vms[appstate.vm_count] = clone;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
@@ -1972,6 +1976,7 @@ fn handleImport(req: []const u8) ![]const u8 {
     cfg.setMacAddress(std.mem.span(mac));
     cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+    cfg.ensureId();
     appstate.vms[appstate.vm_count] = cfg;
     appstate.vm_count += 1;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
