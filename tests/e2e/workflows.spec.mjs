@@ -303,6 +303,23 @@ test('multi-select bulk delete removes only the checked VMs', async ({ page }) =
     expect(await indexOf(page, 'wf-bulk-keep')).toBeGreaterThanOrEqual(0);
 });
 
+test('keyboard activates folder headers and sort headers (a11y)', async ({ page }) => {
+    await createVm(page, 'wf-kbd-vm');
+    const idx = await indexOf(page, 'wf-kbd-vm');
+    await api(page, 'POST', `/api/vms/${idx}`, 'folder=KbdFolder');
+    await page.reload();
+    const hdr = page.locator('.folder-hdr[data-folder="KbdFolder"]');
+    await expect(hdr).toHaveClass(/open/);
+    await hdr.focus();
+    await page.keyboard.press('Enter'); // collapse via keyboard (CSP-safe dispatch)
+    await expect(page.locator('.folder-hdr[data-folder="KbdFolder"]')).not.toHaveClass(/open/);
+    // A sort header activates by keyboard without error (table stays rendered).
+    const th = page.locator('.inv thead th[data-col="name"]');
+    await th.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.inv tbody tr').first()).toBeVisible();
+});
+
 test('command palette (Ctrl+K) opens, filters, runs a command, and closes', async ({ page }) => {
     await createVm(page, 'wf-pal');
     await page.reload();

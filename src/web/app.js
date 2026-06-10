@@ -1393,8 +1393,13 @@ document.body.addEventListener('change',function(e){
  else if(action==='applyTheme'){pendingTheme=el.value;window.applyTheme(el.value);}
 });
 document.body.addEventListener('keydown',function(e){
- if(e.key==='Enter'&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'&&e.target.tagName!=='SELECT'){
-  var el=e.target.closest('[data-action="select"]');if(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);}
+ if((e.key==='Enter'||e.key===' ')&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'&&e.target.tagName!=='SELECT'){
+  // Keyboard-activate focusable non-button controls (CSP-safe dispatch is click
+  // only): list rows, folder headers, sort headers, topology nodes.
+  var el=e.target.closest('[data-action]');if(!el)return;
+  if(el.getAttribute('role')==='button'||el.tagName==='TH'||el.getAttribute('data-action')==='select'){
+   e.preventDefault();var action=el.getAttribute('data-action');var h=actionHandlers[action];if(h)h(el);
+  }
  }
 });
 window.addEventListener('beforeunload',function(){stopFb();stopSerial(true);clearSerialReconnect();});
