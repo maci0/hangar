@@ -275,6 +275,8 @@ aside .vm-item .dot.paused{background:var(--pause);box-shadow:0 0 0 3px color-mi
 aside .vm-item .dot.suspended{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 16%,transparent)}
 aside .vm-item .star{padding:2px;border:0;background:transparent;font-size:11px;line-height:1;color:var(--text-dim);cursor:pointer;border-radius:var(--radius-sm)}
 aside .vm-item .star.fav{color:var(--accent-3)}
+aside .vm-item .star .ico{width:12px;height:12px}
+aside .vm-item .star.fav .ico{fill:currentColor;stroke:currentColor}
 aside .vm-item:focus-visible,aside .vm-item .star:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 aside .vm-item .vm-bars{
   grid-column:2/4;
@@ -388,7 +390,7 @@ main{
   box-shadow:var(--shadow-pop);
   z-index:230;
 }
-.action-menu.open{display:block}
+.action-menu.open{display:block;animation:menu-in .09s ease}
 .menu-item{
   transition:background-color var(--transition),color var(--transition);
   display:flex;
@@ -429,12 +431,12 @@ main{
   box-shadow:var(--shadow-pop);
   z-index:200;
 }
-.toolbar-more-popover.open{display:block}
+.toolbar-more-popover.open{display:block;animation:menu-in .09s ease}
 .toolbar-more-popover .btn{width:100%;justify-content:flex-start;border:0;background:transparent;padding:5px 10px}
 .toolbar-more-popover .btn:hover{background:var(--accent-soft)}
 .toolbar-more-popover .sep{display:block;height:1px;margin:4px 6px;background:var(--border-soft)}
 
-.ctx-menu{min-width:200px;padding:4px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow-pop);z-index:9999}
+.ctx-menu{animation:menu-in .09s ease;min-width:200px;padding:4px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow-pop);z-index:9999}
 .ctx-item{transition:background-color var(--transition);display:flex;align-items:center;gap:8px;width:100%;padding:5px 10px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--text);font-size:12px;text-align:left}
 .ctx-item .ico{width:13px;height:13px;color:var(--text-dim);flex:0 0 auto}
 .ctx-item:hover .ico{color:var(--text-muted)}
@@ -487,6 +489,8 @@ main{
 .tab-btn.active{color:var(--text);border-bottom-color:var(--accent);font-weight:600}
 .tab-btn:disabled{opacity:.42;cursor:not-allowed}
 .tab-btn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+#tabConsole,#tabSummary,#tabSettings{animation:panel-in .08s ease}
 
 /* ── Empty state ─────────────────────────────────────────────────── */
 .empty-state{
@@ -650,7 +654,7 @@ main{
 #serialpanel.connected{border-color:color-mix(in srgb,var(--success) 50%,var(--border))}
 #serialterm{
   width:100%;
-  height:260px;
+  height:170px;
   padding:10px 14px;
   resize:none;
   border:0;
@@ -871,7 +875,11 @@ dialog .btn-row{display:flex;gap:8px;justify-content:flex-end;padding:12px 20px 
   color:var(--text-muted);
   font-size:12px;
 }
-#statusbar .loading{animation:status-pulse .9s ease-in-out infinite}
+#statusbar .loading,#statusmsg.loading{animation:status-pulse .9s ease-in-out infinite}
+#statusmsg{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#livebadge{display:inline-flex;align-items:center;gap:5px;color:var(--text-dim);font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+#livebadge[hidden]{display:none}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 2px color-mix(in srgb,var(--success) 18%,transparent);animation:status-pulse 2.4s ease-in-out infinite}
 #loadbar{position:fixed;top:0;left:0;right:0;height:2px;z-index:300;pointer-events:none;opacity:0;transition:opacity var(--transition)}
 main #loadbar{position:absolute}
 #loadbar.active{opacity:1}
@@ -973,6 +981,8 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
 
 /* ── Animations ──────────────────────────────────────────────────── */
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes menu-in{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:translateY(0)}}
+@keyframes panel-in{from{opacity:.4}to{opacity:1}}
 @keyframes loadbar-slide{0%{margin-left:-35%}60%,100%{margin-left:100%}}
 @keyframes toast-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
 @keyframes toast-out{to{opacity:0;transform:translateY(-3px)}}

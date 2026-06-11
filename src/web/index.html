@@ -169,7 +169,7 @@
       <div class="display-toolbar" aria-label="Display controls">
         <button class="display-tool" data-action="enterDisplayOnly" data-vm-action="display" title="Display only" aria-label="Display only"><svg class="ico" aria-hidden="true"><use href="#i-maximize"/></svg></button>
         <button class="display-tool" data-action="reconnectDisplay" data-vm-action="display" title="Reconnect display" aria-label="Reconnect display"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg></button>
-        <button class="display-tool" data-action="sendCad" data-vm-action="cad" title="Send Ctrl+Alt+Del" aria-label="Send Ctrl+Alt+Del">⌨</button>
+        <button class="display-tool" data-action="sendCad" data-vm-action="cad" title="Send Ctrl+Alt+Del" aria-label="Send Ctrl+Alt+Del"><svg class="ico" aria-hidden="true"><use href="#i-keyboard"/></svg></button>
       </div>
       <div id="displayHint" class="display-hint" aria-live="polite"></div>
     </div>
@@ -222,7 +222,7 @@
 </main>
 
 <!-- Status Bar -->
-<div id="statusbar">Ready</div>
+<div id="statusbar"><span id="statusmsg">Ready</span><span id="livebadge" hidden><span class="live-dot" aria-hidden="true"></span>Live</span></div>
 <!-- Screen-reader announcer: only intentional status messages are announced here,
      so the status bar's frequent passive updates (uptime, VM counts) stay silent. -->
 <div id="statusannounce" class="sr-only" role="status" aria-live="polite"></div>

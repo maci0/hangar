@@ -62,8 +62,8 @@ var displayLabels=['GTK','SDL','SPICE','VNC','None'];
 var gpuLabels=['Virtio-GPU (virgl 3D)','Virtio-VGA (virgl 3D)','Virtio-GPU','Virtio-VGA','QXL','Standard VGA'];
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function announceStatus(s){var a=document.getElementById('statusannounce');if(a)a.textContent=s;}
-function setStatus(s){var el=document.getElementById('statusbar');if(!el)return;el.textContent=s;el.classList.remove('loading');announceStatus(s);}
-function setStatusLoading(s){var el=document.getElementById('statusbar');if(!el)return;el.textContent='⏳ '+s;el.classList.add('loading');announceStatus(s);}
+function setStatus(s){var el=document.getElementById('statusmsg');if(!el)return;el.textContent=s;el.classList.remove('loading');announceStatus(s);}
+function setStatusLoading(s){var el=document.getElementById('statusmsg');if(!el)return;el.textContent=s+'…';el.classList.add('loading');announceStatus(s);}
 var toastIcons={success:'✓',error:'✗',info:'ℹ',warn:'⚠'};
 function showToast(msg,type,opts){type=type||'info';var c=document.getElementById('toast-container');if(!c)return;var toasts=c.querySelectorAll('.toast');while(toasts.length>=5){c.removeChild(toasts[0]);toasts=c.querySelectorAll('.toast');}var t=document.createElement('div');t.className='toast '+type;t.setAttribute('role',(type==='error'||type==='warn')?'alert':'status');var icon=toastIcons[type]||toastIcons.info;var inner='<span class=\"toast-icon\" aria-hidden=\"true\">'+icon+'</span><span class=\"toast-msg\">'+escHtml(msg)+'</span>';if(opts&&opts.action){inner+='<button class=\"toast-action\" data-toast-action=\"'+opts.action+'\">UNDO</button>';}t.innerHTML=inner;c.appendChild(t);
 if(opts&&opts.action&&opts.onAction){t.querySelector('.toast-action').addEventListener('click',function(){opts.onAction();c.removeChild(t);});}
@@ -81,7 +81,7 @@ function initLoadBar(){loadBar=document.createElement('div');loadBar.id='loadbar
 function setLoadBar(on){if(!loadBar)initLoadBar();if(on)loadBar.classList.add('active');else{loadBar.classList.remove('active');}}
 var busy=false,busyGen=0; // guard against double-submit
 function setBusy(){if(busy)return false;busy=true;var gen=++busyGen;setTimeout(function(){if(busyGen===gen){busy=false;apiPostPending=0;setLoadBar(false);setStatus('');logDebug('busy guard auto-cleared after 300s — request may be hung');}},300000);return true;} // fallback auto-clear: only for a genuinely hung request. Set well above realistic op durations (a large qcow2 compact/resize can run minutes) so a slow-but-progressing op keeps the gate (no double-submit, no poll-vs-mutation swap) for its whole duration; apiPost itself clears busy on completion/error.
-async function apiPost(url,body){if(!setBusy()){showToast('Another operation is in progress — please wait.','warn');return null;}var sb=document.getElementById('statusbar');var wasIdle=apiPostPending<=0;var prev=sb?sb.textContent:'Ready';if(wasIdle){setStatusLoading('Working...');setLoadBar(true);}apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':API_KEY}};var r=await fetch(url,opts);if(!r.ok){var msg=await r.text().catch(function(){return '';});try{var j=JSON.parse(msg);if(j.error)msg=j.error;}catch(e){}throw new Error(msg||'HTTP '+r.status);}apiPostPending--;if(apiPostPending<=0){setStatus(prev);setLoadBar(false);}busy=false;busyGen++;return r;}catch(e){apiPostPending--;if(apiPostPending<=0){setStatus('Error: '+e.message);setLoadBar(false);}busy=false;busyGen++;showToast(e.message||'Request failed','error');return null;}}
+async function apiPost(url,body){if(!setBusy()){showToast('Another operation is in progress — please wait.','warn');return null;}var sb=document.getElementById('statusmsg');var wasIdle=apiPostPending<=0;var prev=sb?sb.textContent:'Ready';if(wasIdle){setStatusLoading('Working...');setLoadBar(true);}apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':API_KEY}};var r=await fetch(url,opts);if(!r.ok){var msg=await r.text().catch(function(){return '';});try{var j=JSON.parse(msg);if(j.error)msg=j.error;}catch(e){}throw new Error(msg||'HTTP '+r.status);}apiPostPending--;if(apiPostPending<=0){setStatus(prev);setLoadBar(false);}busy=false;busyGen++;return r;}catch(e){apiPostPending--;if(apiPostPending<=0){setStatus('Error: '+e.message);setLoadBar(false);}busy=false;busyGen++;showToast(e.message||'Request failed','error');return null;}}
 var sidebarOpen=false;
 function isMobileSidebar(){return window.matchMedia('(max-width:900px)').matches;}
 function syncSidebarButton(){const btn=document.querySelector('.hamburger');const aside=document.querySelector('aside');var expanded=isMobileSidebar()?sidebarOpen:!document.body.classList.contains('sidebar-collapsed');if(btn){btn.setAttribute('aria-expanded',expanded?'true':'false');btn.setAttribute('aria-label',expanded?'Collapse VM Library':'Expand VM Library');}if(aside){aside.toggleAttribute('inert',!expanded);aside.setAttribute('aria-hidden',expanded?'false':'true');}}
@@ -147,7 +147,7 @@ function vmBars(v){var barMem=v.mem||1024;var memPct=Math.min(100,Math.round(bar
 function vmItemHtml(x){
  const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
  const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
- const star=x.fav?'<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites">★</button>':'<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites">☆</button>';
+ const star=x.fav?'<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></button>':'<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></button>';
  const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-id="'+escHtml(x.v.id)+'"'+(checkedIds.has(x.v.id)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
  return '<div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="option" aria-selected="'+(sel===x.i?'true':'false')+'" data-vm-index="'+x.i+'" tabindex="0" data-action="select" draggable="true">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'"></span> '+escHtml(x.v.name)+star+vmBars(x.v)+'</div>';
 }
@@ -166,8 +166,8 @@ e.innerHTML=h;
 updateBulkBar();
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+(cnt===1?' virtual machine':' virtual machines');if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
-if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+' — '+v.status;if(v.started&&v.started>0&&v.status==='running'){const elapsed=Math.floor(Date.now()/1000)-v.started;const days=Math.floor(elapsed/86400);const hrs=Math.floor((elapsed%86400)/3600);const mins=Math.floor((elapsed%3600)/60);const secs=elapsed%60;st+=' | Uptime: '+(days>0?days+'d ':'')+hrs+':'+String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');}st+='    |    '+parts;var sb=document.getElementById('statusbar');if(sb)sb.textContent=st;}
-else{var sb2=document.getElementById('statusbar');if(sb2)sb2.textContent=parts;}updateCommandState();}
+if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+' — '+v.status;if(v.started&&v.started>0&&v.status==='running'){const elapsed=Math.floor(Date.now()/1000)-v.started;const days=Math.floor(elapsed/86400);const hrs=Math.floor((elapsed%86400)/3600);const mins=Math.floor((elapsed%3600)/60);const secs=elapsed%60;st+=' | Uptime: '+(days>0?days+'d ':'')+hrs+':'+String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');}st+='    |    '+parts;var sb=document.getElementById('statusmsg');if(sb)sb.textContent=st;}
+else{var sb2=document.getElementById('statusmsg');if(sb2)sb2.textContent=parts;}updateCommandState();}
 async function toggleFavorite(i){if(i>=vms.length)return;const fav=vms[i].favorite==='true'?'0':'1';
 const r=await apiPost('/api/vms/'+i,'favorite='+fav);if(r){if(i<vms.length){vms[i].favorite=fav==='1'?'true':'false';}renderList();if(sel===i)renderDetails();}}
 function selectedVm(){return sel!==null&&sel<vms.length?vms[sel]:null;}
@@ -945,7 +945,10 @@ setInterval(refresh,5000);
 // Server-Sent Events: the daemon bumps a state version on every mutation and
 // unexpected VM exit; refresh immediately instead of waiting for the 5s poll.
 // EventSource reconnects on its own; the poll above remains the fallback.
-(function(){var deb=null;try{var es=new EventSource('/api/events');es.addEventListener('change',function(){if(deb)clearTimeout(deb);deb=setTimeout(function(){refresh();},120);});}catch(e){}})();
+(function(){var deb=null;try{var es=new EventSource('/api/events');var lb=document.getElementById('livebadge');
+es.onopen=function(){if(lb)lb.hidden=false;};
+es.onerror=function(){if(lb)lb.hidden=true;};
+es.addEventListener('change',function(){if(deb)clearTimeout(deb);deb=setTimeout(function(){refresh();},120);});}catch(e){}})();
 document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh();});
 // ── noVNC / SPICE live viewer ──
 var rfb = null; // noVNC RFB client instance
