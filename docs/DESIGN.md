@@ -59,9 +59,16 @@ Uniform `POST /api/vms/<id>/<action>` routes dispatch via a comptime
 
 ## Web UI Layout
 
-Dark theme (`#0e0f12` background, `#1b1d21` surface) with WS7-style
-sidebar + main content. Canvas for VNC framebuffer display.
-5-second auto-refresh via polling `GET /api/vms`.
+Flat slate design system (dark default + light, token-driven; see
+`src/web/app.css`) with WS-style sidebar + toolbar + tabbed workspace
+(Console / Summary / Settings — the embedded display and xterm.js serial
+terminal live inside the Console tab). Reactivity: `GET /api/events` (SSE)
+pushes change notifications; the 5-second `GET /api/vms` poll remains as
+fallback. The host dashboard is a VanJS component. Vendored, embedded
+frontend libs: noVNC, spice-html5, elkjs (vnet topology), vanjs-core,
+@xterm/xterm (+fit/webgl addons). Guest display chain: virtio-vga-gl → virgl
+→ egl-headless host render → VNC/SPICE scanout stream → WebGPU/WebGL2
+presenter (see docs/VIDEO-PIPELINE.md for the planned encoded-video path).
 
 ## Keyboard Shortcuts
 
@@ -94,6 +101,7 @@ which still require auth: `disk2/download`, `framebuffer`, `screenshot`,
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/health` | Liveness + VM/running counts + persist status |
+| GET | `/api/events` | Server-Sent Events: change notifications (state version bumps on every mutation and unexpected VM exit) |
 | GET | `/api/config` · POST `/api/config` | Read / save preferences |
 | GET | `/api/capabilities` · `/api/catalog` | Host capabilities / VM templates |
 | GET | `/api/vms` | List VMs |
