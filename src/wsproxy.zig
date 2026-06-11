@@ -13,6 +13,7 @@ const httpreq = @import("httpreq.zig");
 const httpresp = @import("httpresp.zig");
 const wlog = @import("wlog.zig");
 const netutil = @import("netutil.zig");
+const appio = @import("appio.zig");
 
 const parseIdx = httpreq.parseIdx;
 const writeAll = httpresp.writeAll;
@@ -45,20 +46,30 @@ pub fn vnc(conn: c.fd_t, req: []const u8) !void {
     const accept_key = ws.parseUpgrade(req) orelse return;
     try ws.writeUpgradeResponse(conn, accept_key);
 
-    // Connect to the VM's VNC server.
-    const vnc_fd = c.socket(AF_INET, SOCK_STREAM, 0);
-    if (vnc_fd < 0) return;
-
+    // Connect to the VM's VNC server. QEMU reports "running" the moment it
+    // forks, but its display listener comes up a beat later — a console that
+    // auto-connects on the first running poll would race it and get refused.
+    // Retry briefly (4s budget, 150ms steps, fresh socket per attempt: a failed
+    // connect leaves the fd unusable) before failing the upgrade.
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
     addr.port = std.mem.nativeToBig(u16, vnc_port);
     addr.addr = netutil.LOOPBACK_V4;
 
-    if (c.connect(vnc_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) < 0) {
-        logWarn("ws/vnc: connect to VM VNC port failed");
+    var vnc_fd: c.fd_t = -1;
+    var waited_ms: u32 = 0;
+    while (true) {
+        vnc_fd = c.socket(AF_INET, SOCK_STREAM, 0);
+        if (vnc_fd < 0) return;
+        if (c.connect(vnc_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) == 0) break;
         _ = c.close(vnc_fd);
-        try ws.writeClose(conn);
-        return;
+        if (waited_ms >= 4000) {
+            logWarn("ws/vnc: connect to VM VNC port failed");
+            try ws.writeClose(conn);
+            return;
+        }
+        appio.sleepMs(150);
+        waited_ms += 150;
     }
     setTcpNoDelay(vnc_fd);
 
@@ -168,20 +179,30 @@ pub fn spice(conn: c.fd_t, req: []const u8) !void {
     const accept_key = ws.parseUpgrade(req) orelse return;
     try ws.writeUpgradeResponse(conn, accept_key);
 
-    // Connect to the VM's SPICE server.
-    const spice_fd = c.socket(AF_INET, SOCK_STREAM, 0);
-    if (spice_fd < 0) return;
-
+    // Connect to the VM's SPICE server. QEMU reports "running" the moment it
+    // forks, but its display listener comes up a beat later — a console that
+    // auto-connects on the first running poll would race it and get refused.
+    // Retry briefly (4s budget, 150ms steps, fresh socket per attempt: a failed
+    // connect leaves the fd unusable) before failing the upgrade.
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
     addr.port = std.mem.nativeToBig(u16, spice_port);
     addr.addr = netutil.LOOPBACK_V4;
 
-    if (c.connect(spice_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) < 0) {
-        logWarn("ws/spice: connect to VM SPICE port failed");
+    var spice_fd: c.fd_t = -1;
+    var waited_ms: u32 = 0;
+    while (true) {
+        spice_fd = c.socket(AF_INET, SOCK_STREAM, 0);
+        if (spice_fd < 0) return;
+        if (c.connect(spice_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) == 0) break;
         _ = c.close(spice_fd);
-        try ws.writeClose(conn);
-        return;
+        if (waited_ms >= 4000) {
+            logWarn("ws/spice: connect to VM SPICE port failed");
+            try ws.writeClose(conn);
+            return;
+        }
+        appio.sleepMs(150);
+        waited_ms += 150;
     }
     setTcpNoDelay(spice_fd);
 
