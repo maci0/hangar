@@ -1155,3 +1155,6 @@ aside .vm-item .vm-bar-fill{background:var(--accent)}
 .hamburger,.toolbar-more,.theme-toggle-btn{display:inline-flex;align-items:center;justify-content:center}
 .display-tool .ico{width:16px;height:16px}
 .bulk-actions .btn .ico{width:13px;height:13px;margin:0}
+
+/* Running-VM settings guard banner */
+.settings-runlock{margin:0 0 12px;padding:10px 14px;border:1px solid var(--warn);border-left-width:3px;border-radius:var(--radius-sm);background:var(--surface);color:var(--text-muted);font-size:13px}

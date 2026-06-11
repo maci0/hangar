@@ -276,6 +276,48 @@ test('VM folders: the folder field groups the VM in a collapsible sidebar tree',
     await expect(page.locator('.folder-hdr[data-folder="TestFolder"]')).not.toHaveClass(/open/);
 });
 
+test('per-NIC vnet binding round-trips and appears in the topology', async ({ page }) => {
+    await createVm(page, 'wf-nicvnet');
+    const idx = await indexOf(page, 'wf-nicvnet');
+    await api(page, 'POST', `/api/vms/${idx}`, 'nic2=user&nic2_vnet=VMnet1&nic5_vnet=VMnet8');
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-nicvnet')].nic2_vnet).toBe('VMnet1');
+    expect((await list(page))[await indexOf(page, 'wf-nicvnet')].nic5_vnet).toBe('VMnet8');
+    await page.reload();
+    await page.evaluate(() => openTopology());
+    await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
+    await expect(page.locator('.topo-node.vnet').filter({ hasText: 'VMnet1' })).toHaveCount(1);
+    await expect(page.locator('.topo-node.vnet').filter({ hasText: 'VMnet8' })).toHaveCount(1);
+});
+
+test('snapshot manager shows the creation timestamp', async ({ page }) => {
+    await createVm(page, 'wf-snaptime');
+    await page.reload();
+    await page.locator('.vm-item', { hasText: 'wf-snaptime' }).first().click();
+    await page.click('button:has-text("Snapshots")');
+    await page.locator('#snapshotMenu .menu-item', { hasText: 'Snapshot Manager' }).first().click();
+    await page.fill('#s_tag', 'stamped');
+    await page.click('[data-action="takeSnapshotFromDlg"]');
+    await expect(page.locator('#snaplist')).toContainText('stamped', { timeout: 15000 });
+    // The row carries "Taken YYYY-MM-DD HH:MM:SS" parsed from qemu-img output.
+    await expect(page.locator('#snaplist')).toContainText(/Taken \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+});
+
+test('settings lock virtual hardware while the VM is running, metadata stays editable', async ({ page }) => {
+    await api(page, 'POST', '/api/vms', 'name=wf-lock&mem=1024&cpu=1&disk=1&display=vnc&firmware=bios');
+    const idx = await indexOf(page, 'wf-lock');
+    await api(page, 'POST', `/api/vms/${idx}/power`, '');
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-lock')].status, { timeout: 25000 }).toBe('running');
+    await page.reload();
+    await page.locator('.vm-item', { hasText: 'wf-lock' }).first().click();
+    await page.click('#tab-btn-settings');
+    await expect(page.locator('.settings-runlock')).toBeVisible();
+    await expect(page.locator('#e_mem')).toBeDisabled();
+    await expect(page.locator('#e_cpu')).toBeDisabled();
+    await expect(page.locator('#e_notes')).toBeEnabled();
+    await expect(page.locator('#e_tags')).toBeEnabled();
+    await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-lock')}/power`, '');
+});
+
 test('live console: embedded VNC canvas and serial panel connect for a running VM', async ({ page }) => {
     // Regression test for the WebSocket console: the 101 upgrade response once
     // used a Zig multiline literal (literal "\r" text, not CRLF), so browsers

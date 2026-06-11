@@ -322,8 +322,8 @@ async function loadSnapshots(){if(sel===null)return;const el=document.getElement
 var v=selectedVm();var meta=document.getElementById('snapMeta');var running=v&&(v.status==='running'||v.status==='paused');if(meta)meta.innerHTML=v?'<strong>'+escHtml(v.name)+'</strong><span>'+escHtml(statusLabel(v.status))+'</span>'+(running?'<span class="warn-text">Revert and delete require the VM to be powered off.</span>':''):'';
 try{const r=await fetch('/api/vms/'+sel+'/snapshots');if(!r.ok){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';return;}const t=(await r.text()).trim();
 if(!t||t==='(none)'){el.innerHTML='<div class="snapshot-empty">No snapshots for this VM.</div>';return;}
-const lines=t.split('\n');let h='';for(const ln of lines){const tag=ln.trim();if(!tag)continue;
-h+=`<div class="snapshot-row"><div><strong>${escHtml(tag)}</strong><small>Saved state</small></div><div class="snapshot-actions"><button class="btn" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Revert to snapshot ${escHtml(tag)}"${running?' disabled title="Power off the VM before reverting"':''}>Revert</button><button class="btn danger" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Delete snapshot ${escHtml(tag)}">Delete</button></div></div>`;}
+const lines=t.split('\n');let h='';for(const ln of lines){const parts=ln.split('\t');const tag=(parts[0]||'').trim();if(!tag)continue;const when=(parts[1]||'').trim();
+h+=`<div class="snapshot-row"><div><strong>${escHtml(tag)}</strong><small>${when?'Taken '+escHtml(when):'Saved state'}</small></div><div class="snapshot-actions"><button class="btn" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Revert to snapshot ${escHtml(tag)}"${running?' disabled title="Power off the VM before reverting"':''}>Revert</button><button class="btn danger" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Delete snapshot ${escHtml(tag)}">Delete</button></div></div>`;}
 el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
 async function revertSnapshot(tag){if(sel===null||!tag)return;if(!(await showConfirmDialog('Revert to snapshot "'+tag+'"? This will discard current state.',{danger:true,okLabel:'Revert'})))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
 const r=await apiPost('/api/vms/'+sel+'/snapshots/revert','tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);var sd=document.getElementById('snapdlg');if(sd)sd.close();}else{loadSnapshots();}}
@@ -434,13 +434,13 @@ const fields=[
 ['ISO Path','e_iso_path','text',v.iso_path||''],['','','cdactions',''],['Firmware','e_firmware','select',v.fw||'bios'],
 ['Boot Order','e_boot_order','select',v.boot_order||0],['RTC Clock','e_rtc','select',v.rtc||0],
 {s:'Network &amp; Boot'},['Network','e_network','select',v.net||'user'],['Virtual Network','e_vnet','text',v.vnet||'','placeholder="bind to a virtual network name (optional)"'],['MAC Address','e_mac_address','text',v.mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
-['NIC 2','e_nic2','select',v.nic2_mode||'none'],['NIC 2 MAC','e_nic2_mac','text',v.nic2_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
-['NIC 3','e_nic3','select',v.nic3_mode||'none'],['NIC 3 MAC','e_nic3_mac','text',v.nic3_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
-['NIC 4','e_nic4','select',v.nic4_mode||'none'],['NIC 4 MAC','e_nic4_mac','text',v.nic4_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
-['NIC 5','e_nic5','select',v.nic5_mode||'none'],['NIC 5 MAC','e_nic5_mac','text',v.nic5_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
-['NIC 6','e_nic6','select',v.nic6_mode||'none'],['NIC 6 MAC','e_nic6_mac','text',v.nic6_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
-['NIC 7','e_nic7','select',v.nic7_mode||'none'],['NIC 7 MAC','e_nic7_mac','text',v.nic7_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
-['NIC 8','e_nic8','select',v.nic8_mode||'none'],['NIC 8 MAC','e_nic8_mac','text',v.nic8_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
+['NIC 2','e_nic2','select',v.nic2_mode||'none'],['NIC 2 MAC','e_nic2_mac','text',v.nic2_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 2 VMnet','e_nic2_vnet','text',v.nic2_vnet||'','placeholder="virtual network name (optional)"'],
+['NIC 3','e_nic3','select',v.nic3_mode||'none'],['NIC 3 MAC','e_nic3_mac','text',v.nic3_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 3 VMnet','e_nic3_vnet','text',v.nic3_vnet||'','placeholder="virtual network name (optional)"'],
+['NIC 4','e_nic4','select',v.nic4_mode||'none'],['NIC 4 MAC','e_nic4_mac','text',v.nic4_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 4 VMnet','e_nic4_vnet','text',v.nic4_vnet||'','placeholder="virtual network name (optional)"'],
+['NIC 5','e_nic5','select',v.nic5_mode||'none'],['NIC 5 MAC','e_nic5_mac','text',v.nic5_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 5 VMnet','e_nic5_vnet','text',v.nic5_vnet||'','placeholder="virtual network name (optional)"'],
+['NIC 6','e_nic6','select',v.nic6_mode||'none'],['NIC 6 MAC','e_nic6_mac','text',v.nic6_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 6 VMnet','e_nic6_vnet','text',v.nic6_vnet||'','placeholder="virtual network name (optional)"'],
+['NIC 7','e_nic7','select',v.nic7_mode||'none'],['NIC 7 MAC','e_nic7_mac','text',v.nic7_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 7 VMnet','e_nic7_vnet','text',v.nic7_vnet||'','placeholder="virtual network name (optional)"'],
+['NIC 8','e_nic8','select',v.nic8_mode||'none'],['NIC 8 MAC','e_nic8_mac','text',v.nic8_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 8 VMnet','e_nic8_vnet','text',v.nic8_vnet||'','placeholder="virtual network name (optional)"'],
 ['Port Forwards','e_portfw','text',v.port_forwards||''],
 {s:'Sharing'},['Shared Folder','e_shared_folder','text',v.shared_folder||''],['USB Device','e_usb','text',v.usb_device||''],
 ['USB Policy','e_usb_policy','select',v.usb_policy||0],
@@ -536,7 +536,16 @@ e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
 	h+='</nav><div class="settings-detail">';
 	for(const sec of sections){h+=`<section class="settings-panel${sec.id===settingsCategory?' active':''}" data-settings-panel="${sec.id}"${sec.id===settingsCategory?'':' style="display:none"'}><div class="settings-panel-head"><h3>${sec.title}</h3><p>${escHtml(sectionNotes[sec.id]||'Configure this virtual hardware group.')}</p></div><div class="settings-form">`;for(const f of sec.fields)h+=renderField(f);h+='</div></section>';}
 	h+='</div></div><div class="settings-actions"><button type="button" class="btn" data-action="switchTab" data-tab="summary">Cancel</button><button id="savevmbtn" type="button" class="btn primary" data-action="saveVm" title="Save VM settings">Save Changes</button></div>';
-	var ts=document.getElementById('tabSettings');if(ts)ts.innerHTML=h;settingsDirty=false;}
+	var ts=document.getElementById('tabSettings');if(ts)ts.innerHTML=h;settingsDirty=false;
+	// Workstation-style guard: virtual hardware is locked while the VM has live
+	// or saved state. Identity/metadata fields stay editable; CD/ISO buttons stay
+	// active (media changes apply live over QMP).
+	var hwLocked=v.status==='running'||v.status==='paused'||v.status==='suspended';
+	if(hwLocked&&ts){var soft={e_name:1,e_notes:1,e_tags:1,e_folder:1,e_vnet:1,e_favorite:1,e_autoprotect:1,e_ap_interval:1,e_ap_max:1};
+	 var ctrls=ts.querySelectorAll('.settings-form input,.settings-form select,.settings-form textarea');
+	 for(var ci=0;ci<ctrls.length;ci++){if(!soft[ctrls[ci].id]){ctrls[ci].disabled=true;ctrls[ci].title='Power off the VM to change virtual hardware';}}
+	 var shell=ts.querySelector('.settings-shell');
+	 if(shell){var ban=document.createElement('div');ban.className='settings-runlock';ban.setAttribute('role','note');ban.textContent='This VM is '+statusLabel(v.status).toLowerCase()+' — virtual hardware is locked. Name, notes, tags, folder and AutoProtect stay editable; CD/ISO can be changed live.';ts.insertBefore(ban,shell);}}}
 function setSettingsCategory(cat){settingsCategory=cat;var panels=document.querySelectorAll('.settings-panel');for(var i=0;i<panels.length;i++){var on=panels[i].getAttribute('data-settings-panel')===cat;panels[i].classList.toggle('active',on);panels[i].style.display=on?'block':'none';}
 var items=document.querySelectorAll('.settings-nav-item');for(var j=0;j<items.length;j++){var on=items[j].getAttribute('data-settings-category')===cat;items[j].classList.toggle('active',on);if(on)items[j].setAttribute('aria-current','page');else items[j].removeAttribute('aria-current');}}
 function setFieldError(id,msg,kind){var el=document.getElementById('err_'+id);var field=document.getElementById(id);if(el){el.textContent=msg||'';el.classList.toggle('warning',kind==='warn');}if(field){var bad=!!msg&&kind!=='warn';field.classList.toggle('invalid',bad);if(bad){field.setAttribute('aria-invalid','true');field.setAttribute('aria-describedby','err_'+id);}else{field.removeAttribute('aria-invalid');if(field.getAttribute('aria-describedby')==='err_'+id)field.removeAttribute('aria-describedby');}}}
@@ -554,7 +563,7 @@ if(!validateSettings(true)){var bad=document.querySelector('#tabSettings .invali
 saveInFlight=true;
 const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
 const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','vnet','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
-'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','extra0_path','extra0_size','extra0_format','extra1_path','extra1_size','extra1_format','extra2_path','extra2_size','extra2_format','extra3_path','extra3_size','extra3_format','floppy','nic2','nic2_mac','nic3','nic3_mac','nic4','nic4_mac','nic5','nic5_mac','nic6','nic6_mac','nic7','nic7_mac','nic8','nic8_mac','portfw','notes','tags','cloud_init',
+'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','extra0_path','extra0_size','extra0_format','extra1_path','extra1_size','extra1_format','extra2_path','extra2_size','extra2_format','extra3_path','extra3_size','extra3_format','floppy','nic2','nic2_mac','nic3','nic3_mac','nic4','nic4_mac','nic5','nic5_mac','nic6','nic6_mac','nic7','nic7_mac','nic8','nic8_mac','nic2_vnet','nic3_vnet','nic4_vnet','nic5_vnet','nic6_vnet','nic7_vnet','nic8_vnet','portfw','notes','tags','cloud_init',
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order','rtc',
 'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
 'guest_agent','virtio_rng','tpm','secure_boot','hyperv_enlightenments','hugepages','watchdog','ballooning','host_autostart',
@@ -753,7 +762,8 @@ function buildTopologyGraph(){
  function addEdge(a,b){var key=a+'>'+b;if(edgeSeen[key])return;edgeSeen[key]=1;edges.push({id:'e'+(eid++),sources:[a],targets:[b]});}
  for(var i=0;i<vms.length;i++){var v=vms[i];var vid='vm:'+v.name;addNode(vid,v.name,'vm '+(v.status||''),'data-action="topoSelectVm" data-vm-name="'+escHtml(v.name)+'"');
   // Explicit vnet binding: draw the real VM -> named virtual-network edge.
-  if(v.vnet){var bnid='net:'+v.vnet;addNode(bnid,v.vnet,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(v.vnet)+'"');addEdge(vid,bnid);addEdge(bnid,'host');anyUplink=true;}
+  var bound=[v.vnet];for(var bn=2;bn<=8;bn++){bound.push(v['nic'+bn+'_vnet']);}
+  for(var bi=0;bi<bound.length;bi++){var bname=bound[bi];if(!bname)continue;var bnid='net:'+bname;addNode(bnid,bname,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(bname)+'"');addEdge(vid,bnid);addEdge(bnid,'host');anyUplink=true;}
   var modes=vmModes(v),dd={};for(var k=0;k<modes.length;k++){var mode=modes[k];if(dd[mode])continue;dd[mode]=1;var mid='mode:'+mode;addNode(mid,modeLabel(mode),'net','');modesUsed[mode]=1;addEdge(vid,mid);}}
  if(vnetsData&&vnetsData.networks)for(var n=0;n<vnetsData.networks.length;n++){var net=vnetsData.networks[n];var nid='net:'+net.name;addNode(nid,net.name+' · '+net.type,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(net.name)+'"');addEdge(nid,'host');anyUplink=true;}
  Object.keys(modesUsed).forEach(function(m){if(m!=='none'){addEdge('mode:'+m,'host');anyUplink=true;}});

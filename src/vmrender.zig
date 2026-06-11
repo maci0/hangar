@@ -132,8 +132,12 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     }) catch return error.RenderFailed;
     w += part2b.len;
 
+    // Per-NIC vnet names are user-controlled; escape each into its own buffer.
+    var nv_bufs: [7][96]u8 = undefined;
+    var nv_e: [7][]const u8 = undefined;
+    for (0..7) |ni| nv_e[ni] = if (v.nics[ni + 1].vnet_len > 0) escapeJson(&nv_bufs[ni], v.getNicVnetSliceAny(ni + 1), "nic_vnet") else "";
     const part2c = std.fmt.bufPrint(buf[w..],
-        \\,"nic4_mode":"{s}","nic4_mac":"{s}","nic5_mode":"{s}","nic5_mac":"{s}","nic6_mode":"{s}","nic6_mac":"{s}","nic7_mode":"{s}","nic7_mac":"{s}","nic8_mode":"{s}","nic8_mac":"{s}"
+        \\,"nic4_mode":"{s}","nic4_mac":"{s}","nic5_mode":"{s}","nic5_mac":"{s}","nic6_mode":"{s}","nic6_mac":"{s}","nic7_mode":"{s}","nic7_mac":"{s}","nic8_mode":"{s}","nic8_mac":"{s}","nic2_vnet":"{s}","nic3_vnet":"{s}","nic4_vnet":"{s}","nic5_vnet":"{s}","nic6_vnet":"{s}","nic7_vnet":"{s}","nic8_vnet":"{s}"
     , .{
         std.mem.span(v.nics[3].mode.toStr()),
         if (v.nics[3].mac_len > 0) v.getNicMacSliceAny(3) else "",
@@ -145,6 +149,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         if (v.nics[6].mac_len > 0) v.getNicMacSliceAny(6) else "",
         std.mem.span(v.nics[7].mode.toStr()),
         if (v.nics[7].mac_len > 0) v.getNicMacSliceAny(7) else "",
+        nv_e[0], nv_e[1], nv_e[2], nv_e[3], nv_e[4], nv_e[5], nv_e[6],
     }) catch return error.RenderFailed;
     w += part2c.len;
 
@@ -313,8 +318,12 @@ pub fn renderJson(buf: []u8) usize {
         };
         w += part2b.len;
 
+        // Per-NIC vnet names are user-controlled; escape each into its own buffer.
+        var nv_bufs: [7][96]u8 = undefined;
+        var nv_e: [7][]const u8 = undefined;
+        for (0..7) |ni| nv_e[ni] = if (v.nics[ni + 1].vnet_len > 0) escapeJson(&nv_bufs[ni], v.getNicVnetSliceAny(ni + 1), "nic_vnet") else "";
         const part2c = std.fmt.bufPrint(buf[w..],
-            \\,"nic4_mode":"{s}","nic4_mac":"{s}","nic5_mode":"{s}","nic5_mac":"{s}","nic6_mode":"{s}","nic6_mac":"{s}","nic7_mode":"{s}","nic7_mac":"{s}","nic8_mode":"{s}","nic8_mac":"{s}"
+            \\,"nic4_mode":"{s}","nic4_mac":"{s}","nic5_mode":"{s}","nic5_mac":"{s}","nic6_mode":"{s}","nic6_mac":"{s}","nic7_mode":"{s}","nic7_mac":"{s}","nic8_mode":"{s}","nic8_mac":"{s}","nic2_vnet":"{s}","nic3_vnet":"{s}","nic4_vnet":"{s}","nic5_vnet":"{s}","nic6_vnet":"{s}","nic7_vnet":"{s}","nic8_vnet":"{s}"
         , .{
             std.mem.span(v.nics[3].mode.toStr()),
             if (v.nics[3].mac_len > 0) v.getNicMacSliceAny(3) else "",
@@ -326,6 +335,7 @@ pub fn renderJson(buf: []u8) usize {
             if (v.nics[6].mac_len > 0) v.getNicMacSliceAny(6) else "",
             std.mem.span(v.nics[7].mode.toStr()),
             if (v.nics[7].mac_len > 0) v.getNicMacSliceAny(7) else "",
+            nv_e[0], nv_e[1], nv_e[2], nv_e[3], nv_e[4], nv_e[5], nv_e[6],
         }) catch {
             w = buf.len;
             break;

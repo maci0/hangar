@@ -97,6 +97,13 @@ const VmJson = struct {
     nic7_mac: []const u8 = "",
     nic8_mode: []const u8 = "none",
     nic8_mac: []const u8 = "",
+    nic2_vnet: []const u8 = "",
+    nic3_vnet: []const u8 = "",
+    nic4_vnet: []const u8 = "",
+    nic5_vnet: []const u8 = "",
+    nic6_vnet: []const u8 = "",
+    nic7_vnet: []const u8 = "",
+    nic8_vnet: []const u8 = "",
     enable_3d: bool = false,
     gpu_device: []const u8 = "virtio_vga_gl",
     guest_tools: bool = false,
@@ -194,6 +201,13 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.setNicMacAny(6, j.nic7_mac);
     cfg.nics[7].mode = vm.NetworkMode.fromStr(j.nic8_mode);
     cfg.setNicMacAny(7, j.nic8_mac);
+    cfg.setNicVnetAny(1, j.nic2_vnet);
+    cfg.setNicVnetAny(2, j.nic3_vnet);
+    cfg.setNicVnetAny(3, j.nic4_vnet);
+    cfg.setNicVnetAny(4, j.nic5_vnet);
+    cfg.setNicVnetAny(5, j.nic6_vnet);
+    cfg.setNicVnetAny(6, j.nic7_vnet);
+    cfg.setNicVnetAny(7, j.nic8_vnet);
     cfg.enable_3d = j.enable_3d;
     cfg.gpu_device = vm.GpuDevice.fromStr(j.gpu_device);
     cfg.guest_tools = j.guest_tools;
@@ -418,6 +432,12 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
         const mac_key = std.fmt.bufPrint(&mac_key_buf, "      \"nic{d}_mac\": ", .{nic_i + 1}) catch unreachable;
         try emit(list, alloc, mac_key);
         try emitJsonStr(list, alloc, cfg.getNicMacSliceAny(nic_i));
+        try emit(list, alloc, ",\n");
+
+        var vnet_key_buf: [32]u8 = undefined;
+        const vnet_key = std.fmt.bufPrint(&vnet_key_buf, "      \"nic{d}_vnet\": ", .{nic_i + 1}) catch unreachable;
+        try emit(list, alloc, vnet_key);
+        try emitJsonStr(list, alloc, cfg.getNicVnetSliceAny(nic_i));
         try emit(list, alloc, ",\n");
     }
 
@@ -1050,6 +1070,12 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cfg.usb_policy = vm.UsbPolicy.fromStr(r.value);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
+        } else if (key.len == 9 and std.mem.startsWith(u8, key, "nic") and std.mem.endsWith(u8, key, "_vnet") and key[3] >= '2' and key[3] <= '8') {
+            // "nicN_vnet" (N = 2..8) — per-NIC virtual-network binding.
+            if (parseJsonString(cur, &str_buf)) |r| {
+                cfg.setNicVnetAny(@as(usize, key[3] - '1'), r.value);
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic2_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.nics[1].mode = vm.NetworkMode.fromStr(r.value);
@@ -1646,6 +1672,8 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.setTags("prod,web,critical");
     original.setFolder("Production/Web");
     original.setVnet("VMnet8");
+    original.setNicVnetAny(1, "VMnet1");
+    original.setNicVnetAny(7, "VMnet0");
     original.setCloudInit("#cloud-config\npackages:\n  - vim\n");
     original.setPortForwards("8080:80,2222:22");
     original.setSavedStatePath("/tmp/state.bin");
@@ -1770,6 +1798,13 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .nic7_mac = original.getNicMacSliceAny(6),
         .nic8_mode = std.mem.span(original.nics[7].mode.toStr()),
         .nic8_mac = original.getNicMacSliceAny(7),
+        .nic2_vnet = original.getNicVnetSliceAny(1),
+        .nic3_vnet = original.getNicVnetSliceAny(2),
+        .nic4_vnet = original.getNicVnetSliceAny(3),
+        .nic5_vnet = original.getNicVnetSliceAny(4),
+        .nic6_vnet = original.getNicVnetSliceAny(5),
+        .nic7_vnet = original.getNicVnetSliceAny(6),
+        .nic8_vnet = original.getNicVnetSliceAny(7),
         .enable_3d = original.enable_3d,
         .gpu_device = std.mem.span(original.gpu_device.toStr()),
         .guest_tools = original.guest_tools,
@@ -1826,6 +1861,8 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqualStrings("prod,web,critical", restored.getTagsSlice());
     try std.testing.expectEqualStrings("Production/Web", restored.getFolderSlice());
     try std.testing.expectEqualStrings("VMnet8", restored.getVnetSlice());
+    try std.testing.expectEqualStrings("VMnet1", restored.getNicVnetSliceAny(1));
+    try std.testing.expectEqualStrings("VMnet0", restored.getNicVnetSliceAny(7));
     try std.testing.expectEqualStrings("#cloud-config\npackages:\n  - vim\n", restored.getCloudInitSlice());
     try std.testing.expectEqualStrings("8080:80,2222:22", restored.getPortForwardsSlice());
     try std.testing.expectEqualStrings("/tmp/state.bin", restored.getSavedStatePathSlice());

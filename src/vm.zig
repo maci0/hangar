@@ -210,6 +210,9 @@ pub const Nic = struct {
     mode: NetworkMode = .none,
     mac_buf: [18]u8 = [_]u8{0} ** 18,
     mac_len: u16 = 0,
+    // Virtual-network binding (a VirtualNetwork name; empty = mode only).
+    vnet_buf: [48]u8 = [_]u8{0} ** 48,
+    vnet_len: u16 = 0,
 };
 
 /// Maximum number of extra (non-primary) disk images.
@@ -1608,6 +1611,19 @@ pub const VmConfig = struct {
         self.nics[idx].mac_len = len;
     }
 
+    pub fn setNicVnetAny(self: *VmConfig, idx: usize, s: []const u8) void {
+        if (idx >= MAX_NICS) return;
+        const len: u16 = @intCast(@min(s.len, self.nics[idx].vnet_buf.len - 1));
+        @memcpy(self.nics[idx].vnet_buf[0..len], s[0..len]);
+        self.nics[idx].vnet_buf[len] = 0;
+        self.nics[idx].vnet_len = len;
+    }
+
+    pub fn getNicVnetSliceAny(self: *const VmConfig, idx: usize) []const u8 {
+        if (idx >= MAX_NICS) return "";
+        return self.nics[idx].vnet_buf[0..self.nics[idx].vnet_len];
+    }
+
     // ── Floppy accessors ─────────────────────────────────────────
 
     pub fn getFloppyPath(self: *const VmConfig) [*:0]const u8 {
@@ -1881,6 +1897,33 @@ test "VmConfig: mac address round-trip" {
     cfg.clearMacAddress();
     try std.testing.expect(!cfg.hasMacAddress());
     try std.testing.expectEqual(@as(usize, 0), cfg.getMacAddressSlice().len);
+}
+
+test "setNicVnetAny/getNicVnetSliceAny: round-trip, bounds, out-of-range no-op" {
+    var cfg = VmConfig{};
+    cfg.setNicVnetAny(1, "VMnet8");
+    try std.testing.expectEqualStrings("VMnet8", cfg.getNicVnetSliceAny(1));
+    try std.testing.expectEqualStrings("", cfg.getNicVnetSliceAny(0));
+    cfg.setNicVnetAny(99, "ignored"); // out of range: no-op, no panic
+    try std.testing.expectEqualStrings("", cfg.getNicVnetSliceAny(99));
+    const long = "x" ** 100;
+    cfg.setNicVnetAny(2, long); // truncates to buffer cap
+    try std.testing.expect(cfg.getNicVnetSliceAny(2).len < 48);
+}
+
+test "fuzz: setNicVnetAny never panics on random idx/len" {
+    var prng = std.Random.DefaultPrng.init(0x1234_BEEF);
+    const rnd = prng.random();
+    var cfg = VmConfig{};
+    var buf: [128]u8 = undefined;
+    var i: usize = 0;
+    while (i < 2000) : (i += 1) {
+        const idx = rnd.uintLessThan(usize, 12); // includes out-of-range
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*ch| ch.* = rnd.int(u8);
+        cfg.setNicVnetAny(idx, buf[0..len]);
+        try std.testing.expect(cfg.getNicVnetSliceAny(idx).len < 48);
+    }
 }
 
 test "generateId: 16 lowercase-hex chars, distinct across calls" {

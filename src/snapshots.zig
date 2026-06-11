@@ -138,13 +138,22 @@ pub fn list(req: []const u8, raw_buf: []u8) []const u8 {
     const nodes = snapparse.parse(raw_buf[0..n]);
     if (nodes.count == 0) return "(none)";
 
-    // Emit snapshot names one per line into raw_buf, reusing it for output.
+    // Emit one snapshot per line into raw_buf (reused for output): the tag,
+    // then — when the table carried one — a tab and the creation timestamp.
     var w: usize = 0;
     for (0..nodes.count) |i| {
         const name = nodes.nameSlice(i);
-        if (w + name.len + 1 > raw_buf.len) break;
+        const date = nodes.dateSlice(i);
+        const need = name.len + (if (date.len > 0) date.len + 1 else 0) + 1;
+        if (w + need > raw_buf.len) break;
         @memcpy(raw_buf[w..][0..name.len], name);
         w += name.len;
+        if (date.len > 0) {
+            raw_buf[w] = '\t';
+            w += 1;
+            @memcpy(raw_buf[w..][0..date.len], date);
+            w += date.len;
+        }
         raw_buf[w] = '\n';
         w += 1;
     }

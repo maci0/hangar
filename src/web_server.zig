@@ -1212,6 +1212,10 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             cfg.setFloppyPath(val);
         }
         if (std.mem.eql(u8, key, "nic2")) cfg.nics[1].mode = vm.NetworkMode.fromStr(val);
+        if (key.len == 9 and std.mem.startsWith(u8, key, "nic") and std.mem.endsWith(u8, key, "_vnet") and key[3] >= '2' and key[3] <= '8') {
+            // "nicN_vnet" — per-NIC virtual-network binding (free-form name).
+            if (std.mem.indexOfAny(u8, val, "<>&\"'") == null) cfg.setNicVnetAny(@as(usize, key[3] - '1'), val);
+        }
         if (std.mem.eql(u8, key, "nic2_mac")) {
             if (vm.isValidMac(val)) cfg.setNic2Mac(val);
         }
@@ -1698,6 +1702,10 @@ fn handleSave(req: []const u8) ![]const u8 {
             v.setFloppyPath(val);
         }
         if (std.mem.eql(u8, key, "nic2")) v.nics[1].mode = vm.NetworkMode.fromStr(val);
+        if (key.len == 9 and std.mem.startsWith(u8, key, "nic") and std.mem.endsWith(u8, key, "_vnet") and key[3] >= '2' and key[3] <= '8') {
+            // "nicN_vnet" — per-NIC virtual-network binding (free-form name).
+            if (std.mem.indexOfAny(u8, val, "<>&\"'") == null) v.setNicVnetAny(@as(usize, key[3] - '1'), val);
+        }
         if (std.mem.eql(u8, key, "nic2_mac")) {
             if (vm.isValidMac(val)) v.setNic2Mac(val);
         }

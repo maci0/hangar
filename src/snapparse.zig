@@ -6,18 +6,48 @@ const std = @import("std");
 
 pub const MAX_SNAP_NODES = 16;
 pub const SNAP_NAME_CAP = 24;
+pub const SNAP_DATE_CAP = 20; // "YYYY-MM-DD HH:MM:SS" = 19 bytes
 
-/// Parsed snapshot names, fixed storage (no heap). Names are truncated to
-/// `SNAP_NAME_CAP-1` bytes; at most `MAX_SNAP_NODES` are kept.
+/// Parsed snapshot names + creation dates, fixed storage (no heap). Names are
+/// truncated to `SNAP_NAME_CAP-1` bytes; at most `MAX_SNAP_NODES` are kept.
+/// A date is stored only when the row carries a recognizable DATE+TIME pair.
 pub const SnapNodes = struct {
     names: [MAX_SNAP_NODES][SNAP_NAME_CAP]u8 = undefined,
     name_len: [MAX_SNAP_NODES]u8 = [_]u8{0} ** MAX_SNAP_NODES,
+    dates: [MAX_SNAP_NODES][SNAP_DATE_CAP]u8 = undefined,
+    date_len: [MAX_SNAP_NODES]u8 = [_]u8{0} ** MAX_SNAP_NODES,
     count: usize = 0,
 
     pub fn nameSlice(self: *const SnapNodes, i: usize) []const u8 {
         return self.names[i][0..self.name_len[i]];
     }
+
+    pub fn dateSlice(self: *const SnapNodes, i: usize) []const u8 {
+        return self.dates[i][0..self.date_len[i]];
+    }
 };
+
+/// "YYYY-MM-DD" — digits with dashes at positions 4 and 7.
+fn isDateTok(s: []const u8) bool {
+    if (s.len != 10) return false;
+    for (s, 0..) |ch, i| {
+        if (i == 4 or i == 7) {
+            if (ch != '-') return false;
+        } else if (ch < '0' or ch > '9') return false;
+    }
+    return true;
+}
+
+/// "HH:MM:SS" prefix — digits with colons at positions 2 and 5.
+fn isTimeTok(s: []const u8) bool {
+    if (s.len < 8) return false;
+    for (s[0..8], 0..) |ch, i| {
+        if (i == 2 or i == 5) {
+            if (ch != ':') return false;
+        } else if (ch < '0' or ch > '9') return false;
+    }
+    return true;
+}
 
 /// Parse a snapshot table: skip header lines ("Snapshot list:", a column
 /// header beginning "ID", and "--" rules); for each data row (first token a
@@ -42,6 +72,25 @@ pub fn parse(output: []const u8) SnapNodes {
         const n = @min(name.len, SNAP_NAME_CAP - 1);
         @memcpy(nodes.names[nodes.count][0..n], name[0..n]);
         nodes.name_len[nodes.count] = @intCast(n);
+        // Scan remaining tokens for the DATE + TIME columns ("YYYY-MM-DD
+        // HH:MM:SS"). Tag words and the size column are skipped; a date token
+        // not followed by a time token is discarded (it was tag text).
+        var date_tok: ?[]const u8 = null;
+        while (toks.next()) |tok| {
+            if (date_tok == null) {
+                if (isDateTok(tok)) date_tok = tok;
+            } else if (isTimeTok(tok)) {
+                @memcpy(nodes.dates[nodes.count][0..10], date_tok.?[0..10]);
+                nodes.dates[nodes.count][10] = ' ';
+                @memcpy(nodes.dates[nodes.count][11..19], tok[0..8]);
+                nodes.date_len[nodes.count] = 19;
+                break;
+            } else if (isDateTok(tok)) {
+                date_tok = tok; // newer candidate
+            } else {
+                date_tok = null;
+            }
+        }
         nodes.count += 1;
     }
     return nodes;
@@ -64,6 +113,21 @@ test "snapparse: typical qemu-img table" {
     try t.expectEqualStrings("Base", n.nameSlice(0));
     try t.expectEqualStrings("Updates", n.nameSlice(1));
     try t.expectEqualStrings("App", n.nameSlice(2)); // 2nd token only ("Installed" dropped)
+    try t.expectEqualStrings("2024-01-01 00:00:00", n.dateSlice(0));
+    try t.expectEqualStrings("2024-01-02 00:00:00", n.dateSlice(1));
+    try t.expectEqualStrings("2024-01-03 00:00:00", n.dateSlice(2));
+}
+
+test "snapparse: row without date columns has empty dateSlice" {
+    const n = parse("1 JustATag\n");
+    try t.expectEqual(@as(usize, 1), n.count);
+    try t.expectEqualStrings("", n.dateSlice(0));
+}
+
+test "snapparse: date token without a following time is not a date" {
+    const n = parse("1 tag 2024-01-01 notatime\n");
+    try t.expectEqual(@as(usize, 1), n.count);
+    try t.expectEqualStrings("", n.dateSlice(0));
 }
 
 test "snapparse: empty / header-only yields no nodes" {
@@ -116,6 +180,8 @@ test "fuzz: snapparse never panics and stays bounded" {
             const name = n.nameSlice(k);
             try t.expect(name.len < SNAP_NAME_CAP);
             try t.expect(name.len == n.name_len[k]);
+            try t.expect(n.date_len[k] < SNAP_DATE_CAP);
+            try t.expect(n.dateSlice(k).len == n.date_len[k]);
         }
     }
 }
