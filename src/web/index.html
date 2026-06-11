@@ -241,8 +241,8 @@
 <!-- New VM Dialog -->
 <dialog id="newdlg" aria-label="New Virtual Machine">
   <form method="dialog">
-    <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">New Virtual Machine</h3>
-    <div style="padding:16px 24px">
+    <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">New Virtual Machine</h3>
+    <div style="padding:16px 20px">
       <label for="n_name">Name <span class="req" aria-hidden="true">*</span></label>
       <input id="n_name" type="text" required aria-required="true" maxlength="128" style="width:100%;margin:4px 0 12px">
       <div class="field-error" id="err_n_name" aria-live="polite"></div>
@@ -265,8 +265,8 @@
 
 <!-- Snapshot Dialog -->
 <dialog id="snapdlg" aria-label="Snapshots">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Snapshots</h3>
-  <div style="padding:16px 24px">
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Snapshots</h3>
+  <div style="padding:16px 20px">
     <div id="snapMeta" class="dialog-meta"></div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
       <div style="flex:1"><label for="s_tag">Snapshot name</label><input id="s_tag" type="text" placeholder="e.g. Before update" style="width:100%;margin-top:4px"></div>
@@ -281,8 +281,8 @@
 
 <!-- Clone Dialog -->
 <dialog id="clonedlg" aria-label="Clone VM">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Clone Virtual Machine</h3>
-  <div style="padding:16px 24px">
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Clone Virtual Machine</h3>
+  <div style="padding:16px 20px">
     <p>Clone <strong id="clone_name"></strong>?</p>
   </div>
   <div class="btn-row">
@@ -294,8 +294,8 @@
 
 <!-- VNet Editor Dialog -->
 <dialog id="vnetdlg" aria-label="Virtual Network Editor" style="width:min(560px,95vw)">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Virtual Network Editor</h3>
-  <div style="padding:16px 24px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Virtual Network Editor</h3>
+  <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
     <div>
       <select id="vnet_sel" size="6" data-action="onVnetSelect" style="width:100%;height:180px" aria-label="Network list"></select>
     </div>
@@ -326,8 +326,8 @@
 </dialog>
 
 <dialog id="topodlg" aria-label="Network Topology" style="width:min(1000px,96vw)">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Network Topology</h3>
-  <p style="padding:4px 24px 0;color:var(--text-dim);font-size:12px">Virtual networks, the VMs attached to each (by NIC mode), and the host uplink. Click a VM to open it; click a network to edit it.</p>
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Network Topology</h3>
+  <p style="padding:4px 20px 0;color:var(--text-dim);font-size:12px">Virtual networks, the VMs attached to each (by NIC mode), and the host uplink. Click a VM to open it; click a network to edit it.</p>
   <div id="topoWrap" class="topo-wrap"><div class="topo-loading">Computing layout…</div></div>
   <div class="btn-row">
     <button type="button" class="btn" data-action="openTopology" title="Recompute layout"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh</button>
@@ -337,8 +337,8 @@
 
 <!-- Preferences Dialog -->
 <dialog id="prefsdlg" aria-label="Preferences">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Preferences</h3>
-  <div style="padding:16px 24px">
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Preferences</h3>
+  <div style="padding:16px 20px">
     <label for="p_theme">Theme</label>
     <select id="p_theme" data-action="applyTheme" style="width:100%;margin:4px 0 12px">
       <option value="system">System</option>
@@ -368,8 +368,8 @@
 
 <!-- About Dialog -->
 <dialog id="aboutdlg" aria-label="About Hangar">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">About Hangar</h3>
-  <div style="padding:16px 24px;text-align:center">
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">About Hangar</h3>
+  <div style="padding:16px 20px;text-align:center">
     <div style="width:48px;height:48px;background:var(--gradient);border-radius:var(--radius);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--text-on-accent);margin-bottom:12px">H</div>
     <p style="font-weight:600;font-size:15px">Hangar VM Manager</p>
     <p style="color:var(--text-muted);font-size:13px;margin-top:4px">Lightweight QEMU VM manager</p>
@@ -382,7 +382,7 @@
 
 <!-- QEMU Log Dialog -->
 <dialog id="logdlg" aria-label="QEMU Log">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">QEMU Log — <span id="log_vmname"></span></h3>
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">QEMU Log — <span id="log_vmname"></span></h3>
   <div style="padding:12px 24px">
     <pre id="logbody" style="margin:0;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono,monospace);font-size:12px;background:var(--bg-elev,#111);color:var(--text,#ddd);padding:12px;border-radius:var(--radius);border:1px solid var(--border)">Loading…</pre>
   </div>
@@ -394,8 +394,8 @@
 
 <!-- Migrate Dialog -->
 <dialog id="migratedlg" aria-label="Migrate VM">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Migrate Virtual Machine</h3>
-  <div style="padding:16px 24px">
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Migrate Virtual Machine</h3>
+  <div style="padding:16px 20px">
     <p style="margin-bottom:12px"><strong id="migrate_vmname"></strong></p>
     <label for="mig_host">Target Host <span class="req" aria-hidden="true">*</span></label>
     <input id="mig_host" type="text" required aria-required="true" placeholder="hostname or IP" style="width:100%;margin:4px 0 12px">
@@ -412,8 +412,8 @@
 
 <!-- Keyboard Shortcuts Dialog -->
 <dialog id="shortcutsdlg" aria-label="Keyboard Shortcuts">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">Keyboard Shortcuts</h3>
-  <div style="padding:16px 24px">
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Keyboard Shortcuts</h3>
+  <div style="padding:16px 20px">
     <table style="width:100%;font-size:13px;border-collapse:collapse">
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">↑↓</kbd></td><td>Navigate VM list</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Enter</kbd></td><td>Power On/Off selected VM</td></tr>
@@ -442,7 +442,7 @@
 
 <!-- Catalog Dialog -->
 <dialog id="catalogdlg" aria-label="VM Catalog">
-  <h3 style="padding:20px 24px 0;font-size:17px;font-weight:600">VM Catalog</h3>
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">VM Catalog</h3>
   <p style="padding:4px 24px 12px;font-size:12px;color:var(--text-muted)">Choose a template to create a pre-configured VM.</p>
   <div id="catalogList" style="padding:0 24px 20px;max-height:400px;overflow-y:auto"></div>
   <div class="btn-row">
