@@ -1107,6 +1107,7 @@ pub const VmConfig = struct {
 
     // ── Experimental dbus-display video capture (docs/VIDEO-PIPELINE.md) ──
     video_stream: bool = false,
+    video_bitrate_kbps: u32 = 0, // 0 = auto (4000k)
 
     // ── Folder (inventory-tree path, e.g. "Production/Web"; empty = ungrouped) ──
     folder_buf: [128]u8 = [_]u8{0} ** 128,

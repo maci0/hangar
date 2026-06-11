@@ -943,6 +943,7 @@ fn handleEvents(conn: c.fd_t) void {
 fn handleVideoWs(conn: c.fd_t, req: []const u8) void {
     var name_buf: [vm.MAX_NAME]u8 = undefined;
     var name_len: usize = 0;
+    var bitrate: u32 = 0;
     {
         appstate.vms_mutex.lock();
         defer appstate.vms_mutex.unlock();
@@ -953,10 +954,11 @@ fn handleVideoWs(conn: c.fd_t, req: []const u8) void {
         const nm = v.getNameSlice();
         @memcpy(name_buf[0..nm.len], nm);
         name_len = nm.len;
+        bitrate = v.video_bitrate_kbps;
     }
     const accept_key = ws.parseUpgrade(req) orelse return;
     ws.writeUpgradeResponse(conn, accept_key, req) catch return;
-    dbusdisplay.serveVideoClient(conn, name_buf[0..name_len]);
+    dbusdisplay.serveVideoClient(conn, name_buf[0..name_len], bitrate);
 }
 
 /// Return an allocated copy of the raw vms.json content for remote clients.
@@ -1303,6 +1305,7 @@ fn handleNewVm(req: []const u8) ![]const u8 {
             has_autoprotect = true;
         }
         if (std.mem.eql(u8, key, "ap_interval")) cfg.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch cfg.autoprotect_interval_min));
+        if (std.mem.eql(u8, key, "video_bitrate")) cfg.video_bitrate_kbps = @min(50000, std.fmt.parseInt(u32, val, 10) catch cfg.video_bitrate_kbps);
         if (std.mem.eql(u8, key, "ap_max")) cfg.autoprotect_max = @max(1, @min(1000, std.fmt.parseInt(u32, val, 10) catch cfg.autoprotect_max));
         if (std.mem.eql(u8, key, "disk2_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
@@ -1793,6 +1796,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         _ = applyBoolField(v, key, val);
         if (std.mem.eql(u8, key, "autoprotect")) v.autoprotect = std.mem.eql(u8, val, "1");
         if (std.mem.eql(u8, key, "ap_interval")) v.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_interval_min));
+        if (std.mem.eql(u8, key, "video_bitrate")) v.video_bitrate_kbps = @min(50000, std.fmt.parseInt(u32, val, 10) catch v.video_bitrate_kbps);
         if (std.mem.eql(u8, key, "ap_max")) v.autoprotect_max = @max(1, @min(1000, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_max));
         if (std.mem.eql(u8, key, "disk2_path")) {
             if (std.mem.indexOf(u8, val, "..") != null) return "bad path";

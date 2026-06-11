@@ -6,6 +6,9 @@
 // OVF export. Power-on/migration are intentionally excluded — they need a real
 // booted guest / a second host and would be flaky here.
 import { test, expect } from '@playwright/test';
+import { execSync } from 'child_process';
+let hasFfmpeg = false;
+try { execSync('ffmpeg -version', { stdio: 'ignore' }); hasFfmpeg = true; } catch (e) {}
 
 async function api(page, method, path, body, headers) {
     return page.evaluate(
@@ -336,6 +339,27 @@ test('live console: SPICE display connects and paints in the Console tab', async
     await expect.poll(() => page.evaluate(() => { const c = document.querySelector('#tabConsole #display canvas'); return c ? c.width : 0; }), { timeout: 20000 }).toBeGreaterThan(0);
     await expect.poll(() => page.evaluate(() => document.getElementById('displayBadge').textContent)).toContain('SPICE');
     await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-spice')}/power`, '');
+});
+
+test('video stream: H.264 over /ws/video paints the WebCodecs overlay', async ({ page }) => {
+    test.skip(!hasFfmpeg, 'ffmpeg not installed on this host');
+    await api(page, 'POST', '/api/vms', 'name=wf-video&mem=1024&cpu=1&disk=1&guest_os=2&display=vnc&embed_display=true&video_stream=1&video_bitrate=2500&firmware=bios');
+    const idx = await indexOf(page, 'wf-video');
+    expect((await list(page))[idx].video_bitrate_kbps, 'bitrate round-trips').toBe(2500);
+    await api(page, 'POST', `/api/vms/${idx}/power`, '');
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-video')].status, { timeout: 25000 }).toBe('running');
+    await page.reload();
+    await page.locator('.vm-item', { hasText: 'wf-video' }).first().click();
+    // The overlay canvas must exist, size itself from the config frame, and
+    // carry real decoded pixels (not just be present).
+    await expect.poll(() => page.evaluate(() => { const c = document.querySelector('#display .video-layer'); return c ? c.width : 0; }), { timeout: 25000 }).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => {
+        const c = document.querySelector('#display .video-layer');
+        if (!c) return false;
+        try { const d = c.getContext('2d').getImageData(0, 0, Math.min(64, c.width), Math.min(64, c.height)).data; for (let i = 0; i < d.length; i += 4) { if (d[i] || d[i + 1] || d[i + 2]) return true; } } catch (e) {}
+        return false;
+    }), { timeout: 20000 }).toBe(true);
+    await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-video')}/power`, '');
 });
 
 test('live console: embedded VNC canvas and serial panel connect for a running VM', async ({ page }) => {

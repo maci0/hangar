@@ -1,6 +1,6 @@
 # Accelerated Video Pipeline — Design
 
-Status: **phase 2 shipped** — end-to-end encoded video verified live: dbus capture → ffmpeg h264_vaapi on the host GPU → /ws/video → WebCodecs decode → overlay canvas painting the guest boot screen. Phase 3 polish (cursor channel, bitrate setting, multi-client) remains.
+Status: **phase 2 shipped** — end-to-end encoded video verified live: dbus capture → ffmpeg h264_vaapi on the host GPU → /ws/video → WebCodecs decode → overlay canvas painting the guest boot screen. Phase 3 partial: frame pacing + bitrate setting + e2e shipped; cursor channel, multi-client fan-out, and virgl/dmabuf capture remain.
 Goal: stream the guest's GPU-rendered display to the browser as **encoded
 video** (H.264/AV1) decoded by **WebCodecs** and presented on the **WebGPU**
 canvas — Moonlight/Parsec-class console latency and quality, replacing
@@ -122,8 +122,18 @@ Auth/handshake identical to the other WS routes (subprotocol echoed).
    (input keeps flowing to VNC), badge `H264 · WEBCODECS`. Silently absent
    without VideoDecoder or video_stream. Verified live: overlay painting the
    guest's iPXE boot screen via hardware encode at 70 fps capture cadence.
-4. **Polish**: damage-aware encode skip on idle, cursor channel, AV1 on hosts
-   that expose it, bitrate preference in Settings → Display & Video.
+4. **Polish** (partial): frame pacing shipped — pushes coalesce to ~30 fps
+   with trailing-frame flush (unpaced damage bursts shoved ~80MB/s of redundant
+   full frames into ffmpeg). `video_bitrate_kbps` shipped (persisted; Settings
+   field; -b:v/-maxrate; 0 = auto 4000k). Hardening from live debugging:
+   Sessions are refcounted (power-off mid-stream destroyed the Session under
+   the video client's feet — observed use-after-free panic), the attach thread
+   retries the handshake up to 6× (QMP/display not up at +900ms under load),
+   serveVideoClient waits up to 8s for the session (a client connecting right
+   at the running flip beat the attach), and the browser retries an
+   early-closed stream while the VM runs. e2e: video test asserts decoded
+   pixel content on the overlay. Remaining: cursor channel, multi-client
+   fan-out, AV1, virgl/dmabuf zero-copy capture.
 
 ## Risks
 - D-Bus protocol hand-rolling is the long pole; sd-bus extern fallback noted.

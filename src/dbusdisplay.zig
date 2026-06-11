@@ -386,6 +386,12 @@ pub const Session = struct {
     name_buf: [vm.MAX_NAME]u8 = undefined,
     name_len: u8 = 0,
     alive: bool = true,
+    // Reference count guarded by sessions_mutex: the owning listener thread
+    // holds one ref, each attached video client holds one. The Session (and
+    // its framebuffer) is destroyed only at the final unref — a VM power-off
+    // mid-stream must not free memory under the video client's feet (that
+    // exact use-after-free panicked in serveVideoClient's deferred cleanup).
+    refs: u32 = 1,
 
     // Assembled BGRX framebuffer (heap; (re)allocated on Scanout).
     fb_mutex: sync.SpinMutex = .{},
@@ -398,6 +404,9 @@ pub const Session = struct {
     enc_pid: c.pid_t = -1,
     enc_in: c.fd_t = -1,
     enc_out: c.fd_t = -1,
+    last_push_ms: u64 = 0,
+    fb_dirty: bool = false,
+    bitrate_kbps: u32 = 0,
     client_fd: c.fd_t = -1,
     client_wmtx: sync.SpinMutex = .{},
 
@@ -430,6 +439,17 @@ fn registerSession(name: []const u8) ?*Session {
     return sess;
 }
 
+fn sessionUnref(sess: *Session) void {
+    sessions_mutex.lock();
+    sess.refs -= 1;
+    const dead = sess.refs == 0;
+    sessions_mutex.unlock();
+    if (!dead) return;
+    if (sess.fb) |fb| std.heap.page_allocator.free(fb);
+    sess.fb = null;
+    std.heap.page_allocator.destroy(sess);
+}
+
 fn unregisterSession(sess: *Session) void {
     sessions_mutex.lock();
     for (0..vm.MAX_VMS) |i| {
@@ -437,19 +457,19 @@ fn unregisterSession(sess: *Session) void {
     }
     sessions_mutex.unlock();
     stopEncoder(sess);
-    sess.fb_mutex.lock();
-    if (sess.fb) |fb| std.heap.page_allocator.free(fb);
-    sess.fb = null;
-    sess.fb_mutex.unlock();
-    std.heap.page_allocator.destroy(sess);
+    sessionUnref(sess);
 }
 
-pub fn findSession(name: []const u8) ?*Session {
+/// Find a session by VM name and take a reference. Caller must sessionUnref.
+pub fn findSessionRef(name: []const u8) ?*Session {
     sessions_mutex.lock();
     defer sessions_mutex.unlock();
     for (0..vm.MAX_VMS) |i| {
         if (sessions[i]) |sess| {
-            if (std.mem.eql(u8, sess.nameSlice(), name)) return sess;
+            if (std.mem.eql(u8, sess.nameSlice(), name)) {
+                sess.refs += 1;
+                return sess;
+            }
         }
     }
     return null;
@@ -469,11 +489,23 @@ pub fn attachThread(ctx: *AttachCtx) void {
     appio.sleepMs(900); // let QEMU bring up QMP + the dbus display
     const sess = registerSession(name) orelse return;
     defer unregisterSession(sess);
-    attach(sess) catch |e| {
-        var msg: [160]u8 = undefined;
-        wlog.logWarn(std.fmt.bufPrint(&msg, "dbusdisplay: attach failed vm=\"{s}\": {s}", .{ name, @errorName(e) }) catch "dbusdisplay: attach failed");
-        return;
-    };
+    // Under load (parallel test suites, many simultaneous boots) QEMU may not
+    // have its QMP socket or dbus display up at the first try — retry the
+    // handshake stages before giving up.
+    var tries: u32 = 0;
+    while (true) {
+        attach(sess) catch |e| {
+            tries += 1;
+            if (tries < 6) {
+                appio.sleepMs(1500);
+                continue;
+            }
+            var msg: [160]u8 = undefined;
+            wlog.logWarn(std.fmt.bufPrint(&msg, "dbusdisplay: attach failed vm=\"{s}\": {s}", .{ name, @errorName(e) }) catch "dbusdisplay: attach failed");
+            return;
+        };
+        return; // listener served until EOF: normal detach
+    }
 }
 
 fn attach(sess: *Session) !void {
@@ -618,17 +650,41 @@ fn applyUpdate(sess: *Session, body: []const u8) void {
     pushFrameLocked(sess);
 }
 
-/// Feed the current framebuffer to the encoder (caller holds fb_mutex).
+/// Feed the current framebuffer to the encoder (caller holds fb_mutex), paced
+/// to ~30 fps: damage often arrives in 60-80/s bursts and each push is a full
+/// frame, so unpaced feeding shoves ~80MB/s of redundant pixels into ffmpeg.
+/// Skipped pushes mark the frame dirty; flushFrame sends the trailing state.
 fn pushFrameLocked(sess: *Session) void {
+    const now = nowMs();
+    if (now - sess.last_push_ms < 33) {
+        sess.fb_dirty = true;
+        return;
+    }
+    pushFrameNowLocked(sess, now);
+}
+
+fn pushFrameNowLocked(sess: *Session, now: u64) void {
     const fb = sess.fb orelse return;
     sess.enc_mutex.lock();
     const fd = sess.enc_in;
     sess.enc_mutex.unlock();
     if (fd < 0) return;
+    sess.last_push_ms = now;
+    sess.fb_dirty = false;
     if (!writeAllFd(fd, fb)) {
         // Encoder died (pipe closed): tear it down so a client reconnect restarts it.
         stopEncoder(sess);
     }
+}
+
+/// Send the trailing frame of a damage burst once the pacing window has passed.
+fn flushFrame(sess: *Session) void {
+    sess.fb_mutex.lock();
+    defer sess.fb_mutex.unlock();
+    if (!sess.fb_dirty) return;
+    const now = nowMs();
+    if (now - sess.last_push_ms < 33) return;
+    pushFrameNowLocked(sess, now);
 }
 
 // ── encoder lifecycle ───────────────────────────────────────────────
@@ -639,6 +695,9 @@ fn startEncoder(sess: *Session, w: u32, h: u32) bool {
     if (sess.enc_pid >= 0) return true;
     var size_buf: [32]u8 = undefined;
     const size = std.fmt.bufPrint(&size_buf, "{d}x{d}", .{ w, h }) catch return false;
+    var rate_buf: [16]u8 = undefined;
+    const kbps = if (sess.bitrate_kbps == 0) 4000 else sess.bitrate_kbps;
+    const rate = std.fmt.bufPrint(&rate_buf, "{d}k", .{kbps}) catch return false;
     const have_vaapi = blk: {
         const fd = c.open("/dev/dri/renderD128", .{ .ACCMODE = .RDWR });
         if (fd < 0) break :blk false;
@@ -646,8 +705,8 @@ fn startEncoder(sess: *Session, w: u32, h: u32) bool {
         break :blk true;
     };
     const common = [_][]const u8{ "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "rawvideo", "-pixel_format", "bgr0", "-video_size", size, "-framerate", "30", "-i", "-" };
-    const vaapi = common ++ [_][]const u8{ "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va", "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-profile:v", "constrained_baseline", "-bf", "0", "-g", "60", "-bsf:v", "dump_extra=freq=keyframe", "-f", "h264", "-" };
-    const x264 = common ++ [_][]const u8{ "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline", "-bf", "0", "-g", "60", "-bsf:v", "dump_extra=freq=keyframe", "-f", "h264", "-" };
+    const vaapi = common ++ [_][]const u8{ "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va", "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-profile:v", "constrained_baseline", "-b:v", rate, "-maxrate", rate, "-bf", "0", "-g", "60", "-bsf:v", "dump_extra=freq=keyframe", "-f", "h264", "-" };
+    const x264 = common ++ [_][]const u8{ "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline", "-b:v", rate, "-maxrate", rate, "-bufsize", rate, "-bf", "0", "-g", "60", "-bsf:v", "dump_extra=freq=keyframe", "-f", "h264", "-" };
     const child = (if (have_vaapi)
         qemu.forkExecPiped(&vaapi, std.heap.page_allocator)
     else
@@ -682,11 +741,21 @@ fn stopEncoder(sess: *Session) void {
 
 /// Serve one video WebSocket client (the route handler's thread). The WS
 /// upgrade has already been written by the caller.
-pub fn serveVideoClient(conn: c.fd_t, name: []const u8) void {
-    const sess = findSession(name) orelse {
+pub fn serveVideoClient(conn: c.fd_t, name: []const u8, bitrate_kbps: u32) void {
+    // The session appears ~1s after power-on (attach settle + D-Bus
+    // handshake); a fast client connecting right at the running flip must
+    // wait for it, not bounce.
+    var sess_wait: u32 = 0;
+    const sess = blk: {
+        while (sess_wait < 8000) : (sess_wait += 200) {
+            if (findSessionRef(name)) |found| break :blk found;
+            appio.sleepMs(200);
+        }
         ws.writeClose(conn) catch {};
         return;
     };
+    defer sessionUnref(sess);
+    sess.bitrate_kbps = bitrate_kbps;
     // Wait for the first Scanout so the encoder knows its dimensions.
     var waited: u32 = 0;
     while (waited < 5000) : (waited += 100) {
@@ -813,6 +882,7 @@ fn serveListener(fd: c.fd_t, sess: *Session) void {
         const n = recvClosingFds(fd, &rbuf);
         if (n <= 0) break;
         var chunk: []const u8 = rbuf[0..@intCast(n)];
+        defer flushFrame(sess);
         while (chunk.len > 0) {
             const store = @min(chunk.len, acc.len - @min(acc_len, acc.len));
             if (store > 0 and acc_len < acc.len) {
@@ -945,9 +1015,11 @@ test "fuzz: parseHead/parseFields never panic on random bytes" {
 test "dbus: session registry prevents duplicates and releases" {
     const s1 = registerSession("dup-test-vm").?;
     try t.expect(registerSession("dup-test-vm") == null);
-    try t.expect(findSession("dup-test-vm") == s1);
-    unregisterSession(s1);
-    try t.expect(findSession("dup-test-vm") == null);
+    const ref = findSessionRef("dup-test-vm").?;
+    try t.expect(ref == s1);
+    unregisterSession(s1); // owner drops; ref keeps it alive
+    try t.expect(findSessionRef("dup-test-vm") == null); // no longer findable
+    sessionUnref(ref); // final unref destroys
     const s2 = registerSession("dup-test-vm").?;
     unregisterSession(s2);
 }

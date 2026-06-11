@@ -141,6 +141,7 @@ const VmJson = struct {
     disk_iops_throttle: u32 = 0,
     ballooning: bool = false,
     video_stream: bool = false,
+    video_bitrate_kbps: u32 = 0,
     host_autostart: bool = false,
     num_displays: u32 = 1,
 };
@@ -244,6 +245,7 @@ fn fromVmJson(j: *const VmJson) vm.VmConfig {
     cfg.disk_iops_throttle = j.disk_iops_throttle;
     cfg.ballooning = j.ballooning;
     cfg.video_stream = j.video_stream;
+    cfg.video_bitrate_kbps = j.video_bitrate_kbps;
     cfg.host_autostart = j.host_autostart;
     cfg.num_displays = j.num_displays;
     cfg.ensureId(); // backfill a stable id for VMs persisted before ids existed
@@ -574,6 +576,10 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 
     try emit(list, alloc, "      \"video_stream\": ");
     try emitBool(list, alloc, cfg.video_stream);
+    try emit(list, alloc, ",\n");
+
+    try emit(list, alloc, "      \"video_bitrate_kbps\": ");
+    try emitInt(list, alloc, cfg.video_bitrate_kbps);
     try emit(list, alloc, ",\n");
 
     try emit(list, alloc, "      \"host_autostart\": ");
@@ -1369,6 +1375,11 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cfg.video_stream = r.value;
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
+        } else if (std.mem.eql(u8, key, "video_bitrate_kbps")) {
+            if (parseJsonInt(cur)) |r| {
+                cfg.video_bitrate_kbps = r.value;
+                cur = r.rest;
+            } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "host_autostart")) {
             if (parseJsonBool(cur)) |r| {
                 cfg.host_autostart = r.value;
@@ -1754,6 +1765,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     original.disk_iops_throttle = 1000;
     original.ballooning = true;
     original.video_stream = true;
+    original.video_bitrate_kbps = 6500;
     original.host_autostart = true;
     original.num_displays = 2;
     original.usb_policy = .usb3;
@@ -1852,6 +1864,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
         .disk_iops_throttle = original.disk_iops_throttle,
         .ballooning = original.ballooning,
         .video_stream = original.video_stream,
+        .video_bitrate_kbps = original.video_bitrate_kbps,
         .host_autostart = original.host_autostart,
         .num_displays = original.num_displays,
     };
@@ -1946,6 +1959,7 @@ test "round-trip: VmConfig → VmJson fields → VmConfig preserves values" {
     try std.testing.expectEqual(@as(u32, 1000), restored.disk_iops_throttle);
     try std.testing.expect(restored.ballooning);
     try std.testing.expect(restored.video_stream);
+    try std.testing.expectEqual(@as(u32, 6500), restored.video_bitrate_kbps);
     try std.testing.expect(restored.host_autostart);
     try std.testing.expectEqual(@as(u32, 2), restored.num_displays);
 }
