@@ -36,6 +36,21 @@
     <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
     <symbol id="i-maximize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></symbol>
     <symbol id="i-snapshot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 5v14M14 5v14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></symbol>
+    <symbol id="i-keyboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></symbol>
+    <symbol id="i-disc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></symbol>
+    <symbol id="i-eject" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17h14M12 6l6 7H6z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="1"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="i-migrate" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5M12 19h8"/></symbol>
   </defs>
 </svg>
 
@@ -91,42 +106,46 @@
     <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><svg class="ico" aria-hidden="true"><use href="#i-more"/></svg></button>
     <div class="toolbar-more-popover" role="menu" aria-label="More actions"></div>
     <div id="powerMenu" class="action-menu" role="menu" aria-label="Power actions">
-      <button class="menu-item" data-action="shutdownGuest" data-vm-action="shutdown">Shut Down Guest</button>
-      <button class="menu-item" data-action="suspendGuest" data-vm-action="suspend">Suspend</button>
-      <button class="menu-item" data-action="pauseGuest" data-vm-action="pause">Pause</button>
-      <button class="menu-item" data-action="resumeGuest" data-vm-action="resume">Resume</button>
+      <button class="menu-item" data-action="shutdownGuest" data-vm-action="shutdown"><svg class="ico" aria-hidden="true"><use href="#i-power"/></svg>Shut Down Guest</button>
+      <button class="menu-item" data-action="suspendGuest" data-vm-action="suspend"><svg class="ico" aria-hidden="true"><use href="#i-import"/></svg>Suspend</button>
+      <button class="menu-item" data-action="pauseGuest" data-vm-action="pause"><svg class="ico" aria-hidden="true"><use href="#i-pause"/></svg>Pause</button>
+      <button class="menu-item" data-action="resumeGuest" data-vm-action="resume"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Resume</button>
       <span class="menu-sep" aria-hidden="true"></span>
-      <button class="menu-item danger" data-action="resetGuest" data-vm-action="reset">Reset</button>
-      <button class="menu-item danger" data-action="powerToggle" data-vm-action="hard-power">Power Off</button>
+      <button class="menu-item danger" data-action="resetGuest" data-vm-action="reset"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>Reset</button>
+      <button class="menu-item danger" data-action="powerToggle" data-vm-action="hard-power"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>Power Off</button>
     </div>
     <div id="snapshotMenu" class="action-menu" role="menu" aria-label="Snapshot actions">
-      <button class="menu-item" data-action="takeSnapshot" data-vm-action="snapshot">Snapshot Manager</button>
+      <button class="menu-item" data-action="takeSnapshot" data-vm-action="snapshot"><svg class="ico" aria-hidden="true"><use href="#i-snapshot"/></svg>Take Snapshot…</button>
+      <button class="menu-item" data-action="openSnapshots" data-vm-action="snapshot"><svg class="ico" aria-hidden="true"><use href="#i-grid"/></svg>Snapshot Manager…</button>
     </div>
     <div id="devicesMenu" class="action-menu" role="menu" aria-label="Device actions">
-      <button class="menu-item" data-action="sendCad" data-vm-action="cad">Send Ctrl+Alt+Del</button>
-      <button class="menu-item" data-action="reconnectDisplay" data-vm-action="display">Reconnect Display</button>
-      <button class="menu-item" data-action="enterDisplayOnly" data-vm-action="display">Display Only</button>
+      <button class="menu-item" data-action="changeCd" data-vm-action="settings"><svg class="ico" aria-hidden="true"><use href="#i-disc"/></svg>Change CD/DVD ISO…</button>
+      <button class="menu-item" data-action="ejectCd" data-vm-action="settings"><svg class="ico" aria-hidden="true"><use href="#i-eject"/></svg>Eject CD/DVD</button>
+      <div class="menu-sep" role="separator"></div>
+      <button class="menu-item" data-action="sendCad" data-vm-action="cad"><svg class="ico" aria-hidden="true"><use href="#i-keyboard"/></svg>Send Ctrl+Alt+Del</button>
+      <button class="menu-item" data-action="reconnectDisplay" data-vm-action="display"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>Reconnect Display</button>
+      <button class="menu-item" data-action="enterDisplayOnly" data-vm-action="display"><svg class="ico" aria-hidden="true"><use href="#i-maximize"/></svg>Display Only</button>
       <button class="menu-item" data-action="manualDisconnectSerial" data-vm-action="serial">Disconnect Serial</button>
     </div>
     <div id="toolsMenu" class="action-menu" role="menu" aria-label="Tools">
-      <button class="menu-item" data-action="renameGuest" data-vm-action="rename">Rename</button>
-      <button class="menu-item" data-action="moveToFolder" data-vm-action="rename">Move to Folder…</button>
-      <button class="menu-item" data-action="cloneGuest" data-vm-action="clone">Clone</button>
-      <button class="menu-item" data-action="migrateGuest" data-vm-action="migrate">Migrate</button>
-      <button class="menu-item" data-action="exportOvf" data-vm-action="export">Export OVF</button>
-      <button class="menu-item" data-action="importGuest">Import VM</button>
+      <button class="menu-item" data-action="renameGuest" data-vm-action="rename"><svg class="ico" aria-hidden="true"><use href="#i-edit"/></svg>Rename…</button>
+      <button class="menu-item" data-action="moveToFolder" data-vm-action="rename"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg>Move to Folder…</button>
+      <button class="menu-item" data-action="cloneGuest" data-vm-action="clone"><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg>Clone…</button>
+      <button class="menu-item" data-action="migrateGuest" data-vm-action="migrate"><svg class="ico" aria-hidden="true"><use href="#i-migrate"/></svg>Migrate…</button>
+      <button class="menu-item" data-action="exportOvf" data-vm-action="export"><svg class="ico" aria-hidden="true"><use href="#i-export"/></svg>Export to OVF</button>
+      <button class="menu-item" data-action="importGuest"><svg class="ico" aria-hidden="true"><use href="#i-import"/></svg>Import VM…</button>
       <span class="menu-sep" aria-hidden="true"></span>
-      <button class="menu-item" data-action="openCatalog">VM Catalog</button>
-      <button class="menu-item" data-action="openVnets">Virtual Network Editor</button>
-      <button class="menu-item" data-action="openPrefs">Preferences</button>
-      <button class="menu-item" data-action="showShortcutsModal">Keyboard Shortcuts</button>
-      <button class="menu-item" data-action="openAbout">About Hangar</button>
+      <button class="menu-item" data-action="openCatalog"><svg class="ico" aria-hidden="true"><use href="#i-grid"/></svg>VM Catalog…</button>
+      <button class="menu-item" data-action="openVnets"><svg class="ico" aria-hidden="true"><use href="#i-net"/></svg>Virtual Network Editor…</button>
+      <button class="menu-item" data-action="openPrefs"><svg class="ico" aria-hidden="true"><use href="#i-gear"/></svg>Preferences…</button>
+      <button class="menu-item" data-action="showShortcutsModal"><svg class="ico" aria-hidden="true"><use href="#i-keyboard"/></svg>Keyboard Shortcuts</button>
+      <button class="menu-item" data-action="openAbout"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>About Hangar</button>
     </div>
     <div id="dangerMenu" class="action-menu" role="menu" aria-label="Advanced actions">
-      <button class="menu-item" data-action="batchStart" data-vm-action="batch-start">Power On All Stopped</button>
-      <button class="menu-item danger" data-action="batchStop" data-vm-action="batch-stop">Power Off All Running</button>
+      <button class="menu-item" data-action="batchStart" data-vm-action="batch-start"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Power On All Stopped</button>
+      <button class="menu-item danger" data-action="batchStop" data-vm-action="batch-stop"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>Power Off All Running</button>
       <span class="menu-sep" aria-hidden="true"></span>
-      <button class="menu-item danger" data-action="deleteVm" data-vm-action="delete">Delete VM</button>
+      <button class="menu-item danger" data-action="deleteVm" data-vm-action="delete"><svg class="ico" aria-hidden="true"><use href="#i-trash"/></svg>Delete VM</button>
     </div>
   </div>
 

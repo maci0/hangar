@@ -312,7 +312,7 @@ var stopped=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status===
 for(let i=vms.length-1;i>=0;i--){if(vms[i].status==='running'||vms[i].status==='paused'){setStatus('Batch stop: VM '+(stopped+failed+1)+' of '+total+'...');const r=await apiPost('/api/vms/'+i+'/power');if(r){stopped++;}else{failed++;setStatus('Batch stop: VM '+(stopped+failed)+' of '+total+' failed, continuing...');}}}
 await refresh();setStatus('Batch stop complete: '+stopped+' stopped'+(failed>0?', '+failed+' failed':''));
 for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent=btns[b2].getAttribute('data-prev-label')||'Power Off All Running';btns[b2].removeAttribute('data-prev-label');}}
-async function takeSnapshot(){if(sel===null)return;openSnapshots();}
+async function takeSnapshot(){if(sel===null)return;await openSnapshots();var t=document.getElementById('s_tag');if(t){t.focus();t.select();}}
 async function takeSnapshotFromDlg(){if(sel===null){showToast('No VM selected','warn');return;}const st=document.getElementById('s_tag');if(!st)return;const t=st.value.trim();if(!t){showToast('Enter a snapshot name','warn');return;}if(/[\x00-\x1f]|\.\./.test(t)||t.length>255){showToast('Snapshot name is invalid','error');return;}
 var takeBtn=document.querySelector('[data-action="takeSnapshotFromDlg"]');if(takeBtn){takeBtn.disabled=true;takeBtn.textContent='Taking...';}
 const r=await apiPost('/api/vms/'+sel+'/snapshots','tag='+encodeURIComponent(t));if(r){st.value='';loadSnapshots();setStatus('Snapshot taken: '+t);}
@@ -690,27 +690,27 @@ var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventList
   ctxMenu.style.visibility='';
   var vmForMenu=vms[idx];
   var items=[
-    {label:vmForMenu.status==='running'||vmForMenu.status==='paused'?'Power Off':'Power On',action:'power-toggle',fn:powerToggle},
-    {label:'Shut Down Guest',action:'shutdown',fn:shutdownGuest},
-    {label:'Suspend',action:'suspend',fn:suspendGuest},
-    {label:'Pause',action:'pause',fn:pauseGuest},
-    {label:'Resume',action:'resume',fn:resumeGuest},
+    {label:vmForMenu.status==='running'||vmForMenu.status==='paused'?'Power Off':'Power On',icon:vmForMenu.status==='running'||vmForMenu.status==='paused'?'i-stop':'i-play',action:'power-toggle',fn:powerToggle},
+    {label:'Shut Down Guest',icon:'i-power',action:'shutdown',fn:shutdownGuest},
+    {label:'Suspend',icon:'i-import',action:'suspend',fn:suspendGuest},
+    {label:'Pause',icon:'i-pause',action:'pause',fn:pauseGuest},
+    {label:'Resume',icon:'i-play',action:'resume',fn:resumeGuest},
     {sep:true},
-    {label:'Snapshot Manager',action:'snapshot',fn:openSnapshots},
-    {label:'Send Ctrl+Alt+Del',action:'cad',fn:sendCad},
-    {label:'Display Only',action:'display',fn:enterDisplayOnly},
+    {label:'Snapshot Manager…',icon:'i-grid',action:'snapshot',fn:openSnapshots},
+    {label:'Send Ctrl+Alt+Del',icon:'i-keyboard',action:'cad',fn:sendCad},
+    {label:'Display Only',icon:'i-maximize',action:'display',fn:enterDisplayOnly},
     {sep:true},
-    {label:'Settings',action:'settings',fn:editVm},
-    {label:'Rename',action:'rename',fn:renameGuest},
-    {label:'Clone',action:'clone',fn:cloneGuest},
-    {label:'Migrate',action:'migrate',fn:migrateGuest},
-    {label:'Export OVF',action:'export',fn:exportOvf},
-    {label:'Toggle Favorite',action:'settings',fn:function(target){toggleFavorite(target);}},
+    {label:'Settings',icon:'i-gear',action:'settings',fn:editVm},
+    {label:'Rename…',icon:'i-edit',action:'rename',fn:renameGuest},
+    {label:'Clone…',icon:'i-copy',action:'clone',fn:cloneGuest},
+    {label:'Migrate…',icon:'i-migrate',action:'migrate',fn:migrateGuest},
+    {label:'Export to OVF',icon:'i-export',action:'export',fn:exportOvf},
+    {label:'Toggle Favorite',icon:'i-star',action:'settings',fn:function(target){toggleFavorite(target);}},
     {sep:true},
-    {label:'Reset',action:'reset',danger:true,fn:resetGuest},
-    {label:'Delete',action:'delete',danger:true,fn:deleteVm}
+    {label:'Reset',icon:'i-refresh',action:'reset',danger:true,fn:resetGuest},
+    {label:'Delete',icon:'i-trash',action:'delete',danger:true,fn:deleteVm}
   ];
-  items.forEach(function(item){if(item.sep){var sep=document.createElement('div');sep.className='ctx-sep';ctxMenu.appendChild(sep);return;}var mi=document.createElement('button');mi.type='button';mi.className='ctx-item'+(item.danger?' danger':'');mi.setAttribute('role','menuitem');var ok=actionAllowed(item.action,vmForMenu);mi.disabled=!ok;mi.title=ok?'':disabledReason(item.action,vmForMenu);mi.textContent=item.label;
+  items.forEach(function(item){if(item.sep){var sep=document.createElement('div');sep.className='ctx-sep';ctxMenu.appendChild(sep);return;}var mi=document.createElement('button');mi.type='button';mi.className='ctx-item'+(item.danger?' danger':'');mi.setAttribute('role','menuitem');var ok=actionAllowed(item.action,vmForMenu);mi.disabled=!ok;mi.title=ok?'':disabledReason(item.action,vmForMenu);if(item.icon){mi.innerHTML='<svg class="ico" aria-hidden="true"><use href="#'+item.icon+'"/></svg>'+escHtml(item.label);}else{mi.textContent=item.label;}
     mi.addEventListener('click',function(){if(mi.disabled)return;var target=ctxVmIdx;Promise.resolve(select(target)).then(function(){item.fn(target);});hideCtxMenu();});
     ctxMenu.appendChild(mi);});
 });
@@ -1332,7 +1332,7 @@ var actionHandlers={
  resetGuest:function(){resetGuest();},suspendGuest:function(){suspendGuest();},
  sendCad:function(){sendCad();},editVm:function(){editVm();},
  renameGuest:function(){renameGuest();},cloneGuest:function(){cloneGuest();},
- importGuest:function(){importGuest();},takeSnapshot:function(){takeSnapshot();},
+ importGuest:function(){importGuest();},takeSnapshot:function(){takeSnapshot();},openSnapshots:function(){openSnapshots();},
  exportOvf:function(){exportOvf();},migrateGuest:function(){migrateGuest();},doMigrate:function(){doMigrate();},openVnets:function(){openVnets();},
  openPrefs:function(){openPrefs();},openAbout:function(){openAbout();},openCatalog:function(){openCatalog();},
  showShortcutsModal:function(){showShortcutsModal();},
