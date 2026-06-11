@@ -505,6 +505,12 @@ fn serveHtml(conn: c.fd_t) void {
         }
     }
 
+    // ── Server-Sent Events: state-change stream ──
+    if (routeExact(req, "GET /api/events")) {
+        handleEvents(conn);
+        return;
+    }
+
     // ── WebSocket VNC Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/vnc/")) {
         if (!wsAuthOk(conn, req, "/ws/vnc")) return;
@@ -805,6 +811,9 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (routeExact(req, "GET /elk.js")) {
         response = elk_js;
         content_type = "application/javascript; charset=utf-8";
+    } else if (routeExact(req, "GET /van.js")) {
+        response = van_js;
+        content_type = "application/javascript; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET / ")) {
         response = index_html;
         content_type = "text/html; charset=utf-8";
@@ -870,7 +879,43 @@ fn serveHtml(conn: c.fd_t) void {
         logErr(std.fmt.bufPrint(&lb, "request failed (500): {s} :: {s}", .{ route, response }) catch "request failed (500)");
     }
 
+    // Any accepted POST to the API is a (potential) state mutation: bump the
+    // version so /api/events subscribers refresh immediately instead of waiting
+    // for their next poll. Cheap; spurious bumps just cause one extra GET.
+    if (status < 400 and std.mem.startsWith(u8, req, "POST /api/")) appstate.bumpStateVersion();
     writeHttpResponse(conn, status, content_type, response);
+}
+
+/// Stream state-change notifications as Server-Sent Events. Holds the
+/// connection open (thread-per-conn, like the WS relays) and emits an
+/// `event: change` whenever the global state version moves — POST mutations
+/// and unexpected VM exits both bump it. A comment keepalive every ~15s lets
+/// dead clients be detected via the socket's send timeout.
+fn handleEvents(conn: c.fd_t) void {
+    const hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: keep-alive\r\n\r\n";
+    if (!writeAll(conn, hdr.ptr, hdr.len)) return;
+    var last = appstate.getStateVersion();
+    var buf: [64]u8 = undefined;
+    const hello = std.fmt.bufPrint(&buf, "event: change\ndata: {d}\n\n", .{last}) catch return;
+    if (!writeAll(conn, hello.ptr, hello.len)) return;
+    var ticks: u32 = 0;
+    while (true) {
+        appio.sleepMs(400);
+        const v = appstate.getStateVersion();
+        if (v != last) {
+            last = v;
+            ticks = 0;
+            const msg = std.fmt.bufPrint(&buf, "event: change\ndata: {d}\n\n", .{v}) catch return;
+            if (!writeAll(conn, msg.ptr, msg.len)) return;
+        } else {
+            ticks += 1;
+            if (ticks >= 38) { // ~15s keepalive
+                ticks = 0;
+                const ka = ": ka\n\n";
+                if (!writeAll(conn, ka.ptr, ka.len)) return;
+            }
+        }
+    }
 }
 
 /// Return an allocated copy of the raw vms.json content for remote clients.
@@ -2158,6 +2203,7 @@ const app_js = @embedFile("web/app.js");
 const novnc_js = @embedFile("web/novnc.js");
 const spice_js = @embedFile("web/spice.js");
 const elk_js = @embedFile("web/elk.js");
+const van_js = @embedFile("web/van.js");
 
 /// Background thread: periodically check liveness of running VMs and reap dead ones.
 fn livenessTicker() void {
@@ -2184,6 +2230,7 @@ fn livenessTicker() void {
                     const safe = sanitizeLogName(&name_buf, v.getNameSlice());
                     var msg: [320]u8 = undefined;
                     logWarn(std.fmt.bufPrint(&msg, "vm exited unexpectedly: vm=\"{s}\" prev={s}", .{ safe, v.status.toStr() }) catch "vm exited unexpectedly");
+                    appstate.bumpStateVersion();
                     v.status = .stopped;
                     appstate.destroyVmmHandle(i);
                     changed = true;

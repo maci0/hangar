@@ -318,6 +318,26 @@ test('settings lock virtual hardware while the VM is running, metadata stays edi
     await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-lock')}/power`, '');
 });
 
+test('SSE: a VM created via the API appears in the UI within 3s, no reload', async ({ page }) => {
+    const t0 = Date.now();
+    await api(page, 'POST', '/api/vms', 'name=wf-sse&mem=1024&cpu=1&disk=1');
+    await page.waitForSelector('.vm-item:has-text("wf-sse")', { timeout: 4000 });
+    expect(Date.now() - t0, 'push beats the 5s poll').toBeLessThan(3500);
+    await expect(page.locator('.dash .inv tbody tr', { hasText: 'wf-sse' })).toBeVisible();
+});
+
+test('live console: SPICE display connects and paints in the Console tab', async ({ page }) => {
+    await api(page, 'POST', '/api/vms', 'name=wf-spice&mem=1024&cpu=1&disk=1&guest_os=2&display=2&embed_display=true&firmware=bios');
+    const idx = await indexOf(page, 'wf-spice');
+    await api(page, 'POST', `/api/vms/${idx}/power`, '');
+    await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-spice')].status, { timeout: 25000 }).toBe('running');
+    await page.reload();
+    await page.locator('.vm-item', { hasText: 'wf-spice' }).first().click();
+    await expect.poll(() => page.evaluate(() => { const c = document.querySelector('#tabConsole #display canvas'); return c ? c.width : 0; }), { timeout: 20000 }).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => document.getElementById('displayBadge').textContent)).toContain('SPICE');
+    await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-spice')}/power`, '');
+});
+
 test('live console: embedded VNC canvas and serial panel connect for a running VM', async ({ page }) => {
     // Regression test for the WebSocket console: the 101 upgrade response once
     // used a Zig multiline literal (literal "\r" text, not CRLF), so browsers

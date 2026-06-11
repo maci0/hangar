@@ -32,6 +32,18 @@ pub var g_vmm_handles: [MAX_VMS]?hv_iface.VmmHandle = .{null} ** MAX_VMS;
 
 // ── Undo state ──────────────────────────────────────────────────────
 
+/// Monotonic state version, bumped on every mutation (and on unexpected VM
+/// exit) so the SSE /api/events stream can tell clients to refresh instantly.
+pub var state_version: u64 = 1;
+
+pub fn bumpStateVersion() void {
+    _ = @atomicRmw(u64, &state_version, .Add, 1, .seq_cst);
+}
+
+pub fn getStateVersion() u64 {
+    return @atomicLoad(u64, &state_version, .seq_cst);
+}
+
 pub var undo_vm: vm.VmConfig = .{};
 pub var undo_idx: usize = 0;
 pub var undo_available: bool = false;

@@ -152,28 +152,6 @@
   <!-- Content Area -->
   <div class="content-area">
     <!-- Display panel (VNC/SPICE framebuffer) -->
-    <div id="display">
-      <div class="display-badge" id="displayBadge" aria-hidden="true"></div>
-      <div class="display-toolbar" aria-label="Display controls">
-        <button class="display-tool" data-action="enterDisplayOnly" data-vm-action="display" title="Display only" aria-label="Display only"><svg class="ico" aria-hidden="true"><use href="#i-maximize"/></svg></button>
-        <button class="display-tool" data-action="reconnectDisplay" data-vm-action="display" title="Reconnect display" aria-label="Reconnect display"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg></button>
-        <button class="display-tool" data-action="sendCad" data-vm-action="cad" title="Send Ctrl+Alt+Del" aria-label="Send Ctrl+Alt+Del">⌨</button>
-      </div>
-      <div id="displayHint" class="display-hint" aria-live="polite"></div>
-    </div>
-
-    <!-- Serial console panel -->
-    <div id="serialpanel">
-      <textarea id="serialterm" readonly rows="14" placeholder="Serial console — not connected" aria-label="Serial console"></textarea>
-      <div class="serial-resize-handle" id="serialResize" title="Drag to resize" aria-hidden="true"></div>
-      <div class="serial-toolbar">
-        <button class="btn" data-action="clearSerial">Clear</button>
-        <button class="btn" data-action="exportSerial">Export</button>
-        <span style="flex:1"></span>
-        <button class="btn" data-action="manualDisconnectSerial">Disconnect</button>
-      </div>
-    </div>
-
     <!-- VM Header + Tabs -->
     <div class="vm-header">
       <h1 id="vmname">Select a VM</h1>
@@ -186,10 +164,27 @@
 
     <!-- Tab: Summary -->
     <div id="tabConsole" role="tabpanel" aria-labelledby="tab-btn-console" aria-hidden="true" style="display:none">
-      <div class="console-empty">
-        <strong>No embedded console is active.</strong>
-        <span>Power on a VM with embedded VNC or SPICE display to use the browser console.</span>
+    <div id="display">
+      <div class="display-badge" id="displayBadge" aria-hidden="true"></div>
+      <div class="display-toolbar" aria-label="Display controls">
+        <button class="display-tool" data-action="enterDisplayOnly" data-vm-action="display" title="Display only" aria-label="Display only"><svg class="ico" aria-hidden="true"><use href="#i-maximize"/></svg></button>
+        <button class="display-tool" data-action="reconnectDisplay" data-vm-action="display" title="Reconnect display" aria-label="Reconnect display"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+        <button class="display-tool" data-action="sendCad" data-vm-action="cad" title="Send Ctrl+Alt+Del" aria-label="Send Ctrl+Alt+Del">⌨</button>
       </div>
+      <div id="displayHint" class="display-hint" aria-live="polite"></div>
+    </div>
+    <!-- Serial console panel -->
+    <div id="serialpanel">
+      <textarea id="serialterm" readonly rows="14" placeholder="Serial console — not connected" aria-label="Serial console"></textarea>
+      <div class="serial-resize-handle" id="serialResize" title="Drag to resize" aria-hidden="true"></div>
+      <div class="serial-toolbar">
+        <button class="btn" data-action="clearSerial">Clear</button>
+        <button class="btn" data-action="exportSerial">Export</button>
+        <span style="flex:1"></span>
+        <button class="btn" data-action="manualDisconnectSerial">Disconnect</button>
+      </div>
+    </div>
+      <div id="consoleHint"></div>
     </div>
 
     <!-- Tab: Summary -->
@@ -482,6 +477,7 @@
 
 <script src="/novnc.js"></script>
 <script src="/spice.js"></script>
+<script src="/van.js"></script>
 <script src="/elk.js"></script>
 <script src="/app.js"></script>
 </body>

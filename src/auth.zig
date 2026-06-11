@@ -86,11 +86,13 @@ pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/novnc.js")) return true;
     if (std.mem.eql(u8, path, "/spice.js")) return true;
     if (std.mem.eql(u8, path, "/elk.js")) return true;
+    if (std.mem.eql(u8, path, "/van.js")) return true;
     if (std.mem.eql(u8, path, "/app.css")) return true;
     if (std.mem.startsWith(u8, path, "/favicon")) return true;
     if (std.mem.eql(u8, path, "/api/vms")) return true;
     if (std.mem.eql(u8, path, "/api/capabilities")) return true;
     if (std.mem.eql(u8, path, "/api/health")) return true;
+    if (std.mem.eql(u8, path, "/api/events")) return true;
     if (std.mem.eql(u8, path, "/api/config")) return true;
     if (std.mem.eql(u8, path, "/api/catalog")) return true;
     if (std.mem.eql(u8, path, "/api/networks")) return true;
@@ -141,6 +143,7 @@ test "auth: secretEql is length-checked equality" {
 test "auth: isAuthExempt — static + safe reads exempt, sensitive not" {
     try std.testing.expect(isAuthExempt(true, "/"));
     try std.testing.expect(isAuthExempt(true, "/api/vms"));
+    try std.testing.expect(isAuthExempt(true, "/api/events"));
     try std.testing.expect(isAuthExempt(true, "/api/vms/0/log"));
     try std.testing.expect(!isAuthExempt(true, "/api/vms/0/disk2/download"));
     try std.testing.expect(!isAuthExempt(true, "/api/vms/0/screenshot"));

@@ -120,13 +120,13 @@ var serverDown=false;
 var saveInFlight=false;
 function setServerDown(s){serverDown=s;var b=document.getElementById('connbanner');if(b)b.style.display=s?'flex':'none';if(s)setStatus('Server unreachable — retrying...');}
 async function refresh(){if(document.hidden)return;if(refreshBusy)return;if(transitioningIdx!==null||saveInFlight||busy||apiPostPending>0)return;refreshBusy=true;try{const prevStatus=(sel!==null&&sel<vms.length)?vms[sel].status:null;const prevName=(sel!==null&&sel<vms.length)?vms[sel].name:null;const ctl=new AbortController();const t=setTimeout(function(){ctl.abort();},15000);try{const r=await fetch('/api/vms',{signal:ctl.signal});clearTimeout(t);if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
-setServerDown(false);vms=normVmBools(await r.json());
+setServerDown(false);vms=normVmBools(await r.json());publishVms();
 // Only act on a status transition if the selection still points at the SAME VM
 // we sampled before the await. If the user switched VMs mid-fetch, select()
 // already (re)started the console for the new VM — touching fb/serial here with
 // the stale prevStatus would flap it. Compare by name (indices shift on
 // delete/reorder).
-if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);}else{stopFb();stopSerial(true);}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();else if(sel===null&&!document.querySelector('#tabSummary .dash:focus-within'))showEmptyState();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
+if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);if(activeTab==='summary'&&embeddedDisplayCapable(vms[sel]))switchTab('console');}else{stopFb();stopSerial(true);if(activeTab==='console')switchTab('summary');}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();else if(sel===null)showEmptyState();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
 function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
 // VM folders are a `folder:<path>` tag convention (no backend change). The sidebar
 // groups non-favorite VMs into collapsible folders; open/closed persists locally.
@@ -182,6 +182,54 @@ async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDi
 async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}stopFb();stopSerial(true);sel=null;renderList();showEmptyState();updateCommandState();}
 // Host inventory dashboard shown when no VM is selected: state breakdown +
 // allocated-capacity totals + an attention list. Pure render from the polled vms[].
+// ── Reactive host dashboard (VanJS) ──────────────────────────────────
+// vmsState/dashSortState drive the dashboard DOM in place: no innerHTML
+// rebuilds, so focus (e.g. a sort header) survives every refresh.
+var vmsState=null,dashSortState=null,dashMounted=false;
+function publishVms(){if(window.van){if(!vmsState){vmsState=van.state(vms.slice());}else{vmsState.val=vms.slice();}}}
+function dashStats(list){var st={running:0,stopped:0,paused:0,suspended:0},vcpu=0,ram=0,disk=0,att=[];
+ for(var i=0;i<list.length;i++){var v=list[i];st[v.status]=(st[v.status]||0)+1;vcpu+=Number(v.cpu)||0;ram+=Number(v.mem)||0;disk+=Number(v.disk)||0;if(summaryWarnings(v)!=='')att.push(v.name);}
+ return {st:st,vcpu:vcpu,ramGB:Math.round(ram/102.4)/10,disk:disk,att:att,count:list.length};}
+var DASH_COLS=[['name','Name'],['status','State'],['os','Guest OS'],['cpu','vCPU'],['mem','RAM'],['disk','Disk'],['tags','Tags']];
+function DashView(){
+ var t=van.tags;
+ if(!dashSortState)dashSortState=van.state({col:dashSort.col,dir:dashSort.dir});
+ function card(get,label,cls){return t.div({class:'dash-card'},t.div({class:'dash-num '+(cls||'')},get),t.div({class:'dash-lbl'},label));}
+ return t.div({class:'dash'},
+  t.div({class:'dash-head'},t.h2('Inventory'),t.span({class:'muted'},function(){var c=vmsState.val.length;return c+' virtual machine'+(c===1?'':'s');})),
+  t.div({class:'dash-cards'},
+   card(function(){return String(dashStats(vmsState.val).st.running||0);},'Running','running'),
+   card(function(){return String(dashStats(vmsState.val).st.stopped||0);},'Stopped',''),
+   card(function(){return String(dashStats(vmsState.val).st.paused||0);},'Paused','paused'),
+   card(function(){return String(dashStats(vmsState.val).st.suspended||0);},'Suspended','suspended')),
+  t.div({class:'dash-cards'},
+   card(function(){return String(dashStats(vmsState.val).vcpu);},'vCPU allocated',''),
+   card(function(){return dashStats(vmsState.val).ramGB+' GB';},'RAM allocated',''),
+   card(function(){return dashStats(vmsState.val).disk+' GB';},'Disk provisioned','')),
+  function(){var att=dashStats(vmsState.val).att;
+   return att.length?t.div({class:'dash-attention'},t.h3('Needs attention'),t.ul(att.map(function(n){return t.li(n);}))):t.div();},
+  t.div({class:'inv-wrap'},t.table({class:'inv'},
+   t.thead(t.tr(DASH_COLS.map(function(c){return t.th({'data-action':'sortInv','data-col':c[0],tabindex:'0',role:'button'},function(){var so=dashSortState.val;return c[1]+(so.col===c[0]?(so.dir>0?' ▲':' ▼'):'');});}))),
+   function(){var so=dashSortState.val;var rows=vmsState.val.map(function(v,i){return {v:v,i:i};});
+    rows.sort(function(a,b){var c=so.col,d=so.dir,x=a.v[c],y=b.v[c];
+     if(c==='cpu'||c==='mem'||c==='disk'){return ((Number(x)||0)-(Number(y)||0))*d;}
+     x=(x||'').toString().toLowerCase();y=(y||'').toString().toLowerCase();return x<y?-d:x>y?d:0;});
+    return t.tbody(rows.map(function(r){var v=r.v;var mt=Number(v.mem)>=1024?(Math.round(Number(v.mem)/102.4)/10)+' GB':v.mem+' MB';
+     return t.tr({'data-action':'select','data-vm-index':String(r.i),tabindex:'0'},
+      t.td({class:'inv-name'},v.name),
+      t.td(t.span({class:'sdot '+v.status}),statusLabel(v.status)),
+      t.td(v.os),t.td(String(v.cpu)),t.td(mt),t.td(v.disk+' GB'),
+      t.td(visibleTags(v.tags).map(function(tag){return t.span({class:'tag-chip sm'},tag);})));}));}
+  )),
+  t.div({class:'empty-actions',style:'justify-content:flex-start;margin-top:18px'},
+   t.button({class:'btn primary','data-action':'newVm'},'New VM'),
+   t.button({class:'btn','data-action':'importGuest'},'Import VM'),
+   t.button({class:'btn','data-action':'openCatalog'},'Catalog')));
+}
+function mountDashboard(host){
+ if(dashMounted&&host.firstChild&&host.firstChild.classList&&host.firstChild.classList.contains('dash'))return;
+ publishVms();host.innerHTML='';van.add(host,DashView());dashMounted=true;}
+
 function hostDashboardHtml(){
   var st={running:0,stopped:0,paused:0,suspended:0};var vcpu=0,ram=0,disk=0,attention=[];
   for(var i=0;i<vms.length;i++){var v=vms[i];st[v.status]=(st[v.status]||0)+1;
@@ -219,10 +267,12 @@ if(!t||!s||!nm||!tb)return;
 nm.textContent=vms.length?'Overview':'Select a VM';document.title='Hangar — VM Manager';tb.style.display='none';
 t.style.display='block';s.style.display='none';if(c)c.style.display='none';activeTab='summary';
 t.setAttribute('aria-hidden','false');s.setAttribute('aria-hidden','true');if(c)c.setAttribute('aria-hidden','true');
+if(vms.length&&window.van){mountDashboard(t);publishVms();s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';var chv=document.getElementById('consoleHint');if(chv)chv.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';updateCommandState();return;}
+dashMounted=false;
 var empty=vms.length?hostDashboardHtml():'<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-monitor"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p><div class="empty-actions"><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
 t.innerHTML=empty;
 s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';
-if(c)c.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';
+var ch0=document.getElementById('consoleHint');if(ch0)ch0.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';
 updateCommandState();}
 function renderDetails(){if(sel===null||sel>=vms.length){showEmptyState();return;}
 const tb=document.getElementById('tabBar');const nm=document.getElementById('vmname');const ts=document.getElementById('tabSummary');const tc=document.getElementById('tabConsole');
@@ -234,7 +284,9 @@ syncTabPanels();
 nm.textContent=v.name;document.title='Hangar — '+v.name;
 var info=displayInfo(v);
 var videoMeta=escHtml(info.embedLabel+' '+info.displayLabel)+' · '+escHtml(info.gpuLabel)+' · '+escHtml(info.accelLabel);
-if(tc){tc.innerHTML=embeddedDisplayCapable(v)?'<div class="console-empty compact"><strong>Console controls are above the VM header.</strong><span>Use Display Only for full-screen guest interaction.</span></div>':'<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}
+var ch=document.getElementById('consoleHint');
+if(ch){if(embeddedDisplayCapable(v)){ch.innerHTML=v.status==='running'?'':'<div class="console-empty"><strong>'+escHtml(v.name)+' is powered off.</strong><span>Power on the VM to open its console here.</span></div>';}
+else{ch.innerHTML='<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}}
 function row(l,vv){return '<div class="srow"><dt>'+l+'</dt><dd>'+vv+'</dd></div>';}
 const memTxt=Number(v.mem)>=1024?(Math.round(Number(v.mem)/102.4)/10)+' GB':escHtml(v.mem)+' MB';
 let h='<div class="vm-facts">';
@@ -281,7 +333,7 @@ h+='</div>';
 var warn=summaryWarnings(v);
 if(warn)h+='<div class="summary-grid" style="margin-top:14px">'+warn+'</div>';
 h+='<div class="summary-actions" style="margin-top:16px;display:flex;gap:8px"><button type="button" class="btn" data-action="viewLog">View QEMU Log</button>'+(v.status==='running'?'<button type="button" class="btn" data-action="takeScreenshot">Screenshot</button>':'')+'</div>';
-ts.innerHTML=h;
+dashMounted=false;ts.innerHTML=h;
 if(v.hasDisk==='true')loadDiskInfo(sel);
 if(v.status==='running')loadGuestInfo(sel);
 updateCommandState();}
@@ -806,7 +858,7 @@ async function bulkRun(label,fn){
   var ids=Array.from(checkedIds);if(!ids.length){showToast('No VMs selected','warn');return;}
   var ok=0,fail=0;
   for(var i=0;i<ids.length;i++){
-    try{var rr=await fetch('/api/vms');if(rr.ok)vms=normVmBools(await rr.json());}catch(e){}
+    try{var rr=await fetch('/api/vms');if(rr.ok){vms=normVmBools(await rr.json());publishVms();}}catch(e){}
     var idx=idxById(ids[i]);if(idx<0){continue;}
     try{var r=await fn(idx,ids[i]);if(r)ok++;else fail++;}catch(e){fail++;}
   }
@@ -890,9 +942,19 @@ function reconnectDisplay(){if(sel===null||sel>=vms.length)return;stopFb();start
 // ── Periodic Refresh ──
 refresh();
 setInterval(refresh,5000);
+// Server-Sent Events: the daemon bumps a state version on every mutation and
+// unexpected VM exit; refresh immediately instead of waiting for the 5s poll.
+// EventSource reconnects on its own; the poll above remains the fallback.
+(function(){var deb=null;try{var es=new EventSource('/api/events');es.addEventListener('change',function(){if(deb)clearTimeout(deb);deb=setTimeout(function(){refresh();},120);});}catch(e){}})();
 document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh();});
 // ── noVNC / SPICE live viewer ──
 var rfb = null; // noVNC RFB client instance
+// Auto-reconnect for the embedded display: if the RFB/SPICE session drops while
+// the VM is still running (QEMU restart, transient relay loss), retry with
+// exponential backoff instead of leaving a dead console.
+var fbReconnectTimer=null,fbReconnectDelay=1000;
+function clearFbReconnect(){if(fbReconnectTimer){clearTimeout(fbReconnectTimer);fbReconnectTimer=null;}}
+function scheduleFbReconnect(){if(fbReconnectTimer)return;fbReconnectTimer=setTimeout(function(){fbReconnectTimer=null;if(sel!==null&&sel<vms.length){var v=vms[sel];if(v.status==='running'&&embeddedDisplayCapable(v)&&!rfb&&!spice){fbReconnectDelay=Math.min(fbReconnectDelay*2,15000);startFb();}}},fbReconnectDelay);}
 var spice = null; // SPICE HTML5 client instance
 var displayPresenter = null;
 
@@ -1160,6 +1222,7 @@ function startVnc(idx, displayEl) {
     if (typeof RFBClass !== 'function') { showToast('VNC client failed to load','error'); return; }
     rfb = new RFBClass(displayEl, url, {});
     rfb.addEventListener('connect', function() {
+      fbReconnectDelay=1000;clearFbReconnect();
       displayEl.classList.remove('loading');
       displayEl.classList.add('connected');
       updateDisplayBadge('connected', 'vnc');
@@ -1167,6 +1230,7 @@ function startVnc(idx, displayEl) {
     });
     rfb.addEventListener('disconnect', function() {
       stopFb();
+      scheduleFbReconnect();
     });
     rfb.addEventListener('credentialsrequired', function() {
       rfb.sendCredentials({ password: '' });
@@ -1349,7 +1413,7 @@ var actionHandlers={
  vnetDefaults:function(){vnetDefaults();},vnetSaveCurrent:function(){vnetSaveCurrent();},
  vnetSaveAll:function(){vnetSaveAll();},
  select:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);},
-	 sortInv:function(el){var c=el.getAttribute('data-col');if(!c)return;if(dashSort.col===c)dashSort.dir=-dashSort.dir;else{dashSort.col=c;dashSort.dir=1;}showEmptyState();},
+	 sortInv:function(el){var c=el.getAttribute('data-col');if(!c)return;if(dashSort.col===c)dashSort.dir=-dashSort.dir;else{dashSort.col=c;dashSort.dir=1;}if(window.van&&dashSortState){dashSortState.val={col:dashSort.col,dir:dashSort.dir};}else{showEmptyState();}},
 	 toggleSelectMode:function(){toggleSelectMode();},
 	 toggleCheck:function(el){var n=el.getAttribute('data-vm-id');if(!n)return;if(el.checked)checkedIds.add(n);else checkedIds.delete(n);updateBulkBar();},
 	 bulkPower:function(el){doBulkPower(el.getAttribute('data-on')==='1');},
