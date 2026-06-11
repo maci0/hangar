@@ -814,6 +814,18 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (routeExact(req, "GET /van.js")) {
         response = van_js;
         content_type = "application/javascript; charset=utf-8";
+    } else if (routeExact(req, "GET /xterm.js")) {
+        response = xterm_js;
+        content_type = "application/javascript; charset=utf-8";
+    } else if (routeExact(req, "GET /xterm-fit.js")) {
+        response = xterm_fit_js;
+        content_type = "application/javascript; charset=utf-8";
+    } else if (routeExact(req, "GET /xterm-webgl.js")) {
+        response = xterm_webgl_js;
+        content_type = "application/javascript; charset=utf-8";
+    } else if (routeExact(req, "GET /xterm.css")) {
+        response = xterm_css;
+        content_type = "text/css; charset=utf-8";
     } else if (std.mem.startsWith(u8, req, "GET / ")) {
         response = index_html;
         content_type = "text/html; charset=utf-8";
@@ -2204,6 +2216,10 @@ const novnc_js = @embedFile("web/novnc.js");
 const spice_js = @embedFile("web/spice.js");
 const elk_js = @embedFile("web/elk.js");
 const van_js = @embedFile("web/van.js");
+const xterm_js = @embedFile("web/xterm.js");
+const xterm_fit_js = @embedFile("web/xterm-fit.js");
+const xterm_webgl_js = @embedFile("web/xterm-webgl.js");
+const xterm_css = @embedFile("web/xterm.css");
 
 /// Background thread: periodically check liveness of running VMs and reap dead ones.
 fn livenessTicker() void {

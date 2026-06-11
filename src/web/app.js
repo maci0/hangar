@@ -1319,6 +1319,22 @@ let serialWs=null,serialIdx=null,serialManualOff=false,serialManualOffVmIdx=-1;
 let serialReconnectDelay=1000,serialReconnectTimeoutId=null;
 function scheduleSerialReconnect(){if(serialReconnectTimeoutId)return;serialReconnectTimeoutId=setTimeout(function(){serialReconnectTimeoutId=null;if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&sel===serialManualOffVmIdx){serialReconnectDelay=1000;return;}if(v.status==='running'&&v.hasSerial==='true'){startSerial(sel);serialReconnectDelay=Math.min(serialReconnectDelay*2,30000);}else{serialReconnectDelay=1000;}}},serialReconnectDelay);}
 function clearSerialReconnect(){if(serialReconnectTimeoutId){clearTimeout(serialReconnectTimeoutId);serialReconnectTimeoutId=null;}serialReconnectDelay=1000;}
+// xterm.js serial terminal: real ANSI emulation, bidirectional (onData →
+// guest), WebGL renderer when available (canvas/DOM fallback inside xterm).
+var serialTerm=null,serialFit=null,serialBuf='';
+function ensureSerialTerm(){
+ if(serialTerm)return serialTerm;
+ if(typeof Terminal==='undefined')return null;
+ var host=document.getElementById('serialterm');if(!host)return null;
+ serialTerm=new Terminal({fontSize:12,fontFamily:'ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace',cursorBlink:true,scrollback:5000,convertEol:false,theme:{background:'#101214',foreground:'#b7c5bd',cursor:'#86c89a',cursorAccent:'#101214',selectionBackground:'rgba(77,130,184,.4)'}});
+ try{serialFit=new FitAddon.FitAddon();serialTerm.loadAddon(serialFit);}catch(e){}
+ serialTerm.open(host);
+ try{serialTerm.loadAddon(new WebglAddon.WebglAddon());}catch(e){/* GPU unavailable: xterm falls back to its DOM/canvas renderer */}
+ serialTerm.onData(function(d){if(serialWs&&serialWs.readyState===WebSocket.OPEN)serialWs.send(d);});
+ if(serialFit){try{serialFit.fit();}catch(e){}}
+ return serialTerm;
+}
+function serialFitNow(){if(serialFit){try{serialFit.fit();}catch(e){}}}
 function startSerial(idx){if(serialManualOff&&serialManualOffVmIdx===idx)return;
 clearSerialReconnect();
 if(serialWs){if(serialIdx===idx&&(serialWs.readyState===WebSocket.OPEN||serialWs.readyState===WebSocket.CONNECTING))return;
@@ -1326,45 +1342,28 @@ serialWs.close();serialWs=null;} /* close stale CONNECTING socket before reconne
 const sameVm=(serialIdx===idx);
 stopSerial(!sameVm); /* clear terminal only when switching VMs */
 if(idx===null||idx>=vms.length)return;const v=vms[idx];if(v.status!=='running'||v.hasSerial!=='true')return;
-serialIdx=idx;const term=document.getElementById('serialterm');const sp=document.getElementById('serialpanel');if(!term||!sp)return;sp.style.display='block';sp.classList.add('connected');
+serialIdx=idx;const sp=document.getElementById('serialpanel');if(!sp)return;sp.style.display='block';sp.classList.add('connected');
+const t=ensureSerialTerm();if(!t)return;if(!sameVm){t.reset();serialBuf='';}
 const proto=location.protocol==='https:'?'wss:':'ws:';const ws=new WebSocket(proto+'//'+location.host+'/ws/serial/'+idx);
+ws.binaryType='arraybuffer';
 serialWs=ws; // reassign before old onclose fires to avoid closing the new socket
-ws.onmessage=e=>{var t=term.value+e.data;var SERIAL_MAX=256*1024;if(t.length>SERIAL_MAX)t=t.slice(t.length-SERIAL_MAX);term.value=t;term.scrollTop=term.scrollHeight;};
-ws.onopen=()=>{serialReconnectDelay=1000;sp.classList.add('connected');};
+ws.onmessage=e=>{var data=e.data instanceof ArrayBuffer?new Uint8Array(e.data):e.data;t.write(data);
+ var txt=typeof data==='string'?data:new TextDecoder('utf-8',{fatal:false}).decode(data);
+ serialBuf+=txt;var SERIAL_MAX=256*1024;if(serialBuf.length>SERIAL_MAX)serialBuf=serialBuf.slice(serialBuf.length-SERIAL_MAX);};
+ws.onopen=()=>{serialReconnectDelay=1000;sp.classList.add('connected');serialFitNow();};
 ws.onclose=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
 ws.onerror=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
 }
-function stopSerial(clearTerm){if(clearTerm===void 0)clearTerm=true;clearSerialReconnect();if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;if(clearTerm){const term=document.getElementById('serialterm');if(term)term.value='';}const sp=document.getElementById('serialpanel');if(sp){sp.style.display='none';sp.classList.remove('connected');}}
+function stopSerial(clearTerm){if(clearTerm===void 0)clearTerm=true;clearSerialReconnect();if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;if(clearTerm){if(serialTerm)serialTerm.reset();serialBuf='';}const sp=document.getElementById('serialpanel');if(sp){sp.style.display='none';sp.classList.remove('connected');}}
 function manualDisconnectSerial(){serialManualOff=true;serialManualOffVmIdx=sel!==null?sel:-1;clearSerialReconnect();stopSerial(true);}
-var serialTermEl=document.getElementById('serialterm');if(serialTermEl){serialTermEl.addEventListener('keydown',function(e){if(!serialWs||serialWs.readyState!==WebSocket.OPEN)return;
-var s=null;
-if(e.ctrlKey&&!e.altKey&&!e.metaKey){
- // Allow browser copy/paste/select-all shortcuts
- if(e.key==='c'||e.key==='C'||e.key==='x'||e.key==='X'){if(e.target.selectionStart!==e.target.selectionEnd)return;}
- if(e.key==='a'||e.key==='A'||e.key==='v'||e.key==='V')return;
- if(e.key.length===1){var cc=e.key.charCodeAt(0);if(cc>=64&&cc<=95)s=String.fromCharCode(cc-64);else if(cc>=97&&cc<=122)s=String.fromCharCode(cc-96);}
- else if(e.key===' '||e.key==='Spacebar')s='\x00';
-}else if(!e.altKey&&!e.metaKey){
- switch(e.key){
-  case'Enter':s='\r\n';break;case'Backspace':s='\x08';break;case'Tab':s='\t';break;
-  case'Delete':s='\x1b[3~';break;case'Escape':s='\x1b';break;
-  case'ArrowUp':s='\x1b[A';break;case'ArrowDown':s='\x1b[B';break;
-  case'ArrowRight':s='\x1b[C';break;case'ArrowLeft':s='\x1b[D';break;
-  case'Home':s='\x1b[H';break;case'End':s='\x1b[F';break;
-  case'PageUp':s='\x1b[5~';break;case'PageDown':s='\x1b[6~';break;
-  case'Insert':s='\x1b[2~';break;
-  case'F1':s='\x1bOP';break;case'F2':s='\x1bOQ';break;case'F3':s='\x1bOR';break;case'F4':s='\x1bOS';break;
-  case'F5':s='\x1b[15~';break;case'F6':s='\x1b[17~';break;case'F7':s='\x1b[18~';break;case'F8':s='\x1b[19~';break;
-  case'F9':s='\x1b[20~';break;case'F10':s='\x1b[21~';break;case'F11':s='\x1b[23~';break;case'F12':s='\x1b[24~';break;
-  default:if(e.key.length===1)s=e.key;break;
- }
-}
-if(s){e.preventDefault();e.stopPropagation();serialWs.send(s);}});}
+// (keyboard input now flows through xterm's onData)
 // Serial panel resize handle
 (function() {
   var handle = document.getElementById('serialResize');
   var term = document.getElementById('serialterm');
   if (!handle || !term) return;
+  // After any height change, refit the xterm grid to the new box.
+  var refit = function(){ if (typeof serialFitNow === 'function') serialFitNow(); };
   var startY = 0, startH = 0, dragging = false;
   handle.addEventListener('mousedown', function(e) {
     e.preventDefault();
@@ -1379,13 +1378,14 @@ if(s){e.preventDefault();e.stopPropagation();serialWs.send(s);}});}
     var dy = e.clientY - startY;
     var newH = Math.max(60, Math.min(600, startH + dy));
     term.style.height = newH + 'px';
-    term.setAttribute('rows', Math.floor(newH / 20));
+    refit();
   });
   window.addEventListener('mouseup', function() {
     if (!dragging) return;
     dragging = false;
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
+    refit();
   });
 })();
 var filterTimer=null;
@@ -1409,8 +1409,8 @@ var actionHandlers={
  newVm:function(){newVm();},createVm:function(){createVm();},
  takeSnapshotFromDlg:function(){takeSnapshotFromDlg();},
  manualDisconnectSerial:function(){manualDisconnectSerial();},
- clearSerial:function(){var t=document.getElementById('serialterm');if(t)t.value='';},
- exportSerial:function(){var t=document.getElementById('serialterm');if(!t||!t.value)return;var blob=new Blob([t.value],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='hangar-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
+ clearSerial:function(){if(serialTerm)serialTerm.reset();serialBuf='';},
+ exportSerial:function(){if(!serialBuf)return;var blob=new Blob([serialBuf],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='hangar-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
  savePrefs:function(){savePrefs();},saveVm:function(){saveVm();},
  vnetAdd:function(){vnetAdd();},vnetRemove:function(){vnetRemove();},
  vnetDefaults:function(){vnetDefaults();},vnetSaveCurrent:function(){vnetSaveCurrent();},
