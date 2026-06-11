@@ -20,6 +20,8 @@ globals in `appstate.zig`.
 - **Hypervisor process control:** `src/hv/` (dispatch table) — see its AGENTS.md.
 - **QEMU / guest:** `qemu.zig` (arg builders + `forkExec`/`runWait`; never `std.process.spawn`),
   `qmp.zig` (QMP client), `framebuffer.zig`, `vnc_client.zig`, `spice_client.zig`.
+- **Events:** `GET /api/events` (SSE) — `appstate.state_version` bumps on every accepted
+  POST mutation and unexpected VM exit; `handleEvents` streams change events.
 - **HTTP leaf utils:** `httpreq` `httpresp` `wlog` `netutil` `auth` `urlencode` `form_parsers`.
 - **Handler groups:** `snapshots` `migrate` `disk` `cdrom` `guestagent` `streams`
   `wsproxy` `framebuffer` `vmlist` `vmrender` `filter`.

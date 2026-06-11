@@ -12,10 +12,15 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 - `app.css` (~1150 lines) — theme (`:root` dark default + `:root.light`) + components;
   a trailing "serious flat reskin" override block wins by cascade order.
 - Vendored libs (do not hand-edit; treat as binary): `novnc.js`, `spice.js`, `elk.js`,
-  `favicon.svg`. Each is `@embedFile`'d, served at `/novnc.js` etc, and listed in
-  `auth.isAuthExempt`.
+  `van.js` (vanjs-core, ESM export converted to `window.van`), `favicon.svg`. Each is
+  `@embedFile`'d, served at `/novnc.js` etc, and listed in `auth.isAuthExempt`.
 
 ## Local Contracts
+- **Reactivity**: `GET /api/events` (SSE) pushes a change event whenever the daemon's
+  state version bumps; the client refreshes on it (5s poll stays as fallback). The host
+  dashboard is a VanJS component driven by `vmsState`/`dashSortState` — update state,
+  never rebuild its innerHTML. The console (`#display` + `#serialpanel`) lives inside
+  `#tabConsole`; hints go to `#consoleHint` (renders must not wipe the panel).
 - **Strict CSP** (`script-src 'self'`): NO inline event handlers. All actions go through
   the delegated body click → `el.closest('[data-action]')` → `actionHandlers[action](el)`.
   Keyboard activation for `role=button`/`th[data-action]` is the global keydown delegator.
