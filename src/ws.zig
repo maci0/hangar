@@ -58,19 +58,40 @@ pub fn parseUpgrade(req: []const u8) ?[29]u8 {
     return accept;
 }
 
-/// Format the HTTP 101 Switching Protocols response for a WebSocket upgrade.
-/// MUST use a normal string literal: Zig multiline (`\\`) literals do not
-/// process escapes, so a `\r` inside one is the two characters backslash+r —
-/// browsers then never see a real CRLF header terminator and the WebSocket
-/// stays in CONNECTING forever (this silently broke VNC/SPICE/serial consoles).
-pub fn formatUpgradeResponse(buf: []u8, accept_key: [29]u8) ![]const u8 {
+/// First requested WebSocket subprotocol from the upgrade request, if any
+/// (e.g. spice-html5 asks for "binary"). RFC 6455 §4.2.2: when the client
+/// requests a subprotocol, the server must echo one back or the browser fails
+/// the whole handshake — silently dropping it broke the SPICE console while
+/// VNC (which requests none) worked.
+pub fn requestedProtocol(req: []const u8) ?[]const u8 {
+    const marker = "Sec-WebSocket-Protocol: ";
+    const start = std.mem.indexOf(u8, req, marker) orelse return null;
+    const val_start = start + marker.len;
+    const rel_end = std.mem.indexOfScalar(u8, req[val_start..], '\r') orelse return null;
+    var first = req[val_start .. val_start + rel_end];
+    if (std.mem.indexOfScalar(u8, first, ',')) |comma| first = first[0..comma];
+    first = std.mem.trim(u8, first, " \t");
+    if (first.len == 0 or first.len > 64) return null;
+    return first;
+}
+
+/// Format the HTTP 101 Switching Protocols response for a WebSocket upgrade,
+/// echoing the client's requested subprotocol when present (see
+/// `requestedProtocol`). MUST use a normal string literal: Zig multiline (`\\`)
+/// literals do not process escapes, so a `\r` inside one is the two characters
+/// backslash+r — browsers then never see a real CRLF header terminator and the
+/// WebSocket stays in CONNECTING forever (this silently broke all consoles).
+pub fn formatUpgradeResponse(buf: []u8, accept_key: [29]u8, protocol: ?[]const u8) ![]const u8 {
+    if (protocol) |p| {
+        return std.fmt.bufPrint(buf, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {s}\r\nSec-WebSocket-Protocol: {s}\r\n\r\n", .{ accept_key[0..28], p }) catch error.WriteFailed;
+    }
     return std.fmt.bufPrint(buf, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {s}\r\n\r\n", .{accept_key[0..28]}) catch error.WriteFailed;
 }
 
 /// Write the HTTP 101 Switching Protocols response for a WebSocket upgrade.
-pub fn writeUpgradeResponse(fd: c.fd_t, accept_key: [29]u8) !void {
-    var buf: [256]u8 = undefined;
-    const resp = try formatUpgradeResponse(&buf, accept_key);
+pub fn writeUpgradeResponse(fd: c.fd_t, accept_key: [29]u8, req: []const u8) !void {
+    var buf: [384]u8 = undefined;
+    const resp = try formatUpgradeResponse(&buf, accept_key, requestedProtocol(req));
     _ = c.write(fd, resp.ptr, resp.len);
 }
 
@@ -272,7 +293,7 @@ test "formatUpgradeResponse: real CRLF line endings and terminator (RFC 6455)" {
     const req = "GET /ws/vnc/0 HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
     const accept = parseUpgrade(req).?;
     var buf: [256]u8 = undefined;
-    const resp = try formatUpgradeResponse(&buf, accept);
+    const resp = try formatUpgradeResponse(&buf, accept, null);
     // Every line must end in a REAL CR+LF — a literal backslash-r (from a Zig
     // multiline string) leaves browsers waiting for end-of-headers forever.
     try std.testing.expect(std.mem.indexOf(u8, resp, "\\r") == null);
@@ -287,6 +308,21 @@ fn fuzzByteIsPrintable(b: u8) bool {
     return b == '\r' or b == '\n' or (b >= 0x20 and b < 0x7f);
 }
 
+test "requestedProtocol: extracts first token, trims, null when absent" {
+    try std.testing.expectEqualStrings("binary", requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: binary\r\n\r\n").?);
+    try std.testing.expectEqualStrings("binary", requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: binary, base64\r\n\r\n").?);
+    try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n") == null);
+}
+
+test "formatUpgradeResponse: echoes the requested subprotocol (RFC 6455)" {
+    const req = "GET /ws/spice/0 HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: binary\r\n\r\n";
+    const accept = parseUpgrade(req).?;
+    var buf: [384]u8 = undefined;
+    const resp = try formatUpgradeResponse(&buf, accept, requestedProtocol(req));
+    try std.testing.expect(std.mem.indexOf(u8, resp, "Sec-WebSocket-Protocol: binary\r\n") != null);
+    try std.testing.expect(std.mem.endsWith(u8, resp, "\r\n\r\n"));
+}
+
 test "fuzz: formatUpgradeResponse output is printable HTTP for random accept keys" {
     var prng = std.Random.DefaultPrng.init(0xC0FFEE01);
     const random = prng.random();
@@ -296,7 +332,7 @@ test "fuzz: formatUpgradeResponse output is printable HTTP for random accept key
         for (&key) |*kb| kb.* = random.intRangeAtMost(u8, 0x21, 0x7e); // printable, no spaces
         key[28] = 0;
         var buf: [256]u8 = undefined;
-        const resp = try formatUpgradeResponse(&buf, key);
+        const resp = try formatUpgradeResponse(&buf, key, null);
         try std.testing.expect(std.mem.endsWith(u8, resp, "\r\n\r\n"));
         for (resp) |rb| try std.testing.expect(fuzzByteIsPrintable(rb));
     }
@@ -504,7 +540,7 @@ test "writeUpgradeResponse: emits valid HTTP 101 response" {
     var accept: [29]u8 = undefined;
     @memcpy(accept[0..28], "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     accept[28] = 0;
-    try writeUpgradeResponse(fds[0], accept);
+    try writeUpgradeResponse(fds[0], accept, "GET /ws HTTP/1.1\r\n\r\n");
 
     var read_buf: [256]u8 = undefined;
     const n = c.read(fds[1], &read_buf, read_buf.len);

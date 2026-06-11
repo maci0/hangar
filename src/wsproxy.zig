@@ -44,7 +44,7 @@ pub fn vnc(conn: c.fd_t, req: []const u8) !void {
 
     // Perform WebSocket upgrade handshake.
     const accept_key = ws.parseUpgrade(req) orelse return;
-    try ws.writeUpgradeResponse(conn, accept_key);
+    try ws.writeUpgradeResponse(conn, accept_key, req);
 
     // Connect to the VM's VNC server. QEMU reports "running" the moment it
     // forks, but its display listener comes up a beat later — a console that
@@ -177,7 +177,7 @@ pub fn spice(conn: c.fd_t, req: []const u8) !void {
 
     // Perform WebSocket upgrade handshake.
     const accept_key = ws.parseUpgrade(req) orelse return;
-    try ws.writeUpgradeResponse(conn, accept_key);
+    try ws.writeUpgradeResponse(conn, accept_key, req);
 
     // Connect to the VM's SPICE server. QEMU reports "running" the moment it
     // forks, but its display listener comes up a beat later — a console that
@@ -307,7 +307,7 @@ pub fn serialConsole(conn: c.fd_t, req: []const u8) !void {
 
     // Perform WebSocket upgrade handshake.
     const accept_key = ws.parseUpgrade(req) orelse return;
-    try ws.writeUpgradeResponse(conn, accept_key);
+    try ws.writeUpgradeResponse(conn, accept_key, req);
 
     // Connect to the VM's serial Unix socket.
     var sock_buf: [256]u8 = undefined;
