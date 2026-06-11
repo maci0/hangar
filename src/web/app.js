@@ -1177,6 +1177,53 @@ function initWebGlPresenter(p) {
   }
 }
 
+// ── Encoded video stream (WebCodecs ← /ws/video, docs/VIDEO-PIPELINE.md) ──
+// When the VM has video_stream and the browser has VideoDecoder, an H.264
+// stream paints onto an overlay canvas (pointer-events:none, so input still
+// flows to the noVNC layer underneath). Fails silently back to noVNC.
+var videoWs=null,videoDec=null,videoCanvas=null,videoTs=0;
+function startVideoStream(idx){
+  if(videoWs||typeof VideoDecoder==='undefined')return;
+  var v=vms[idx];if(!v||v.video_stream!=='true')return;
+  var displayEl=document.getElementById('display');if(!displayEl)return;
+  try{
+    var ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws/video/'+idx);
+    ws.binaryType='arraybuffer';videoWs=ws;
+    ws.onmessage=function(e){
+      var b=new Uint8Array(e.data);if(!b.length)return;
+      if(b[0]===1){ // config: u16 w, u16 h, u8 codec
+        var w=b[1]|(b[2]<<8),h=b[3]|(b[4]<<8);
+        if(!videoCanvas){videoCanvas=document.createElement('canvas');videoCanvas.className='video-layer';displayEl.appendChild(videoCanvas);}
+        videoCanvas.width=w;videoCanvas.height=h;
+        videoDec=new VideoDecoder({output:function(frame){
+          try{var ctx=videoCanvas.getContext('2d');ctx.drawImage(frame,0,0);}catch(err){}
+          frame.close();
+        },error:function(){stopVideoStream();}});
+        videoDec.configure({codec:'avc1.42E01F',optimizeForLatency:true,hardwareAcceleration:'no-preference'});
+        displayEl.classList.add('video-active');
+        updateDisplayBadge('connected','vnc');
+        var bg=document.getElementById('displayBadge');if(bg)bg.textContent='H264 · WEBCODECS';
+        return;
+      }
+      if((b[0]===2||b[0]===3)&&videoDec&&videoDec.state==='configured'){
+        var key=b[0]===3;
+        if(videoTs===0&&!key)return; // wait for the first key frame
+        videoTs+=33333;
+        try{videoDec.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:videoTs,data:b.subarray(1)}));}catch(err){stopVideoStream();}
+      }
+    };
+    ws.onerror=function(){if(videoWs===ws)stopVideoStream();};
+    ws.onclose=function(){if(videoWs===ws)stopVideoStream();};
+  }catch(e){stopVideoStream();}
+}
+function stopVideoStream(){
+  if(videoWs){try{videoWs.close();}catch(e){}videoWs=null;}
+  if(videoDec){try{videoDec.close();}catch(e){}videoDec=null;}
+  if(videoCanvas&&videoCanvas.parentNode)videoCanvas.parentNode.removeChild(videoCanvas);
+  videoCanvas=null;videoTs=0;
+  var d=document.getElementById('display');if(d)d.classList.remove('video-active');
+}
+
 function startFb() {
   if (rfb || spice) return; // already connected
   const idx = sel;
@@ -1191,6 +1238,7 @@ function startFb() {
   var hint=document.getElementById('displayHint');if(hint)hint.textContent='';
 
   // Dispatch based on display type: 2 = SPICE, 3 = VNC
+  startVideoStream(idx);
   var dt = Number(v.display);
   if (dt === 2) {
     updateDisplayBadge('connecting', 'spice');
@@ -1277,6 +1325,7 @@ function startSpice(idx, displayEl, v) {
 }
 
 function stopFb() {
+  stopVideoStream();
   stopDisplayPresenter();
   if (rfb) {
     try { rfb.disconnect(); } catch (e) {}
@@ -1298,7 +1347,7 @@ function stopFb() {
     updateDisplayBadge('disconnected');
   }
 }
-function updateDisplayBadge(state, proto) {
+function updateDisplayBadge(state, proto)  { if(typeof videoCanvas!=='undefined'&&videoCanvas){var vb=document.getElementById('displayBadge');if(vb){vb.textContent='H264 · WEBCODECS';return;}}
   var badge = document.getElementById('displayBadge');
   if (!badge) return;
   badge.classList.remove('vnc', 'spice');

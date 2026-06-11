@@ -1,6 +1,6 @@
 # Accelerated Video Pipeline — Design
 
-Status: **phase 1 shipped** (dbus capture attached + cadence-verified at 37–67 fps live); encoder is phase 2.
+Status: **phase 2 shipped** — end-to-end encoded video verified live: dbus capture → ffmpeg h264_vaapi on the host GPU → /ws/video → WebCodecs decode → overlay canvas painting the guest boot screen. Phase 3 polish (cursor channel, bitrate setting, multi-client) remains.
 Goal: stream the guest's GPU-rendered display to the browser as **encoded
 video** (H.264/AV1) decoded by **WebCodecs** and presented on the **WebGPU**
 canvas — Moonlight/Parsec-class console latency and quality, replacing
@@ -106,10 +106,22 @@ Auth/handshake identical to the other WS routes (subprotocol echoed).
    during firmware boot. Auth-role gotcha for phase 2: on the listener
    connection QEMU is the AUTH **server** — the daemon must speak
    `\0AUTH EXTERNAL` first even though QEMU is the method-caller afterwards.
-2. **Encoder**: EGL import + VAAPI H.264 + `/ws/video` route; gate behind a
-   per-VM `video_stream` bool (persisted like other VmConfig fields).
-3. **Client**: WebCodecs decode + presenter integration + badge + capability
-   gating; e2e asserts decoder receives a key frame and the canvas sizes.
+2. **Encoder** — shipped. Implementation note: instead of in-process libva
+   (hundreds of lines of hand-declared VAAPI structs + bitstream packing), the
+   encoder is an **ffmpeg child** (`h264_vaapi` when /dev/dri/renderD128 is
+   openable, `libx264 -tune zerolatency` otherwise) fed raw BGRX frames on
+   stdin — the same subprocess pattern as qemu-img, via qemu.forkExecPiped.
+   The session assembles Scanout/Update bodies into a heap framebuffer and
+   pushes full frames; an Annex-B access-unit splitter (unit+fuzz tested)
+   chunks the output, `-bsf:v dump_extra=freq=keyframe` repeats SPS/PPS so any
+   key frame is a valid decoder entry point. Native libva remains a future
+   optimization, not a requirement.
+3. **Client** — shipped: /ws/video frames (0x01 config w/h/codec, 0x02 delta,
+   0x03 key) feed a VideoDecoder (`avc1.42E01F`, optimizeForLatency); decoded
+   frames draw onto a pointer-events:none overlay canvas above the noVNC layer
+   (input keeps flowing to VNC), badge `H264 · WEBCODECS`. Silently absent
+   without VideoDecoder or video_stream. Verified live: overlay painting the
+   guest's iPXE boot screen via hardware encode at 70 fps capture cadence.
 4. **Polish**: damage-aware encode skip on idle, cursor channel, AV1 on hosts
    that expose it, bitrate preference in Settings → Display & Video.
 

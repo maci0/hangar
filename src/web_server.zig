@@ -532,6 +532,13 @@ fn serveHtml(conn: c.fd_t) void {
         return;
     }
 
+    // ── WebSocket video stream (encoded H.264, docs/VIDEO-PIPELINE.md) ──
+    if (std.mem.startsWith(u8, req, "GET /ws/video/")) {
+        if (!wsAuthOk(conn, req, "/ws/video")) return;
+        handleVideoWs(conn, req);
+        return;
+    }
+
     // ── WebSocket Serial Console ──
     if (std.mem.startsWith(u8, req, "GET /ws/serial/")) {
         if (!wsAuthOk(conn, req, "/ws/serial")) return;
@@ -929,6 +936,27 @@ fn handleEvents(conn: c.fd_t) void {
             }
         }
     }
+}
+
+/// Upgrade and serve a /ws/video/<idx> client: encoded video for a running VM
+/// with video_stream enabled (the dbusdisplay session feeds the encoder).
+fn handleVideoWs(conn: c.fd_t, req: []const u8) void {
+    var name_buf: [vm.MAX_NAME]u8 = undefined;
+    var name_len: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "GET /ws/video/") orelse return;
+        if (idx >= appstate.vm_count) return;
+        const v = &appstate.vms[idx];
+        if (!v.isAlive() or !v.video_stream) return;
+        const nm = v.getNameSlice();
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
+    }
+    const accept_key = ws.parseUpgrade(req) orelse return;
+    ws.writeUpgradeResponse(conn, accept_key, req) catch return;
+    dbusdisplay.serveVideoClient(conn, name_buf[0..name_len]);
 }
 
 /// Return an allocated copy of the raw vms.json content for remote clients.

@@ -602,6 +602,9 @@ main{
   display:block;
   object-fit:contain;
 }
+/* Encoded-video overlay: paints above the noVNC canvas; input passes through. */
+#display .video-layer{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;z-index:2;background:transparent}
+#display.video-active > canvas:not(.video-layer){opacity:0}
 #display.gpu-presenting{isolation:isolate}
 #display.gpu-presenting .gpu-presenter{
   position:relative;

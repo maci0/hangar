@@ -104,6 +104,51 @@ pub fn diskInfo(path: []const u8, allocator: std.mem.Allocator) ?struct { virtua
 /// Run `argv`, capturing its stdout into `out`. Returns the number of bytes
 /// written (truncated to `out.len`). Returns an error unless it exits 0.
 /// stdin/stderr are sent to /dev/null.
+/// Spawned pipeline child for long-running streaming helpers (the video
+/// encoder). stdin and stdout are pipes returned to the caller; stderr goes to
+/// /dev/null. Caller owns both fds and must reap the pid (tryReapChild).
+pub const PipedChild = struct {
+    pid: std.c.pid_t,
+    stdin_fd: std.c.fd_t,
+    stdout_fd: std.c.fd_t,
+};
+
+/// fork+execvp with stdin/stdout pipes. Lives here so all process spawning
+/// stays behind the qemu.zig wrappers (project rule: no new fork/exec sites).
+pub fn forkExecPiped(argv: []const []const u8, allocator: std.mem.Allocator) !PipedChild {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const c_argv = try buildCArgv(argv, arena_state.allocator());
+
+    var in_fds: [2]std.c.fd_t = undefined; // child stdin
+    var out_fds: [2]std.c.fd_t = undefined; // child stdout
+    if (std.c.pipe(&in_fds) != 0) return QemuError.ProcessFailed;
+    if (std.c.pipe(&out_fds) != 0) {
+        _ = std.c.close(in_fds[0]);
+        _ = std.c.close(in_fds[1]);
+        return QemuError.ProcessFailed;
+    }
+
+    const pid = std.c.fork();
+    if (pid < 0) {
+        for ([_]std.c.fd_t{ in_fds[0], in_fds[1], out_fds[0], out_fds[1] }) |fd| _ = std.c.close(fd);
+        return QemuError.ForkFailed;
+    }
+    if (pid == 0) {
+        _ = std.c.close(in_fds[1]);
+        _ = std.c.close(out_fds[0]);
+        _ = std.c.dup2(in_fds[0], 0);
+        _ = std.c.dup2(out_fds[1], 1);
+        const devnull = std.c.open("/dev/null", .{ .ACCMODE = .RDWR });
+        if (devnull >= 0) _ = std.c.dup2(devnull, 2);
+        _ = execvp(c_argv[0].?, c_argv.ptr);
+        std.c._exit(127);
+    }
+    _ = std.c.close(in_fds[0]);
+    _ = std.c.close(out_fds[1]);
+    return .{ .pid = pid, .stdin_fd = in_fds[1], .stdout_fd = out_fds[0] };
+}
+
 pub fn runCapture(argv: []const []const u8, out: []u8, allocator: std.mem.Allocator) !usize {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();

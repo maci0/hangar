@@ -17,6 +17,8 @@ const wlog = @import("wlog.zig");
 const qmp = @import("qmp.zig");
 const sync = @import("sync.zig");
 const vm = @import("vm.zig");
+const qemu = @import("qemu.zig");
+const ws = @import("ws.zig");
 
 const SOL_SOCKET: c_int = 1;
 const SCM_RIGHTS: c_int = 1;
@@ -324,36 +326,133 @@ fn authClient(fd: c.fd_t) bool {
     return writeAllFd(fd, "BEGIN\r\n");
 }
 
-// ── attach + listener loop ──────────────────────────────────────────
+// ── H.264 Annex-B access-unit splitter ─────────────────────────────
+// The encoder's byte stream arrives at arbitrary pipe boundaries; WebCodecs
+// must be fed whole access units. Group NALs: non-VCL (SPS/PPS/SEI/AUD)
+// prefix + one VCL slice (type 1/5) closes an AU.
 
-/// One attach thread per VM name; prevents duplicate listeners on re-power.
-var attached_mutex: sync.SpinMutex = .{};
-var attached_names: [vm.MAX_VMS][vm.MAX_NAME]u8 = undefined;
-var attached_lens: [vm.MAX_VMS]u8 = [_]u8{0} ** vm.MAX_VMS;
+pub const AuSplitter = struct {
+    buf: []u8,
+    len: usize = 0,
 
-fn markAttached(name: []const u8, on: bool) bool {
-    attached_mutex.lock();
-    defer attached_mutex.unlock();
-    var free_slot: ?usize = null;
-    for (0..vm.MAX_VMS) |i| {
-        const cur = attached_names[i][0..attached_lens[i]];
-        if (attached_lens[i] == 0) {
-            if (free_slot == null) free_slot = i;
-            continue;
+    /// Append encoder bytes; for each complete AU found, calls
+    /// emit(ctx, au_bytes, is_key). Returns false if the buffer overflowed
+    /// (stream hopeless — caller should tear down).
+    pub fn feed(self: *AuSplitter, data: []const u8, ctx: anytype, comptime emit: fn (@TypeOf(ctx), []const u8, bool) bool) bool {
+        if (self.len + data.len > self.buf.len) return false;
+        @memcpy(self.buf[self.len..][0..data.len], data);
+        self.len += data.len;
+        var emitted_until: usize = 0;
+        var have_vcl = false;
+        var key = false;
+        var au_start: usize = 0;
+        var i: usize = 0;
+        while (i + 3 < self.len) {
+            const sc3 = self.buf[i] == 0 and self.buf[i + 1] == 0 and self.buf[i + 2] == 1;
+            const sc4 = i + 4 < self.len and self.buf[i] == 0 and self.buf[i + 1] == 0 and self.buf[i + 2] == 0 and self.buf[i + 3] == 1;
+            if (!(sc3 or sc4)) {
+                i += 1;
+                continue;
+            }
+            const nal_off = i + (if (sc4) @as(usize, 4) else 3);
+            if (nal_off >= self.len) break;
+            const nal_type = self.buf[nal_off] & 0x1f;
+            const is_vcl = nal_type == 1 or nal_type == 5;
+            if (have_vcl) {
+                // This start code begins the NEXT AU.
+                if (!emit(ctx, self.buf[au_start..i], key)) return false;
+                emitted_until = i;
+                au_start = i;
+                have_vcl = false;
+                key = false;
+            }
+            if (is_vcl) {
+                have_vcl = true;
+                if (nal_type == 5) key = true;
+            }
+            i = nal_off;
         }
-        if (std.mem.eql(u8, cur, name)) {
-            if (!on) attached_lens[i] = 0;
-            return !on; // already attached: attach fails, detach succeeds
+        if (emitted_until > 0) {
+            std.mem.copyForwards(u8, self.buf[0 .. self.len - emitted_until], self.buf[emitted_until..self.len]);
+            self.len -= emitted_until;
         }
-    }
-    if (on) {
-        const slot = free_slot orelse return false;
-        const n: u8 = @intCast(@min(name.len, vm.MAX_NAME - 1));
-        @memcpy(attached_names[slot][0..n], name[0..n]);
-        attached_lens[slot] = n;
         return true;
     }
-    return false;
+};
+
+// ── per-VM capture session ──────────────────────────────────────────
+
+pub const Session = struct {
+    name_buf: [vm.MAX_NAME]u8 = undefined,
+    name_len: u8 = 0,
+    alive: bool = true,
+
+    // Assembled BGRX framebuffer (heap; (re)allocated on Scanout).
+    fb_mutex: sync.SpinMutex = .{},
+    fb: ?[]u8 = null,
+    fb_w: u32 = 0,
+    fb_h: u32 = 0,
+
+    // Encoder child + the single attached video client.
+    enc_mutex: sync.SpinMutex = .{},
+    enc_pid: c.pid_t = -1,
+    enc_in: c.fd_t = -1,
+    enc_out: c.fd_t = -1,
+    client_fd: c.fd_t = -1,
+    client_wmtx: sync.SpinMutex = .{},
+
+    fn nameSlice(self: *const Session) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+};
+
+const MAX_FB_BYTES: usize = 32 * 1024 * 1024; // 2900x2900 BGRX ceiling
+
+var sessions_mutex: sync.SpinMutex = .{};
+var sessions: [vm.MAX_VMS]?*Session = [_]?*Session{null} ** vm.MAX_VMS;
+
+fn registerSession(name: []const u8) ?*Session {
+    sessions_mutex.lock();
+    defer sessions_mutex.unlock();
+    var free_slot: ?usize = null;
+    for (0..vm.MAX_VMS) |i| {
+        if (sessions[i]) |sess| {
+            if (std.mem.eql(u8, sess.nameSlice(), name)) return null; // already attached
+        } else if (free_slot == null) free_slot = i;
+    }
+    const slot = free_slot orelse return null;
+    const sess = std.heap.page_allocator.create(Session) catch return null;
+    sess.* = .{};
+    const n: u8 = @intCast(@min(name.len, vm.MAX_NAME - 1));
+    @memcpy(sess.name_buf[0..n], name[0..n]);
+    sess.name_len = n;
+    sessions[slot] = sess;
+    return sess;
+}
+
+fn unregisterSession(sess: *Session) void {
+    sessions_mutex.lock();
+    for (0..vm.MAX_VMS) |i| {
+        if (sessions[i] == sess) sessions[i] = null;
+    }
+    sessions_mutex.unlock();
+    stopEncoder(sess);
+    sess.fb_mutex.lock();
+    if (sess.fb) |fb| std.heap.page_allocator.free(fb);
+    sess.fb = null;
+    sess.fb_mutex.unlock();
+    std.heap.page_allocator.destroy(sess);
+}
+
+pub fn findSession(name: []const u8) ?*Session {
+    sessions_mutex.lock();
+    defer sessions_mutex.unlock();
+    for (0..vm.MAX_VMS) |i| {
+        if (sessions[i]) |sess| {
+            if (std.mem.eql(u8, sess.nameSlice(), name)) return sess;
+        }
+    }
+    return null;
 }
 
 pub const AttachCtx = struct {
@@ -368,16 +467,17 @@ pub fn attachThread(ctx: *AttachCtx) void {
     defer std.heap.page_allocator.destroy(ctx);
     const name = ctx.name_buf[0..ctx.name_len];
     appio.sleepMs(900); // let QEMU bring up QMP + the dbus display
-    if (!markAttached(name, true)) return;
-    defer _ = markAttached(name, false);
-    attach(name) catch |e| {
+    const sess = registerSession(name) orelse return;
+    defer unregisterSession(sess);
+    attach(sess) catch |e| {
         var msg: [160]u8 = undefined;
         wlog.logWarn(std.fmt.bufPrint(&msg, "dbusdisplay: attach failed vm=\"{s}\": {s}", .{ name, @errorName(e) }) catch "dbusdisplay: attach failed");
         return;
     };
 }
 
-fn attach(name: []const u8) !void {
+fn attach(sess: *Session) !void {
+    const name = sess.nameSlice();
     var path_buf: [256]u8 = undefined;
     const qmp_path = qmp.socketPath(name, &path_buf) orelse return error.BadName;
 
@@ -418,7 +518,7 @@ fn attach(name: []const u8) !void {
     if (!sent) return error.Register;
 
     // Read the RegisterListener reply: a METHOD_RETURN means QEMU accepted the
-    // fd and will connect on it; an ERROR tells us why not.
+    // fd and will serve it; an ERROR tells us why not.
     {
         var rb: [4096]u8 = undefined;
         var got: usize = 0;
@@ -450,13 +550,256 @@ fn attach(name: []const u8) !void {
         var msg: [128]u8 = undefined;
         wlog.logAt(.info, std.fmt.bufPrint(&msg, "dbusdisplay: attached vm=\"{s}\"", .{name}) catch "dbusdisplay: attached");
     }
-    serveListener(lst, name);
+    serveListener(lst, sess);
 }
 
-fn serveListener(fd: c.fd_t, name: []const u8) void {
-    var acc: [256 * 1024]u8 = undefined; // header + fields + body head (dims)
-    var acc_len: usize = 0; // bytes stored (capped at acc.len)
-    var msg_have: usize = 0; // bytes of current message seen (incl. discarded)
+// ── frame assembly ──────────────────────────────────────────────────
+
+fn readU32(b: []const u8, off: usize) u32 {
+    return std.mem.readInt(u32, b[off..][0..4], .little);
+}
+
+/// Body: Scanout(u width, u height, u stride, u pixman_format, ay data).
+fn applyScanout(sess: *Session, body: []const u8) void {
+    if (body.len < 20) return;
+    const w = readU32(body, 0);
+    const h = readU32(body, 4);
+    const stride = readU32(body, 8);
+    const arr_len = readU32(body, 16);
+    if (w == 0 or h == 0 or w > 8192 or h > 8192) return;
+    if (20 + @as(usize, arr_len) > body.len) return;
+    if (@as(usize, stride) * h > arr_len) return;
+    const need = @as(usize, w) * h * 4;
+    if (need > MAX_FB_BYTES) return;
+    sess.fb_mutex.lock();
+    defer sess.fb_mutex.unlock();
+    if (sess.fb == null or sess.fb_w != w or sess.fb_h != h) {
+        if (sess.fb) |fb| std.heap.page_allocator.free(fb);
+        sess.fb = std.heap.page_allocator.alloc(u8, need) catch {
+            sess.fb = null;
+            return;
+        };
+        sess.fb_w = w;
+        sess.fb_h = h;
+        // Resolution change invalidates the encoder.
+        stopEncoderLocked(sess);
+    }
+    const fb = sess.fb.?;
+    const data = body[20 .. 20 + arr_len];
+    var row: usize = 0;
+    while (row < h) : (row += 1) {
+        @memcpy(fb[row * w * 4 ..][0 .. w * 4], data[row * stride ..][0 .. w * 4]);
+    }
+    pushFrameLocked(sess);
+}
+
+/// Body: Update(i x, i y, i width, i height, u stride, u pixman_format, ay data).
+fn applyUpdate(sess: *Session, body: []const u8) void {
+    if (body.len < 28) return;
+    const x = readU32(body, 0);
+    const y = readU32(body, 4);
+    const w = readU32(body, 8);
+    const h = readU32(body, 12);
+    const stride = readU32(body, 16);
+    const arr_len = readU32(body, 24);
+    if (w == 0 or h == 0 or w > 8192 or h > 8192) return;
+    if (28 + @as(usize, arr_len) > body.len) return;
+    if (@as(usize, stride) * h > arr_len) return;
+    sess.fb_mutex.lock();
+    defer sess.fb_mutex.unlock();
+    const fb = sess.fb orelse return;
+    if (x + w > sess.fb_w or y + h > sess.fb_h) return;
+    const data = body[28 .. 28 + arr_len];
+    var row: usize = 0;
+    while (row < h) : (row += 1) {
+        const dst_off = (@as(usize, y) + row) * sess.fb_w * 4 + @as(usize, x) * 4;
+        @memcpy(fb[dst_off..][0 .. @as(usize, w) * 4], data[row * stride ..][0 .. @as(usize, w) * 4]);
+    }
+    pushFrameLocked(sess);
+}
+
+/// Feed the current framebuffer to the encoder (caller holds fb_mutex).
+fn pushFrameLocked(sess: *Session) void {
+    const fb = sess.fb orelse return;
+    sess.enc_mutex.lock();
+    const fd = sess.enc_in;
+    sess.enc_mutex.unlock();
+    if (fd < 0) return;
+    if (!writeAllFd(fd, fb)) {
+        // Encoder died (pipe closed): tear it down so a client reconnect restarts it.
+        stopEncoder(sess);
+    }
+}
+
+// ── encoder lifecycle ───────────────────────────────────────────────
+
+fn startEncoder(sess: *Session, w: u32, h: u32) bool {
+    sess.enc_mutex.lock();
+    defer sess.enc_mutex.unlock();
+    if (sess.enc_pid >= 0) return true;
+    var size_buf: [32]u8 = undefined;
+    const size = std.fmt.bufPrint(&size_buf, "{d}x{d}", .{ w, h }) catch return false;
+    const have_vaapi = blk: {
+        const fd = c.open("/dev/dri/renderD128", .{ .ACCMODE = .RDWR });
+        if (fd < 0) break :blk false;
+        _ = c.close(fd);
+        break :blk true;
+    };
+    const common = [_][]const u8{ "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "rawvideo", "-pixel_format", "bgr0", "-video_size", size, "-framerate", "30", "-i", "-" };
+    const vaapi = common ++ [_][]const u8{ "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va", "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-profile:v", "constrained_baseline", "-bf", "0", "-g", "60", "-bsf:v", "dump_extra=freq=keyframe", "-f", "h264", "-" };
+    const x264 = common ++ [_][]const u8{ "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "baseline", "-bf", "0", "-g", "60", "-bsf:v", "dump_extra=freq=keyframe", "-f", "h264", "-" };
+    const child = (if (have_vaapi)
+        qemu.forkExecPiped(&vaapi, std.heap.page_allocator)
+    else
+        qemu.forkExecPiped(&x264, std.heap.page_allocator)) catch return false;
+    sess.enc_pid = child.pid;
+    sess.enc_in = child.stdin_fd;
+    sess.enc_out = child.stdout_fd;
+    var msg: [128]u8 = undefined;
+    wlog.logAt(.info, std.fmt.bufPrint(&msg, "dbusdisplay: encoder started vm=\"{s}\" {d}x{d} {s}", .{ sess.nameSlice(), w, h, if (have_vaapi) "h264_vaapi" else "libx264" }) catch "dbusdisplay: encoder started");
+    return true;
+}
+
+fn stopEncoderLocked(sess: *Session) void {
+    sess.enc_mutex.lock();
+    defer sess.enc_mutex.unlock();
+    if (sess.enc_pid < 0) return;
+    _ = c.close(sess.enc_in);
+    _ = c.close(sess.enc_out);
+    _ = c.kill(sess.enc_pid, .KILL);
+    var status: c_int = 0;
+    _ = c.waitpid(sess.enc_pid, &status, 0);
+    sess.enc_pid = -1;
+    sess.enc_in = -1;
+    sess.enc_out = -1;
+}
+
+fn stopEncoder(sess: *Session) void {
+    stopEncoderLocked(sess);
+}
+
+// ── /ws/video client ────────────────────────────────────────────────
+
+/// Serve one video WebSocket client (the route handler's thread). The WS
+/// upgrade has already been written by the caller.
+pub fn serveVideoClient(conn: c.fd_t, name: []const u8) void {
+    const sess = findSession(name) orelse {
+        ws.writeClose(conn) catch {};
+        return;
+    };
+    // Wait for the first Scanout so the encoder knows its dimensions.
+    var waited: u32 = 0;
+    while (waited < 5000) : (waited += 100) {
+        sess.fb_mutex.lock();
+        const ready = sess.fb != null;
+        sess.fb_mutex.unlock();
+        if (ready) break;
+        appio.sleepMs(100);
+    }
+    sess.fb_mutex.lock();
+    const w = sess.fb_w;
+    const h = sess.fb_h;
+    const ready = sess.fb != null;
+    sess.fb_mutex.unlock();
+    if (!ready) {
+        ws.writeClose(conn) catch {};
+        return;
+    }
+    sess.enc_mutex.lock();
+    const busy = sess.client_fd >= 0;
+    if (!busy) sess.client_fd = conn;
+    sess.enc_mutex.unlock();
+    if (busy) {
+        ws.writeClose(conn) catch {};
+        return;
+    }
+    defer {
+        sess.enc_mutex.lock();
+        sess.client_fd = -1;
+        sess.enc_mutex.unlock();
+        stopEncoder(sess);
+    }
+    if (!startEncoder(sess, w, h)) return;
+
+    // Config frame: 0x01, u16le width, u16le height, u8 codec(0=h264).
+    var cfg: [6]u8 = undefined;
+    cfg[0] = 1;
+    std.mem.writeInt(u16, cfg[1..3], @intCast(w), .little);
+    std.mem.writeInt(u16, cfg[3..5], @intCast(h), .little);
+    cfg[5] = 0;
+    sess.client_wmtx.lock();
+    const cfg_ok = blk: {
+        ws.writeFrame(conn, .binary, &cfg) catch break :blk false;
+        break :blk true;
+    };
+    sess.client_wmtx.unlock();
+    if (!cfg_ok) return;
+
+    // Pump encoder output on a separate thread; this thread drains client
+    // input (ping/close) like the other relays.
+    const pump = std.Thread.spawn(std.Thread.SpawnConfig{}, encoderPump, .{ sess, conn }) catch return;
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        const hdr = ws.readFrameHeader(conn) orelse break;
+        if (hdr.opcode == .close) break;
+        if (hdr.opcode == .ping) {
+            _ = ws.readFramePayload(conn, &buf, hdr) orelse break;
+            sess.client_wmtx.lock();
+            ws.writePong(conn) catch {
+                sess.client_wmtx.unlock();
+                break;
+            };
+            sess.client_wmtx.unlock();
+            continue;
+        }
+        _ = ws.readFramePayload(conn, &buf, hdr) orelse break;
+    }
+    stopEncoder(sess); // closes enc_out → pump exits
+    pump.join();
+}
+
+const PumpCtx = struct {
+    sess: *Session,
+    conn: c.fd_t,
+};
+
+fn emitAu(ctx: PumpCtx, au: []const u8, key: bool) bool {
+    var hdr_byte: [1]u8 = .{if (key) 0x03 else 0x02};
+    // Frame: 0x02|0x03 marker byte then the Annex-B access unit. (0x03 = key.)
+    ctx.sess.client_wmtx.lock();
+    defer ctx.sess.client_wmtx.unlock();
+    ws.writeFrame2(ctx.conn, .binary, &hdr_byte, au) catch return false;
+    return true;
+}
+
+fn encoderPump(sess: *Session, conn: c.fd_t) void {
+    sess.enc_mutex.lock();
+    const out = sess.enc_out;
+    sess.enc_mutex.unlock();
+    if (out < 0) return;
+    const au_buf = std.heap.page_allocator.alloc(u8, 4 * 1024 * 1024) catch return;
+    defer std.heap.page_allocator.free(au_buf);
+    var splitter = AuSplitter{ .buf = au_buf };
+    var rbuf: [64 * 1024]u8 = undefined;
+    const ctx = PumpCtx{ .sess = sess, .conn = conn };
+    while (true) {
+        const n = c.read(out, &rbuf, rbuf.len);
+        if (n <= 0) break;
+        if (!splitter.feed(rbuf[0..@intCast(n)], ctx, emitAu)) break;
+    }
+    _ = c.shutdown(conn, netutilShut());
+}
+
+fn netutilShut() c_int {
+    return 2; // SHUT_RDWR
+}
+
+fn serveListener(fd: c.fd_t, sess: *Session) void {
+    const name = sess.nameSlice();
+    const acc = std.heap.page_allocator.alloc(u8, 16 * 1024 * 1024) catch return;
+    defer std.heap.page_allocator.free(acc);
+    var acc_len: usize = 0;
+    var msg_have: usize = 0;
     var need: usize = 16;
     var head: ?MsgHead = null;
     var reply_serial_counter: u32 = 100;
@@ -479,26 +822,34 @@ fn serveListener(fd: c.fd_t, name: []const u8) void {
             }
             msg_have += chunk.len;
             chunk = chunk[chunk.len..];
-            // Process as many complete messages as the accumulator holds.
             while (true) {
                 if (head == null) {
                     if (acc_len < 16) break;
-                    head = parseHead(acc[0..acc_len]) orelse return; // protocol desync: bail
+                    head = parseHead(acc[0..acc_len]) orelse return; // protocol desync
                     need = head.?.totalLen();
                 }
                 const h = head.?;
                 if (msg_have < need) break;
-                // Whole message arrived (possibly partially stored).
                 const stored = @min(need, acc_len);
                 if (stored >= 16 + h.fields_len) {
                     const fl = parseFields(acc[16 .. 16 + h.fields_len]);
                     const member = fl.memberSlice();
                     const body_off = 16 + alignUp(h.fields_len, 8);
-                    if (std.mem.startsWith(u8, member, "Scanout") or std.mem.startsWith(u8, member, "Update")) {
+                    const body_end = @min(body_off + h.body_len, stored);
+                    const body = if (body_end > body_off) acc[body_off..body_end] else acc[0..0];
+                    if (std.mem.eql(u8, member, "Scanout")) {
                         frames += 1;
-                        if (stored >= body_off + 8) {
-                            last_w = std.mem.readInt(u32, acc[body_off..][0..4], .little);
-                            last_h = std.mem.readInt(u32, acc[body_off + 4 ..][0..4], .little);
+                        applyScanout(sess, body);
+                        if (body.len >= 8) {
+                            last_w = readU32(body, 0);
+                            last_h = readU32(body, 4);
+                        }
+                    } else if (std.mem.eql(u8, member, "Update")) {
+                        frames += 1;
+                        applyUpdate(sess, body);
+                        if (body.len >= 16) {
+                            last_w = readU32(body, 8);
+                            last_h = readU32(body, 12);
                         }
                     }
                     if (h.msg_type == 1 and (h.flags & 0x1) == 0) {
@@ -508,7 +859,6 @@ fn serveListener(fd: c.fd_t, name: []const u8) void {
                         if (!writeAllFd(fd, ret)) return;
                     }
                 }
-                // Shift any bytes of the next message left.
                 const extra_stored = if (acc_len > need) acc_len - need else 0;
                 if (extra_stored > 0) std.mem.copyForwards(u8, acc[0..extra_stored], acc[need .. need + extra_stored]);
                 acc_len = extra_stored;
@@ -592,12 +942,70 @@ test "fuzz: parseHead/parseFields never panic on random bytes" {
     }
 }
 
-test "dbus: markAttached prevents duplicates and releases" {
-    try t.expect(markAttached("dup-test-vm", true));
-    try t.expect(!markAttached("dup-test-vm", true));
-    try t.expect(markAttached("dup-test-vm", false));
-    try t.expect(markAttached("dup-test-vm", true));
-    try t.expect(markAttached("dup-test-vm", false));
+test "dbus: session registry prevents duplicates and releases" {
+    const s1 = registerSession("dup-test-vm").?;
+    try t.expect(registerSession("dup-test-vm") == null);
+    try t.expect(findSession("dup-test-vm") == s1);
+    unregisterSession(s1);
+    try t.expect(findSession("dup-test-vm") == null);
+    const s2 = registerSession("dup-test-vm").?;
+    unregisterSession(s2);
+}
+
+fn collectAu(list: *std.ArrayListUnmanaged(u8), au: []const u8, key: bool) bool {
+    list.append(std.heap.page_allocator, if (key) @as(u8, 1) else 0) catch return false;
+    list.append(std.heap.page_allocator, @intCast(au.len)) catch return false;
+    return true;
+}
+
+test "dbus: AuSplitter groups NALs into access units with key detection" {
+    // SPS(7) PPS(8) IDR(5) | non-IDR(1) | non-IDR(1)  → 3 AUs, first is key.
+    var stream: std.ArrayListUnmanaged(u8) = .empty;
+    defer stream.deinit(std.heap.page_allocator);
+    const sc = [_]u8{ 0, 0, 0, 1 };
+    for ([_]struct { typ: u8, len: u8 }{
+        .{ .typ = 7, .len = 4 }, .{ .typ = 8, .len = 2 }, .{ .typ = 5, .len = 9 },
+        .{ .typ = 1, .len = 6 }, .{ .typ = 1, .len = 7 },
+    }) |nal| {
+        stream.appendSlice(std.heap.page_allocator, &sc) catch unreachable;
+        stream.append(std.heap.page_allocator, nal.typ) catch unreachable;
+        var i: u8 = 0;
+        while (i < nal.len) : (i += 1) stream.append(std.heap.page_allocator, 0xAA) catch unreachable;
+    }
+    var buf: [4096]u8 = undefined;
+    var sp = AuSplitter{ .buf = &buf };
+    var got: std.ArrayListUnmanaged(u8) = .empty;
+    defer got.deinit(std.heap.page_allocator);
+    // Feed in awkward 3-byte chunks to prove boundary independence.
+    var off: usize = 0;
+    while (off < stream.items.len) {
+        const end = @min(off + 3, stream.items.len);
+        try t.expect(sp.feed(stream.items[off..end], &got, collectAu));
+        off = end;
+    }
+    // Two complete AUs emitted (the third stays buffered until more data).
+    try t.expectEqual(@as(usize, 4), got.items.len);
+    try t.expectEqual(@as(u8, 1), got.items[0]); // first AU is a key (has IDR)
+    try t.expectEqual(@as(u8, 0), got.items[2]); // second is delta
+}
+
+test "fuzz: AuSplitter never panics on random bytes" {
+    var prng = std.Random.DefaultPrng.init(0xA0_5EED);
+    const rnd = prng.random();
+    var buf: [8192]u8 = undefined;
+    var sp = AuSplitter{ .buf = &buf };
+    var sink: std.ArrayListUnmanaged(u8) = .empty;
+    defer sink.deinit(std.heap.page_allocator);
+    var i: usize = 0;
+    var chunk: [257]u8 = undefined;
+    while (i < 2000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, chunk.len);
+        for (chunk[0..len]) |*b| b.* = rnd.int(u8);
+        if (!sp.feed(chunk[0..len], &sink, collectAu)) {
+            sp.len = 0; // overflow: reset like the pump would
+        }
+        sink.clearRetainingCapacity();
+    }
 }
 
 test "dbus: alignUp" {

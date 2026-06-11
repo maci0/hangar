@@ -211,6 +211,53 @@ pub fn readFramePayload(fd: c.fd_t, buf: []u8, header: FrameHeader) ?usize {
 
 /// Write a WebSocket frame (binary or text).
 /// Server frames are never masked.
+/// Write one frame whose payload is the concatenation of two slices (used by
+/// the video relay: 1-byte chunk marker + access unit) without copying them
+/// into a contiguous buffer. One writev attempt for the common case; partial
+/// writes finish with plain sequential writes.
+pub fn writeFrame2(fd: c.fd_t, opcode: Opcode, p1: []const u8, p2: []const u8) !void {
+    const plen = p1.len + p2.len;
+    var header: [10]u8 = undefined;
+    var header_len: usize = 2;
+    header[0] = 0x80 | @as(u8, @intFromEnum(opcode));
+    if (plen < 126) {
+        header[1] = @intCast(plen);
+    } else if (plen <= 65535) {
+        header[1] = 126;
+        std.mem.writeInt(u16, header[2..4], @intCast(plen), .big);
+        header_len = 4;
+    } else {
+        header[1] = 127;
+        std.mem.writeInt(u64, header[2..10], @intCast(plen), .big);
+        header_len = 10;
+    }
+    var iov = [3]std.posix.iovec_const{
+        .{ .base = &header, .len = header_len },
+        .{ .base = p1.ptr, .len = p1.len },
+        .{ .base = p2.ptr, .len = p2.len },
+    };
+    const total = header_len + plen;
+    const n = c.writev(fd, iov[0..].ptr, 3);
+    if (n <= 0) return error.WriteFailed;
+    var done: usize = @intCast(n);
+    if (done == total) return;
+    // Finish whatever the single writev left over, slice by slice.
+    const parts = [3][]const u8{ header[0..header_len], p1, p2 };
+    for (parts) |part| {
+        if (done >= part.len) {
+            done -= part.len;
+            continue;
+        }
+        var off = done;
+        done = 0;
+        while (off < part.len) {
+            const wn = c.write(fd, part[off..].ptr, part.len - off);
+            if (wn <= 0) return error.WriteFailed;
+            off += @intCast(wn);
+        }
+    }
+}
+
 pub fn writeFrame(fd: c.fd_t, opcode: Opcode, payload: []const u8) !void {
     var header: [10]u8 = undefined;
     var header_len: usize = 2;

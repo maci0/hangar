@@ -20,8 +20,10 @@ globals in `appstate.zig`.
 - **Hypervisor process control:** `src/hv/` (dispatch table) — see its AGENTS.md.
 - **QEMU / guest:** `qemu.zig` (arg builders + `forkExec`/`runWait`; never `std.process.spawn`),
   `qmp.zig` (QMP client), `framebuffer.zig`, `vnc_client.zig`, `spice_client.zig`.
-- **Video capture (phase 1):** `dbusdisplay.zig` — QMP add_client + hand-rolled D-Bus
-  subset; attaches when a VM with `video_stream` powers on (see docs/VIDEO-PIPELINE.md).
+- **Video pipeline (phases 1-2):** `dbusdisplay.zig` — QMP add_client + hand-rolled D-Bus
+  subset attaches on power-on of a `video_stream` VM; assembles scanouts into a
+  framebuffer, encodes via an ffmpeg child (qemu.forkExecPiped), serves H.264 access
+  units on `/ws/video/<idx>` to the WebCodecs client (docs/VIDEO-PIPELINE.md).
 - **Events:** `GET /api/events` (SSE) — `appstate.state_version` bumps on every accepted
   POST mutation and unexpected VM exit; `handleEvents` streams change events.
 - **HTTP leaf utils:** `httpreq` `httpresp` `wlog` `netutil` `auth` `urlencode` `form_parsers`.
