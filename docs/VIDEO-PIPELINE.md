@@ -81,9 +81,24 @@ Auth/handshake identical to the other WS routes (subprotocol echoed).
   current noVNC/spice path. The video path is an *upgrade*, never a
   requirement.
 
+## Spike results (verified on the reference host, QEMU 11.0)
+
+- `-display dbus,p2p=yes` boots; clients attach by passing one end of a
+  socketpair via QMP `add_client` (the daemon already speaks QMP — no bus
+  broker needed).
+- **GL exclusivity**: `dbus,gl=on` cannot coexist with `-vnc` ("Display vnc is
+  incompatible with the GL context"). So with virgl + video streaming, the
+  dbus display owns the console: input goes through the
+  `org.qemu.Display1.Keyboard/Mouse` D-Bus interfaces and there is no live VNC
+  fallback (fallback = power-cycle back to the VNC arg set).
+- Non-GL `dbus,p2p=yes` **does** coexist with `-vnc` (scanouts arrive as
+  memfd/shared-memory instead of dmabuf): phase 1 can ship capture + encode
+  for non-3D VMs with the VNC console untouched as fallback, deferring the
+  D-Bus input work to the virgl phase.
+
 ## Phases
-1. **Spike**: `-display dbus` alongside `-vnc`; daemon connects, logs frame
-   cadence + dmabuf metadata. Proves the capture half with zero UI change.
+1. **Spike** — done (above): arg compatibility + attach mechanism proven.
+   Next: daemon-side `add_client` handshake and frame-cadence logging.
 2. **Encoder**: EGL import + VAAPI H.264 + `/ws/video` route; gate behind a
    per-VM `video_stream` bool (persisted like other VmConfig fields).
 3. **Client**: WebCodecs decode + presenter integration + badge + capability
