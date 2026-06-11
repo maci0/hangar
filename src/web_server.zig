@@ -59,6 +59,7 @@ extern fn time(t: ?*c_long) c_long;
 const httpresp = @import("httpresp.zig");
 const auth = @import("auth.zig");
 const netutil = @import("netutil.zig");
+const dbusdisplay = @import("dbusdisplay.zig");
 const wsproxy = @import("wsproxy.zig");
 const vmrender = @import("vmrender.zig");
 const AF_INET = netutil.AF_INET;
@@ -301,7 +302,7 @@ const bool_form_fields = [_][]const u8{
     "guest_tools",           "enable_3d",   "embed_display", "enable_serial",
     "virtio_rng",            "favorite",    "guest_agent",   "tpm",
     "secure_boot",           "hyperv_enlightenments", "hugepages", "ballooning",
-    "host_autostart",
+    "host_autostart",        "video_stream",
 };
 
 /// Set a boolean VmConfig field from a form key/value via @field. Returns true if
@@ -1009,6 +1010,8 @@ fn handlePower(req: []const u8) ![]const u8 {
     if (idx >= appstate.vm_count) return "invalid idx";
     const v = &appstate.vms[idx];
     const was_alive = v.isAlive();
+    const want_dbus_capture = v.video_stream and v.embed_display and
+        !(v.enable_3d and v.gpu_device.needsVirgl());
     var vm_name_buf: [vm.MAX_NAME]u8 = undefined;
     const vm_name = v.getNameSlice();
     @memcpy(vm_name_buf[0..vm_name.len], vm_name);
@@ -1055,6 +1058,20 @@ fn handlePower(req: []const u8) ![]const u8 {
         appstate.vm_started[idx] = 0;
     } else {
         appstate.vm_started[idx] = time(null);
+        if (want_dbus_capture) {
+            // Fire-and-forget scanout-capture attach (docs/VIDEO-PIPELINE.md
+            // phase 1). Failures only log; this must never affect power-on.
+            if (std.heap.page_allocator.create(dbusdisplay.AttachCtx)) |ctx| {
+                ctx.* = .{};
+                @memcpy(ctx.name_buf[0..vm_name.len], vm_name_buf[0..vm_name.len]);
+                ctx.name_len = @intCast(vm_name.len);
+                if (std.Thread.spawn(std.Thread.SpawnConfig{}, dbusdisplay.attachThread, .{ctx})) |th| {
+                    th.detach();
+                } else |_| {
+                    std.heap.page_allocator.destroy(ctx);
+                }
+            } else |_| {}
+        }
     }
     logAudit(if (was_alive) "power off" else "power on", vm_name_buf[0..vm_name.len]);
     // No persist.save here: power on/off only mutates runtime state

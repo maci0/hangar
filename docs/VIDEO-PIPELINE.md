@@ -1,6 +1,6 @@
 # Accelerated Video Pipeline — Design
 
-Status: **proposed** (foundation shipped; encoder subsystem not started).
+Status: **phase 1 shipped** (dbus capture attached + cadence-verified at 37–67 fps live); encoder is phase 2.
 Goal: stream the guest's GPU-rendered display to the browser as **encoded
 video** (H.264/AV1) decoded by **WebCodecs** and presented on the **WebGPU**
 canvas — Moonlight/Parsec-class console latency and quality, replacing
@@ -97,8 +97,15 @@ Auth/handshake identical to the other WS routes (subprotocol echoed).
   D-Bus input work to the virgl phase.
 
 ## Phases
-1. **Spike** — done (above): arg compatibility + attach mechanism proven.
-   Next: daemon-side `add_client` handshake and frame-cadence logging.
+1. **Capture** — shipped (`dbusdisplay.zig`): per-VM `video_stream` flag adds
+   `-display dbus,p2p=yes` (non-virgl embedded VMs; coexists with the VNC
+   console — verified live side-by-side), the daemon attaches via QMP
+   `getfd`+`add_client` SCM_RIGHTS, hand-rolled D-Bus auth + marshal/parse,
+   registers a Listener and serves it (METHOD_RETURN replies, passed fds
+   closed), logging frame cadence. Live: 37–67 fps of Scanout/Update traffic
+   during firmware boot. Auth-role gotcha for phase 2: on the listener
+   connection QEMU is the AUTH **server** — the daemon must speak
+   `\0AUTH EXTERNAL` first even though QEMU is the method-caller afterwards.
 2. **Encoder**: EGL import + VAAPI H.264 + `/ws/video` route; gate behind a
    per-VM `video_stream` bool (persisted like other VmConfig fields).
 3. **Client**: WebCodecs decode + presenter integration + badge + capability

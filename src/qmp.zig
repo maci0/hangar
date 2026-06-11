@@ -119,6 +119,26 @@ pub const QmpClient = struct {
         self.connected = true;
     }
 
+    /// Raw socket fd — used by dbusdisplay to sendmsg(SCM_RIGHTS) a file
+    /// descriptor alongside the QMP `getfd` command.
+    pub fn rawFd(self: *QmpClient) ?std.c.fd_t {
+        const s = self.stream orelse return null;
+        return s.fd;
+    }
+
+    /// Read one response and require a "return" key (skipping async events).
+    pub fn expectReturn(self: *QmpClient) !void {
+        const resp = try self.readResponse();
+        if (std.mem.indexOf(u8, resp, "\"return\"") == null) return error.CommandFailed;
+    }
+
+    /// Send a raw command line and require a successful "return" response.
+    pub fn execExpectReturn(self: *QmpClient, cmd: []const u8) !void {
+        try self.writeAll(cmd);
+        try self.writeAll("\n");
+        try self.expectReturn();
+    }
+
     /// Disconnect from the QMP socket.
     pub fn disconnect(self: *QmpClient) void {
         self.closeStream();

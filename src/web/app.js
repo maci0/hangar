@@ -527,7 +527,7 @@ const fields=[
 ['Hyper-V Enlightenments','e_hyperv_enlightenments','select',v.hyperv_enlightenments==='true'?'1':'0'],
 ['Hugepages','e_hugepages','select',v.hugepages==='true'?'1':'0'],
 ['Watchdog','e_watchdog','select',v.watchdog||0],
-['Ballooning','e_ballooning','select',v.ballooning==='true'?'1':'0'],
+['Ballooning','e_ballooning','select',v.ballooning==='true'?'1':'0'],['Video Stream (experimental)','e_video_stream','select',v.video_stream==='true'?'1':'0'],
 ['Host Autostart','e_host_autostart','select',v.host_autostart==='true'?'1':'0'],
 ['I/O Threads','e_io_threads','number',v.io_threads||0,'min="0" max="64" step="1"'],
 ['Disk BPS Throttle','e_disk_bps_throttle','number',v.disk_bps_throttle||0,'min="0" max="1099511627776" step="1"'],
@@ -559,7 +559,7 @@ e_nic8:[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged'
 e_guest_agent:[['0','No'],['1','Yes']],e_virtio_rng:[['0','No'],['1','Yes']],
 e_tpm:[['0','No'],['1','Yes']],e_secure_boot:[['0','No'],['1','Yes']],
 e_hyperv_enlightenments:[['0','No'],['1','Yes']],e_hugepages:[['0','No'],['1','Yes']],
-e_ballooning:[['0','No'],['1','Yes']],e_host_autostart:[['0','No'],['1','Yes']],
+e_ballooning:[['0','No'],['1','Yes']],e_video_stream:[['0','No'],['1','Yes']],e_host_autostart:[['0','No'],['1','Yes']],
 e_watchdog:[['0','None'],['1','Reset Guest'],['2','Power Off Guest'],['3','Pause Guest']],
 e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
 	var sectionNotes={
@@ -619,7 +619,7 @@ const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','d
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order','rtc',
 'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
 'guest_agent','virtio_rng','tpm','secure_boot','hyperv_enlightenments','hugepages','watchdog','ballooning','host_autostart',
-'io_threads','disk_bps_throttle','disk_iops_throttle']
+'io_threads','disk_bps_throttle','disk_iops_throttle','video_stream']
 .map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
 try{const r=await apiPost('/api/vms/'+idx,body);if(r){settingsDirty=false;saveInFlight=false;/* refresh() no-ops while saveInFlight — clear it first or the summary renders stale data */await refresh();switchTab('summary');setStatus('Settings saved.');}
 else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}

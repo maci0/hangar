@@ -1105,6 +1105,9 @@ pub const VmConfig = struct {
     tags_buf: [256]u8 = [_]u8{0} ** 256,
     tags_len: u16 = 0,
 
+    // ── Experimental dbus-display video capture (docs/VIDEO-PIPELINE.md) ──
+    video_stream: bool = false,
+
     // ── Folder (inventory-tree path, e.g. "Production/Web"; empty = ungrouped) ──
     folder_buf: [128]u8 = [_]u8{0} ** 128,
     folder_len: u16 = 0,

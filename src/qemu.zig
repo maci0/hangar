@@ -663,13 +663,18 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     // distro spice-server builds often lack — qemu then dies at startup with
     // "invalid video codec".
     const embedded_gl = config.embed_display and wants_virgl;
+    // Experimental scanout capture (docs/VIDEO-PIPELINE.md): the dbus display
+    // replaces "none" for non-virgl embedded VMs and coexists with -vnc/-spice.
+    // It cannot replace egl-headless yet: dbus,gl=on owns the GL context and
+    // is incompatible with -vnc (verified) — virgl capture is a later phase.
+    const embedded_dbus = config.embed_display and config.video_stream and !wants_virgl;
 
     if (config.embed_display) {
         // When embedding the display inside our app, QEMU must not open its
         // own window. With virgl we still need a GL-capable headless display
         // backend, otherwise QEMU rejects virtio-*-gl.
         try args.append(alloc, "-display");
-        try args.append(alloc, if (embedded_gl) "egl-headless,gl=on" else "none");
+        try args.append(alloc, if (embedded_gl) "egl-headless,gl=on" else if (embedded_dbus) "dbus,p2p=yes" else "none");
         if (config.display == .spice) {
             const spice_str = try std.fmt.bufPrint(&bufs.spice_buf, "port={d},disable-ticketing=on", .{config.spice_port});
             try args.append(alloc, "-spice");
@@ -2347,6 +2352,30 @@ test "qemu: buildScriptStr embedded SPICE virgl uses EGL headless GL" {
     try expect(!has(s, "disable-ticketing=on,gl=on"));
     try expect(has(s, "disable-ticketing=on"));
     try expect(has(s, "virtio-vga-gl"));
+}
+
+test "qemu: buildScriptStr video_stream uses the dbus display alongside VNC" {
+    var cfg = vm.VmConfig{};
+    cfg.embed_display = true;
+    cfg.display = .vnc;
+    cfg.video_stream = true;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "dbus,p2p=yes"));
+    try expect(has(s, "-vnc"));
+}
+
+test "qemu: buildScriptStr video_stream defers to egl-headless under virgl" {
+    var cfg = vm.VmConfig{};
+    cfg.embed_display = true;
+    cfg.display = .vnc;
+    cfg.video_stream = true;
+    cfg.enable_3d = true;
+    cfg.gpu_device = .virtio_vga_gl;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "egl-headless,gl=on"));
+    try expect(!has(s, "dbus,p2p=yes"));
 }
 
 test "qemu: buildScriptStr embedded VNC virgl renders via EGL headless too" {
