@@ -908,28 +908,35 @@ pub fn serveVideoClient(conn: c.fd_t, name: []const u8, bitrate_kbps: u32) void 
 
 fn emitAu(sess: *Session, au: []const u8, key: bool) bool {
     var hdr_byte: [1]u8 = .{if (key) 0x03 else 0x02};
-    // Snapshot the client fds under the lock, then write OUTSIDE it: a blocking
-    // WS write to one stalled viewer must not hold client_wmtx for up to the
-    // 30s send timeout, which would freeze every other viewer, the ping path,
-    // and the encoder pump. A fd captured here can be closed by a departing
-    // client between snapshot and write — shutdown() on an already-closed fd is
-    // a harmless ENOTCONN/EBADF, and the fd number is not reused until the
-    // client slot is freed under the same lock after its drain loop exits.
-    var fds: [MAX_VIDEO_CLIENTS]c.fd_t = undefined;
-    var nfds: usize = 0;
+    // dup() each client fd UNDER the lock, write to the dup OUTSIDE it, close the
+    // dup after. The write must not hold client_wmtx (a stalled viewer would
+    // freeze every other viewer + the pump for the 30s send timeout). But a bare
+    // snapshotted fd is unsafe: the client thread closes its own fd on exit
+    // independently of this lock, and the kernel can recycle that number for a
+    // fresh connection before we write — sending H.264 bytes into an unrelated
+    // socket. A dup holds its own reference to the SAME open socket, so it never
+    // aliases a new connection; if the peer is gone the write just fails (EPIPE).
+    var dups: [MAX_VIDEO_CLIENTS]c.fd_t = undefined;
+    var ndups: usize = 0;
     sess.client_wmtx.lock();
     for (0..MAX_VIDEO_CLIENTS) |i| {
         if (sess.clients[i] >= 0) {
-            fds[nfds] = sess.clients[i];
-            nfds += 1;
+            const dfd = c.dup(sess.clients[i]);
+            if (dfd >= 0) {
+                dups[ndups] = dfd;
+                ndups += 1;
+            }
         }
     }
     sess.client_wmtx.unlock();
     // Frame: 0x02|0x03 marker byte then the Annex-B access unit. (0x03 = key.)
-    for (fds[0..nfds]) |fd| {
-        ws.writeFrame2(fd, .binary, &hdr_byte, au) catch {
-            _ = c.shutdown(fd, netutilShut()); // drops only this client
+    for (dups[0..ndups]) |dfd| {
+        ws.writeFrame2(dfd, .binary, &hdr_byte, au) catch {
+            // shutdown() on the dup tears down the shared socket, so the
+            // client's drain loop exits and frees its slot under the lock.
+            _ = c.shutdown(dfd, netutilShut());
         };
+        _ = c.close(dfd);
     }
     return true;
 }
