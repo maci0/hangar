@@ -3074,26 +3074,26 @@ Both the `VmConfig→VmJson fields→VmConfig` test and the
 | `parseDiskCache` | All variants round-trip + unknown → writeback + empty → writeback |
 
 
-## Deferred from the multi-review pass (tracked, not yet fixed)
+## Multi-review pass — remaining deferred items
 
-These need careful, isolated changes with their own tests — deliberately not
-bundled into the sweep that fixed the security/correctness set.
+Most findings from the 8-agent review were fixed (security, correctness,
+concurrency incl. the handlePower lock and the dbusdisplay video locks, tests,
+docs). These few remain, each deliberately deferred because the fix's risk or
+churn currently exceeds its value:
 
-- **handlePower holds vms_mutex across blocking start/stop I/O** (web_server.zig).
-  Flagged by concurrency + perf + arch reviews. The lock is currently held
-  *deliberately* — releasing it naively reintroduces a fixed use-after-free
-  (the VMM handle + VmConfig can be freed by a concurrent delete/clone). A
-  correct fix adds a per-slot "in-transition" guard that delete/clone/rename/
-  suspend honor, then does fork/exec/reap unlocked and re-validates the slot by
-  id on re-lock (the handleDelete/handleSuspend pattern). Impact today: the
-  ~5s UI poll stutters for the ~1-2s power-on window on this single-user tool.
-- **dbusdisplay video pipeline lock-during-I/O** (MEDIUM): `emitAu` holds the
-  client write spinlock across blocking WS writes to up to 8 viewers;
-  `pushFrameNowLocked`/`stopEncoderLocked` do pipe writes / blocking waitpid
-  under `fb_mutex`/`enc_mutex`. Per-client write mutexes (or snapshot-fds-then-
-  write-unlocked) fix it. Encoder generation-count race and the unsynchronized
-  `bitrate_kbps` write are in the same module.
-- **persist.save runs under vms_mutex** (~12 call sites): serialize to a buffer
-  under the lock, then write/fsync/rename unlocked.
-- **No idempotent /start /stop routes**: /power is a blind toggle; the CLI's
-  read-then-toggle has a TOCTOU window. Add explicit start/stop.
+- **persist.save runs under vms_mutex** (~12 sites). Moving the fsync outside
+  the lock without weakening synchronous durability (a crash must not lose a
+  just-created VM) means a serialize-under-lock + write-outside refactor at each
+  call site, or a background saver that trades durability. Impact today: an
+  occasional ms-level poll stall on a single-user tool. Defer until it's worth
+  the invasive change.
+- **transport.httpRequest discards the HTTP status line** (returns body only).
+  The daemon now returns consistent `{"error":...}` JSON envelopes on every
+  failure, so the CLI's body-sniffing detects errors correctly; parsing the
+  status code would be cleaner but is a signature change across all callers for
+  marginal gain.
+- **display_resolution persisted as a numeric index** (rest of the enums use
+  toStr). Internally consistent — only mis-maps if the enum is reordered, a
+  code-review-time concern, not a runtime bug.
+- **guestinfo returns 200 {"ips":""} for stopped/no-agent/bad-idx alike** —
+  minor: clients can't distinguish "no IPs" from "wrong VM". Cosmetic.

@@ -65,7 +65,8 @@ pub fn vnc(conn: c.fd_t, req: []const u8) !void {
         if (c.connect(vnc_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) == 0) break;
         _ = c.close(vnc_fd);
         if (waited_ms >= 4000) {
-            logWarn("ws/vnc: connect to VM VNC port failed");
+            var wb: [96]u8 = undefined;
+            logWarn(std.fmt.bufPrint(&wb, "ws/vnc: connect failed vm[{d}] port={d}", .{ idx, vnc_port }) catch "ws/vnc: connect failed");
             try ws.writeClose(conn);
             return;
         }
@@ -198,7 +199,8 @@ pub fn spice(conn: c.fd_t, req: []const u8) !void {
         if (c.connect(spice_fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) == 0) break;
         _ = c.close(spice_fd);
         if (waited_ms >= 4000) {
-            logWarn("ws/spice: connect to VM SPICE port failed");
+            var wb: [96]u8 = undefined;
+            logWarn(std.fmt.bufPrint(&wb, "ws/spice: connect failed vm[{d}] port={d}", .{ idx, spice_port }) catch "ws/spice: connect failed");
             try ws.writeClose(conn);
             return;
         }
@@ -324,7 +326,8 @@ pub fn serialConsole(conn: c.fd_t, req: []const u8) !void {
     ) catch return;
 
     const serial = usock.UnixStream.connect(sock_path) catch {
-        logWarn("ws/serial: connect to VM serial socket failed");
+        var wb: [128]u8 = undefined;
+        logWarn(std.fmt.bufPrint(&wb, "ws/serial: connect failed vm[{d}] sock={s}", .{ idx, sock_path }) catch "ws/serial: connect failed");
         return;
     };
 
