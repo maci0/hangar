@@ -1077,3 +1077,8 @@ body.displayonly .displayonly-bar{display:flex}
 
 /* Locked/disabled form controls read as locked (running-VM hardware lock). */
 #tabSettings input:disabled,#tabSettings select:disabled,#tabSettings textarea:disabled{opacity:.45;cursor:not-allowed;background:var(--bg-inset,var(--bg))}
+
+/* Display-only: keep the hint bar, display toolbar, and renderer badge from
+   stacking on top of each other along the top edge. */
+body.displayonly .display-toolbar{top:42px;left:8px}
+body.displayonly .display-badge,body.displayonly #displayBadge{top:42px;right:8px}

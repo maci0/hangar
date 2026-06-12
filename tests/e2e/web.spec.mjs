@@ -80,7 +80,7 @@ test('view QEMU log workflow opens the log dialog', async ({ page }) => {
     await expect.poll(() => dialogOpen(page, 'logdlg')).toBe(true);
     // The VM was never started, so the daemon has no log file yet — the dialog
     // must say so rather than hang on "Loading…".
-    await expect(page.locator('#logbody')).toContainText(/No log yet|empty|Failed/i);
+    await expect(page.locator('#logbody')).toContainText(/No log output yet|empty|Failed/i);
 });
 
 test('edit settings workflow saves without losing the VM', async ({ page }) => {
