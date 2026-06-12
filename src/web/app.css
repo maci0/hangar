@@ -950,7 +950,7 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
 .palette{width:min(540px,92vw);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-modal);overflow:hidden}
 #paletteInput{width:100%;box-sizing:border-box;border:0;border-bottom:1px solid var(--border);background:transparent;color:var(--text);font-size:15px;padding:12px 14px;outline:none}
 #paletteList{list-style:none;margin:0;padding:4px;max-height:52vh;overflow:auto}
-#paletteList li{padding:6px 11px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;color:var(--text-muted)}
+#paletteList li{display:flex;align-items:center;gap:8px;padding:6px 11px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;color:var(--text-muted)}
 #paletteList li{transition:background-color var(--transition)}
 #paletteList li.sel{background:var(--accent-soft);color:var(--text);box-shadow:inset 2px 0 0 var(--accent)}
 #paletteList li.palette-empty{color:var(--text-dim);cursor:default}

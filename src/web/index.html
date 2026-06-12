@@ -267,6 +267,23 @@
 </dialog>
 
 <!-- Snapshot Dialog -->
+<dialog id="importdlg" aria-label="Import Virtual Machine">
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Import Virtual Machine</h3>
+  <div style="padding:16px 20px">
+    <p class="muted" style="margin:0 0 12px;font-size:12px">Imports an existing disk image as a new VM. The image is used in place; it is not copied.</p>
+    <label for="imp_path">Disk Image Path <span class="req" aria-hidden="true">*</span></label>
+    <input id="imp_path" type="text" placeholder="/var/lib/images/guest.qcow2" style="width:100%;margin:4px 0 4px">
+    <div class="field-error" id="err_imp_path" aria-live="polite"></div>
+    <p class="muted" style="margin:2px 0 12px;font-size:11px">Supported: .qcow2, .qcow, .vmdk, .vdi, .vhdx, .raw, .img</p>
+    <label for="imp_name">VM Name <span class="muted">(optional — defaults to the file name)</span></label>
+    <input id="imp_name" type="text" maxlength="128" style="width:100%;margin:4px 0 12px">
+  </div>
+  <div class="btn-row">
+    <button type="button" class="btn" data-action="closeDlg" data-dialog="importdlg">Cancel</button>
+    <button type="button" class="btn primary" data-action="importConfirm">Import</button>
+  </div>
+</dialog>
+
 <dialog id="snapdlg" aria-label="Snapshot Manager">
   <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Snapshot Manager</h3>
   <div style="padding:16px 20px">

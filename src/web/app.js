@@ -199,7 +199,7 @@ function publishVms(){if(window.van){if(!vmsState){vmsState=van.state(vms.slice(
 function dashStats(list){var st={running:0,stopped:0,paused:0,suspended:0},vcpu=0,ram=0,disk=0,att=[];
  for(var i=0;i<list.length;i++){var v=list[i];st[v.status]=(st[v.status]||0)+1;vcpu+=Number(v.cpu)||0;ram+=Number(v.mem)||0;disk+=Number(v.disk)||0;if(summaryWarnings(v)!=='')att.push(v.name);}
  return {st:st,vcpu:vcpu,ramGB:Math.round(ram/102.4)/10,disk:disk,att:att,count:list.length};}
-var DASH_COLS=[['name','Name'],['status','State'],['os','Guest OS'],['cpu','vCPU'],['mem','RAM'],['disk','Disk'],['tags','Tags']];
+var DASH_COLS=[['name','Name'],['status','State'],['os','Guest OS'],['cpu','vCPU'],['mem','RAM'],['disk','Disk'],['folder','Folder'],['tags','Tags']];
 function DashView(){
  var t=van.tags;
  if(!dashSortState)dashSortState=van.state({col:dashSort.col,dir:dashSort.dir});
@@ -228,6 +228,7 @@ function DashView(){
       t.td({class:'inv-name'},v.name),
       t.td(t.span({class:'sdot '+v.status}),statusLabel(v.status)),
       t.td(v.os),t.td(String(v.cpu)),t.td(mt),t.td(v.disk+' GB'),
+      t.td({class:'muted'},v.folder||''),
       t.td(visibleTags(v.tags).map(function(tag){return t.span({class:'tag-chip sm'},tag);})));}));}
   )),
   t.div({class:'empty-actions',style:'justify-content:flex-start;margin-top:18px'},
@@ -251,7 +252,7 @@ function hostDashboardHtml(){
   h+='<div class="dash-cards">'+card(vcpu,'vCPU allocated')+card(ramGB+' GB','RAM allocated')+card(disk+' GB','Disk provisioned')+'</div>';
   if(attention.length){h+='<div class="dash-attention"><h3>Needs attention</h3><ul>';for(var a=0;a<attention.length;a++)h+='<li>'+escHtml(attention[a])+'</li>';h+='</ul></div>';}
   // Sortable inventory table (vSphere "VMs" grid). Rows reuse the select handler.
-  var cols=[['name','Name'],['status','State'],['os','Guest OS'],['cpu','vCPU'],['mem','RAM'],['disk','Disk'],['tags','Tags']];
+  var cols=DASH_COLS;
   var rows=vms.map(function(v,i){return {v:v,i:i};});
   rows.sort(function(a,b){var c=dashSort.col,d=dashSort.dir,x=a.v[c],y=b.v[c];
     if(c==='cpu'||c==='mem'||c==='disk'){return ((Number(x)||0)-(Number(y)||0))*d;}
@@ -263,7 +264,8 @@ function hostDashboardHtml(){
     h+='<tr data-action="select" data-vm-index="'+r.i+'" tabindex="0">';
     h+='<td class="inv-name">'+escHtml(v.name)+'</td>';
     h+='<td><span class="sdot '+v.status+'"></span>'+escHtml(statusLabel(v.status))+'</td>';
-    h+='<td>'+escHtml(v.os)+'</td><td>'+escHtml(v.cpu)+'</td><td>'+mt+'</td><td>'+escHtml(v.disk)+' GB</td>';
+    h+='<td>'+escHtml(v.os)+'</td><td>'+escHtml(v.cpu)+'</td><td>'+mt+'</td><td>'+escHtml(v.disk)+' GB</td>'
+h+='<td class="muted">'+escHtml(v.folder||'')+'</td>';
     h+='<td>'+visibleTags(v.tags).map(function(t){return '<span class="tag-chip sm">'+escHtml(t)+'</span>';}).join('')+'</td>';
     h+='</tr>';});
   h+='</tbody></table></div>';
@@ -361,7 +363,23 @@ async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=await
 async function suspendGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Suspend VM "'+v.name+'" to disk?\nThe VM state will be saved and the VM will be paused.',{okLabel:'Suspend'})))return;const r=await apiPost('/api/vms/'+sel+'/suspend');if(r){await refresh();setStatus('Suspended VM to disk.');}}
 async function cloneGuest(){if(sel===null)return;var cn=document.getElementById('clone_name');var cd=document.getElementById('clonedlg');if(cn)cn.textContent=vms[sel].name;if(cd)cd.showModal();}
 async function doClone(linked){if(sel===null)return;const body=linked?'linked=1':'';const r=await apiPost('/api/vms/'+sel+'/clone',body);if(r){var cd=document.getElementById('clonedlg');if(cd)cd.close();await refresh();setStatus(linked?'Linked clone created.':'VM cloned.');}}
-async function importGuest(){const p=await showPromptDialog('Import Virtual Machine — path to an existing disk image (.qcow2, .vmdk, .vdi, .vhdx, .raw)');if(p===null)return; /* cancelled: no nagging toast */ const trimmed=p.trim();if(!trimmed){showToast('A file path is required','error');return;}if(trimmed.includes('..')){showToast('Invalid path: parent directory traversal not allowed','error');return;}if(!/\.(qcow2|qcow|vmdk|vdi|vhdx|raw|img)$/i.test(trimmed)){showToast('Path should end with a disk image extension (.qcow2, .vmdk, etc.)','warn');}const r=await apiPost('/api/vms/import','path='+encodeURIComponent(trimmed));if(r){await refresh();setStatus('VM imported.');}}
+function importGuest(){var d=document.getElementById('importdlg');if(!d)return;var ip=document.getElementById('imp_path');var im=document.getElementById('imp_name');var ie=document.getElementById('err_imp_path');if(ip){ip.value='';ip.classList.remove('invalid');}if(im)im.value='';if(ie)ie.textContent='';d.showModal();if(ip)ip.focus();}
+async function importConfirm(){var d=document.getElementById('importdlg');var ip=document.getElementById('imp_path');var im=document.getElementById('imp_name');var ie=document.getElementById('err_imp_path');if(!d||!ip)return;
+const trimmed=ip.value.trim();
+function fail(msg){if(ie)ie.textContent=msg;ip.classList.add('invalid');ip.focus();}
+if(!trimmed){fail('A file path is required.');return;}
+if(trimmed.includes('..')){fail('Parent directory traversal is not allowed.');return;}
+if(!/\.(qcow2|qcow|vmdk|vdi|vhdx|raw|img)$/i.test(trimmed)){fail('Path must end with a disk image extension (.qcow2, .vmdk, .vdi, .vhdx, .raw, .img).');return;}
+ip.classList.remove('invalid');if(ie)ie.textContent='';
+const wantName=im?im.value.trim():'';
+const before=vms.map(function(x){return x.name;});
+const r=await apiPost('/api/vms/import','path='+encodeURIComponent(trimmed));
+if(!r)return;
+d.close();await refresh();
+var added=vms.findIndex(function(x){return before.indexOf(x.name)<0;});
+if(wantName&&added>=0&&vms[added].name!==wantName){await apiPost('/api/vms/'+added+'/rename','name='+encodeURIComponent(wantName));await refresh();added=vms.findIndex(function(x){return x.name===wantName;});}
+if(added>=0)await select(added);
+setStatus('VM imported.');}
 async function batchStart(){var btns=document.querySelectorAll('[data-action="batchStart"]');for(var b=0;b<btns.length;b++){btns[b].setAttribute('data-prev-label',btns[b].textContent);btns[b].disabled=true;btns[b].textContent='...';}
 var started=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped')total++;}
 for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){setStatus('Batch start: VM '+(started+failed+1)+' of '+total+'...');const r=await apiPost('/api/vms/'+i+'/power');if(r){started++;}else{failed++;setStatus('Batch start: VM '+(started+failed)+' of '+total+' failed, continuing...');}}}
@@ -641,7 +659,8 @@ async function openVnets(){await loadVnets();var vd=document.getElementById('vne
 async function loadVnets(){try{const r=await fetch('/api/networks');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};logDebug('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};logDebug('Failed to load VNets:',e);}renderVnetList();}
 function renderVnetList(){const sel=document.getElementById('vnet_sel');if(!sel)return;let h='';if(!vnetsData.networks)vnetsData={networks:[]};
 for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const line=escHtml(n.name)+' — '+escHtml(n.type);h+=`<option value="${i}"${i===vnetIdx?' selected':''}>${line}</option>`;}
-sel.innerHTML=h;if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length){showVnetFields(vnetIdx);}else{clearVnetFields();}}
+sel.innerHTML=h;if(vnetIdx<0&&vnetsData.networks.length){vnetIdx=0;sel.value='0';}
+if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length){sel.value=String(vnetIdx);showVnetFields(vnetIdx);}else{clearVnetFields();}}
 function clearVnetFields(){['vn_name','vn_type','vn_subnet','vn_mask','vn_dhcp','vn_dstart','vn_dend','vn_iface','vn_gw','vn_pf'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});var vt=document.getElementById('vn_type');if(vt)vt.value='nat';var vd=document.getElementById('vn_dhcp');if(vd)vd.value='0';}
 function onVnetSelect(){const s=document.getElementById('vnet_sel');if(!s)return;vnetIdx=parseInt(s.value,10);if(vnetIdx>=0)showVnetFields(vnetIdx);}
 function showVnetFields(i){const n=vnetsData.networks[i];if(!n)return;
@@ -1455,7 +1474,7 @@ var actionHandlers={
  resetGuest:function(){resetGuest();},suspendGuest:function(){suspendGuest();},
  sendCad:function(){sendCad();},editVm:function(){editVm();},
  renameGuest:function(){renameGuest();},cloneGuest:function(){cloneGuest();},
- importGuest:function(){importGuest();},takeSnapshot:function(){takeSnapshot();},openSnapshots:function(){openSnapshots();},
+ importGuest:function(){importGuest();},importConfirm:function(){importConfirm();},takeSnapshot:function(){takeSnapshot();},openSnapshots:function(){openSnapshots();},
  exportOvf:function(){exportOvf();},migrateGuest:function(){migrateGuest();},doMigrate:function(){doMigrate();},openVnets:function(){openVnets();},
  openPrefs:function(){openPrefs();},openAbout:function(){openAbout();},openCatalog:function(){openCatalog();},
  showShortcutsModal:function(){showShortcutsModal();},
