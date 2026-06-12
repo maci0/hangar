@@ -136,6 +136,22 @@ pub const Url = struct {
 
 /// Shared-memory channel layout (mmap'd region).
 /// A bidirectional transport connection to the daemon.
+/// Parse the Content-Length header value from an HTTP header block (bytes
+/// before the body). Case-insensitive header name. Null if absent/unparseable.
+fn parseContentLength(headers: []const u8) ?usize {
+    var line_start: usize = 0;
+    while (line_start < headers.len) {
+        const nl = std.mem.indexOfScalar(u8, headers[line_start..], '\n') orelse break;
+        const line = std.mem.trim(u8, headers[line_start .. line_start + nl], " \r\t");
+        line_start += nl + 1;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, line[0..colon], " "), "content-length")) {
+            return std.fmt.parseInt(usize, std.mem.trim(u8, line[colon + 1 ..], " "), 10) catch null;
+        }
+    }
+    return null;
+}
+
 pub const Connection = struct {
     proto: Proto,
     fd: c.fd_t = -1,
@@ -187,6 +203,69 @@ pub const Connection = struct {
             // produced "//api/..." with no headers and the server rejected it.
             .unix => httpRequest(self.fd, "localhost", method, path, body, out),
         };
+    }
+
+    /// Send a request and stream the response BODY straight to `out_fd` (for
+    /// binary downloads like OVA export, where the body far exceeds any
+    /// reasonable in-memory buffer). Parses the status line and Content-Length
+    /// from the header block; reads exactly that many body bytes from the
+    /// socket and writes them to out_fd. Returns the number of body bytes
+    /// written, or an error. The whole-body-in-RAM `request()` path silently
+    /// truncated large downloads at its caller's buffer size.
+    pub fn requestToFd(self: *Connection, method: []const u8, path: []const u8, body: ?[]const u8, out_fd: c.fd_t) !usize {
+        if (self.fd < 0) {
+            self.fd = dial(&self.url);
+            if (self.fd < 0) return error.ConnectFailed;
+        }
+        defer {
+            _ = c.close(self.fd);
+            self.fd = -1;
+        }
+        var req_buf: [512]u8 = undefined;
+        const body_len = if (body) |b| b.len else 0;
+        const host = if (self.proto == .unix) "localhost" else self.host[0..self.host_len];
+        const req = buildHttpRequest(&req_buf, method, path, host, apiKey(), body_len) orelse return error.BuildFailed;
+        writeAll(self.fd, req.ptr[0..req.len]);
+        if (body) |b| writeAll(self.fd, b);
+
+        // Read until we have the full header block (ends with CRLFCRLF).
+        var hbuf: [8192]u8 = undefined;
+        var hlen: usize = 0;
+        var hdr_end: ?usize = null;
+        while (hlen < hbuf.len) {
+            const n = c.read(self.fd, hbuf[hlen..].ptr, hbuf.len - hlen);
+            if (n <= 0) break;
+            hlen += @intCast(n);
+            if (std.mem.indexOf(u8, hbuf[0..hlen], "\r\n\r\n")) |pos| {
+                hdr_end = pos + 4;
+                break;
+            }
+        }
+        const he = hdr_end orelse return error.NoHeaders;
+        const headers = hbuf[0..he];
+        // Status line: "HTTP/1.x NNN ..."
+        const sp = std.mem.indexOfScalar(u8, headers, ' ') orelse return error.BadStatus;
+        const code = std.fmt.parseInt(u16, headers[sp + 1 .. sp + 4], 10) catch return error.BadStatus;
+        if (code >= 400) return error.HttpError;
+        const clen = parseContentLength(headers) orelse return error.NoContentLength;
+
+        // The bytes already read past the header are the start of the body.
+        var written: usize = 0;
+        const first = hbuf[he..hlen];
+        if (first.len > 0) {
+            writeAll(out_fd, first);
+            written += first.len;
+        }
+        var rbuf: [64 * 1024]u8 = undefined;
+        while (written < clen) {
+            const want = @min(rbuf.len, clen - written);
+            const n = c.read(self.fd, &rbuf, want);
+            if (n <= 0) break;
+            writeAll(out_fd, rbuf[0..@intCast(n)]);
+            written += @intCast(n);
+        }
+        if (written < clen) return error.Truncated;
+        return written;
     }
 
     /// Close the connection.

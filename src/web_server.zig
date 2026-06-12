@@ -524,6 +524,13 @@ fn serveHtml(conn: c.fd_t) void {
 
     // ── Server-Sent Events: state-change stream ──
     if (routeExact(req, "GET /api/events")) {
+        // Dispatched before the generic auth gate below, so enforce the same
+        // exposed-mode rule here: in exposed mode the stream (even just the
+        // state-version) requires the key.
+        if (auth.isExposed() and !auth.checkAuth(req)) {
+            writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
+            return;
+        }
         handleEvents(conn);
         return;
     }
@@ -1148,7 +1155,14 @@ fn powerOp(req: []const u8, mode: PowerMode) ![]const u8 {
         const slot = appstate.idxById(vid);
         still_present = slot != null;
         if (start_failed) {
-            if (slot) |j| appstate.vms[j].status = .stopped;
+            // startVm may have forked a pid before failing; reap it so a partial
+            // start never leaks a zombie/orphan, whether or not the slot survives.
+            qemu.forceStopVm(&copy);
+            qemu.reapVm(&copy);
+            if (slot) |j| {
+                appstate.vms[j].status = .stopped;
+                appstate.vms[j].pid = null;
+            }
             if (start_detail.len > 0) {
                 return std.fmt.bufPrint(&start_err_buf, "start err: {s}", .{start_detail}) catch "start err";
             }
@@ -1722,6 +1736,9 @@ fn handleDelete(req: []const u8) ![]const u8 {
 
         const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
         if (idx >= appstate.vm_count) return "invalid idx";
+        // Don't delete a VM mid power-transition: power-on commits pid/status by
+        // id after this would have shifted/removed the slot. Refuse; client retries.
+        if (appstate.isTransitioning(appstate.vms[idx].getIdSlice())) return "busy";
         logAudit("delete", appstate.vms[idx].getNameSlice());
         // Save undo state before deleting.
         appstate.undo_vm = appstate.vms[idx];
@@ -1999,6 +2016,13 @@ fn handleSuspend(req: []const u8) ![]const u8 {
     if (!v.isAlive()) {
         appstate.vms_mutex.unlock();
         return "not running";
+    }
+    // A power on/off may be running its blocking I/O on this VM with the lock
+    // released; suspending in that window could write status=suspended over a
+    // pid that power-on is about to commit. Refuse — the client can retry.
+    if (appstate.isTransitioning(v.getIdSlice())) {
+        appstate.vms_mutex.unlock();
+        return "busy";
     }
     // Copy the VM name before releasing the lock — another thread could rename
     // or delete the VM while we do the migration I/O.

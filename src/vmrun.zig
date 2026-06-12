@@ -591,10 +591,12 @@ fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usiz
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/{s}", .{ idx, action });
     const resp = try sendRequest(allocator, conn, "POST", path, null);
     defer allocator.free(resp);
-    // The daemon returns "invalid"/"invalid idx" for a bad index (mapped to a
-    // 4xx body); surface that as a CLI error with a non-zero exit.
-    if (std.mem.indexOf(u8, resp, "invalid") != null or std.mem.indexOf(u8, resp, "\"error\"") != null) {
-        var ebuf: [160]u8 = undefined;
+    // Anything other than the success token "ok" is a failure: "invalid"/
+    // "invalid idx" (bad index), "busy" (a power op is already in flight), or
+    // "start err" (QEMU spawn failed). The daemon's {"error":...} envelopes are
+    // already turned into exit 1 by sendRequest; this catches the plain tokens.
+    if (!std.mem.eql(u8, std.mem.trim(u8, resp, " \r\n\t"), "ok")) {
+        var ebuf: [200]u8 = undefined;
         const em = std.fmt.bufPrint(&ebuf, "Error: {s} failed for VM [{d}]: {s}\n", .{ action, idx, resp }) catch "Error: power op failed\n";
         fdWrite(c.STDERR_FILENO, em);
         std.process.exit(1);
@@ -806,19 +808,12 @@ fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_pat
 
 fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
     _ = io;
+    _ = allocator;
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/export", .{idx});
-    // The response body is the OVA tarball (binary). Write it to a file rather
-    // than printing it: the old code bufPrint'd it into a 256-byte line, which
-    // failed with NoSpaceLeft and never produced a file.
-    const resp = try sendRequest(allocator, conn, "POST", path, null);
-    defer allocator.free(resp);
-    if (resp.len == 0 or std.mem.indexOf(u8, resp, "\"error\"") != null) {
-        var ebuf: [160]u8 = undefined;
-        const em = std.fmt.bufPrint(&ebuf, "Error: export failed for VM [{d}]: {s}\n", .{ idx, resp }) catch "Error: export failed\n";
-        fdWrite(c.STDERR_FILENO, em);
-        std.process.exit(1);
-    }
+    // The response body is the OVA tarball (binary, far larger than any
+    // in-memory buffer). Stream it straight to the file: the buffered request
+    // path caps the body at its caller buffer and would silently truncate.
     var fn_buf: [64]u8 = undefined;
     const fname = try std.fmt.bufPrintZ(&fn_buf, "vm-{d}.ova", .{idx});
     const fd = std.c.open(fname, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(c.mode_t, 0o644));
@@ -827,17 +822,14 @@ fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
         std.process.exit(1);
     }
     defer _ = std.c.close(fd);
-    var off: usize = 0;
-    while (off < resp.len) {
-        const n = std.c.write(fd, resp[off..].ptr, resp.len - off);
-        if (n <= 0) {
-            fdWrite(c.STDERR_FILENO, "Error: write to output file failed\n");
-            std.process.exit(1);
-        }
-        off += @intCast(n);
-    }
+    const written = conn.requestToFd("POST", path, null, fd) catch |e| {
+        var ebuf: [160]u8 = undefined;
+        const em = std.fmt.bufPrint(&ebuf, "Error: export failed for VM [{d}]: {s}\n", .{ idx, @errorName(e) }) catch "Error: export failed\n";
+        fdWrite(c.STDERR_FILENO, em);
+        std.process.exit(1);
+    };
     var buf: [128]u8 = undefined;
-    const line = try std.fmt.bufPrint(&buf, "export VM [{d}]: wrote {d} bytes to {s}\n", .{ idx, resp.len, fname });
+    const line = try std.fmt.bufPrint(&buf, "export VM [{d}]: wrote {d} bytes to {s}\n", .{ idx, written, fname });
     fdWrite(c.STDOUT_FILENO, line);
 }
 

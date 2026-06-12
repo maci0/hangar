@@ -468,6 +468,14 @@ fn unregisterSession(sess: *Session) void {
     }
     sessions_mutex.unlock();
     stopEncoder(sess);
+    // The feed thread (this thread, the listener) owns enc_in and is the only
+    // closer; stopEncoder no longer touches it. Close it here on teardown.
+    sess.enc_mutex.lock();
+    if (sess.enc_in >= 0) {
+        _ = c.close(sess.enc_in);
+        sess.enc_in = -1;
+    }
+    sess.enc_mutex.unlock();
     sessionUnref(sess);
 }
 
@@ -679,24 +687,27 @@ fn pushFrameLocked(sess: *Session) void {
 
 fn pushFrameNowLocked(sess: *Session, now: u64) void {
     const fb = sess.fb orelse return;
-    // Hold enc_mutex ACROSS the pipe write, not just to read the fd: otherwise a
-    // concurrent stopEncoder could close enc_in between the read and the write,
-    // and in this threaded daemon the recycled fd number could belong to an
-    // unrelated socket — we'd write raw framebuffer bytes into it. enc_mutex is
-    // a dedicated small lock; stopEncoder waiting on a back-pressured pipe write
-    // here is acceptable (it only happens when the last viewer leaves).
+    // enc_in is owned by THIS thread (the single listener/feed thread): only it
+    // writes the pipe and only it closes the fd. The write runs WITHOUT any lock
+    // held — a back-pressured ffmpeg must never pin enc_mutex (the killer needs
+    // it) or fb_mutex (the listener needs it). stopEncoder does not touch enc_in;
+    // it kills ffmpeg, which EPIPEs this write, and we close the fd ourselves.
     sess.enc_mutex.lock();
     const fd = sess.enc_in;
-    if (fd < 0) {
-        sess.enc_mutex.unlock();
-        return;
-    }
+    const alive = sess.enc_pid >= 0;
+    sess.enc_mutex.unlock();
+    if (fd < 0 or !alive) return;
     sess.last_push_ms = now;
     sess.fb_dirty = false;
     const ok = writeAllFd(fd, fb);
-    sess.enc_mutex.unlock();
     if (!ok) {
-        // Encoder died (pipe closed): tear it down so a client reconnect restarts it.
+        // ffmpeg gone (EPIPE) — close our end and tear down so a reconnect restarts it.
+        sess.enc_mutex.lock();
+        if (sess.enc_in == fd) {
+            _ = c.close(fd);
+            sess.enc_in = -1;
+        }
+        sess.enc_mutex.unlock();
         stopEncoder(sess);
     }
 }
@@ -744,23 +755,28 @@ fn startEncoder(sess: *Session, w: u32, h: u32) bool {
 }
 
 fn stopEncoderLocked(sess: *Session) void {
+    // Capture the pid and decide fd ownership under the lock, then kill+waitpid
+    // OUTSIDE it: waitpid can block, and a feed thread back-pressured on enc_in
+    // holds no lock but needs ffmpeg dead to unblock — so the killer must not
+    // wait on a lock the writer might hold. enc_in is owned by the feed thread
+    // (it closes it on EPIPE); enc_out by the pump (closes on read EOF). We only
+    // close a fd here when its owner thread is NOT running.
     sess.enc_mutex.lock();
-    defer sess.enc_mutex.unlock();
-    if (sess.enc_pid < 0) return;
-    _ = c.close(sess.enc_in);
-    // enc_out belongs to the pump while it runs: closing it here while the
-    // pump is blocked in read() would free the fd number for reuse and the
-    // pump could end up reading some unrelated socket. Killing ffmpeg makes
-    // the pump's read return 0; the pump closes its fd itself on exit.
-    if (!sess.pump_running) {
-        _ = c.close(sess.enc_out);
+    const pid = sess.enc_pid;
+    if (pid < 0) {
+        sess.enc_mutex.unlock();
+        return;
     }
-    _ = c.kill(sess.enc_pid, .KILL);
-    var status: c_int = 0;
-    _ = c.waitpid(sess.enc_pid, &status, 0);
+    const close_out = !sess.pump_running and sess.enc_out >= 0;
+    const out_fd = sess.enc_out;
     sess.enc_pid = -1;
-    sess.enc_in = -1;
     sess.enc_out = -1;
+    sess.enc_mutex.unlock();
+
+    _ = c.kill(pid, .KILL); // EPIPEs any in-flight feed write; ends the pump's read
+    var status: c_int = 0;
+    _ = c.waitpid(pid, &status, 0);
+    if (close_out) _ = c.close(out_fd);
 }
 
 fn stopEncoder(sess: *Session) void {
