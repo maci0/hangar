@@ -187,11 +187,19 @@ pub const NetworkMode = enum(u8) {
     }
 
     pub fn fromStr(s: []const u8) NetworkMode {
+        return fromStrOr(s, .user);
+    }
+
+    /// Like fromStr but returns `default` on no match. Secondary NICs pass
+    /// `.none` so a corrupt mode string in a hand-edited config does NOT
+    /// silently attach a live NAT interface (the global default is `.user` for
+    /// the primary NIC).
+    pub fn fromStrOr(s: []const u8, default: NetworkMode) NetworkMode {
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: NetworkMode = @enumFromInt(f.value);
             if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
         }
-        return .user;
+        return default;
     }
 };
 
@@ -2295,6 +2303,12 @@ test "CpuModel: label values" {
     try std.testing.expectEqualStrings("AMD EPYC", std.mem.span(CpuModel.EPYC.label()));
     try std.testing.expectEqualStrings("Intel Haswell", std.mem.span(CpuModel.Haswell.label()));
     try std.testing.expectEqualStrings("ARM Neoverse N1", std.mem.span(CpuModel.Neoverse_N1.label()));
+}
+
+test "NetworkMode: secondary NIC defaults to none on a corrupt value, not NAT" {
+    try std.testing.expectEqual(NetworkMode.none, NetworkMode.fromStrOr("garbage", .none));
+    try std.testing.expectEqual(NetworkMode.user, NetworkMode.fromStr("garbage")); // primary keeps NAT default
+    try std.testing.expectEqual(NetworkMode.bridge, NetworkMode.fromStrOr("bridge", .none)); // valid value wins
 }
 
 test "CpuModel: host_passthrough emits the QEMU name and accepts the legacy one" {

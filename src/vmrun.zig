@@ -583,33 +583,22 @@ fn cmdStatus(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.
 
 fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, action: []const u8, io: std.Io) !void {
     _ = io;
-    // The daemon's /api/vms/<id>/power endpoint is a toggle (start if off, stop if on).
-    // The CLI exposes explicit `start`/`stop` verbs, so issuing the toggle
-    // blindly inverts the user's intent: `stop` on an already-off VM would
-    // power it ON, and `start` on a running VM would power it OFF. Query the
-    // current state first and only toggle when it actually needs to change,
-    // making `start`/`stop` idempotent and faithful to the documented verbs.
-    const want_on = std.mem.eql(u8, action, "start");
-    const json = try sendRequest(allocator, conn, "GET", "/api/vms", null);
-    defer allocator.free(json);
-    if (!vmExistsInJson(json, idx)) {
-        var ebuf: [128]u8 = undefined;
-        const em = std.fmt.bufPrint(&ebuf, "Error: no VM at index {d}\n", .{idx}) catch "Error: no such VM\n";
+    // The daemon exposes idempotent /start and /stop routes (a no-op if already
+    // in the requested state), so the CLI verbs map straight through — no
+    // read-then-toggle, which previously had a TOCTOU window that could invert
+    // intent when two ops raced.
+    var path_buf: [32]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/{s}", .{ idx, action });
+    const resp = try sendRequest(allocator, conn, "POST", path, null);
+    defer allocator.free(resp);
+    // The daemon returns "invalid"/"invalid idx" for a bad index (mapped to a
+    // 4xx body); surface that as a CLI error with a non-zero exit.
+    if (std.mem.indexOf(u8, resp, "invalid") != null or std.mem.indexOf(u8, resp, "\"error\"") != null) {
+        var ebuf: [160]u8 = undefined;
+        const em = std.fmt.bufPrint(&ebuf, "Error: {s} failed for VM [{d}]: {s}\n", .{ action, idx, resp }) catch "Error: power op failed\n";
         fdWrite(c.STDERR_FILENO, em);
         std.process.exit(1);
     }
-    const is_on = if (findVmStatusInJson(json, idx)) |s| statusIsAlive(s) else false;
-    if (is_on == want_on) {
-        var nbuf: [256]u8 = undefined;
-        const noop = try std.fmt.bufPrint(&nbuf, "VM [{d}] already {s}\n", .{ idx, if (want_on) "powered on" else "powered off" });
-        fdWrite(c.STDOUT_FILENO, noop);
-        return;
-    }
-
-    var path_buf: [32]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/power", .{idx});
-    const resp = try sendRequest(allocator, conn, "POST", path, null);
-    defer allocator.free(resp);
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "{s} VM [{d}]: {s}\n", .{ action, idx, resp });
     fdWrite(c.STDOUT_FILENO, line);
@@ -819,10 +808,36 @@ fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     _ = io;
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/export", .{idx});
+    // The response body is the OVA tarball (binary). Write it to a file rather
+    // than printing it: the old code bufPrint'd it into a 256-byte line, which
+    // failed with NoSpaceLeft and never produced a file.
     const resp = try sendRequest(allocator, conn, "POST", path, null);
     defer allocator.free(resp);
-    var buf: [256]u8 = undefined;
-    const line = try std.fmt.bufPrint(&buf, "export VM [{d}]: {s}\n", .{ idx, resp });
+    if (resp.len == 0 or std.mem.indexOf(u8, resp, "\"error\"") != null) {
+        var ebuf: [160]u8 = undefined;
+        const em = std.fmt.bufPrint(&ebuf, "Error: export failed for VM [{d}]: {s}\n", .{ idx, resp }) catch "Error: export failed\n";
+        fdWrite(c.STDERR_FILENO, em);
+        std.process.exit(1);
+    }
+    var fn_buf: [64]u8 = undefined;
+    const fname = try std.fmt.bufPrintZ(&fn_buf, "vm-{d}.ova", .{idx});
+    const fd = std.c.open(fname, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(c.mode_t, 0o644));
+    if (fd < 0) {
+        fdWrite(c.STDERR_FILENO, "Error: could not create output file\n");
+        std.process.exit(1);
+    }
+    defer _ = std.c.close(fd);
+    var off: usize = 0;
+    while (off < resp.len) {
+        const n = std.c.write(fd, resp[off..].ptr, resp.len - off);
+        if (n <= 0) {
+            fdWrite(c.STDERR_FILENO, "Error: write to output file failed\n");
+            std.process.exit(1);
+        }
+        off += @intCast(n);
+    }
+    var buf: [128]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, "export VM [{d}]: wrote {d} bytes to {s}\n", .{ idx, resp.len, fname });
     fdWrite(c.STDOUT_FILENO, line);
 }
 

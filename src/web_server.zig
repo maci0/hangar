@@ -391,6 +391,8 @@ const ApiHandler = *const fn ([]const u8) anyerror![]const u8;
 /// so the first match in iteration order wins.
 const post_routes = [_]struct { suffix: []const u8, handler: ApiHandler }{
     .{ .suffix = "/power", .handler = handlePower },
+    .{ .suffix = "/start", .handler = handlePowerStart },
+    .{ .suffix = "/stop", .handler = handlePowerStop },
     .{ .suffix = "/delete", .handler = handleDelete },
     .{ .suffix = "/clone", .handler = handleClone },
     .{ .suffix = "/rename", .handler = handleRename },
@@ -1058,7 +1060,23 @@ fn nameTaken(name: []const u8, skip: ?usize) bool {
     return false;
 }
 
+const PowerMode = enum { toggle, on, off };
+
 fn handlePower(req: []const u8) ![]const u8 {
+    return powerOp(req, .toggle);
+}
+
+/// Idempotent power-on: no-op (200 ok) if the VM is already running.
+fn handlePowerStart(req: []const u8) ![]const u8 {
+    return powerOp(req, .on);
+}
+
+/// Idempotent power-off: no-op (200 ok) if the VM is already stopped.
+fn handlePowerStop(req: []const u8) ![]const u8 {
+    return powerOp(req, .off);
+}
+
+fn powerOp(req: []const u8, mode: PowerMode) ![]const u8 {
     // Power on/off forks/execs/reaps QEMU, which blocks for ~1-2s. Holding
     // vms_mutex across that froze every concurrent request (the 5s poll, SSE,
     // render) on a spinlock. Instead: snapshot the config under the lock, do
@@ -1082,11 +1100,17 @@ fn handlePower(req: []const u8) ![]const u8 {
         if (idx >= appstate.vm_count) return "invalid idx";
         const v = &appstate.vms[idx];
         const vid = v.getIdSlice();
-        if (vid.len == 0) return handlePowerLocked(idx); // pre-id legacy config
+        if (vid.len == 0) {
+            const alive = v.isAlive();
+            if ((mode == .on and alive) or (mode == .off and !alive)) return "ok";
+            return handlePowerLocked(idx); // pre-id legacy config
+        }
         if (appstate.isTransitioning(vid)) return "busy";
         if (!v.isAlive()) ensureBindableDisplayPorts(idx);
-        copy = v.*;
         was_alive = v.isAlive();
+        // Idempotent start/stop: if already in the requested state, do nothing.
+        if ((mode == .on and was_alive) or (mode == .off and !was_alive)) return "ok";
+        copy = v.*;
         want_dbus_capture = v.video_stream and v.embed_display and
             !(v.enable_3d and v.gpu_device.needsVirgl());
         const nm = v.getNameSlice();

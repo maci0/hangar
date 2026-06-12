@@ -203,6 +203,10 @@ fn connectUnixFd(url: *const Url) c.fd_t {
     if (sock < 0) return -1;
     var addr: c.sockaddr.un = .{ .family = c.AF.UNIX, .path = undefined };
     const path_bytes = url.path[0..url.path_len];
+    // sun_path is 108 bytes; url.path can be longer. Reject rather than overflow
+    // the fixed sockaddr field (the usock wrapper has this guard; this path
+    // drifted from it). +1 for the NUL terminator.
+    if (path_bytes.len + 1 > addr.path.len) return -1;
     @memcpy(addr.path[0..path_bytes.len], path_bytes);
     addr.path[path_bytes.len] = 0;
     const addrlen = @offsetOf(c.sockaddr.un, "path") + path_bytes.len + 1;
