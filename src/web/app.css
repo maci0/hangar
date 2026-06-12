@@ -993,8 +993,6 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
   .toolbar .btn:not(.keep-mobile){display:none}
   .toolbar .btn.keep-mobile{display:inline-flex}
   .toolbar .btn.toolbar-more{display:inline-flex}
-  .toolbar.open-more .btn:not(.keep-mobile){display:inline-flex}
-  .toolbar.open-more .sep{display:block}
 }
 @media(max-width:900px){
   body{grid-template-columns:minmax(0,1fr)}
@@ -1076,3 +1074,6 @@ body.displayonly .displayonly-bar{display:flex}
 @media(hover:none){body.displayonly .displayonly-bar{opacity:1;pointer-events:auto}}
 
 #vnetdlg .btn-row{flex-wrap:wrap}
+
+/* Locked/disabled form controls read as locked (running-VM hardware lock). */
+#tabSettings input:disabled,#tabSettings select:disabled,#tabSettings textarea:disabled{opacity:.45;cursor:not-allowed;background:var(--bg-inset,var(--bg))}
