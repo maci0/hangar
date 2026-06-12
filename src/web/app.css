@@ -1074,3 +1074,5 @@ body.displayonly .displayonly-bar{display:flex}
 .displayonly-exit:hover{background:rgba(255,255,255,.22)}
 .displayonly-exit:focus-visible{outline:2px solid #fff;outline-offset:2px}
 @media(hover:none){body.displayonly .displayonly-bar{opacity:1;pointer-events:auto}}
+
+#vnetdlg .btn-row{flex-wrap:wrap}

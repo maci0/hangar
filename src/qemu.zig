@@ -87,6 +87,43 @@ pub fn parseJsonU64(text: []const u8, key: []const u8) ?u64 {
     return std.fmt.parseInt(u64, text[start..i], 10) catch null;
 }
 
+/// Like parseJsonU64 but only matches the key at object-nesting depth 1 (the
+/// top level of the document). `qemu-img info --output=json` nests a
+/// "children" array whose file node carries its own "virtual-size" (the size
+/// of the qcow2 FILE, not the guest disk) BEFORE the top-level keys —
+/// first-match parsing read that and the summary showed a 20 GB disk as
+/// "192.5 KiB". Strings are skipped so braces inside values can't skew depth.
+pub fn parseTopLevelU64(text: []const u8, key: []const u8) ?u64 {
+    var depth: i32 = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        const ch = text[i];
+        if (ch == '"') {
+            // Skip the string; check for a key match at depth 1.
+            const str_start = i;
+            i += 1;
+            while (i < text.len and text[i] != '"') : (i += 1) {
+                if (text[i] == '\\') i += 1;
+            }
+            if (i >= text.len) return null;
+            const tok = text[str_start .. i + 1];
+            i += 1;
+            if (depth == 1 and std.mem.eql(u8, tok, key)) {
+                while (i < text.len and (text[i] == ' ' or text[i] == ':' or text[i] == '\t')) i += 1;
+                const start = i;
+                while (i < text.len and text[i] >= '0' and text[i] <= '9') i += 1;
+                if (i == start) return null;
+                return std.fmt.parseInt(u64, text[start..i], 10) catch null;
+            }
+        } else {
+            if (ch == '{' or ch == '[') depth += 1;
+            if (ch == '}' or ch == ']') depth -= 1;
+            i += 1;
+        }
+    }
+    return null;
+}
+
 /// Virtual (provisioned) and actual (on-disk allocated) byte sizes of a disk
 /// image, via `qemu-img info --output=json`. Returns null if it can't be read.
 pub fn diskInfo(path: []const u8, allocator: std.mem.Allocator) ?struct { virtual_bytes: u64, actual_bytes: u64 } {
@@ -96,8 +133,8 @@ pub fn diskInfo(path: []const u8, allocator: std.mem.Allocator) ?struct { virtua
     const n = runCapture(&.{ "qemu-img", "info", "-U", "--output=json", path }, &out, allocator) catch return null;
     if (n == 0 or n > out.len) return null;
     const text = out[0..n];
-    const v = parseJsonU64(text, "\"virtual-size\"") orelse return null;
-    const a = parseJsonU64(text, "\"actual-size\"") orelse return null;
+    const v = parseTopLevelU64(text, "\"virtual-size\"") orelse return null;
+    const a = parseTopLevelU64(text, "\"actual-size\"") orelse return null;
     return .{ .virtual_bytes = v, .actual_bytes = a };
 }
 
@@ -2381,6 +2418,29 @@ test "qemu: buildScriptStr with spice embed" {
     defer talloc.free(s);
     try expect(has(s, "-spice"));
     try expect(has(s, "disable-ticketing"));
+}
+
+test "qemu: parseTopLevelU64 ignores nested children sizes (qemu-img info)" {
+    const j =
+        \\{"children":[{"name":"file","info":{"virtual-size":197120,"actual-size":196608,"filename":"d.qcow2"}}],"virtual-size":21474836480,"actual-size":196608,"format":"qcow2"}
+    ;
+    try expect(parseTopLevelU64(j, "\"virtual-size\"").? == 21474836480);
+    try expect(parseTopLevelU64(j, "\"actual-size\"").? == 196608);
+    try expect(parseTopLevelU64(j, "\"missing\"") == null);
+    // first-match would have returned the child's 197120 — the original bug
+    try expect(parseJsonU64(j, "\"virtual-size\"").? == 197120);
+}
+
+test "fuzz: parseTopLevelU64 never panics on random bytes" {
+    var prng = std.Random.DefaultPrng.init(0x70_1EAF);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    var i: usize = 0;
+    while (i < 3000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        _ = parseTopLevelU64(buf[0..len], "\"virtual-size\"");
+    }
 }
 
 test "qemu: buildScriptStr embedded SPICE virgl uses EGL headless GL" {

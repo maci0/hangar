@@ -102,11 +102,12 @@
     <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="snapshotMenu" aria-haspopup="menu" aria-controls="snapshotMenu" aria-expanded="false">Snapshots ▾</button>
     <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="devicesMenu" aria-haspopup="menu" aria-controls="devicesMenu" aria-expanded="false">Devices ▾</button>
     <button class="btn menu-btn" data-action="toggleActionMenu" data-menu="toolsMenu" aria-haspopup="menu" aria-controls="toolsMenu" aria-expanded="false">Tools ▾</button>
-    <button class="btn menu-btn danger-menu" data-action="toggleActionMenu" data-menu="dangerMenu" aria-haspopup="menu" aria-controls="dangerMenu" aria-expanded="false">More ▾</button>
+    <button class="btn menu-btn danger-menu" data-action="toggleActionMenu" data-menu="dangerMenu" aria-haspopup="menu" aria-controls="dangerMenu" aria-expanded="false">Manage ▾</button>
     <button class="btn theme-toggle-btn keep-mobile" data-action="toggleTheme" title="Toggle theme" aria-label="Toggle theme"><svg class="ico" aria-hidden="true"><use href="#i-theme"/></svg></button>
     <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><svg class="ico" aria-hidden="true"><use href="#i-more"/></svg></button>
     <div class="toolbar-more-popover" role="menu" aria-label="More actions"></div>
     <div id="powerMenu" class="action-menu" role="menu" aria-label="Power actions">
+      <button class="menu-item" data-action="powerToggle" data-vm-action="power-on"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Power On</button>
       <button class="menu-item" data-action="shutdownGuest" data-vm-action="shutdown"><svg class="ico" aria-hidden="true"><use href="#i-power"/></svg>Shut Down Guest</button>
       <button class="menu-item" data-action="suspendGuest" data-vm-action="suspend"><svg class="ico" aria-hidden="true"><use href="#i-import"/></svg>Suspend</button>
       <button class="menu-item" data-action="pauseGuest" data-vm-action="pause"><svg class="ico" aria-hidden="true"><use href="#i-pause"/></svg>Pause</button>
@@ -126,7 +127,7 @@
       <button class="menu-item" data-action="sendCad" data-vm-action="cad"><svg class="ico" aria-hidden="true"><use href="#i-keyboard"/></svg>Send Ctrl+Alt+Del</button>
       <button class="menu-item" data-action="reconnectDisplay" data-vm-action="display"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>Reconnect Display</button>
       <button class="menu-item" data-action="enterDisplayOnly" data-vm-action="display"><svg class="ico" aria-hidden="true"><use href="#i-maximize"/></svg>Display Only</button>
-      <button class="menu-item" data-action="manualDisconnectSerial" data-vm-action="serial">Disconnect Serial</button>
+      <button class="menu-item" data-action="manualDisconnectSerial" data-vm-action="serial"><svg class="ico" aria-hidden="true"><use href="#i-terminal"/></svg>Disconnect Serial</button>
     </div>
     <div id="toolsMenu" class="action-menu" role="menu" aria-label="Tools">
       <button class="menu-item" data-action="renameGuest" data-vm-action="rename"><svg class="ico" aria-hidden="true"><use href="#i-edit"/></svg>Rename…</button>
@@ -251,6 +252,12 @@
       <label for="n_disk">Disk Size (GB)</label>
       <input id="n_disk" type="number" value="20" min="1" max="65536" step="1" style="width:100%;margin:4px 0 12px">
       <div class="field-error" id="err_n_disk" aria-live="polite"></div>
+      <label for="n_guest_os">Guest OS</label>
+      <select id="n_guest_os" style="width:100%;margin:4px 0 12px"></select>
+      <label for="n_iso">Installer ISO Path <span class="muted">(optional)</span></label>
+      <input id="n_iso" type="text" placeholder="/path/to/installer.iso" style="width:100%;margin:4px 0 12px">
+      <label for="n_firmware">Firmware</label>
+      <select id="n_firmware" style="width:100%;margin:4px 0 12px"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select>
     </div>
     <div class="btn-row">
       <button type="button" class="btn" data-action="closeDlg" data-dialog="newdlg">Cancel</button>
@@ -260,8 +267,8 @@
 </dialog>
 
 <!-- Snapshot Dialog -->
-<dialog id="snapdlg" aria-label="Snapshots">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Snapshots</h3>
+<dialog id="snapdlg" aria-label="Snapshot Manager">
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Snapshot Manager</h3>
   <div style="padding:16px 20px">
     <div id="snapMeta" class="dialog-meta"></div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
@@ -311,12 +318,12 @@
     </div>
   </div>
   <div class="btn-row">
-    <button type="button" class="btn" data-action="vnetSaveCurrent">Save Network</button>
-    <button type="button" class="btn" data-action="vnetAdd">Add</button>
-    <button type="button" class="btn danger" data-action="vnetRemove">Remove</button>
+    <button type="button" class="btn" data-action="vnetAdd"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Add</button>
+    <button type="button" class="btn danger" data-action="vnetRemove"><svg class="ico" aria-hidden="true"><use href="#i-trash"/></svg>Remove</button>
     <button type="button" class="btn" data-action="vnetDefaults">Defaults</button>
-    <button type="button" class="btn primary" data-action="vnetSaveAll">Save All</button>
     <button type="button" class="btn" data-action="openTopology" title="Visual network topology"><svg class="ico" aria-hidden="true"><use href="#i-net"/></svg>Topology</button>
+    <button type="button" class="btn" data-action="vnetSaveCurrent">Save Selected</button>
+    <button type="button" class="btn primary" data-action="vnetSaveAll">Save All</button>
     <button type="button" class="btn" data-action="closeDlg" data-dialog="vnetdlg">Close</button>
   </div>
 </dialog>
