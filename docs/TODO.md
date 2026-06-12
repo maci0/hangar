@@ -3087,11 +3087,11 @@ churn currently exceeds its value:
   call site, or a background saver that trades durability. Impact today: an
   occasional ms-level poll stall on a single-user tool. Defer until it's worth
   the invasive change.
-- **transport.httpRequest discards the HTTP status line** (returns body only).
-  The daemon now returns consistent `{"error":...}` JSON envelopes on every
-  failure, so the CLI's body-sniffing detects errors correctly; parsing the
-  status code would be cleaner but is a signature change across all callers for
-  marginal gain.
+- **transport.httpRequest (buffered path) discards the HTTP status line.** The
+  daemon returns consistent `{"error":...}` envelopes on failure so the CLI
+  detects errors; binary downloads now use Connection.requestToFd which DOES
+  parse status + Content-Length. Parsing status in the buffered path too would
+  be cleaner but is a signature change across all callers for marginal gain.
 - **display_resolution persisted as a numeric index** (rest of the enums use
   toStr). Internally consistent — only mis-maps if the enum is reordered, a
   code-review-time concern, not a runtime bug.

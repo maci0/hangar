@@ -130,7 +130,9 @@ pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
 /// present-and-foreign Origin is rejected.
 pub fn wsOriginOk(req: []const u8) bool {
     const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse req.len;
-    const origin = httpreq.findHeader(req[0..hdr_end], "Origin: ") orelse return true; // no Origin: non-browser
+    // Accept "Origin:" with or without the optional space (RFC 7230 OWS).
+    const origin_raw = httpreq.findHeader(req[0..hdr_end], "Origin:") orelse return true; // no Origin: non-browser
+    const origin = std.mem.trim(u8, origin_raw, " \t");
     // Strip scheme.
     const after_scheme = if (std.mem.indexOf(u8, origin, "://")) |s| origin[s + 3 ..] else return false;
     // Host[:port] — take up to the first '/' if any.
@@ -191,6 +193,7 @@ test "auth: wsOriginOk allows loopback + no-origin, rejects foreign" {
     try std.testing.expect(wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin: http://[::1]:9080\r\n\r\n"));
     try std.testing.expect(!wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin: http://evil.example.com\r\n\r\n"));
     try std.testing.expect(!wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin: https://attacker.test\r\n\r\n"));
+    try std.testing.expect(wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin:http://127.0.0.1:9080\r\n\r\n")); // no space after colon
 }
 
 test "auth: exposed mode removes data-read exemptions" {
