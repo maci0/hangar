@@ -624,7 +624,7 @@ var nameEl=document.getElementById('e_name');if(nameEl){clear('e_name');if(!name
 [['e_mem',128,65536,'Memory must be 128-65536 MB.'],['e_cpu',1,256,'CPU cores must be 1-256.'],['e_disk',1,65536,'Disk size must be 1-65536 GB.']].forEach(function(c){var el=document.getElementById(c[0]);if(!el)return;clear(c[0]);var n=parseInt(el.value,10);if(!Number.isFinite(n)||n<c[1]||n>c[2])fail(c[0],c[3]);});
 var macIds=['e_mac_address'];for(var mn=2;mn<=MAX_NICS;mn++)macIds.push('e_nic'+mn+'_mac');for(var i=0;i<macIds.length;i++){var m=document.getElementById(macIds[i]);if(!m)continue;var val=m.value.trim();clear(macIds[i]);if(val&&!/^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(val))fail(macIds[i],'Use XX:XX:XX:XX:XX:XX.');}
 ['e_vnc_port','e_spice_port'].forEach(function(id){var p=document.getElementById(id);if(!p)return;var n=parseInt(p.value,10);clear(id);if(!Number.isFinite(n)||n<1||n>65535)fail(id,'Port must be 1-65535.');});
-var pf=document.getElementById('e_portfw');if(pf){clear('e_portfw');var val=pf.value.trim();if(val&&!/^\\s*\\d{1,5}:\\d{1,5}(\\s*,\\s*\\d{1,5}:\\d{1,5})*\\s*$/.test(val)&&!/^\\s*\\d{1,5}:[^,]+:\\d{1,5}(\\s*,\\s*\\d{1,5}:[^,]+:\\d{1,5})*\\s*$/.test(val))fail('e_portfw','Use host:guest or host:ip:guest entries.');}
+var pf=document.getElementById('e_portfw');if(pf){clear('e_portfw');var val=pf.value.trim();if(val&&!/^\s*\d{1,5}:\d{1,5}(\s*,\s*\d{1,5}:\d{1,5})*\s*$/.test(val)&&!/^\s*\d{1,5}:[^,]+:\d{1,5}(\s*,\s*\d{1,5}:[^,]+:\d{1,5})*\s*$/.test(val))fail('e_portfw','Use host:guest or host:ip:guest entries.');}
 var embed=document.getElementById('e_embed_display');var disp=document.getElementById('e_display');var accel=document.getElementById('e_enable_3d');var gpu=document.getElementById('e_gpu_device');if(embed&&disp){clear('e_display');if(embed.value==='1'&&!(disp.value==='2'||disp.value==='3')&&show)setFieldError('e_display','Browser console requires SPICE or VNC; native display opens outside the browser.','warn');}
 if(embed&&disp&&accel&&gpu){clear('e_gpu_device');if(embed.value==='1'&&disp.value==='3'&&accel.value==='1'&&(gpu.value==='0'||gpu.value==='1')&&show)setFieldError('e_gpu_device','Virgl 3D needs embedded SPICE; VNC will fall back to non-GL virtio.','warn');}
 return ok;}
@@ -632,20 +632,22 @@ async function saveVm(){const idx=sel;if(idx===null)return;const btn=document.ge
 if(!validateSettings(true)){var bad=document.querySelector('#tabSettings .invalid');if(bad){var panel=bad.closest('.settings-panel');if(panel)setSettingsCategory(panel.getAttribute('data-settings-panel')||settingsCategory);bad.focus({preventScroll:false});}if(btn){btn.disabled=false;btn.textContent='Save Changes';}showToast('Fix highlighted settings before saving.','error');return;}
 saveInFlight=true;
 const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
-const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','vnet','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
+const fieldIds=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','vnet','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
 'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','portfw','notes','tags','cloud_init',
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order','rtc',
 'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
 'guest_agent','virtio_rng','tpm','secure_boot','hyperv_enlightenments','hugepages','watchdog','ballooning','host_autostart',
-'io_threads','disk_bps_throttle','disk_iops_throttle','video_stream','video_bitrate']
-.map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
+'io_threads','disk_bps_throttle','disk_iops_throttle','video_stream','video_bitrate'];
+// Generated NIC 2..MAX_NICS and extra-disk slots are saved too (their form
+// rows are generated from /api/capabilities; the field list must match).
+for(var bn=2;bn<=MAX_NICS;bn++)fieldIds.push('nic'+bn,'nic'+bn+'_mac','nic'+bn+'_vnet');
+for(var bk=0;bk<MAX_EXTRA_DISKS;bk++)fieldIds.push('extra'+bk+'_path','extra'+bk+'_size','extra'+bk+'_format');
+const body=fieldIds.map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
 try{const r=await apiPost('/api/vms/'+idx,body);if(r){settingsDirty=false;saveInFlight=false;/* refresh() no-ops while saveInFlight — clear it first or the summary renders stale data */await refresh();switchTab('summary');setStatus('Settings saved.');}
 else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}
 saveInFlight=false;
 for(let i=0;i<formEls.length;i++)formEls[i].disabled=false;}}
 async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=document.createElement('input');inp.type='file';inp.accept='.qcow2,.qcow,.vmdk,.vdi,.vhdx,.raw,.img';inp.onchange=async function(){const file=inp.files&&inp.files[0];
-for(var bn=2;bn<=MAX_NICS;bn++)body.push('nic'+bn,'nic'+bn+'_mac','nic'+bn+'_vnet');
-for(var bk=0;bk<MAX_EXTRA_DISKS;bk++)body.push('extra'+bk+'_path','extra'+bk+'_size','extra'+bk+'_format');
 if(!file)return;const fd=new FormData();fd.append('disk2',file);setStatus('Uploading Disk 2 for "'+vms[idx].name+'"...');try{const r=await fetch('/api/vms/'+idx+'/disk2',{method:'POST',body:fd,headers:{'X-API-Key':API_KEY}});if(!r.ok){var em=await r.text().catch(function(){return'';});try{var j=JSON.parse(em);if(j.error)em=j.error;}catch(e){}throw new Error(em||'HTTP '+r.status);}await refresh();setStatus('Disk 2 uploaded successfully.');if(sel===idx)editVm();}catch(e){setStatus('Upload failed: '+e.message);showToast('Disk 2 upload failed: '+e.message,'error');}};inp.click();}
 function downloadDisk2(){if(sel===null)return;const a=document.createElement('a');a.href='/api/vms/'+sel+'/disk2/download';a.download=vms[sel].name+'_disk2.qcow2';document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);},1000);}
 function fmtBytes(n){if(!Number.isFinite(n)||n<0)return'?';const u=['B','KiB','MiB','GiB','TiB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++;}return(i===0?x:x.toFixed(1))+' '+u[i];}

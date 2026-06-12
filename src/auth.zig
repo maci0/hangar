@@ -81,6 +81,9 @@ pub fn checkAuth(req: []const u8) bool {
 /// screenshot, guestinfo, migrate status) are never exempt.
 pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (!method_get) return false; // only GET endpoints are exempt
+    // Static assets and non-sensitive status endpoints are ALWAYS exempt — the
+    // UI must load (to prompt for the key) and liveness/capabilities carry no
+    // secrets.
     if (std.mem.eql(u8, path, "/")) return true;
     if (std.mem.eql(u8, path, "/app.js")) return true;
     if (std.mem.eql(u8, path, "/novnc.js")) return true;
@@ -93,9 +96,15 @@ pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/xterm.css")) return true;
     if (std.mem.eql(u8, path, "/app.css")) return true;
     if (std.mem.startsWith(u8, path, "/favicon")) return true;
-    if (std.mem.eql(u8, path, "/api/vms")) return true;
     if (std.mem.eql(u8, path, "/api/capabilities")) return true;
     if (std.mem.eql(u8, path, "/api/health")) return true;
+    // Data-bearing reads (VM list/detail/log/snapshots, config incl. cloud-init
+    // secrets, networks, catalog, the SSE stream) are exempt ONLY in loopback
+    // mode. When a key is configured the daemon binds all interfaces, so these
+    // must require the key — otherwise any unauthenticated remote client could
+    // read cloud-init user-data, MACs, disk paths, and serial/console state.
+    if (isExposed()) return false;
+    if (std.mem.eql(u8, path, "/api/vms")) return true;
     if (std.mem.eql(u8, path, "/api/events")) return true;
     if (std.mem.eql(u8, path, "/api/config")) return true;
     if (std.mem.eql(u8, path, "/api/catalog")) return true;
@@ -107,16 +116,47 @@ pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
         if (std.mem.endsWith(u8, p, "/migrate")) return false;
         if (std.mem.endsWith(u8, p, "/screenshot")) return false;
         if (std.mem.endsWith(u8, p, "/guestinfo")) return false;
-        return true; // detail, /log, /snapshots are read-only and exempt
+        return true; // detail, /log, /snapshots are read-only and loopback-exempt
     }
     return false;
 }
 
-/// Auth-gate a WebSocket route. On failure logs the rejected `route`, writes a
-/// 401, and returns false. In loopback mode the upgrade is allowed without a key
-/// (browsers can't set headers on a WS handshake; the Host allowlist already
-/// gates origin).
+/// Validate the WebSocket `Origin` against same-origin loopback. Browsers set
+/// Origin on WS handshakes but it is NOT covered by CORS, so without this a
+/// malicious page the user visits can open ws://127.0.0.1:<port>/ws/... and
+/// read the framebuffer/serial or inject keystrokes into a running VM
+/// (cross-site WebSocket hijacking, CWE-1385). A WS request with NO Origin
+/// (non-browser clients: the CLI, curl, native viewers) is allowed; only a
+/// present-and-foreign Origin is rejected.
+pub fn wsOriginOk(req: []const u8) bool {
+    const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse req.len;
+    const origin = httpreq.findHeader(req[0..hdr_end], "Origin: ") orelse return true; // no Origin: non-browser
+    // Strip scheme.
+    const after_scheme = if (std.mem.indexOf(u8, origin, "://")) |s| origin[s + 3 ..] else return false;
+    // Host[:port] — take up to the first '/' if any.
+    const host_port = if (std.mem.indexOfScalar(u8, after_scheme, '/')) |sl| after_scheme[0..sl] else after_scheme;
+    const addr = if (std.mem.lastIndexOfScalar(u8, host_port, ']')) |rb|
+        host_port[0 .. rb + 1]
+    else if (std.mem.indexOfScalar(u8, host_port, ':')) |colon|
+        host_port[0..colon]
+    else
+        host_port;
+    return std.ascii.eqlIgnoreCase(addr, "localhost") or
+        std.mem.eql(u8, addr, "127.0.0.1") or
+        std.mem.eql(u8, addr, "[::1]") or
+        std.mem.eql(u8, addr, "::1");
+}
+
+/// Auth-gate a WebSocket route. Rejects a foreign Origin first (cross-site WS
+/// hijacking defense, both modes), then in exposed mode requires the API key.
+/// On failure logs the rejected `route`, writes a 401, and returns false.
 pub fn wsAuthOk(conn: c.fd_t, req: []const u8, route: []const u8) bool {
+    if (!wsOriginOk(req)) {
+        var ob: [64]u8 = undefined;
+        wlog.logWarn(std.fmt.bufPrint(&ob, "ws origin rejected: GET {s}", .{route}) catch "ws origin rejected");
+        httpresp.writeHttpResponse(conn, httpresp.HTTP_FORBIDDEN, "application/json; charset=utf-8", "{\"error\":\"forbidden origin\"}");
+        return false;
+    }
     if (token_len == 0) return true;
     if (checkAuth(req)) return true;
     var buf: [64]u8 = undefined;
@@ -142,6 +182,32 @@ test "auth: secretEql is length-checked equality" {
     try std.testing.expect(secretEql("abc", "abc"));
     try std.testing.expect(!secretEql("abc", "abd"));
     try std.testing.expect(!secretEql("abc", "ab"));
+}
+
+test "auth: wsOriginOk allows loopback + no-origin, rejects foreign" {
+    try std.testing.expect(wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nHost: x\r\n\r\n")); // no Origin
+    try std.testing.expect(wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin: http://127.0.0.1:9080\r\n\r\n"));
+    try std.testing.expect(wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin: http://localhost:9080\r\n\r\n"));
+    try std.testing.expect(wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin: http://[::1]:9080\r\n\r\n"));
+    try std.testing.expect(!wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin: http://evil.example.com\r\n\r\n"));
+    try std.testing.expect(!wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin: https://attacker.test\r\n\r\n"));
+}
+
+test "auth: exposed mode removes data-read exemptions" {
+    const prev = token_len;
+    defer token_len = prev;
+    token_len = 0; // loopback
+    try std.testing.expect(isAuthExempt(true, "/api/vms"));
+    try std.testing.expect(isAuthExempt(true, "/api/config"));
+    try std.testing.expect(isAuthExempt(true, "/api/vms/0/log"));
+    token_len = 8; // exposed
+    try std.testing.expect(!isAuthExempt(true, "/api/vms"));
+    try std.testing.expect(!isAuthExempt(true, "/api/config"));
+    try std.testing.expect(!isAuthExempt(true, "/api/vms/0/log"));
+    // static + health stay exempt even when exposed
+    try std.testing.expect(isAuthExempt(true, "/"));
+    try std.testing.expect(isAuthExempt(true, "/app.js"));
+    try std.testing.expect(isAuthExempt(true, "/api/health"));
 }
 
 test "auth: isAuthExempt — static + safe reads exempt, sensitive not" {

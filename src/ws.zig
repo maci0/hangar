@@ -33,6 +33,28 @@ pub const FrameHeader = struct {
 /// Parse the WebSocket upgrade request, returning the accept key.
 /// Caller must write the 101 response using the returned key.
 /// Returns null if the request is not a valid WebSocket upgrade.
+/// Case-insensitive check that a header line `name` exists and its value
+/// contains `token` (comma/space tolerant). Used for the upgrade handshake,
+/// where clients vary header casing and combine Connection tokens.
+fn headerValueContains(req: []const u8, name: []const u8, token: []const u8) bool {
+    var rest = req;
+    while (true) {
+        const nl = std.mem.indexOfScalar(u8, rest, '\n') orelse return false;
+        const line = std.mem.trim(u8, rest[0..nl], " \r\t");
+        rest = rest[nl + 1 ..];
+        if (line.len == 0) return false; // end of headers
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const hname = line[0..colon];
+        if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, hname, " \t"), std.mem.trim(u8, name[0..name.len-1], " "))) continue;
+        const value = line[colon + 1 ..];
+        var it = std.mem.tokenizeAny(u8, value, ", \t");
+        while (it.next()) |tok| {
+            if (std.ascii.eqlIgnoreCase(tok, token)) return true;
+        }
+        return false;
+    }
+}
+
 pub fn parseUpgrade(req: []const u8) ?[29]u8 {
     // Find the Sec-WebSocket-Key header.
     const key_marker = "Sec-WebSocket-Key: ";
@@ -41,9 +63,12 @@ pub fn parseUpgrade(req: []const u8) ?[29]u8 {
     const key_end = std.mem.indexOfScalar(u8, req[key_val_start..], '\r') orelse return null;
     const key = req[key_val_start .. key_val_start + key_end];
 
-    // Verify Connection: Upgrade and Upgrade: websocket are present.
-    if (std.mem.indexOf(u8, req, "Upgrade: websocket") == null) return null;
-    if (std.mem.indexOf(u8, req, "Connection: Upgrade") == null) return null;
+    // Verify the Upgrade and Connection headers. Match case-insensitively and
+    // token-scan the value: Firefox sends "Connection: keep-alive, Upgrade" and
+    // header casing varies by client, so exact-substring matching dropped valid
+    // upgrades (every console WS failed on Firefox).
+    if (!headerValueContains(req, "upgrade:", "websocket")) return null;
+    if (!headerValueContains(req, "connection:", "upgrade")) return null;
 
     // Compute accept = base64(sha1(key + ws_guid))
     var sha: [20]u8 = undefined;
@@ -353,6 +378,76 @@ test "formatUpgradeResponse: real CRLF line endings and terminator (RFC 6455)" {
 
 fn fuzzByteIsPrintable(b: u8) bool {
     return b == '\r' or b == '\n' or (b >= 0x20 and b < 0x7f);
+}
+
+test "headerValueContains: case-insensitive, comma-tolerant (Firefox Connection)" {
+    const ff = "GET /ws HTTP/1.1\r\nupgrade: WebSocket\r\nConnection: keep-alive, Upgrade\r\n\r\n";
+    try std.testing.expect(headerValueContains(ff, "upgrade:", "websocket"));
+    try std.testing.expect(headerValueContains(ff, "connection:", "upgrade"));
+    const no = "GET /ws HTTP/1.1\r\nConnection: keep-alive\r\n\r\n";
+    try std.testing.expect(!headerValueContains(no, "connection:", "upgrade"));
+}
+
+test "parseUpgrade: accepts Firefox-style combined Connection header" {
+    const req = "GET /ws HTTP/1.1\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    try std.testing.expect(parseUpgrade(req) != null);
+}
+
+test "writeFrame2: two-slice payload round-trips through a socketpair" {
+    var fds: [2]c.fd_t = undefined;
+    if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) return error.SkipZigTest;
+    defer _ = c.close(fds[0]);
+    defer _ = c.close(fds[1]);
+    const marker = [_]u8{0x03};
+    const au = "ACCESS-UNIT-BYTES" ** 4; // 68 bytes
+    try writeFrame2(fds[0], .binary, &marker, au);
+    var rb: [128]u8 = undefined;
+    const hdr = readFrameHeader(fds[1]).?;
+    try std.testing.expectEqual(Opcode.binary, hdr.opcode);
+    try std.testing.expectEqual(@as(u64, marker.len + au.len), hdr.payload_len);
+    const n = readFramePayload(fds[1], &rb, hdr).?;
+    try std.testing.expectEqual(marker.len + au.len, n);
+    try std.testing.expectEqual(@as(u8, 0x03), rb[0]);
+    try std.testing.expectEqualStrings(au, rb[1 .. 1 + au.len]);
+}
+
+test "fuzz: writeFrame2 emits a well-formed header across length boundaries" {
+    var prng = std.Random.DefaultPrng.init(0xF2A2_0001);
+    const rnd = prng.random();
+    const big = std.heap.page_allocator.alloc(u8, 70000) catch return error.SkipZigTest;
+    defer std.heap.page_allocator.free(big);
+    for (big) |*b| b.* = rnd.int(u8);
+    // Boundary payload lengths exercise the 1/2/8-byte header encodings.
+    const lens = [_]usize{ 0, 1, 125, 126, 127, 65535, 65536, 70000 };
+    for (lens) |total| {
+        const p1len = @min(total, @as(usize, 1));
+        const p2len = total - p1len;
+        var fds: [2]c.fd_t = undefined;
+        if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) return error.SkipZigTest;
+        // Drain reader on a thread so a >SO_SNDBUF frame doesn't deadlock the writer.
+        const Reader = struct {
+            fn run(fd: c.fd_t, expect_len: u64) void {
+                const h = readFrameHeader(fd) orelse return;
+                std.testing.expectEqual(expect_len, h.payload_len) catch {};
+                var buf: [4096]u8 = undefined;
+                var got: usize = 0;
+                while (got < h.payload_len) {
+                    const n = readFramePayload(fd, &buf, .{ .fin = h.fin, .opcode = h.opcode, .mask = false, .payload_len = @min(h.payload_len - got, buf.len) }) orelse break;
+                    if (n == 0) break;
+                    got += n;
+                }
+            }
+        };
+        const th = std.Thread.spawn(.{}, Reader.run, .{ fds[1], @as(u64, total) }) catch {
+            _ = c.close(fds[0]);
+            _ = c.close(fds[1]);
+            continue;
+        };
+        writeFrame2(fds[0], .binary, big[0..p1len], big[p1len .. p1len + p2len]) catch {};
+        _ = c.close(fds[0]);
+        th.join();
+        _ = c.close(fds[1]);
+    }
 }
 
 test "requestedProtocol: extracts first token, trims, null when absent" {

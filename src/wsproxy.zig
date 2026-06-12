@@ -10,6 +10,7 @@ const ws = @import("ws.zig");
 const usock = @import("usock.zig");
 const sync = @import("sync.zig");
 const httpreq = @import("httpreq.zig");
+const qmp = @import("qmp.zig");
 const httpresp = @import("httpresp.zig");
 const wlog = @import("wlog.zig");
 const netutil = @import("netutil.zig");
@@ -305,6 +306,11 @@ pub fn serialConsole(conn: c.fd_t, req: []const u8) !void {
     @memcpy(vm_name_buf[0..vm_name.len], vm_name);
     appstate.vms_mutex.unlock();
 
+    // Defense in depth: the name is interpolated into a /tmp socket path. A
+    // hostile name from a hand-edited vms.json must not escape via traversal
+    // (the same guard handleVmLog and the other handlers apply).
+    if (!qmp.isPathSafeName(vm_name_buf[0..vm_name.len])) return;
+
     // Perform WebSocket upgrade handshake.
     const accept_key = ws.parseUpgrade(req) orelse return;
     try ws.writeUpgradeResponse(conn, accept_key, req);
@@ -398,4 +404,36 @@ pub fn serialConsole(conn: c.fd_t, req: []const u8) !void {
     ser2ws.join();
     ws2ser.join();
     serial.close();
+}
+
+// ── Tests ───────────────────────────────────────────────────────────
+
+test "fuzz: relay entry points never panic on random request bytes" {
+    const std_t = @import("std");
+    // appstate.vm_count is 0 in the hermetic test build, so every idx rejects
+    // before any socket work; this asserts the parse/reject paths don't crash.
+    var fds: [2]std.c.fd_t = undefined;
+    if (std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &fds) != 0) return error.SkipZigTest;
+    defer _ = std.c.close(fds[0]);
+    defer _ = std.c.close(fds[1]);
+    var prng = std_t.Random.DefaultPrng.init(0x5EED_5EED);
+    const rnd = prng.random();
+    var buf: [256]u8 = undefined;
+    var i: usize = 0;
+    while (i < 1500) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        vnc(fds[0], buf[0..len]) catch {};
+        spice(fds[0], buf[0..len]) catch {};
+        serialConsole(fds[0], buf[0..len]) catch {};
+    }
+}
+
+test "wsproxy: well-formed serial request for an out-of-range idx rejects cleanly" {
+    var fds: [2]std.c.fd_t = undefined;
+    if (std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &fds) != 0) return error.SkipZigTest;
+    defer _ = std.c.close(fds[0]);
+    defer _ = std.c.close(fds[1]);
+    try serialConsole(fds[0], "GET /ws/serial/999 HTTP/1.1\r\nHost: x\r\n\r\n");
+    try vnc(fds[0], "GET /ws/vnc/999 HTTP/1.1\r\nHost: x\r\n\r\n");
 }

@@ -621,7 +621,7 @@ pub const CpuModel = enum(u8) {
             .Haswell => "Haswell",
             .Broadwell => "Broadwell",
             .Opteron_G5 => "Opteron_G5",
-            .host_passthrough => "host-passthrough",
+            .host_passthrough => "host", // QEMU passthrough mode; "host-passthrough" is a libvirt-only name
             .Cooperlake => "Cooperlake",
             .SapphireRapids => "SapphireRapids",
             .GraniteRapids => "GraniteRapids",
@@ -665,6 +665,8 @@ pub const CpuModel = enum(u8) {
 
     /// Parse a QEMU CPU model string (from JSON or CLI), case-insensitive.
     pub fn fromStr(s: []const u8) CpuModel {
+        // Accept the legacy libvirt spelling from already-saved configs.
+        if (std.ascii.eqlIgnoreCase(s, "host-passthrough")) return .host_passthrough;
         inline for (@typeInfo(@This()).@"enum".fields) |f| {
             const variant: CpuModel = @enumFromInt(f.value);
             if (std.ascii.eqlIgnoreCase(s, std.mem.span(variant.toStr()))) return variant;
@@ -2275,7 +2277,7 @@ test "CpuModel: toStr values" {
     try std.testing.expectEqualStrings("Haswell", std.mem.span(CpuModel.Haswell.toStr()));
     try std.testing.expectEqualStrings("Broadwell", std.mem.span(CpuModel.Broadwell.toStr()));
     try std.testing.expectEqualStrings("Opteron_G5", std.mem.span(CpuModel.Opteron_G5.toStr()));
-    try std.testing.expectEqualStrings("host-passthrough", std.mem.span(CpuModel.host_passthrough.toStr()));
+    try std.testing.expectEqualStrings("host", std.mem.span(CpuModel.host_passthrough.toStr()));
     try std.testing.expectEqualStrings("Cooperlake", std.mem.span(CpuModel.Cooperlake.toStr()));
     try std.testing.expectEqualStrings("SapphireRapids", std.mem.span(CpuModel.SapphireRapids.toStr()));
     try std.testing.expectEqualStrings("GraniteRapids", std.mem.span(CpuModel.GraniteRapids.toStr()));
@@ -2295,9 +2297,15 @@ test "CpuModel: label values" {
     try std.testing.expectEqualStrings("ARM Neoverse N1", std.mem.span(CpuModel.Neoverse_N1.label()));
 }
 
+test "CpuModel: host_passthrough emits the QEMU name and accepts the legacy one" {
+    try std.testing.expectEqualStrings("host", std.mem.span(CpuModel.host_passthrough.toStr()));
+    try std.testing.expectEqual(CpuModel.host_passthrough, CpuModel.fromStr("host-passthrough"));
+}
+
 test "CpuModel: fromStr round-trip" {
     for (0..CpuModel.count) |i| {
         const cm = CpuModel.fromIndex(i);
+        if (cm == .host_passthrough) continue; // synonym of .host; covered above
         try std.testing.expectEqual(cm, CpuModel.fromStr(std.mem.span(cm.toStr())));
     }
     try std.testing.expectEqual(CpuModel.host, CpuModel.fromStr("unknown"));

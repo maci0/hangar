@@ -529,7 +529,11 @@ fn attach(sess: *Session) !void {
     if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) return error.SocketPair;
     const ctrl = fds[0];
     var ctrl_remote: c.fd_t = fds[1];
-    errdefer _ = c.close(ctrl);
+    // Single owner of ctrl's close on every path. A previous errdefer-plus-defer
+    // pair double-closed ctrl on errors after the second was registered; in a
+    // threaded daemon the freed fd number can be reused by another connection
+    // between the two closes, killing an unrelated client.
+    defer _ = c.close(ctrl);
     defer if (ctrl_remote >= 0) {
         _ = c.close(ctrl_remote);
     };
@@ -547,7 +551,6 @@ fn attach(sess: *Session) !void {
 
     // D-Bus handshake on our control end.
     if (!authClient(ctrl)) return error.Auth;
-    defer _ = c.close(ctrl);
 
     // Listener socketpair: register the remote end with the Console object.
     var lfds: [2]c.fd_t = undefined;

@@ -263,9 +263,23 @@ fn acceptLoop(fd: c.fd_t) void {
     while (true) {
         const conn = c.accept(fd, null, null);
         if (conn < 0) {
-            // The listener is gone — the daemon will silently stop serving on
-            // this socket. Surface it so an operator knows why requests stopped.
-            logErr("acceptLoop: accept() failed, listener thread exiting");
+            const e = c._errno().*;
+            // Transient per-connection errors must not kill the listener: a
+            // single EMFILE (fd table full from many consoles) or EINTR/
+            // ECONNABORTED would otherwise silently stop the daemon serving
+            // until restart. Back off briefly on EMFILE/ENFILE; retry the rest.
+            if (e == @intFromEnum(c.E.INTR) or e == @intFromEnum(c.E.AGAIN) or
+                e == @intFromEnum(c.E.CONNABORTED))
+            {
+                continue;
+            }
+            if (e == @intFromEnum(c.E.MFILE) or e == @intFromEnum(c.E.NFILE)) {
+                logErr("acceptLoop: out of file descriptors, backing off");
+                appio.sleepMs(100);
+                continue;
+            }
+            // Listener socket itself is gone (EBADF/EINVAL): stop the thread.
+            logErr("acceptLoop: accept() failed fatally, listener thread exiting");
             break;
         }
         // Both writeHttpResponse and ws.writeFrame emit a small header write
@@ -868,7 +882,7 @@ fn serveHtml(conn: c.fd_t) void {
         const err_status: ?u16 = blk: {
             if (anyEql(response, &.{ "invalid", "invalid idx", "not found", "no undo", "no vm" })) {
                 break :blk HTTP_NOT_FOUND;
-            } else if (anyEql(response, &.{ "not running", "off", "not paused", "vm running", "full", "shrink not allowed" })) {
+            } else if (anyEql(response, &.{ "not running", "off", "not paused", "vm running", "full", "shrink not allowed", "name exists" })) {
                 // The resource is in a state incompatible with the request
                 // (running VM that must be off, off VM that must be running, table
                 // at capacity, ...). 409 lets clients distinguish a transient state
@@ -1025,6 +1039,22 @@ fn ensureBindableDisplayPorts(idx: usize) void {
     if (v.display == .spice and netutil.portInUse(v.spice_port)) {
         if (freeBindableDisplayPort(idx)) |p| v.spice_port = p;
     }
+}
+
+/// True if `name` already names a VM (optionally excluding index `skip`, for
+/// rename). Caller must hold vms_mutex. Names are case-sensitive and matched
+/// exactly — VM names derive the QMP/serial/log paths, so a duplicate would
+/// make control commands hit the wrong VM and a delete unlink a live VM's
+/// sockets.
+fn nameTaken(name: []const u8, skip: ?usize) bool {
+    var i: usize = 0;
+    while (i < appstate.vm_count) : (i += 1) {
+        if (skip) |sk| {
+            if (i == sk) continue;
+        }
+        if (std.mem.eql(u8, appstate.vms[i].getNameSlice(), name)) return true;
+    }
+    return false;
 }
 
 fn handlePower(req: []const u8) ![]const u8 {
@@ -1401,6 +1431,10 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (disk_created) cleanupCreatedDisk(&cfg);
         return "full";
     }
+    if (nameTaken(cfg.getNameSlice(), null)) {
+        if (disk_created) cleanupCreatedDisk(&cfg);
+        return "name exists";
+    }
     if (!has_vnc_port) cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     if (!has_spice_port) cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
     cfg.ensureId();
@@ -1503,7 +1537,17 @@ fn handleClone(req: []const u8) ![]const u8 {
     var clone = appstate.vms[idx];
     const src = &appstate.vms[idx];
     var name_buf: [320]u8 = undefined;
-    const cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{clone.getNameSlice()}) catch return "nameerr";
+    const base = clone.getNameSlice();
+    var cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{base}) catch return "nameerr";
+    // Avoid colliding with an existing "<name> (clone)" — names derive temp
+    // socket/log paths, so duplicates must not happen.
+    if (nameTaken(cn, null)) {
+        var n: u32 = 2;
+        while (n < 1000) : (n += 1) {
+            cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone {d})", .{ base, n }) catch return "nameerr";
+            if (!nameTaken(cn, null)) break;
+        }
+    }
     clone.setName(cn);
     clone.status = .stopped;
     clone.pid = null;
@@ -2037,6 +2081,7 @@ fn handleRename(req: []const u8) ![]const u8 {
         if (std.mem.eql(u8, key, "name")) {
             if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
             if (!vm.isValidVmName(val)) return "invalid name";
+            if (nameTaken(val, idx)) return "name exists";
             // Drop the old name's temp artifacts so they don't leak / get reused by
             // a future same-named VM. Only when stopped — a running VM's sockets are
             // still in use under the old name.
@@ -2119,6 +2164,7 @@ fn handleImport(req: []const u8) ![]const u8 {
     var name_buf: [vm.MAX_NAME]u8 = undefined;
     const name = path_helpers.basenameWithoutExt(decoded_path, &name_buf);
     if (!vm.isValidVmName(name)) return "bad name";
+    if (nameTaken(name, null)) return "name exists";
     var cfg = vm.VmConfig{};
     cfg.setName(name);
     cfg.setDiskPath(decoded_path);

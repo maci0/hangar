@@ -758,7 +758,10 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, "-display");
         try args.append(alloc, if (embedded_gl) "egl-headless,gl=on" else if (embedded_dbus) "dbus,p2p=yes" else "none");
         if (config.display == .spice) {
-            const spice_str = try std.fmt.bufPrint(&bufs.spice_buf, "port={d},disable-ticketing=on", .{config.spice_port});
+            // Bind SPICE to loopback only: the WS proxy dials 127.0.0.1, and an
+            // all-interfaces ticketless SPICE port would be an unauthenticated
+            // console exposed on the LAN (the sibling -vnc path binds localhost).
+            const spice_str = try std.fmt.bufPrint(&bufs.spice_buf, "addr=127.0.0.1,port={d},disable-ticketing=on", .{config.spice_port});
             try args.append(alloc, "-spice");
             try args.append(alloc, spice_str);
         } else {
@@ -886,8 +889,10 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     }
 
     if (config.ballooning) {
-        try args.append(alloc, "-balloon");
-        try args.append(alloc, "virtio");
+        // `-balloon virtio` was removed in QEMU 3.1; the modern spelling is the
+        // device form, otherwise the VM fails to launch.
+        try args.append(alloc, "-device");
+        try args.append(alloc, "virtio-balloon-pci");
     }
 
     if (config.hasName()) {
@@ -2793,13 +2798,13 @@ test "qemu: without io_threads the disk uses the simple if=virtio form" {
     try expect(!has(s, "iothread"));
 }
 
-test "qemu: buildScriptStr with ballooning emits balloon virtio" {
+test "qemu: buildScriptStr with ballooning emits the virtio-balloon device" {
     var cfg = vm.VmConfig{};
     cfg.ballooning = true;
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
-    try expect(has(s, "-balloon"));
-    try expect(has(s, "virtio"));
+    try expect(has(s, "virtio-balloon-pci"));
+    try expect(!has(s, "-balloon virtio")); // the removed flag must not appear
 }
 
 test "qemu: buildScriptStr with virtio_rng emits rng device" {

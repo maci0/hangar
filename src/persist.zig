@@ -1583,6 +1583,18 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
         @atomicStore(bool, &load_read_failed, true, .seq_cst);
     }
 
+    // A non-empty file that does not parse into a "vms" array is corrupt (a
+    // truncated write, hand-edit, or unrelated file). Returning 0 VMs here and
+    // then letting save() run would atomically overwrite the user's real
+    // configs with an empty list — so mark the load degraded, which save()
+    // refuses to overwrite. Suppressed in test builds so round-trip tests of
+    // intentionally-empty/odd buffers still exercise save().
+    const mark_degraded = struct {
+        fn call() void {
+            if (!@import("builtin").is_test) @atomicStore(bool, &load_read_failed, true, .seq_cst);
+        }
+    }.call;
+
     // Top-level "theme" + "prefs" keys (optional).
     // parsePrefs resets prefs_out, so save/restore the theme.
     const loaded_theme = parseThemeKey(content);
@@ -1612,12 +1624,16 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
                 break;
             }
         } else {
-            return 0; // no "vms" key found
+            mark_degraded(); // non-empty content with no "vms" key: corrupt file
+            return 0;
         }
     }
 
     // Expect '['
-    if (cur.len == 0 or cur[0] != '[') return 0;
+    if (cur.len == 0 or cur[0] != '[') {
+        mark_degraded(); // "vms" present but not an array: corrupt file
+        return 0;
+    }
     cur = cur[1..];
 
     // Parse VM objects
@@ -1659,6 +1675,14 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "persist: corrupt non-empty file (no vms array) yields 0 VMs" {
+    var vms: [vm.MAX_VMS]vm.VmConfig = undefined;
+    var prefs = vm.Prefs{};
+    try std.testing.expectEqual(@as(usize, 0), loadFromSlice(&vms, "{\"garbage\":true}", &prefs));
+    try std.testing.expectEqual(@as(usize, 0), loadFromSlice(&vms, "{\"vms\": \"not-an-array\"}", &prefs));
+    try std.testing.expectEqual(@as(usize, 0), loadFromSlice(&vms, "not json at all", &prefs));
+}
 
 test "save refuses to overwrite when load read failed" {
     // Simulate a degraded load (unreadable existing vms.json).

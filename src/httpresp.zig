@@ -144,7 +144,7 @@ pub fn isServerErrToken(response: []const u8) bool {
         "create err", "delete err", "linkerr",   "migrate err",
         "nameerr",    "path err",   "qmp err",   "sock err",
         "write err",  "change err", "eject err", "resize err",
-        "upload err", "save failed", "compact err",
+        "upload err", "save failed", "compact err", "internal err",
     };
     for (tokens) |t| {
         if (std.mem.eql(u8, response, t)) return true;

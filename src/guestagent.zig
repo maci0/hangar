@@ -8,6 +8,7 @@ const vm = @import("vm.zig");
 const appstate = @import("appstate.zig");
 const usock = @import("usock.zig");
 const httpreq = @import("httpreq.zig");
+const qmp = @import("qmp.zig");
 
 const parseIdx = httpreq.parseIdx;
 
@@ -61,6 +62,8 @@ pub fn query(req: []const u8, out: []u8) []const u8 {
         name_len = nm.len;
     }
 
+    // Defense in depth: a hand-edited config name must not traverse out of /tmp.
+    if (!qmp.isPathSafeName(name_buf[0..name_len])) return "{\"ips\":\"\"}";
     var sock_buf: [128]u8 = undefined;
     const sock = std.fmt.bufPrint(&sock_buf, "/tmp/hangar-ga-{s}.sock", .{name_buf[0..name_len]}) catch return "{\"ips\":\"\"}";
     const stream = usock.UnixStream.connect(sock) catch return "{\"ips\":\"\"}";
