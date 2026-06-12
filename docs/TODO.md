@@ -3073,3 +3073,27 @@ Both the `VmConfig→VmJson fields→VmConfig` test and the
 | `parseWatchdogAction` | All variants round-trip + unknown → none + empty → none |
 | `parseDiskCache` | All variants round-trip + unknown → writeback + empty → writeback |
 
+
+## Deferred from the multi-review pass (tracked, not yet fixed)
+
+These need careful, isolated changes with their own tests — deliberately not
+bundled into the sweep that fixed the security/correctness set.
+
+- **handlePower holds vms_mutex across blocking start/stop I/O** (web_server.zig).
+  Flagged by concurrency + perf + arch reviews. The lock is currently held
+  *deliberately* — releasing it naively reintroduces a fixed use-after-free
+  (the VMM handle + VmConfig can be freed by a concurrent delete/clone). A
+  correct fix adds a per-slot "in-transition" guard that delete/clone/rename/
+  suspend honor, then does fork/exec/reap unlocked and re-validates the slot by
+  id on re-lock (the handleDelete/handleSuspend pattern). Impact today: the
+  ~5s UI poll stutters for the ~1-2s power-on window on this single-user tool.
+- **dbusdisplay video pipeline lock-during-I/O** (MEDIUM): `emitAu` holds the
+  client write spinlock across blocking WS writes to up to 8 viewers;
+  `pushFrameNowLocked`/`stopEncoderLocked` do pipe writes / blocking waitpid
+  under `fb_mutex`/`enc_mutex`. Per-client write mutexes (or snapshot-fds-then-
+  write-unlocked) fix it. Encoder generation-count race and the unsynchronized
+  `bitrate_kbps` write are in the same module.
+- **persist.save runs under vms_mutex** (~12 call sites): serialize to a buffer
+  under the lock, then write/fsync/rename unlocked.
+- **No idempotent /start /stop routes**: /power is a blind toggle; the CLI's
+  read-then-toggle has a TOCTOU window. Add explicit start/stop.
