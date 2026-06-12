@@ -17,6 +17,13 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   `@embedFile`'d, served at `/novnc.js` etc, and listed in `auth.isAuthExempt`.
 
 ## Local Contracts
+- **UI patterns** (keep consistent when adding surfaces): menu items are
+  `<button class="menu-item">` with a leading 13px `.ico` sprite svg and trailing `…`
+  for dialog-openers; dialog footers are `.btn-row` (right-aligned, primary last,
+  destructive `.btn.danger` grouped left when present). Destructive-action rule:
+  recoverable deletes use the undo toast (`toastUndo`), irreversible operations
+  (snapshot revert, disk ops) use `showConfirmDialog({danger:true})` — don't mix.
+
 - **Reactivity**: `GET /api/events` (SSE) pushes a change event whenever the daemon's
   state version bumps; the client refreshes on it (5s poll stays as fallback). The host
   dashboard is a VanJS component driven by `vmsState`/`dashSortState` — update state,

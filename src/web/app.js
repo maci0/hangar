@@ -60,6 +60,8 @@ var selectMode=false; var checkedIds=new Set(); // sidebar multi-select bulk-ops
 var settingsCategory='compute';
 var displayLabels=['GTK','SDL','SPICE','VNC','None'];
 var gpuLabels=['Virtio-GPU (virgl 3D)','Virtio-VGA (virgl 3D)','Virtio-GPU','Virtio-VGA','QXL','Standard VGA'];
+function relAge(ts){var t=Date.parse(String(ts).replace(' ','T'));if(!t)return '';var d=Math.floor((Date.now()-t)/1000);if(d<0)return '';
+if(d<60)return 'just now';if(d<3600)return Math.floor(d/60)+' min ago';if(d<86400)return Math.floor(d/3600)+' h ago';return Math.floor(d/86400)+' d ago';}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function announceStatus(s){var a=document.getElementById('statusannounce');if(a)a.textContent=s;}
 function setStatus(s){var el=document.getElementById('statusmsg');if(!el)return;el.textContent=s;el.classList.remove('loading');announceStatus(s);}
@@ -74,7 +76,7 @@ function toastUndo(msg,onUndo){showToast(msg,'info',{action:'undo',onAction:onUn
 // ── Confirm dialog (replaces native confirm() with custom modal) ──
 function showConfirmDialog(msg,opts){return new Promise(function(resolve){var dlg=document.getElementById('confirmdlg');var msgEl=document.getElementById('confirmmsg');var okBtn=document.getElementById('confirmOkBtn');var cancelBtn=document.getElementById('confirmCancelBtn');if(!dlg||!msgEl||!okBtn||!cancelBtn){resolve(confirm(msg));return;}msgEl.textContent=msg;okBtn.className=opts&&opts.danger?'btn danger':'btn primary';okBtn.textContent=opts&&opts.okLabel?opts.okLabel:'OK';function cleanup(){okBtn.removeEventListener('click',onOk);cancelBtn.removeEventListener('click',onCancel);dlg.removeEventListener('close',onCancel);okBtn.className='btn primary';okBtn.textContent='OK';dlg.close();}function onOk(){cleanup();resolve(true);}function onCancel(){cleanup();resolve(false);}okBtn.addEventListener('click',onOk);cancelBtn.addEventListener('click',onCancel);dlg.addEventListener('close',onCancel);trapFocus(dlg);dlg.showModal();});}
 // ── Prompt dialog (replaces native prompt() with custom modal) ──
-function showPromptDialog(label,defaultValue){return new Promise(function(resolve){var dlg=document.getElementById('promptdlg');var labelEl=document.getElementById('promptLabel');var input=document.getElementById('promptInput');var okBtn=document.getElementById('promptOkBtn');var cancelBtn=document.getElementById('promptCancelBtn');if(!dlg||!labelEl||!input||!okBtn||!cancelBtn){resolve(prompt(label,defaultValue||''));return;}labelEl.textContent=label;input.value=defaultValue||'';function cleanup(){okBtn.removeEventListener('click',onOk);cancelBtn.removeEventListener('click',onCancel);input.removeEventListener('keydown',onKey);dlg.removeEventListener('close',onCancel);dlg.close();}function onOk(){cleanup();resolve(input.value);}function onCancel(){cleanup();resolve(null);}function onKey(e){if(e.key==='Enter'){e.preventDefault();onOk();}}okBtn.addEventListener('click',onOk);cancelBtn.addEventListener('click',onCancel);input.addEventListener('keydown',onKey);dlg.addEventListener('close',onCancel);trapFocus(dlg);dlg.showModal();input.focus();input.select();});}
+function showPromptDialog(label,defaultValue,suggestions){return new Promise(function(resolve){var dlg=document.getElementById('promptdlg');var labelEl=document.getElementById('promptLabel');var input=document.getElementById('promptInput');var dl=document.getElementById('promptOptions');if(dl){dl.innerHTML=(suggestions||[]).map(function(o){return '<option value="'+escHtml(o)+'">';}).join('');if(suggestions&&suggestions.length)input.setAttribute('list','promptOptions');else input.removeAttribute('list');}var okBtn=document.getElementById('promptOkBtn');var cancelBtn=document.getElementById('promptCancelBtn');if(!dlg||!labelEl||!input||!okBtn||!cancelBtn){resolve(prompt(label,defaultValue||''));return;}labelEl.textContent=label;input.value=defaultValue||'';function cleanup(){okBtn.removeEventListener('click',onOk);cancelBtn.removeEventListener('click',onCancel);input.removeEventListener('keydown',onKey);dlg.removeEventListener('close',onCancel);dlg.close();}function onOk(){cleanup();resolve(input.value);}function onCancel(){cleanup();resolve(null);}function onKey(e){if(e.key==='Enter'){e.preventDefault();onOk();}}okBtn.addEventListener('click',onOk);cancelBtn.addEventListener('click',onCancel);input.addEventListener('keydown',onKey);dlg.addEventListener('close',onCancel);trapFocus(dlg);dlg.showModal();input.focus();input.select();});}
 var apiPostPending=0;
 var loadBar=null;
 function initLoadBar(){loadBar=document.createElement('div');loadBar.id='loadbar';var mn=document.querySelector('main');if(mn)mn.appendChild(loadBar);else document.body.appendChild(loadBar);}
@@ -137,7 +139,8 @@ function folderOpen(f){try{var c=JSON.parse(localStorage.getItem('hangar.folders
 function setFolderOpen(f,o){try{var c=JSON.parse(localStorage.getItem('hangar.folders')||'{}');c[f]=o;localStorage.setItem('hangar.folders',JSON.stringify(c));}catch(e){}}
 function folderList(){var s={};for(var i=0;i<vms.length;i++){var f=vmFolder(vms[i]);if(f)s[f]=1;}return Object.keys(s).sort();}
 async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[sel];var cur=vmFolder(v);
-  var f=await showPromptDialog('Move "'+v.name+'" to folder (blank = none):',cur);if(f===null)return;f=f.trim();
+  var folders=[];vms.forEach(function(x){var fl=vmFolder(x);if(fl&&folders.indexOf(fl)<0)folders.push(fl);});folders.sort();
+  var f=await showPromptDialog('Move "'+v.name+'" to folder (blank = none):',cur,folders);if(f===null)return;f=f.trim();
   var r=await apiPost('/api/vms/'+sel,'folder='+encodeURIComponent(f));
   if(r){await refresh();setStatus(f?('Moved to '+escHtml(f)):'Removed from folder');}}
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
@@ -149,7 +152,7 @@ function vmItemHtml(x){
  const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
  const star=x.fav?'<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></button>':'<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></button>';
  const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-id="'+escHtml(x.v.id)+'"'+(checkedIds.has(x.v.id)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
- return '<div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="option" aria-selected="'+(sel===x.i?'true':'false')+'" data-vm-index="'+x.i+'" tabindex="0" data-action="select" draggable="true">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'"></span> '+escHtml(x.v.name)+star+vmBars(x.v)+'</div>';
+ return '<div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="option" aria-selected="'+(sel===x.i?'true':'false')+'" data-vm-index="'+x.i+'" tabindex="0" data-action="select" draggable="true">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'" title="'+dotLabel+'"></span> '+escHtml(x.v.name)+star+vmBars(x.v)+'</div>';
 }
 for(const x of viz){if(!x.show||!x.fav)continue;h+=vmItemHtml(x);}
 if(hasFavs&&hasNon)h+='<div role="separator" aria-hidden="true" style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
@@ -402,7 +405,7 @@ var v=selectedVm();var meta=document.getElementById('snapMeta');var running=v&&(
 try{const r=await fetch('/api/vms/'+sel+'/snapshots');if(!r.ok){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';return;}const t=(await r.text()).trim();
 if(!t||t==='(none)'){el.innerHTML='<div class="snapshot-empty">No snapshots yet. Take one above to capture this VM\'s disk state — you can revert to or delete it here later.</div>';return;}
 const lines=t.split('\n');let h='';for(const ln of lines){const parts=ln.split('\t');const tag=(parts[0]||'').trim();if(!tag)continue;const when=(parts[1]||'').trim();
-h+=`<div class="snapshot-row"><div><strong>${escHtml(tag)}</strong><small>${when?'Taken '+escHtml(when):'Saved state'}</small></div><div class="snapshot-actions"><button class="btn" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Revert to snapshot ${escHtml(tag)}"${running?' disabled title="Power off the VM before reverting"':''}>Revert</button><button class="btn danger" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Delete snapshot ${escHtml(tag)}">Delete</button></div></div>`;}
+h+=`<div class="snapshot-row"><div><strong>${escHtml(tag)}</strong><small title="${when?escHtml(relAge(when)):''}">${when?'Taken '+escHtml(when):'Saved state'}</small></div><div class="snapshot-actions"><button class="btn" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Revert to snapshot ${escHtml(tag)}"${running?' disabled title="Power off the VM before reverting"':''}>Revert</button><button class="btn danger" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Delete snapshot ${escHtml(tag)}">Delete</button></div></div>`;}
 el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
 async function revertSnapshot(tag){if(sel===null||!tag)return;if(!(await showConfirmDialog('Revert to snapshot "'+tag+'"? This will discard current state.',{danger:true,okLabel:'Revert'})))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
 const r=await apiPost('/api/vms/'+sel+'/snapshots/revert','tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);var sd=document.getElementById('snapdlg');if(sd)sd.close();}else{loadSnapshots();}}
@@ -554,8 +557,8 @@ const fields=[
 ['Ballooning','e_ballooning','select',v.ballooning==='true'?'1':'0'],
 ['Host Autostart','e_host_autostart','select',v.host_autostart==='true'?'1':'0'],
 ['I/O Threads','e_io_threads','number',v.io_threads||0,'min="0" max="64" step="1"'],
-['Disk BPS Throttle','e_disk_bps_throttle','number',v.disk_bps_throttle||0,'min="0" max="1099511627776" step="1"'],
-['Disk IOPS Throttle','e_disk_iops_throttle','number',v.disk_iops_throttle||0,'min="0" max="100000000" step="1"']]));
+['Disk Throttle (bytes/s, 0 = off)','e_disk_bps_throttle','number',v.disk_bps_throttle||0,'min="0" max="1099511627776" step="1"'],
+['Disk Throttle (IOPS, 0 = off)','e_disk_iops_throttle','number',v.disk_iops_throttle||0,'min="0" max="100000000" step="1"']]));
 const selects={e_network:[['user','NAT (User)'],['gvproxy','gvproxy (User)'],['bridge','Bridged'],['none','None']],
 e_firmware:[['bios','BIOS'],['uefi','UEFI']],e_disk_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
 e_disk2_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
@@ -1440,13 +1443,13 @@ function manualDisconnectSerial(){serialManualOff=true;serialManualOffVmIdx=sel!
   // After any height change, refit the xterm grid to the new box.
   var refit = function(){ if (typeof serialFitNow === 'function') serialFitNow(); };
   var startY = 0, startH = 0, dragging = false;
+  function dragStart(clientY){dragging=true;startY=clientY;startH=term.offsetHeight;document.body.style.cursor='ns-resize';document.body.style.userSelect='none';}
+  handle.addEventListener('touchstart', function(e){ if(e.touches.length===1){ e.preventDefault(); dragStart(e.touches[0].clientY); } }, {passive:false});
+  window.addEventListener('touchmove', function(e){ if(!dragging||!e.touches.length) return; var dy=e.touches[0].clientY-startY; var nh=Math.max(60,Math.min(600,startH+dy)); term.style.height=nh+'px'; refit(); }, {passive:true});
+  window.addEventListener('touchend', function(){ if(!dragging) return; dragging=false; document.body.style.cursor=''; document.body.style.userSelect=''; refit(); });
   handle.addEventListener('mousedown', function(e) {
     e.preventDefault();
-    dragging = true;
-    startY = e.clientY;
-    startH = term.offsetHeight;
-    document.body.style.cursor = 'ns-resize';
-    document.body.style.userSelect = 'none';
+    dragStart(e.clientY);
   });
   window.addEventListener('mousemove', function(e) {
     if (!dragging) return;

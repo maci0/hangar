@@ -1082,3 +1082,9 @@ body.displayonly .displayonly-bar{display:flex}
    stacking on top of each other along the top edge. */
 body.displayonly .display-toolbar{top:42px;left:8px}
 body.displayonly .display-badge,body.displayonly #displayBadge{top:42px;right:8px}
+
+/* Skip link: visible only when keyboard-focused. */
+.skip-link{position:absolute;left:-9999px;top:0;z-index:20000;background:var(--accent);color:#fff;padding:8px 14px;border-radius:0 0 4px 0;font-size:13px}
+.skip-link:focus{left:0}
+/* Select-mode checkbox sits flush in the row grid. */
+aside .vm-item .vm-check{flex:none;margin:0 6px 0 0;accent-color:var(--accent);width:15px;height:15px}
