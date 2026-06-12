@@ -2602,6 +2602,22 @@ const TestConfigHome = struct {
     }
 };
 
+test "nameTaken: detects duplicates and honors the skip index" {
+    const saved_count = appstate.vm_count;
+    defer appstate.vm_count = saved_count;
+    appstate.vm_count = 2;
+    appstate.vms[0] = vm.VmConfig{};
+    appstate.vms[1] = vm.VmConfig{};
+    appstate.vms[0].setName("alpha");
+    appstate.vms[1].setName("beta");
+    try std.testing.expect(nameTaken("alpha", null));
+    try std.testing.expect(nameTaken("beta", null));
+    try std.testing.expect(!nameTaken("gamma", null));
+    // skip the VM's own index so a no-op rename isn't a false collision
+    try std.testing.expect(!nameTaken("alpha", 0));
+    try std.testing.expect(nameTaken("alpha", 1));
+}
+
 test "isServerErrToken: matches dynamic error constants exactly" {
     try std.testing.expect(isServerErrToken("qmp err"));
     try std.testing.expect(isServerErrToken("apply err"));

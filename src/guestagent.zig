@@ -91,6 +91,20 @@ pub fn query(req: []const u8, out: []u8) []const u8 {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
+test "fuzz: parseIpv4s never panics and stays within the output buffer" {
+    var prng = std.Random.DefaultPrng.init(0x6A11_0001);
+    const rnd = prng.random();
+    var jbuf: [2048]u8 = undefined;
+    var out: [64]u8 = undefined; // deliberately small to exercise the bound
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, jbuf.len);
+        for (jbuf[0..len]) |*b| b.* = rnd.int(u8);
+        const r = parseIpv4s(jbuf[0..len], &out);
+        std.debug.assert(r.len <= out.len);
+    }
+}
+
 test "guestagent: parseIpv4s extracts non-loopback IPv4s" {
     var out: [128]u8 = undefined;
     const sample = "{\"return\":[{\"ip-address\":\"127.0.0.1\"},{\"ip-address\":\"192.168.1.5\"},{\"ip-address\":\"fe80::1\"}]}";

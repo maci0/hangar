@@ -131,6 +131,26 @@ pub fn getBody(req: []const u8) ?[]const u8 {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
+test "fuzz: httpreq parsers never panic on random request bytes" {
+    var prng = std.Random.DefaultPrng.init(0x4777_9001);
+    const rnd = prng.random();
+    var buf: [1024]u8 = undefined;
+    var out: [256]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        const req = buf[0..len];
+        _ = parseIdx(req, "POST /api/vms/");
+        _ = parseVmIdxSuffix(req, "GET /ws/vnc/", "");
+        _ = findHeader(req, "Content-Length: ");
+        if (parseContentLength(req)) |cl| std.debug.assert(cl <= std.math.maxInt(usize));
+        if (getBody(req)) |b| std.debug.assert(b.len <= req.len);
+        const line = requestLine(req, &out);
+        std.debug.assert(line.len <= out.len);
+    }
+}
+
 test "httpreq: parseIdx + suffix/exact routing" {
     try std.testing.expectEqual(@as(?usize, 12), parseIdx("POST /api/vms/12/power HTTP/1.1", "POST /api/vms/"));
     try std.testing.expectEqual(@as(?usize, 0), parseVmIdxSuffix("GET /api/vms/0/log HTTP/1.1", "GET /api/vms/", "/log"));

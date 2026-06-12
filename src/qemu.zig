@@ -2455,6 +2455,17 @@ test "fuzz: parseTopLevelU64 never panics on random bytes" {
     }
 }
 
+test "qemu: embedded SPICE binds loopback only (addr=127.0.0.1)" {
+    var cfg = vm.VmConfig{};
+    cfg.embed_display = true;
+    cfg.display = .spice;
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    // The unauthenticated ticketless SPICE port must not be LAN-reachable.
+    try expect(has(s, "addr=127.0.0.1,port="));
+    try expect(has(s, "disable-ticketing=on"));
+}
+
 test "qemu: buildScriptStr embedded SPICE virgl uses EGL headless GL" {
     var cfg = vm.VmConfig{};
     cfg.embed_display = true;

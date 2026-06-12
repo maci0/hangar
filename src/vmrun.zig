@@ -485,22 +485,6 @@ fn findVmStatusInJson(json: []const u8, idx: usize) ?[]const u8 {
     return null;
 }
 
-/// True if a VM object with `"idx":N` exists in the list JSON. Distinguishes a
-/// nonexistent index from a VM whose status simply couldn't be read, so the CLI
-/// doesn't silently report a bad index as "already powered off".
-fn vmExistsInJson(json: []const u8, idx: usize) bool {
-    var rest = json;
-    while (std.mem.indexOfScalar(u8, rest, '{')) |obj_start| {
-        rest = rest[obj_start..];
-        const obj_end = std.mem.indexOfScalar(u8, rest, '}') orelse break;
-        const obj = rest[0 .. obj_end + 1];
-        rest = rest[obj_end + 1 ..];
-        if (extractJsonInt(obj, "idx")) |oi| {
-            if (oi == idx) return true;
-        }
-    }
-    return false;
-}
 
 /// True when a VM-list status string denotes a powered-on VM (running or
 /// paused), mirroring the daemon's `VmConfig.isAlive`.
