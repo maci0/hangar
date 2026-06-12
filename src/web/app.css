@@ -1088,3 +1088,6 @@ body.displayonly .display-badge,body.displayonly #displayBadge{top:42px;right:8p
 .skip-link:focus{left:0}
 /* Select-mode checkbox sits flush in the row grid. */
 aside .vm-item .vm-check{flex:none;margin:0 6px 0 0;accent-color:var(--accent);width:15px;height:15px}
+
+.inv tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.inv thead th:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
