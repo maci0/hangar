@@ -341,7 +341,7 @@ test('live console: SPICE display connects and paints in the Console tab', async
     await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-spice')}/power`, '');
 });
 
-test('video stream: H.264 over /ws/video paints the WebCodecs overlay', async ({ page }) => {
+test('video stream: H.264 over /ws/video paints the WebCodecs overlay', async ({ page, context }) => {
     test.skip(!hasFfmpeg, 'ffmpeg not installed on this host');
     await api(page, 'POST', '/api/vms', 'name=wf-video&mem=1024&cpu=1&disk=1&guest_os=2&display=vnc&embed_display=true&video_stream=1&video_bitrate=2500&firmware=bios');
     const idx = await indexOf(page, 'wf-video');
@@ -359,6 +359,14 @@ test('video stream: H.264 over /ws/video paints the WebCodecs overlay', async ({
         try { const d = c.getContext('2d').getImageData(0, 0, Math.min(64, c.width), Math.min(64, c.height)).data; for (let i = 0; i < d.length; i += 4) { if (d[i] || d[i + 1] || d[i + 2]) return true; } } catch (e) {}
         return false;
     }), { timeout: 20000 }).toBe(true);
+    // Fan-out: a second viewer joins the same encoder and paints too.
+    const page2 = await context.newPage();
+    await page2.goto('/');
+    await page2.locator('.vm-item', { hasText: 'wf-video' }).first().click();
+    await expect.poll(() => page2.evaluate(() => { const c = document.querySelector('#display .video-layer'); return c ? c.width : 0; }), { timeout: 15000 }).toBeGreaterThan(0);
+    await page2.close();
+    // First viewer must still be streaming after the second leaves.
+    expect(await page.evaluate(() => videoWs && videoWs.readyState === WebSocket.OPEN)).toBe(true);
     await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-video')}/power`, '');
 });
 

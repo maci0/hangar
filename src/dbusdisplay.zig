@@ -407,8 +407,12 @@ pub const Session = struct {
     last_push_ms: u64 = 0,
     fb_dirty: bool = false,
     bitrate_kbps: u32 = 0,
-    client_fd: c.fd_t = -1,
+    // Attached video clients (fan-out: one encoder, N viewers). Slots are
+    // -1 when free; client_wmtx guards the array AND all WS writes to them.
+    clients: [MAX_VIDEO_CLIENTS]c.fd_t = [_]c.fd_t{-1} ** MAX_VIDEO_CLIENTS,
+    client_count: u8 = 0,
     client_wmtx: sync.SpinMutex = .{},
+    pump_running: bool = false,
 
     fn nameSlice(self: *const Session) []const u8 {
         return self.name_buf[0..self.name_len];
@@ -416,6 +420,7 @@ pub const Session = struct {
 };
 
 const MAX_FB_BYTES: usize = 32 * 1024 * 1024; // 2900x2900 BGRX ceiling
+pub const MAX_VIDEO_CLIENTS: usize = 8;
 
 var sessions_mutex: sync.SpinMutex = .{};
 var sessions: [vm.MAX_VMS]?*Session = [_]?*Session{null} ** vm.MAX_VMS;
@@ -437,6 +442,12 @@ fn registerSession(name: []const u8) ?*Session {
     sess.name_len = n;
     sessions[slot] = sess;
     return sess;
+}
+
+fn sessionRefInc(sess: *Session) void {
+    sessions_mutex.lock();
+    sess.refs += 1;
+    sessions_mutex.unlock();
 }
 
 fn sessionUnref(sess: *Session) void {
@@ -724,7 +735,13 @@ fn stopEncoderLocked(sess: *Session) void {
     defer sess.enc_mutex.unlock();
     if (sess.enc_pid < 0) return;
     _ = c.close(sess.enc_in);
-    _ = c.close(sess.enc_out);
+    // enc_out belongs to the pump while it runs: closing it here while the
+    // pump is blocked in read() would free the fd number for reuse and the
+    // pump could end up reading some unrelated socket. Killing ffmpeg makes
+    // the pump's read return 0; the pump closes its fd itself on exit.
+    if (!sess.pump_running) {
+        _ = c.close(sess.enc_out);
+    }
     _ = c.kill(sess.enc_pid, .KILL);
     var status: c_int = 0;
     _ = c.waitpid(sess.enc_pid, &status, 0);
@@ -774,21 +791,55 @@ pub fn serveVideoClient(conn: c.fd_t, name: []const u8, bitrate_kbps: u32) void 
         ws.writeClose(conn) catch {};
         return;
     }
-    sess.enc_mutex.lock();
-    const busy = sess.client_fd >= 0;
-    if (!busy) sess.client_fd = conn;
-    sess.enc_mutex.unlock();
-    if (busy) {
+    // Claim a viewer slot.
+    sess.client_wmtx.lock();
+    var slot: ?usize = null;
+    for (0..MAX_VIDEO_CLIENTS) |i| {
+        if (sess.clients[i] < 0) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot) |i| {
+        sess.clients[i] = conn;
+        sess.client_count += 1;
+    }
+    sess.client_wmtx.unlock();
+    if (slot == null) {
         ws.writeClose(conn) catch {};
         return;
     }
     defer {
-        sess.enc_mutex.lock();
-        sess.client_fd = -1;
-        sess.enc_mutex.unlock();
-        stopEncoder(sess);
+        sess.client_wmtx.lock();
+        sess.clients[slot.?] = -1;
+        sess.client_count -= 1;
+        const last = sess.client_count == 0;
+        sess.client_wmtx.unlock();
+        // Last viewer gone: stop the encoder (the pump exits on its closed
+        // stdout and drops its session ref).
+        if (last) stopEncoder(sess);
     }
     if (!startEncoder(sess, w, h)) return;
+    // One pump per encoder, spawned by whichever client started it. The pump
+    // holds its own session ref and broadcasts to every attached client.
+    {
+        sess.enc_mutex.lock();
+        const need_pump = !sess.pump_running and sess.enc_out >= 0;
+        if (need_pump) sess.pump_running = true;
+        sess.enc_mutex.unlock();
+        if (need_pump) {
+            sessionRefInc(sess);
+            if (std.Thread.spawn(std.Thread.SpawnConfig{}, encoderPump, .{sess})) |th| {
+                th.detach();
+            } else |_| {
+                sess.enc_mutex.lock();
+                sess.pump_running = false;
+                sess.enc_mutex.unlock();
+                sessionUnref(sess);
+                return;
+            }
+        }
+    }
 
     // Config frame: 0x01, u16le width, u16le height, u8 codec(0=h264).
     var cfg: [6]u8 = undefined;
@@ -804,9 +855,8 @@ pub fn serveVideoClient(conn: c.fd_t, name: []const u8, bitrate_kbps: u32) void 
     sess.client_wmtx.unlock();
     if (!cfg_ok) return;
 
-    // Pump encoder output on a separate thread; this thread drains client
-    // input (ping/close) like the other relays.
-    const pump = std.Thread.spawn(std.Thread.SpawnConfig{}, encoderPump, .{ sess, conn }) catch return;
+    // Drain client input (ping/close) like the other relays; the shared pump
+    // broadcasts encoder output to every client.
     var buf: [4096]u8 = undefined;
     while (true) {
         const hdr = ws.readFrameHeader(conn) orelse break;
@@ -823,40 +873,53 @@ pub fn serveVideoClient(conn: c.fd_t, name: []const u8, bitrate_kbps: u32) void 
         }
         _ = ws.readFramePayload(conn, &buf, hdr) orelse break;
     }
-    stopEncoder(sess); // closes enc_out → pump exits
-    pump.join();
 }
 
-const PumpCtx = struct {
-    sess: *Session,
-    conn: c.fd_t,
-};
-
-fn emitAu(ctx: PumpCtx, au: []const u8, key: bool) bool {
+fn emitAu(sess: *Session, au: []const u8, key: bool) bool {
     var hdr_byte: [1]u8 = .{if (key) 0x03 else 0x02};
     // Frame: 0x02|0x03 marker byte then the Annex-B access unit. (0x03 = key.)
-    ctx.sess.client_wmtx.lock();
-    defer ctx.sess.client_wmtx.unlock();
-    ws.writeFrame2(ctx.conn, .binary, &hdr_byte, au) catch return false;
+    // Broadcast to every attached client; a failed write shuts that client's
+    // socket down (its drain loop then exits and frees the slot) without
+    // affecting the others.
+    sess.client_wmtx.lock();
+    defer sess.client_wmtx.unlock();
+    for (0..MAX_VIDEO_CLIENTS) |i| {
+        const fd = sess.clients[i];
+        if (fd < 0) continue;
+        ws.writeFrame2(fd, .binary, &hdr_byte, au) catch {
+            _ = c.shutdown(fd, netutilShut());
+        };
+    }
     return true;
 }
 
-fn encoderPump(sess: *Session, conn: c.fd_t) void {
+fn encoderPump(sess: *Session) void {
+    defer {
+        sess.enc_mutex.lock();
+        sess.pump_running = false;
+        sess.enc_mutex.unlock();
+        // Encoder gone: force every remaining client's drain loop to exit.
+        sess.client_wmtx.lock();
+        for (0..MAX_VIDEO_CLIENTS) |i| {
+            if (sess.clients[i] >= 0) _ = c.shutdown(sess.clients[i], netutilShut());
+        }
+        sess.client_wmtx.unlock();
+        sessionUnref(sess);
+    }
     sess.enc_mutex.lock();
     const out = sess.enc_out;
     sess.enc_mutex.unlock();
     if (out < 0) return;
+    defer _ = c.close(out); // pump owns the read end (see stopEncoderLocked)
     const au_buf = std.heap.page_allocator.alloc(u8, 4 * 1024 * 1024) catch return;
     defer std.heap.page_allocator.free(au_buf);
     var splitter = AuSplitter{ .buf = au_buf };
     var rbuf: [64 * 1024]u8 = undefined;
-    const ctx = PumpCtx{ .sess = sess, .conn = conn };
     while (true) {
         const n = c.read(out, &rbuf, rbuf.len);
         if (n <= 0) break;
-        if (!splitter.feed(rbuf[0..@intCast(n)], ctx, emitAu)) break;
+        if (!splitter.feed(rbuf[0..@intCast(n)], sess, emitAu)) break;
     }
-    _ = c.shutdown(conn, netutilShut());
 }
 
 fn netutilShut() c_int {
