@@ -68,7 +68,7 @@ fallback. The host dashboard is a VanJS component. Vendored, embedded
 frontend libs: noVNC, spice-html5, elkjs (vnet topology), vanjs-core,
 @xterm/xterm (+fit/webgl addons). Guest display chain: virtio-vga-gl → virgl
 → egl-headless host render → VNC/SPICE scanout stream → WebGPU/WebGL2
-presenter (see docs/VIDEO-PIPELINE.md for the planned encoded-video path).
+presenter (see docs/VIDEO-PIPELINE.md for the encoded-video path (phases 1-2 shipped)).
 
 ## Keyboard Shortcuts
 

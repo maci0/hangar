@@ -238,6 +238,6 @@ When the user requests a durable behavior change, record it here or in the relev
   shell API/vmrun) that drive the built binary; distinct from the in-module unit/fuzz tests.
 
 Owned by the parent (no child doc): `docs/` (design notes — DESIGN/PRD/GAP-ANALYSIS/
-TEST-COVERAGE/WEB-UI-CUJS/TODO; reference material, not contracts), `reference/`
+TEST-COVERAGE/WEB-UI-CUJS/TODO/VIDEO-PIPELINE; reference material, not contracts), `reference/`
 (read-only external material: VMware WS7), `zig-pkg/` (vendored Zig deps — do not edit),
 and the root build files (`build.zig`, `build.zig.zon`, `package.json`, `playwright.config.mjs`).

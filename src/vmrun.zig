@@ -485,6 +485,23 @@ fn findVmStatusInJson(json: []const u8, idx: usize) ?[]const u8 {
     return null;
 }
 
+/// True if a VM object with `"idx":N` exists in the list JSON. Distinguishes a
+/// nonexistent index from a VM whose status simply couldn't be read, so the CLI
+/// doesn't silently report a bad index as "already powered off".
+fn vmExistsInJson(json: []const u8, idx: usize) bool {
+    var rest = json;
+    while (std.mem.indexOfScalar(u8, rest, '{')) |obj_start| {
+        rest = rest[obj_start..];
+        const obj_end = std.mem.indexOfScalar(u8, rest, '}') orelse break;
+        const obj = rest[0 .. obj_end + 1];
+        rest = rest[obj_end + 1 ..];
+        if (extractJsonInt(obj, "idx")) |oi| {
+            if (oi == idx) return true;
+        }
+    }
+    return false;
+}
+
 /// True when a VM-list status string denotes a powered-on VM (running or
 /// paused), mirroring the daemon's `VmConfig.isAlive`.
 fn statusIsAlive(status: []const u8) bool {
@@ -575,6 +592,12 @@ fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usiz
     const want_on = std.mem.eql(u8, action, "start");
     const json = try sendRequest(allocator, conn, "GET", "/api/vms", null);
     defer allocator.free(json);
+    if (!vmExistsInJson(json, idx)) {
+        var ebuf: [128]u8 = undefined;
+        const em = std.fmt.bufPrint(&ebuf, "Error: no VM at index {d}\n", .{idx}) catch "Error: no such VM\n";
+        fdWrite(c.STDERR_FILENO, em);
+        std.process.exit(1);
+    }
     const is_on = if (findVmStatusInJson(json, idx)) |s| statusIsAlive(s) else false;
     if (is_on == want_on) {
         var nbuf: [256]u8 = undefined;

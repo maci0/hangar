@@ -4,7 +4,7 @@
 
 ```
 zig build test
-→ All tests pass across 35 modules
+→ All tests pass across 50+ registered test modules
 ```
 
 ## Pure Module Tests
@@ -54,7 +54,7 @@ commit; run `zig build test` for the authoritative result.
 
 ## Web End-to-End
 
-The Playwright e2e suite is folded into the umbrella `test` step, or run on its own:
+The Playwright e2e suite is a standalone `zig build web-e2e` step, NOT part of `zig build test` (which stays hermetic), or run on its own:
 
 ```bash
 zig build web-e2e      # Web UI end-to-end tests (Playwright, temp port + $HOME)
