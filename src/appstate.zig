@@ -30,6 +30,60 @@ pub var g_vmm: hv_iface.Vmm = undefined;
 pub var g_vmm_ready: bool = false;
 pub var g_vmm_handles: [MAX_VMS]?hv_iface.VmmHandle = .{null} ** MAX_VMS;
 
+// ── Power-transition guard ──────────────────────────────────────────
+// Power on/off runs its blocking fork/exec/reap WITHOUT vms_mutex held (so the
+// poll/SSE/render don't spin for the ~1-2s power window). These hold the set of
+// VM ids currently mid-transition so a second power op on the same VM (e.g. a
+// double-click) is refused rather than spawning a duplicate QEMU. Indexed by
+// id, not slot, because the array shifts on delete during the unlocked window.
+// All helpers require vms_mutex.
+var transition_ids: [MAX_VMS][32]u8 = undefined;
+var transition_lens: [MAX_VMS]u8 = [_]u8{0} ** MAX_VMS;
+
+/// True if `id` is already mid power-transition. Caller holds vms_mutex.
+pub fn isTransitioning(id: []const u8) bool {
+    for (0..MAX_VMS) |i| {
+        if (transition_lens[i] != 0 and std.mem.eql(u8, transition_ids[i][0..transition_lens[i]], id)) return true;
+    }
+    return false;
+}
+
+/// Claim a power-transition for `id`; false if already claimed or no slot.
+/// Caller holds vms_mutex.
+pub fn beginTransition(id: []const u8) bool {
+    if (id.len == 0 or id.len > 32) return false;
+    if (isTransitioning(id)) return false;
+    for (0..MAX_VMS) |i| {
+        if (transition_lens[i] == 0) {
+            @memcpy(transition_ids[i][0..id.len], id);
+            transition_lens[i] = @intCast(id.len);
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Release the power-transition claim for `id`. Caller holds vms_mutex.
+pub fn endTransition(id: []const u8) void {
+    for (0..MAX_VMS) |i| {
+        if (transition_lens[i] != 0 and std.mem.eql(u8, transition_ids[i][0..transition_lens[i]], id)) {
+            transition_lens[i] = 0;
+            return;
+        }
+    }
+}
+
+/// Index of the VM whose stable id equals `id`, or null. Caller holds vms_mutex.
+/// Used to re-resolve a slot after releasing the lock for blocking I/O — the
+/// array may have shifted (delete) or the VM may be gone.
+pub fn idxById(id: []const u8) ?usize {
+    if (id.len == 0) return null;
+    for (0..vm_count) |i| {
+        if (std.mem.eql(u8, vms[i].getIdSlice(), id)) return i;
+    }
+    return null;
+}
+
 // ── Undo state ──────────────────────────────────────────────────────
 
 /// Monotonic state version, bumped on every mutation (and on unexpected VM
@@ -129,6 +183,32 @@ pub fn networksPath(buf: *[512]u8) ?[]const u8 {
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "appstate: transition guard claim/refuse/release by id" {
+    for (0..MAX_VMS) |i| transition_lens[i] = 0;
+    try std.testing.expect(!isTransitioning("vm-abc"));
+    try std.testing.expect(beginTransition("vm-abc"));
+    try std.testing.expect(isTransitioning("vm-abc"));
+    try std.testing.expect(!beginTransition("vm-abc"));
+    try std.testing.expect(beginTransition("vm-def"));
+    endTransition("vm-abc");
+    try std.testing.expect(!isTransitioning("vm-abc"));
+    try std.testing.expect(isTransitioning("vm-def"));
+    endTransition("vm-def");
+}
+
+test "appstate: idxById resolves a stable id to its current slot" {
+    vm_count = 2;
+    vms[0] = vm.VmConfig{};
+    vms[1] = vm.VmConfig{};
+    vms[0].setId("id-zero");
+    vms[1].setId("id-one");
+    try std.testing.expectEqual(@as(?usize, 0), idxById("id-zero"));
+    try std.testing.expectEqual(@as(?usize, 1), idxById("id-one"));
+    try std.testing.expectEqual(@as(?usize, null), idxById("id-missing"));
+    try std.testing.expectEqual(@as(?usize, null), idxById(""));
+    vm_count = 0;
+}
 
 test "appstate: configDir returns expected suffix when HOME is set" {
     var buf: [512]u8 = undefined;

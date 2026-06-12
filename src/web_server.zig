@@ -882,7 +882,7 @@ fn serveHtml(conn: c.fd_t) void {
         const err_status: ?u16 = blk: {
             if (anyEql(response, &.{ "invalid", "invalid idx", "not found", "no undo", "no vm" })) {
                 break :blk HTTP_NOT_FOUND;
-            } else if (anyEql(response, &.{ "not running", "off", "not paused", "vm running", "full", "shrink not allowed", "name exists" })) {
+            } else if (anyEql(response, &.{ "not running", "off", "not paused", "vm running", "full", "shrink not allowed", "name exists", "busy" })) {
                 // The resource is in a state incompatible with the request
                 // (running VM that must be off, off VM that must be running, table
                 // at capacity, ...). 409 lets clients distinguish a transient state
@@ -1005,6 +1005,7 @@ fn serveConfigRawAlloc() ?[]u8 {
 /// Per-request error detail buffer for start-failure diagnostics.
 /// Thread-local because each accepted HTTP connection runs in its own thread.
 threadlocal var start_err_buf: [640]u8 = undefined;
+threadlocal var start_err_buf2: [512]u8 = undefined;
 
 /// Scan for a display port that is free both in this daemon's VM list and at the
 /// OS level (actually bindable). `findUnusedVncPort` only avoids in-daemon
@@ -1058,88 +1059,133 @@ fn nameTaken(name: []const u8, skip: ?usize) bool {
 }
 
 fn handlePower(req: []const u8) ![]const u8 {
-    // Hold the lock across the whole operation. The VMM handle (and the
-    // VmConfig it points at) can be freed by a concurrent delete/clone/suspend
-    // the instant the lock is released, so it must never be used unlocked —
-    // doing so was a use-after-free. The QEMU start/stop therefore runs under
-    // the lock, matching the snapshot/pause handlers which already issue their
-    // QMP I/O this way.
-    appstate.vms_mutex.lock();
-    defer appstate.vms_mutex.unlock();
-    const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count) return "invalid idx";
+    // Power on/off forks/execs/reaps QEMU, which blocks for ~1-2s. Holding
+    // vms_mutex across that froze every concurrent request (the 5s poll, SSE,
+    // render) on a spinlock. Instead: snapshot the config under the lock, do
+    // the blocking I/O on the COPY unlocked, then re-resolve the slot by stable
+    // id under the lock to commit pid/status. The dispatch handle's stored
+    // pointer can't be used unlocked (a concurrent delete frees it), so the I/O
+    // goes straight through qemu.* on the copy — the dispatch table covers only
+    // process lifecycle and QEMU is the only backend. A per-id transition guard
+    // refuses a second power op on the same VM (double-click -> duplicate QEMU).
+    var copy: vm.VmConfig = undefined;
+    var was_alive = false;
+    var want_dbus_capture = false;
+    var vm_name_buf: [vm.MAX_NAME]u8 = undefined;
+    var vm_name_len: usize = 0;
+    var id_buf: [32]u8 = undefined;
+    var id_len: usize = 0;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
+        if (idx >= appstate.vm_count) return "invalid idx";
+        const v = &appstate.vms[idx];
+        const vid = v.getIdSlice();
+        if (vid.len == 0) return handlePowerLocked(idx); // pre-id legacy config
+        if (appstate.isTransitioning(vid)) return "busy";
+        if (!v.isAlive()) ensureBindableDisplayPorts(idx);
+        copy = v.*;
+        was_alive = v.isAlive();
+        want_dbus_capture = v.video_stream and v.embed_display and
+            !(v.enable_3d and v.gpu_device.needsVirgl());
+        const nm = v.getNameSlice();
+        @memcpy(vm_name_buf[0..nm.len], nm);
+        vm_name_len = nm.len;
+        @memcpy(id_buf[0..vid.len], vid);
+        id_len = vid.len;
+        if (!appstate.beginTransition(vid)) return "busy";
+    }
+    const vid = id_buf[0..id_len];
+    const vm_name = vm_name_buf[0..vm_name_len];
+
+    // ── Blocking I/O, lock released ──
+    var start_failed = false;
+    var start_detail: []const u8 = "";
+    if (was_alive) {
+        qemu.forceStopVm(&copy);
+        qemu.reapVm(&copy); // sets copy.pid=null, copy.status=.stopped
+    } else {
+        qemu.startVm(&copy, std.heap.page_allocator) catch |e| {
+            logOpErr("power on", e, vm_name);
+            start_failed = true;
+            var log_path_buf: [320]u8 = [_]u8{0} ** 320;
+            const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/hangar-vm-{s}.log", .{vm_name}) catch null;
+            start_detail = if (log_path) |lp| readStartupLog(lp, &start_err_buf2) else "";
+        };
+    }
+
+    // ── Commit under the lock, re-resolving by id ──
+    var still_present = false;
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        defer appstate.endTransition(vid);
+        const slot = appstate.idxById(vid);
+        still_present = slot != null;
+        if (start_failed) {
+            if (slot) |j| appstate.vms[j].status = .stopped;
+            if (start_detail.len > 0) {
+                return std.fmt.bufPrint(&start_err_buf, "start err: {s}", .{start_detail}) catch "start err";
+            }
+            return "start err";
+        }
+        if (slot) |j| {
+            appstate.vms[j].pid = copy.pid;
+            appstate.vms[j].status = copy.status;
+            if (was_alive) {
+                appstate.destroyVmmHandle(j);
+                appstate.vm_started[j] = 0;
+            } else {
+                appstate.vm_started[j] = time(null);
+            }
+        } else if (!was_alive) {
+            // VM deleted while powering on: kill the orphaned process.
+            qemu.forceStopVm(&copy);
+            qemu.reapVm(&copy);
+        }
+    }
+
+    if (!was_alive and want_dbus_capture and still_present) spawnDbusCapture(vm_name);
+    logAudit(if (was_alive) "power off" else "power on", vm_name);
+    // No persist.save: power toggles only runtime state (pid/status/started),
+    // which is never written to vms.json.
+    return "ok";
+}
+
+/// Spawn the fire-and-forget dbus scanout-capture attach (phase 1). Failures
+/// only log; never affects power-on.
+fn spawnDbusCapture(vm_name: []const u8) void {
+    if (std.heap.page_allocator.create(dbusdisplay.AttachCtx)) |ctx| {
+        ctx.* = .{};
+        @memcpy(ctx.name_buf[0..vm_name.len], vm_name);
+        ctx.name_len = @intCast(vm_name.len);
+        if (std.Thread.spawn(std.Thread.SpawnConfig{}, dbusdisplay.attachThread, .{ctx})) |th| {
+            th.detach();
+        } else |_| {
+            std.heap.page_allocator.destroy(ctx);
+        }
+    } else |_| {}
+}
+
+/// Locked fallback for pre-id legacy configs (no stable id to re-resolve by).
+fn handlePowerLocked(idx: usize) []const u8 {
     const v = &appstate.vms[idx];
     const was_alive = v.isAlive();
-    const want_dbus_capture = v.video_stream and v.embed_display and
-        !(v.enable_3d and v.gpu_device.needsVirgl());
     var vm_name_buf: [vm.MAX_NAME]u8 = undefined;
     const vm_name = v.getNameSlice();
     @memcpy(vm_name_buf[0..vm_name.len], vm_name);
-    vm_name_buf[vm_name.len] = 0;
-    const vmm_handle = appstate.getVmmHandle(idx);
-
     if (was_alive) {
-        // Force-stop the running VM.
-        if (vmm_handle) |h| {
-            appstate.g_vmm.forceStopFn(h);
-            appstate.g_vmm.reapFn(h);
-        } else {
-            qemu.forceStopVm(v);
-            qemu.reapVm(v);
-        }
-    } else {
-        // Start the VM. Re-home the display port if an external process grabbed
-        // it since assignment, so QEMU can bind and the WS console proxy (which
-        // dials the same field) connects to the right port.
-        ensureBindableDisplayPorts(idx);
-        if (vmm_handle) |h| {
-            appstate.g_vmm.startFn(h, @ptrCast(v)) catch |e| {
-                logOpErr("power on", e, vm_name_buf[0..vm_name.len]);
-                appstate.destroyVmmHandle(idx);
-                return "start err";
-            };
-        } else {
-            qemu.startVm(v, std.heap.page_allocator) catch |e| {
-                logOpErr("power on", e, vm_name_buf[0..vm_name.len]);
-                var log_path_buf: [320]u8 = [_]u8{0} ** 320;
-                var log_content_buf: [512]u8 = undefined;
-                const log_path = std.fmt.bufPrintZ(&log_path_buf, "/var/tmp/hangar-vm-{s}.log", .{vm_name_buf[0..vm_name.len]}) catch null;
-                const err_detail = if (log_path) |lp| readStartupLog(lp, &log_content_buf) else "";
-                if (err_detail.len > 0) {
-                    return std.fmt.bufPrint(&start_err_buf, "start err: {s}", .{err_detail}) catch "start err";
-                }
-                return "start err";
-            };
-        }
-    }
-
-    if (was_alive) {
+        qemu.forceStopVm(v);
+        qemu.reapVm(v);
         appstate.destroyVmmHandle(idx);
         appstate.vm_started[idx] = 0;
     } else {
+        ensureBindableDisplayPorts(idx);
+        qemu.startVm(v, std.heap.page_allocator) catch return "start err";
         appstate.vm_started[idx] = time(null);
-        if (want_dbus_capture) {
-            // Fire-and-forget scanout-capture attach (docs/VIDEO-PIPELINE.md
-            // phase 1). Failures only log; this must never affect power-on.
-            if (std.heap.page_allocator.create(dbusdisplay.AttachCtx)) |ctx| {
-                ctx.* = .{};
-                @memcpy(ctx.name_buf[0..vm_name.len], vm_name_buf[0..vm_name.len]);
-                ctx.name_len = @intCast(vm_name.len);
-                if (std.Thread.spawn(std.Thread.SpawnConfig{}, dbusdisplay.attachThread, .{ctx})) |th| {
-                    th.detach();
-                } else |_| {
-                    std.heap.page_allocator.destroy(ctx);
-                }
-            } else |_| {}
-        }
     }
     logAudit(if (was_alive) "power off" else "power on", vm_name_buf[0..vm_name.len]);
-    // No persist.save here: power on/off only mutates runtime state
-    // (vm_started, the VMM handle, status) which is never written to vms.json.
-    // The serialized config is byte-identical to what is already on disk, so a
-    // save would be a redundant full-JSON serialize + atomic file write
-    // (open/write/fsync/rename) issued on every toggle while holding vms_mutex,
-    // stalling concurrent /api/vms polls for no benefit.
     return "ok";
 }
 

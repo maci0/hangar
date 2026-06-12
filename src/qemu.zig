@@ -19,6 +19,7 @@ const std = @import("std");
 const vm = @import("vm.zig");
 const appio = @import("appio.zig");
 const sync = @import("sync.zig");
+const wlog = @import("wlog.zig");
 
 /// libc PATH-searching exec. `std.process` in 0.16 routes spawning through the
 /// `std.Io` interface, which would hand the child an empty environment unless
@@ -1099,12 +1100,18 @@ pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
     // (it only attaches when the seed file exists). Best-effort: a missing
     // cloud-localds or a generation error just means the guest boots without it.
     if (config.hasCloudInit()) {
-        generateCloudInitSeed(config, allocator) catch {};
+        generateCloudInitSeed(config, allocator) catch |e| {
+            var nb: [160]u8 = undefined;
+            wlog.logWarn(std.fmt.bufPrint(&nb, "cloud-init seed failed for vm=\"{s}\" ({s}); booting without it", .{ config.getNameSlice(), @errorName(e) }) catch "cloud-init seed failed");
+        };
     }
     // Seed per-VM Secure Boot NVRAM so buildArgs can wire split pflash; harmless
     // no-op when SB is off or no firmware is installed.
     if (config.secure_boot) {
-        generateSecureBootVars(config, allocator) catch {};
+        generateSecureBootVars(config, allocator) catch |e| {
+        var nb2: [160]u8 = undefined;
+        wlog.logWarn(std.fmt.bufPrint(&nb2, "secure-boot vars failed for vm=\"{s}\" ({s}); booting without them", .{ config.getNameSlice(), @errorName(e) }) catch "secure-boot vars failed");
+    };
     }
 
     var args: std.ArrayList([]const u8) = .empty;

@@ -775,7 +775,9 @@ pub fn serveVideoClient(conn: c.fd_t, name: []const u8, bitrate_kbps: u32) void 
         return;
     };
     defer sessionUnref(sess);
+    sess.enc_mutex.lock();
     sess.bitrate_kbps = bitrate_kbps;
+    sess.enc_mutex.unlock();
     // Wait for the first Scanout so the encoder knows its dimensions.
     var waited: u32 = 0;
     while (waited < 5000) : (waited += 100) {
