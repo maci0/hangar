@@ -72,3 +72,4 @@ __pycache__/
 # Generated visual regression screenshots
 tests/visual/**/*.png
 tests/visual/results.json
+_*.mjs
