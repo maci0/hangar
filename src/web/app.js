@@ -185,6 +185,15 @@ async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await
 // ── Reactive host dashboard (VanJS) ──────────────────────────────────
 // vmsState/dashSortState drive the dashboard DOM in place: no innerHTML
 // rebuilds, so focus (e.g. a sort header) survives every refresh.
+// Hardware slot limits — served by GET /api/capabilities (vm.zig constants);
+// the defaults below only cover the window before that fetch resolves.
+var MAX_NICS=8,MAX_EXTRA_DISKS=4;
+(function(){try{fetch('/api/capabilities').then(function(r){return r.json();}).then(function(c){if(c.max_nics)MAX_NICS=c.max_nics;if(c.max_extra_disks)MAX_EXTRA_DISKS=c.max_extra_disks;}).catch(function(){});}catch(e){}})();
+// Settings rows for NIC 2..MAX_NICS and the extra-disk slots are generated,
+// never hand-enumerated — adding a slot in vm.zig must not require UI edits.
+function nicRows(v){var r=[];for(var n=2;n<=MAX_NICS;n++){r.push(['NIC '+n,'e_nic'+n,'select',v['nic'+n+'_mode']||'none'],['NIC '+n+' MAC','e_nic'+n+'_mac','text',v['nic'+n+'_mac']||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC '+n+' VMnet','e_nic'+n+'_vnet','text',v['nic'+n+'_vnet']||'','placeholder="virtual network name (optional)"']);}return r;}
+function extraDiskRows(v){var r=[];for(var n=0;n<MAX_EXTRA_DISKS;n++){r.push(['Extra '+n+' Path','e_extra'+n+'_path','text',v['extra'+n+'_path']||''],['Extra '+n+' Size','e_extra'+n+'_size','number',v['extra'+n+'_size']||0,'min="0" max="65536" step="1"'],['Extra '+n+' Format','e_extra'+n+'_format','select',v['extra'+n+'_format']||0]);}return r;}
+
 var vmsState=null,dashSortState=null,dashMounted=false;
 function publishVms(){if(window.van){if(!vmsState){vmsState=van.state(vms.slice());}else{vmsState.val=vms.slice();}}}
 function dashStats(list){var st={running:0,stopped:0,paused:0,suspended:0},vcpu=0,ram=0,disk=0,att=[];
@@ -486,13 +495,7 @@ const fields=[
 ['ISO Path','e_iso_path','text',v.iso_path||''],['','','cdactions',''],['Firmware','e_firmware','select',v.fw||'bios'],
 ['Boot Order','e_boot_order','select',v.boot_order||0],['RTC Clock','e_rtc','select',v.rtc||0],
 {s:'Network &amp; Boot'},['Network','e_network','select',v.net||'user'],['Virtual Network','e_vnet','text',v.vnet||'','placeholder="bind to a virtual network name (optional)"'],['MAC Address','e_mac_address','text',v.mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
-['NIC 2','e_nic2','select',v.nic2_mode||'none'],['NIC 2 MAC','e_nic2_mac','text',v.nic2_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 2 VMnet','e_nic2_vnet','text',v.nic2_vnet||'','placeholder="virtual network name (optional)"'],
-['NIC 3','e_nic3','select',v.nic3_mode||'none'],['NIC 3 MAC','e_nic3_mac','text',v.nic3_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 3 VMnet','e_nic3_vnet','text',v.nic3_vnet||'','placeholder="virtual network name (optional)"'],
-['NIC 4','e_nic4','select',v.nic4_mode||'none'],['NIC 4 MAC','e_nic4_mac','text',v.nic4_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 4 VMnet','e_nic4_vnet','text',v.nic4_vnet||'','placeholder="virtual network name (optional)"'],
-['NIC 5','e_nic5','select',v.nic5_mode||'none'],['NIC 5 MAC','e_nic5_mac','text',v.nic5_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 5 VMnet','e_nic5_vnet','text',v.nic5_vnet||'','placeholder="virtual network name (optional)"'],
-['NIC 6','e_nic6','select',v.nic6_mode||'none'],['NIC 6 MAC','e_nic6_mac','text',v.nic6_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 6 VMnet','e_nic6_vnet','text',v.nic6_vnet||'','placeholder="virtual network name (optional)"'],
-['NIC 7','e_nic7','select',v.nic7_mode||'none'],['NIC 7 MAC','e_nic7_mac','text',v.nic7_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 7 VMnet','e_nic7_vnet','text',v.nic7_vnet||'','placeholder="virtual network name (optional)"'],
-['NIC 8','e_nic8','select',v.nic8_mode||'none'],['NIC 8 MAC','e_nic8_mac','text',v.nic8_mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC 8 VMnet','e_nic8_vnet','text',v.nic8_vnet||'','placeholder="virtual network name (optional)"'],
+].concat(nicRows(v)).concat([
 ['Port Forwards','e_portfw','text',v.port_forwards||''],
 {s:'Sharing'},['Shared Folder','e_shared_folder','text',v.shared_folder||''],['USB Device','e_usb','text',v.usb_device||''],
 ['USB Policy','e_usb_policy','select',v.usb_policy||0],
@@ -509,14 +512,7 @@ const fields=[
 {s:'Storage &amp; Notes'},['Disk 2 Path','e_disk2_path','text',v.disk2_path||''],['','','disk2actions',''],['Disk 2 Size','e_disk2_size','number',v.disk2_size||0,'min="0" max="65536" step="1"'],
 ['Disk 2 Format','e_disk2_format','select',v.disk2_format||0],
 {s:'Extra Disks'},
-['Extra 0 Path','e_extra0_path','text',v.extra0_path||''],['Extra 0 Size','e_extra0_size','number',v.extra0_size||0,'min="0" max="65536" step="1"'],
-['Extra 0 Format','e_extra0_format','select',v.extra0_format||0],
-['Extra 1 Path','e_extra1_path','text',v.extra1_path||''],['Extra 1 Size','e_extra1_size','number',v.extra1_size||0,'min="0" max="65536" step="1"'],
-['Extra 1 Format','e_extra1_format','select',v.extra1_format||0],
-['Extra 2 Path','e_extra2_path','text',v.extra2_path||''],['Extra 2 Size','e_extra2_size','number',v.extra2_size||0,'min="0" max="65536" step="1"'],
-['Extra 2 Format','e_extra2_format','select',v.extra2_format||0],
-['Extra 3 Path','e_extra3_path','text',v.extra3_path||''],['Extra 3 Size','e_extra3_size','number',v.extra3_size||0,'min="0" max="65536" step="1"'],
-['Extra 3 Format','e_extra3_format','select',v.extra3_format||0],
+].concat(extraDiskRows(v)).concat([
 ['Floppy','e_floppy','text',v.floppy_path||''],
 ['Favorite','e_favorite','select',v.favorite==='true'?'1':'0'],['Notes','e_notes','text',v.notes||''],['Tags','e_tags','text',v.tags||'','placeholder="comma-separated, e.g. prod, web"'],['Cloud-Init User-Data','e_cloud_init','textarea',v.cloud_init||'','placeholder="#cloud-config&#10;… (NoCloud user-data; attached as a seed ISO)"'],
 {s:'QEMU Capabilities'},
@@ -531,14 +527,10 @@ const fields=[
 ['Host Autostart','e_host_autostart','select',v.host_autostart==='true'?'1':'0'],
 ['I/O Threads','e_io_threads','number',v.io_threads||0,'min="0" max="64" step="1"'],
 ['Disk BPS Throttle','e_disk_bps_throttle','number',v.disk_bps_throttle||0,'min="0" max="1099511627776" step="1"'],
-['Disk IOPS Throttle','e_disk_iops_throttle','number',v.disk_iops_throttle||0,'min="0" max="100000000" step="1"']];
+['Disk IOPS Throttle','e_disk_iops_throttle','number',v.disk_iops_throttle||0,'min="0" max="100000000" step="1"']]));
 const selects={e_network:[['user','NAT (User)'],['gvproxy','gvproxy (User)'],['bridge','Bridged'],['none','None']],
 e_firmware:[['bios','BIOS'],['uefi','UEFI']],e_disk_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
 e_disk2_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
-e_extra0_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
-e_extra1_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
-e_extra2_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
-e_extra3_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
 e_disk_cache:[['0','Writeback'],['1','Writethrough'],['2','None'],['3','Direct Sync'],['4','Unsafe']],
 e_cpu_model:[['host','Host'],['host-passthrough','Host Passthrough'],['max','Max'],['qemu64','QEMU64'],['kvm64','KVM64'],['EPYC','EPYC'],['EPYC-Rome','EPYC-Rome'],['EPYC-Milan','EPYC-Milan'],['Skylake-Server','Skylake-Server'],['Skylake-Client','Skylake-Client'],['Cascadelake-Server','Cascadelake-Server'],['Icelake-Server','Icelake-Server'],['Nehalem','Nehalem'],['Westmere','Westmere'],['SandyBridge','SandyBridge'],['IvyBridge','IvyBridge'],['Haswell','Haswell'],['Broadwell','Broadwell'],['Opteron_G5','Opteron G5'],['Cooperlake','Cooperlake'],['SapphireRapids','SapphireRapids'],['GraniteRapids','GraniteRapids'],['Neoverse-N1','Neoverse-N1'],['Neoverse-N2','Neoverse-N2'],['Neoverse-V1','Neoverse-V1'],['aarch64','AArch64']],
 e_enable_3d:[['0','No'],['1','Yes']],e_gpu_device:[['0','Virtio-GPU (3D)'],['1','Virtio-VGA (3D)'],['2','Virtio-GPU'],['3','Virtio-VGA'],['4','QXL'],['5','Standard VGA']],
@@ -549,19 +541,14 @@ e_audio:[['0','None'],['1','Intel HDA'],['2','AC97']],e_boot_order:[['0','Hard D
 e_accel:[['auto','Auto (best available)'],['tcg','TCG (software)'],['kvm','KVM (Linux)'],['hvf','HVF (macOS)'],['whpx','WHPX (Windows)']],e_embed_display:[['0','No'],['1','Yes']],
 e_enable_serial:[['0','No'],['1','Yes']],e_favorite:[['0','No'],['1','Yes']],
 e_guest_tools:[['0','No'],['1','Yes']],e_autoprotect:[['0','Off'],['1','On']],
-e_nic2:[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged']],
-e_nic3:[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged']],
-e_nic4:[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged']],
-e_nic5:[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged']],
-e_nic6:[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged']],
-e_nic7:[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged']],
-e_nic8:[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged']],
 e_guest_agent:[['0','No'],['1','Yes']],e_virtio_rng:[['0','No'],['1','Yes']],
 e_tpm:[['0','No'],['1','Yes']],e_secure_boot:[['0','No'],['1','Yes']],
 e_hyperv_enlightenments:[['0','No'],['1','Yes']],e_hugepages:[['0','No'],['1','Yes']],
 e_ballooning:[['0','No'],['1','Yes']],e_video_stream:[['0','No'],['1','Yes']],e_host_autostart:[['0','No'],['1','Yes']],
 e_watchdog:[['0','None'],['1','Reset Guest'],['2','Power Off Guest'],['3','Pause Guest']],
 e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
+(function(){var nm=[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged']],df=[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']];for(var n=2;n<=MAX_NICS;n++)selects['e_nic'+n]=nm;for(var k=0;k<MAX_EXTRA_DISKS;k++)selects['e_extra'+k+'_format']=df;})();
+
 	var sectionNotes={
 	 basic:'Identity, operating system, firmware, and boot defaults.',
 	 network_and_boot:'VMnet, NAT, bridged adapters, MAC addresses, and port forwarding.',
@@ -604,7 +591,7 @@ function setFieldError(id,msg,kind){var el=document.getElementById('err_'+id);va
 function validateSettings(show){var ok=true;function fail(id,msg){ok=false;if(show)setFieldError(id,msg);}function clear(id){if(show)setFieldError(id,'');}
 var nameEl=document.getElementById('e_name');if(nameEl){clear('e_name');if(!nameEl.value.trim())fail('e_name','Name is required.');}
 [['e_mem',128,65536,'Memory must be 128-65536 MB.'],['e_cpu',1,256,'CPU cores must be 1-256.'],['e_disk',1,65536,'Disk size must be 1-65536 GB.']].forEach(function(c){var el=document.getElementById(c[0]);if(!el)return;clear(c[0]);var n=parseInt(el.value,10);if(!Number.isFinite(n)||n<c[1]||n>c[2])fail(c[0],c[3]);});
-var macIds=['e_mac_address','e_nic2_mac','e_nic3_mac','e_nic4_mac','e_nic5_mac','e_nic6_mac','e_nic7_mac','e_nic8_mac'];for(var i=0;i<macIds.length;i++){var m=document.getElementById(macIds[i]);if(!m)continue;var val=m.value.trim();clear(macIds[i]);if(val&&!/^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(val))fail(macIds[i],'Use XX:XX:XX:XX:XX:XX.');}
+var macIds=['e_mac_address'];for(var mn=2;mn<=MAX_NICS;mn++)macIds.push('e_nic'+mn+'_mac');for(var i=0;i<macIds.length;i++){var m=document.getElementById(macIds[i]);if(!m)continue;var val=m.value.trim();clear(macIds[i]);if(val&&!/^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(val))fail(macIds[i],'Use XX:XX:XX:XX:XX:XX.');}
 ['e_vnc_port','e_spice_port'].forEach(function(id){var p=document.getElementById(id);if(!p)return;var n=parseInt(p.value,10);clear(id);if(!Number.isFinite(n)||n<1||n>65535)fail(id,'Port must be 1-65535.');});
 var pf=document.getElementById('e_portfw');if(pf){clear('e_portfw');var val=pf.value.trim();if(val&&!/^\\s*\\d{1,5}:\\d{1,5}(\\s*,\\s*\\d{1,5}:\\d{1,5})*\\s*$/.test(val)&&!/^\\s*\\d{1,5}:[^,]+:\\d{1,5}(\\s*,\\s*\\d{1,5}:[^,]+:\\d{1,5})*\\s*$/.test(val))fail('e_portfw','Use host:guest or host:ip:guest entries.');}
 var embed=document.getElementById('e_embed_display');var disp=document.getElementById('e_display');var accel=document.getElementById('e_enable_3d');var gpu=document.getElementById('e_gpu_device');if(embed&&disp){clear('e_display');if(embed.value==='1'&&!(disp.value==='2'||disp.value==='3')&&show)setFieldError('e_display','Browser console requires SPICE or VNC; native display opens outside the browser.','warn');}
@@ -615,7 +602,7 @@ if(!validateSettings(true)){var bad=document.querySelector('#tabSettings .invali
 saveInFlight=true;
 const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
 const body=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','vnet','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
-'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','extra0_path','extra0_size','extra0_format','extra1_path','extra1_size','extra1_format','extra2_path','extra2_size','extra2_format','extra3_path','extra3_size','extra3_format','floppy','nic2','nic2_mac','nic3','nic3_mac','nic4','nic4_mac','nic5','nic5_mac','nic6','nic6_mac','nic7','nic7_mac','nic8','nic8_mac','nic2_vnet','nic3_vnet','nic4_vnet','nic5_vnet','nic6_vnet','nic7_vnet','nic8_vnet','portfw','notes','tags','cloud_init',
+'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','portfw','notes','tags','cloud_init',
 'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order','rtc',
 'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
 'guest_agent','virtio_rng','tpm','secure_boot','hyperv_enlightenments','hugepages','watchdog','ballooning','host_autostart',
@@ -625,7 +612,10 @@ try{const r=await apiPost('/api/vms/'+idx,body);if(r){settingsDirty=false;saveIn
 else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}
 saveInFlight=false;
 for(let i=0;i<formEls.length;i++)formEls[i].disabled=false;}}
-async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=document.createElement('input');inp.type='file';inp.accept='.qcow2,.qcow,.vmdk,.vdi,.vhdx,.raw,.img';inp.onchange=async function(){const file=inp.files&&inp.files[0];if(!file)return;const fd=new FormData();fd.append('disk2',file);setStatus('Uploading Disk 2 for "'+vms[idx].name+'"...');try{const r=await fetch('/api/vms/'+idx+'/disk2',{method:'POST',body:fd,headers:{'X-API-Key':API_KEY}});if(!r.ok){var em=await r.text().catch(function(){return'';});try{var j=JSON.parse(em);if(j.error)em=j.error;}catch(e){}throw new Error(em||'HTTP '+r.status);}await refresh();setStatus('Disk 2 uploaded successfully.');if(sel===idx)editVm();}catch(e){setStatus('Upload failed: '+e.message);showToast('Disk 2 upload failed: '+e.message,'error');}};inp.click();}
+async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=document.createElement('input');inp.type='file';inp.accept='.qcow2,.qcow,.vmdk,.vdi,.vhdx,.raw,.img';inp.onchange=async function(){const file=inp.files&&inp.files[0];
+for(var bn=2;bn<=MAX_NICS;bn++)body.push('nic'+bn,'nic'+bn+'_mac','nic'+bn+'_vnet');
+for(var bk=0;bk<MAX_EXTRA_DISKS;bk++)body.push('extra'+bk+'_path','extra'+bk+'_size','extra'+bk+'_format');
+if(!file)return;const fd=new FormData();fd.append('disk2',file);setStatus('Uploading Disk 2 for "'+vms[idx].name+'"...');try{const r=await fetch('/api/vms/'+idx+'/disk2',{method:'POST',body:fd,headers:{'X-API-Key':API_KEY}});if(!r.ok){var em=await r.text().catch(function(){return'';});try{var j=JSON.parse(em);if(j.error)em=j.error;}catch(e){}throw new Error(em||'HTTP '+r.status);}await refresh();setStatus('Disk 2 uploaded successfully.');if(sel===idx)editVm();}catch(e){setStatus('Upload failed: '+e.message);showToast('Disk 2 upload failed: '+e.message,'error');}};inp.click();}
 function downloadDisk2(){if(sel===null)return;const a=document.createElement('a');a.href='/api/vms/'+sel+'/disk2/download';a.download=vms[sel].name+'_disk2.qcow2';document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);},1000);}
 function fmtBytes(n){if(!Number.isFinite(n)||n<0)return'?';const u=['B','KiB','MiB','GiB','TiB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++;}return(i===0?x:x.toFixed(1))+' '+u[i];}
 async function loadGuestInfo(idx){const el=document.getElementById('guestIpVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/guestinfo',{headers:{'X-API-Key':API_KEY}});if(!r.ok)throw 0;const j=await r.json();if(sel===idx&&document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent=(j.ips&&j.ips.length)?j.ips:'(guest agent not responding)';}catch(e){if(document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent='unavailable';}}
