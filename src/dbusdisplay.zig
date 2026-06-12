@@ -679,13 +679,23 @@ fn pushFrameLocked(sess: *Session) void {
 
 fn pushFrameNowLocked(sess: *Session, now: u64) void {
     const fb = sess.fb orelse return;
+    // Hold enc_mutex ACROSS the pipe write, not just to read the fd: otherwise a
+    // concurrent stopEncoder could close enc_in between the read and the write,
+    // and in this threaded daemon the recycled fd number could belong to an
+    // unrelated socket — we'd write raw framebuffer bytes into it. enc_mutex is
+    // a dedicated small lock; stopEncoder waiting on a back-pressured pipe write
+    // here is acceptable (it only happens when the last viewer leaves).
     sess.enc_mutex.lock();
     const fd = sess.enc_in;
-    sess.enc_mutex.unlock();
-    if (fd < 0) return;
+    if (fd < 0) {
+        sess.enc_mutex.unlock();
+        return;
+    }
     sess.last_push_ms = now;
     sess.fb_dirty = false;
-    if (!writeAllFd(fd, fb)) {
+    const ok = writeAllFd(fd, fb);
+    sess.enc_mutex.unlock();
+    if (!ok) {
         // Encoder died (pipe closed): tear it down so a client reconnect restarts it.
         stopEncoder(sess);
     }
@@ -882,17 +892,27 @@ pub fn serveVideoClient(conn: c.fd_t, name: []const u8, bitrate_kbps: u32) void 
 
 fn emitAu(sess: *Session, au: []const u8, key: bool) bool {
     var hdr_byte: [1]u8 = .{if (key) 0x03 else 0x02};
-    // Frame: 0x02|0x03 marker byte then the Annex-B access unit. (0x03 = key.)
-    // Broadcast to every attached client; a failed write shuts that client's
-    // socket down (its drain loop then exits and frees the slot) without
-    // affecting the others.
+    // Snapshot the client fds under the lock, then write OUTSIDE it: a blocking
+    // WS write to one stalled viewer must not hold client_wmtx for up to the
+    // 30s send timeout, which would freeze every other viewer, the ping path,
+    // and the encoder pump. A fd captured here can be closed by a departing
+    // client between snapshot and write — shutdown() on an already-closed fd is
+    // a harmless ENOTCONN/EBADF, and the fd number is not reused until the
+    // client slot is freed under the same lock after its drain loop exits.
+    var fds: [MAX_VIDEO_CLIENTS]c.fd_t = undefined;
+    var nfds: usize = 0;
     sess.client_wmtx.lock();
-    defer sess.client_wmtx.unlock();
     for (0..MAX_VIDEO_CLIENTS) |i| {
-        const fd = sess.clients[i];
-        if (fd < 0) continue;
+        if (sess.clients[i] >= 0) {
+            fds[nfds] = sess.clients[i];
+            nfds += 1;
+        }
+    }
+    sess.client_wmtx.unlock();
+    // Frame: 0x02|0x03 marker byte then the Annex-B access unit. (0x03 = key.)
+    for (fds[0..nfds]) |fd| {
         ws.writeFrame2(fd, .binary, &hdr_byte, au) catch {
-            _ = c.shutdown(fd, netutilShut());
+            _ = c.shutdown(fd, netutilShut()); // drops only this client
         };
     }
     return true;
