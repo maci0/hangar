@@ -694,12 +694,25 @@ async function resizeDisk(){if(sel===null)return;const v=vms[sel];if(v.status!==
 let vnetsData=[],vnetIdx=-1;
 async function openVnets(){await loadVnets();var vd=document.getElementById('vnetdlg');if(vd)vd.showModal();}
 async function loadVnets(){try{const r=await fetch('/api/networks');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};logDebug('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};logDebug('Failed to load VNets:',e);}renderVnetList();}
-function renderVnetList(){const sel=document.getElementById('vnet_sel');if(!sel)return;let h='';if(!vnetsData.networks)vnetsData={networks:[]};
-for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const line=escHtml(n.name)+' — '+escHtml(n.type);h+=`<option value="${i}"${i===vnetIdx?' selected':''}>${line}</option>`;}
-sel.innerHTML=h;if(vnetIdx<0&&vnetsData.networks.length){vnetIdx=0;sel.value='0';}
-if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length){sel.value=String(vnetIdx);showVnetFields(vnetIdx);}else{clearVnetFields();}}
+function vnetTypeMeta(t){t=(t||'').toLowerCase();
+ if(t==='nat')return {c:'#3C6EB4',label:'NAT'};
+ if(t==='bridged')return {c:'#10B981',label:'Bridged'};
+ if(t==='host_only'||t==='host-only')return {c:'#D9892B',label:'Host-Only'};
+ return {c:'var(--text-dim)',label:t||'—'};}
+function renderVnetList(){const sel=document.getElementById('vnet_sel');if(!sel)return;if(!vnetsData.networks)vnetsData={networks:[]};
+ if(vnetIdx<0&&vnetsData.networks.length)vnetIdx=0;
+ let h='';
+ for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const tm=vnetTypeMeta(n.type);const on=i===vnetIdx;
+  h+='<button type="button" class="vnet-item'+(on?' active':'')+'" role="option" aria-selected="'+(on?'true':'false')+'" data-action="onVnetSelect" data-vnet-idx="'+i+'">'
+   +'<span class="vnet-dot" style="background:'+tm.c+'" aria-hidden="true"></span>'
+   +'<span class="vnet-item-name">'+escHtml(n.name)+'</span>'
+   +'<span class="vnet-type-badge" style="color:'+tm.c+';border-color:'+tm.c+'">'+escHtml(tm.label)+'</span>'
+   +'</button>';}
+ if(!vnetsData.networks.length)h='<div class="vnet-empty">No virtual networks. Add one below.</div>';
+ sel.innerHTML=h;
+ if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length){showVnetFields(vnetIdx);}else{clearVnetFields();}}
 function clearVnetFields(){['vn_name','vn_type','vn_subnet','vn_mask','vn_dhcp','vn_dstart','vn_dend','vn_iface','vn_gw','vn_pf'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});var vt=document.getElementById('vn_type');if(vt)vt.value='nat';var vd=document.getElementById('vn_dhcp');if(vd)vd.value='0';}
-function onVnetSelect(){const s=document.getElementById('vnet_sel');if(!s)return;vnetIdx=parseInt(s.value,10);if(vnetIdx>=0)showVnetFields(vnetIdx);}
+function onVnetSelect(el){var idx=el&&el.getAttribute?parseInt(el.getAttribute('data-vnet-idx'),10):NaN;if(isNaN(idx))return;vnetIdx=idx;renderVnetList();}
 function showVnetFields(i){const n=vnetsData.networks[i];if(!n)return;
 var vn=document.getElementById('vn_name');if(!vn)return;vn.value=n.name||'';
 var vt=document.getElementById('vn_type');if(vt)vt.value=n.type||'nat';
@@ -1566,7 +1579,7 @@ var actionHandlers={
  applyTheme:function(el){pendingTheme=el.value;window.applyTheme(el.value);},
  toggleTheme:function(){window.cycleTheme();},
  filterList:function(){filterList();},
- onVnetSelect:function(){onVnetSelect();},
+ onVnetSelect:function(el){onVnetSelect(el);},
 	 disk2upload:function(){uploadDisk2();},
 	 disk2download:function(){downloadDisk2();},
 	 resizeDisk:function(){resizeDisk();},

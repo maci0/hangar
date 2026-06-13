@@ -321,6 +321,21 @@ test('settings lock virtual hardware while the VM is running, metadata stays edi
     await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-lock')}/power`, '');
 });
 
+test('vnet editor lists networks as clickable typed cards; selecting one fills the form', async ({ page }) => {
+    await page.evaluate(() => actionHandlers.openVnets(document.body));
+    await expect(page.locator('#vnetdlg')).toBeVisible();
+    const items = page.locator('.vnet-item');
+    await expect.poll(() => items.count()).toBeGreaterThanOrEqual(1);
+    // Each card carries a type badge (NAT/Bridged/Host-Only).
+    await expect(page.locator('.vnet-type-badge').first()).toBeVisible();
+    // Clicking a card selects it (active highlight) and fills the form name.
+    await items.first().click();
+    await expect(items.first()).toHaveClass(/active/);
+    const name = await page.evaluate(() => document.getElementById('vn_name').value);
+    expect(name.length).toBeGreaterThan(0);
+    await page.evaluate(() => document.getElementById('vnetdlg').close());
+});
+
 test('catalog quickstart creates a VM with the template OS and firmware', async ({ page }) => {
     const cat = await api(page, 'GET', '/api/catalog', null);
     const entries = JSON.parse(cat.text);

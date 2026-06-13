@@ -1135,3 +1135,14 @@ aside .vm-item .vm-meta{flex-basis:100%;padding-left:18px}
 .snap-info strong{font-size:13px}
 .snap-info small{color:var(--text-dim);font-size:11px}
 .snapshot-row .snapshot-actions{margin-left:auto}
+
+/* ── Virtual Network Editor: visual network list ── */
+.vnet-list{display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto;padding:2px}
+.vnet-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 11px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm,6px);cursor:pointer;color:var(--text);transition:border-color var(--transition),background-color var(--transition)}
+.vnet-item:hover{border-color:var(--accent)}
+.vnet-item.active{border-color:var(--accent);background:var(--accent-soft)}
+.vnet-item:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.vnet-dot{width:10px;height:10px;border-radius:50%;flex:none}
+.vnet-item-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:auto}
+.vnet-type-badge{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border:1px solid;border-radius:4px;padding:1px 6px;white-space:nowrap}
+.vnet-empty{padding:18px 12px;text-align:center;font-size:12px;color:var(--text-dim)}
