@@ -13,13 +13,29 @@ pub const CatalogEntry = struct {
     memory_mb: u32,
     cpu_cores: u32,
     disk_size_gb: u32,
+    /// Firmware the guest expects: BootFirmware index (0 = BIOS, 1 = UEFI).
+    /// Modern Linux/Windows install cleanly on UEFI; Windows 11 requires it.
+    firmware: usize,
     description: []const u8,
 };
 
-pub const entries: [3]CatalogEntry = .{
-    .{ .id = "ubuntu2404", .name = "Ubuntu 24.04 LTS", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 40, .description = "Ubuntu 24.04 Noble Numbat — latest LTS" },
-    .{ .id = "fedora40", .name = "Fedora 40", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .description = "Fedora 40 Workstation" },
-    .{ .id = "debian12", .name = "Debian 12", .guest_os = vm.GuestOs.linux.toIndex(), .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .description = "Debian 12 Bookworm — stable" },
+const LINUX = vm.GuestOs.linux.toIndex();
+const WINDOWS = vm.GuestOs.windows.toIndex();
+const FREEBSD = vm.GuestOs.freebsd.toIndex();
+const BIOS = @as(usize, 0);
+const UEFI = @as(usize, 1);
+
+pub const entries: [10]CatalogEntry = .{
+    .{ .id = "ubuntu2404", .name = "Ubuntu 24.04 LTS", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 40, .firmware = UEFI, .description = "Ubuntu 24.04 Noble Numbat — latest LTS" },
+    .{ .id = "debian12", .name = "Debian 12", .guest_os = LINUX, .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .firmware = UEFI, .description = "Debian 12 Bookworm — rock-stable" },
+    .{ .id = "fedora40", .name = "Fedora 40", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 30, .firmware = UEFI, .description = "Fedora 40 Workstation" },
+    .{ .id = "rocky9", .name = "Rocky Linux 9", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 40, .firmware = UEFI, .description = "Rocky Linux 9 — RHEL-compatible server" },
+    .{ .id = "archlinux", .name = "Arch Linux", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 30, .firmware = UEFI, .description = "Arch Linux — rolling release" },
+    .{ .id = "alpine320", .name = "Alpine 3.20", .guest_os = LINUX, .memory_mb = 1024, .cpu_cores = 2, .disk_size_gb = 8, .firmware = BIOS, .description = "Alpine Linux 3.20 — minimal, container-friendly" },
+    .{ .id = "win11", .name = "Windows 11", .guest_os = WINDOWS, .memory_mb = 8192, .cpu_cores = 4, .disk_size_gb = 80, .firmware = UEFI, .description = "Windows 11 — UEFI (enable TPM + Secure Boot in Settings)" },
+    .{ .id = "win2022", .name = "Windows Server 2022", .guest_os = WINDOWS, .memory_mb = 8192, .cpu_cores = 4, .disk_size_gb = 80, .firmware = UEFI, .description = "Windows Server 2022 — datacenter workloads" },
+    .{ .id = "freebsd14", .name = "FreeBSD 14", .guest_os = FREEBSD, .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .firmware = UEFI, .description = "FreeBSD 14 — BSD server/router" },
+    .{ .id = "openbsd75", .name = "OpenBSD 7.5", .guest_os = FREEBSD, .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .firmware = BIOS, .description = "OpenBSD 7.5 — security-focused BSD" },
 };
 
 /// The catalog entry whose id equals `slug`, or null.
@@ -51,8 +67,8 @@ pub fn catalogJson(buf: []u8) []const u8 {
             w += 1;
         }
         const part = std.fmt.bufPrint(buf[w..],
-            \\{{"id":"{s}","name":"{s}","guest_os":{d},"memory_mb":{d},"cpu_cores":{d},"disk_size_gb":{d},"description":"{s}"}}
-        , .{ entry.id, entry.name, entry.guest_os, entry.memory_mb, entry.cpu_cores, entry.disk_size_gb, entry.description }) catch return "[]";
+            \\{{"id":"{s}","name":"{s}","guest_os":{d},"memory_mb":{d},"cpu_cores":{d},"disk_size_gb":{d},"firmware":{d},"description":"{s}"}}
+        , .{ entry.id, entry.name, entry.guest_os, entry.memory_mb, entry.cpu_cores, entry.disk_size_gb, entry.firmware, entry.description }) catch return "[]";
         w += part.len;
     }
     if (w >= buf.len) return "[]";
@@ -63,13 +79,34 @@ pub fn catalogJson(buf: []u8) []const u8 {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
+test "catalog: every entry has valid guest_os, firmware, and sane specs" {
+    try std.testing.expect(entries.len >= 10);
+    for (entries) |e| {
+        try std.testing.expect(e.guest_os < vm.GuestOs.count);
+        try std.testing.expect(e.firmware <= 1); // BIOS=0, UEFI=1
+        try std.testing.expect(e.memory_mb >= 256 and e.cpu_cores >= 1 and e.disk_size_gb >= 1);
+        try std.testing.expect(e.id.len > 0 and e.name.len > 0);
+    }
+    // Windows 11 must be UEFI; Alpine is the minimal BIOS image.
+    try std.testing.expectEqual(@as(usize, 1), find("win11").?.firmware);
+    try std.testing.expectEqual(vm.GuestOs.windows.toIndex(), find("win11").?.guest_os);
+    try std.testing.expectEqual(@as(usize, 0), find("alpine320").?.firmware);
+    try std.testing.expectEqual(vm.GuestOs.freebsd.toIndex(), find("freebsd14").?.guest_os);
+}
+
+test "catalog: catalogJson includes the firmware field" {
+    var buf: [4096]u8 = undefined;
+    const s = catalogJson(&buf);
+    try std.testing.expect(std.mem.indexOf(u8, s, "\"firmware\":") != null);
+}
+
 test "catalog: find returns the matching entry and null otherwise" {
     try std.testing.expectEqualStrings("Ubuntu 24.04 LTS", find("ubuntu2404").?.name);
     try std.testing.expect(find("nope") == null);
 }
 
 test "catalog: catalogJson is a well-formed array containing every entry" {
-    var buf: [2048]u8 = undefined;
+    var buf: [4096]u8 = undefined;
     const s = catalogJson(&buf);
     try std.testing.expect(s[0] == '[' and s[s.len - 1] == ']');
     for (entries) |e| try std.testing.expect(std.mem.indexOf(u8, s, e.id) != null);

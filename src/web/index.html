@@ -463,10 +463,10 @@
 </dialog>
 
 <!-- Catalog Dialog -->
-<dialog id="catalogdlg" aria-label="VM Catalog">
+<dialog id="catalogdlg" aria-label="VM Catalog" style="width:min(860px,94vw)">
   <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">VM Catalog</h3>
   <p style="padding:4px 24px 12px;font-size:12px;color:var(--text-muted)">Choose a template to create a pre-configured VM.</p>
-  <div id="catalogList" style="padding:0 24px 20px;max-height:400px;overflow-y:auto"></div>
+  <div id="catalogList" class="catalog-grid" style="padding:0 24px 22px;max-height:62vh;overflow-y:auto"></div>
   <div class="btn-row">
     <button type="button" class="btn" data-action="closeDlg" data-dialog="catalogdlg">Close</button>
   </div>

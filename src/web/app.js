@@ -735,7 +735,32 @@ var pai=document.getElementById('p_autoprotect_interval');if(pai)pai.value=cfg.a
 var pam=document.getElementById('p_autoprotect_max');if(pam)pam.value=cfg.autoprotect_max_default||10;
 pd.showModal();}
 function openAbout(){var ad=document.getElementById('aboutdlg');if(ad)ad.showModal();}
-async function openCatalog(){var cd=document.getElementById('catalogdlg');if(!cd)return;var list=document.getElementById('catalogList');if(list)list.innerHTML='<div class="spinner" style="padding:20px;text-align:center">Loading catalog…</div>';cd.showModal();try{var r=await fetch('/api/catalog');if(!r.ok){if(list)list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';return;}var entries=await r.json();if(!list)return;if(!entries||!entries.length){list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">No templates available.</p>';return;}var guestOsLabels=['Linux','Windows','FreeBSD','macOS','Other'];var h='';for(var i=0;i<entries.length;i++){var e=entries[i];var osLabel=guestOsLabels[e.guest_os]||'Other';h+='<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)"'+'><div><strong>'+escHtml(e.name)+'</strong><br><small style="color:var(--text-muted)">'+escHtml(e.description||'')+'</small><br><small>'+escHtml(osLabel)+' · '+e.memory_mb+' MB · '+e.cpu_cores+' vCPU · '+e.disk_size_gb+' GB disk</small></div>'+'<button class="btn primary" data-action="quickstartVm" data-catalog-id="'+escHtml(e.id)+'" aria-label="Create VM from '+escHtml(e.name)+'" style="white-space:nowrap;margin-left:12px">Create VM</button></div>';}list.innerHTML=h;}catch(ex){if(list)list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';}}
+async function openCatalog(){var cd=document.getElementById('catalogdlg');if(!cd)return;var list=document.getElementById('catalogList');if(list)list.innerHTML='<div class="spinner" style="padding:20px;text-align:center">Loading catalog…</div>';cd.showModal();try{var r=await fetch('/api/catalog');if(!r.ok){if(list)list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';return;}var entries=await r.json();if(!list)return;if(!entries||!entries.length){list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">No templates available.</p>';return;}var guestOsLabels=['Linux','Windows','FreeBSD','macOS','Other'];
+// Distro/OS visual identity: accent color + monogram for the card emblem.
+function catalogBrand(e){var n=(e.name||'').toLowerCase(),id=(e.id||'').toLowerCase();
+ if(/ubuntu/.test(n+id))return {c:'#E95420',m:'U'};
+ if(/fedora/.test(n+id))return {c:'#3C6EB4',m:'F'};
+ if(/debian/.test(n+id))return {c:'#A80030',m:'D'};
+ if(/alpine/.test(n+id))return {c:'#0D597F',m:'A'};
+ if(/arch/.test(n+id))return {c:'#1793D1',m:'A'};
+ if(/rocky|alma|centos|rhel|red ?hat/.test(n+id))return {c:'#10B981',m:'R'};
+ if(Number(e.guest_os)===1)return {c:'#0078D4',m:'W'}; // Windows
+ if(Number(e.guest_os)===2)return {c:'#AB2B28',m:'B'}; // FreeBSD
+ if(Number(e.guest_os)===3)return {c:'#555',m:'M'};     // macOS
+ return {c:'var(--accent)',m:(e.name||'?').charAt(0).toUpperCase()};}
+function gb(mb){return Number(mb)>=1024?(Math.round(Number(mb)/102.4)/10+' GB'):(Number(mb)+' MB');}
+var h='';for(var i=0;i<entries.length;i++){var e=entries[i];var osLabel=guestOsLabels[e.guest_os]||'Other';var br=catalogBrand(e);
+ h+='<div class="cat-card">'
+  +'<div class="cat-emblem" style="background:'+br.c+'" aria-hidden="true">'+escHtml(br.m)+'</div>'
+  +'<div class="cat-body">'
+   +'<div class="cat-name">'+escHtml(e.name)+'</div>'
+   +'<div class="cat-os">'+escHtml(osLabel)+'</div>'
+   +'<div class="cat-desc">'+escHtml(e.description||'')+'</div>'
+   +'<div class="cat-specs"><span class="cat-spec">'+e.cpu_cores+' vCPU</span><span class="cat-spec">'+gb(e.memory_mb)+' RAM</span><span class="cat-spec">'+e.disk_size_gb+' GB disk</span></div>'
+  +'</div>'
+  +'<button class="btn primary cat-create" data-action="quickstartVm" data-catalog-id="'+escHtml(e.id)+'" aria-label="Create VM from '+escHtml(e.name)+'">Create</button>'
+  +'</div>';}
+list.innerHTML=h;}catch(ex){if(list)list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';}}
 async function quickstartVm(slug){if(!slug)return;var r=await apiPost('/api/vms/quickstart/'+slug);if(r){var cd=document.getElementById('catalogdlg');if(cd)cd.close();await refresh();setStatus('VM created from template.');}}
 async function savePrefs(){const body=['theme','default_vm_dir','default_memory_mb','default_cpu_cores','autoprotect_enabled','autoprotect_interval','autoprotect_max']
 .map(id=>{const el=document.getElementById('p_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');

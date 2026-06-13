@@ -1566,6 +1566,7 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
     cfg.cpu_cores = tmpl.cpu_cores;
     cfg.disk_size_gb = tmpl.disk_size_gb;
     cfg.guest_os = vm.GuestOs.fromIndex(tmpl.guest_os);
+    cfg.firmware = vm.BootFirmware.fromIndex(tmpl.firmware);
 
     var mac_buf: [18]u8 = undefined;
     const mac = vm.generateMacAddress(&mac_buf);
@@ -1594,6 +1595,20 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
     if (appstate.vm_count >= appstate.MAX_VMS) {
         if (disk_created) cleanupCreatedDisk(&cfg);
         return "full";
+    }
+    // Templates share a fixed name; suffix to keep names (and the derived
+    // QMP/serial/log socket paths) unique when created more than once.
+    if (nameTaken(cfg.getNameSlice(), null)) {
+        var nbuf: [vm.MAX_NAME]u8 = undefined;
+        const base = cfg.getNameSlice();
+        var n: u32 = 2;
+        while (n < 1000) : (n += 1) {
+            const cand = std.fmt.bufPrintZ(&nbuf, "{s} ({d})", .{ base, n }) catch break;
+            if (!nameTaken(cand, null)) {
+                cfg.setName(cand);
+                break;
+            }
+        }
     }
     cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);

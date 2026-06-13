@@ -321,6 +321,28 @@ test('settings lock virtual hardware while the VM is running, metadata stays edi
     await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-lock')}/power`, '');
 });
 
+test('catalog quickstart creates a VM with the template OS and firmware', async ({ page }) => {
+    const cat = await api(page, 'GET', '/api/catalog', null);
+    const entries = JSON.parse(cat.text);
+    expect(entries.length).toBeGreaterThanOrEqual(10);
+    const win = entries.find(e => e.id === 'win11');
+    expect(win.firmware).toBe(1); // UEFI
+    // Quickstart a UEFI Windows template and a BIOS Alpine template.
+    await api(page, 'POST', '/api/vms/quickstart/win11', '');
+    await api(page, 'POST', '/api/vms/quickstart/alpine320', '');
+    const vms = await list(page);
+    const w = vms.find(v => v.name === 'Windows 11');
+    const a = vms.find(v => v.name === 'Alpine 3.20');
+    expect(w, 'win11 VM exists').toBeTruthy();
+    expect(w.fw).toBe('uefi');
+    expect(w.os).toMatch(/Windows/);
+    expect(a.fw).toBe('bios');
+    // A second win11 quickstart gets a unique name (sockets are name-derived).
+    await api(page, 'POST', '/api/vms/quickstart/win11', '');
+    const after = await list(page);
+    expect(after.filter(v => v.name.startsWith('Windows 11')).length).toBe(2);
+});
+
 test('dashboard shows host capacity (committed vs physical)', async ({ page }) => {
     await api(page, 'POST', '/api/vms', 'name=cap-a&mem=2048&cpu=2&disk=10');
     await page.reload();
