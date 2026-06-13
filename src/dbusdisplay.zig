@@ -728,6 +728,16 @@ fn startEncoder(sess: *Session, w: u32, h: u32) bool {
     sess.enc_mutex.lock();
     defer sess.enc_mutex.unlock();
     if (sess.enc_pid >= 0) return true;
+    // Close any stale enc_in left by a prior encoder that was stopped (last
+    // viewer left, or a resolution change): stopEncoderLocked deliberately
+    // doesn't touch enc_in (the feed thread owns it), and the post-stop !alive
+    // short-circuit means the feed thread never EPIPE-closes it either, so
+    // without this every stop+restart leaked the old stdin fd. Safe here: we
+    // hold enc_mutex with enc_pid<0, so no feed-thread write is in flight.
+    if (sess.enc_in >= 0) {
+        _ = c.close(sess.enc_in);
+        sess.enc_in = -1;
+    }
     var size_buf: [32]u8 = undefined;
     const size = std.fmt.bufPrint(&size_buf, "{d}x{d}", .{ w, h }) catch return false;
     var rate_buf: [16]u8 = undefined;
