@@ -1126,3 +1126,12 @@ aside .vm-item .vm-meta{flex-basis:100%;padding-left:18px}
 .vm-emblem[hidden]{display:none}
 .os-cell{display:inline-flex;align-items:center;gap:8px}
 .os-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;color:#fff;font-weight:700;font-size:11px;line-height:1;flex:none}
+
+/* Snapshot rows: a camera emblem + stacked tag/timestamp, actions right. */
+.snapshot-row{display:flex;align-items:center;gap:12px}
+.snap-emblem{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:8px;background:var(--accent-soft);color:var(--accent);flex:none}
+.snap-emblem .ico{width:17px;height:17px}
+.snap-info{display:flex;flex-direction:column;min-width:0}
+.snap-info strong{font-size:13px}
+.snap-info small{color:var(--text-dim);font-size:11px}
+.snapshot-row .snapshot-actions{margin-left:auto}
