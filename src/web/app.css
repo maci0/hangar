@@ -464,7 +464,7 @@ main{
   margin-bottom:12px;
 }
 #vmname{
-  margin:0;
+  margin:0 auto 0 0;
   color:var(--text);
   letter-spacing:-.01em;
   font-size:17px;
@@ -1120,3 +1120,9 @@ aside .vm-item .vm-meta{flex-basis:100%;padding-left:18px}
 .cat-spec{font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-muted);background:var(--bg-inset,rgba(127,127,127,.14));border-radius:4px;padding:2px 7px;white-space:nowrap}
 .cat-create{align-self:center;white-space:nowrap}
 @media(max-width:560px){.catalog-grid{grid-template-columns:1fr}.cat-card{grid-template-columns:auto 1fr}.cat-create{grid-column:1/-1;justify-self:stretch}}
+
+/* ── OS emblems (shared visual identity: catalog, summary, inventory) ── */
+.vm-emblem{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;color:#fff;font-weight:700;font-size:15px;line-height:1;flex:none;vertical-align:middle;margin-right:10px}
+.vm-emblem[hidden]{display:none}
+.os-cell{display:inline-flex;align-items:center;gap:8px}
+.os-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;color:#fff;font-weight:700;font-size:11px;line-height:1;flex:none}

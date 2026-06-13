@@ -62,6 +62,23 @@ var displayLabels=['GTK','SDL','SPICE','VNC','None'];
 var gpuLabels=['Virtio-GPU (virgl 3D)','Virtio-VGA (virgl 3D)','Virtio-GPU','Virtio-VGA','QXL','Standard VGA'];
 function relAge(ts){var t=Date.parse(String(ts).replace(' ','T'));if(!t)return '';var d=Math.floor((Date.now()-t)/1000);if(d<0)return '';
 if(d<60)return 'just now';if(d<3600)return Math.floor(d/60)+' min ago';if(d<86400)return Math.floor(d/3600)+' h ago';return Math.floor(d/86400)+' d ago';}
+// Shared OS/distro visual identity (emblem color + monogram), used by the
+// catalog cards, the summary header, and the inventory grid for a consistent
+// visual language. `hint` is a name or description string; `osLabel` is the
+// guest-OS label/family fallback.
+function osBrand(hint,osLabel){var n=((hint||'')+' '+(osLabel||'')).toLowerCase();
+ if(/ubuntu/.test(n))return {c:'#E95420',m:'U'};
+ if(/fedora/.test(n))return {c:'#3C6EB4',m:'F'};
+ if(/debian/.test(n))return {c:'#A80030',m:'D'};
+ if(/alpine/.test(n))return {c:'#0D597F',m:'A'};
+ if(/\barch\b/.test(n))return {c:'#1793D1',m:'A'};
+ if(/rocky|alma|centos|rhel|red ?hat/.test(n))return {c:'#10B981',m:'R'};
+ if(/openbsd/.test(n))return {c:'#F2CA30',m:'O'};
+ if(/freebsd|\bbsd\b/.test(n))return {c:'#AB2B28',m:'B'};
+ if(/windows|microsoft/.test(n))return {c:'#0078D4',m:'W'};
+ if(/mac ?os|apple|darwin/.test(n))return {c:'#555',m:'M'};
+ if(/linux/.test(n))return {c:'#5B7A8C',m:'L'};
+ return {c:'var(--accent)',m:((hint||osLabel||'?').charAt(0)||'?').toUpperCase()};}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function announceStatus(s){var a=document.getElementById('statusannounce');if(a)a.textContent=s;}
 function setStatus(s){var el=document.getElementById('statusmsg');if(!el)return;el.textContent=s;el.classList.remove('loading');announceStatus(s);}
@@ -244,7 +261,7 @@ function DashView(){
      return t.tr({'data-action':'select','data-vm-index':String(r.i),tabindex:'0'},
       t.td({class:'inv-name'},v.name),
       t.td(t.span({class:'sdot '+v.status}),statusLabel(v.status)),
-      t.td(v.os),t.td(String(v.cpu)),t.td(mt),t.td(v.disk+' GB'),
+      t.td(function(){var br=osBrand(v.name,v.os);return t.span({class:'os-cell'},t.span({class:'os-badge',style:'background:'+br.c},br.m),v.os);}),t.td(String(v.cpu)),t.td(mt),t.td(v.disk+' GB'),
       t.td({class:'muted'},v.folder||''),
       t.td(visibleTags(v.tags).map(function(tag){return t.span({class:'tag-chip sm'},tag);})));}));}
   )),
@@ -310,6 +327,7 @@ const v=vms[sel];const sc=v.status==='running'?'running':v.status==='paused'?'pa
 if(activeTab==='console'&&!(v.status==='running'&&embeddedDisplayCapable(v)))activeTab='summary';
 syncTabPanels();
 nm.textContent=v.name;document.title='Hangar — '+v.name;
+var emb=document.getElementById('vmemblem');if(emb){var br=osBrand(v.name,v.os);emb.textContent=br.m;emb.style.background=br.c;emb.hidden=false;}
 var info=displayInfo(v);
 var videoMeta=escHtml(info.embedLabel+' '+info.displayLabel)+' · '+escHtml(info.gpuLabel)+' · '+escHtml(info.accelLabel);
 var ch=document.getElementById('consoleHint');
@@ -737,17 +755,7 @@ pd.showModal();}
 function openAbout(){var ad=document.getElementById('aboutdlg');if(ad)ad.showModal();}
 async function openCatalog(){var cd=document.getElementById('catalogdlg');if(!cd)return;var list=document.getElementById('catalogList');if(list)list.innerHTML='<div class="spinner" style="padding:20px;text-align:center">Loading catalog…</div>';cd.showModal();try{var r=await fetch('/api/catalog');if(!r.ok){if(list)list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';return;}var entries=await r.json();if(!list)return;if(!entries||!entries.length){list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">No templates available.</p>';return;}var guestOsLabels=['Linux','Windows','FreeBSD','macOS','Other'];
 // Distro/OS visual identity: accent color + monogram for the card emblem.
-function catalogBrand(e){var n=(e.name||'').toLowerCase(),id=(e.id||'').toLowerCase();
- if(/ubuntu/.test(n+id))return {c:'#E95420',m:'U'};
- if(/fedora/.test(n+id))return {c:'#3C6EB4',m:'F'};
- if(/debian/.test(n+id))return {c:'#A80030',m:'D'};
- if(/alpine/.test(n+id))return {c:'#0D597F',m:'A'};
- if(/arch/.test(n+id))return {c:'#1793D1',m:'A'};
- if(/rocky|alma|centos|rhel|red ?hat/.test(n+id))return {c:'#10B981',m:'R'};
- if(Number(e.guest_os)===1)return {c:'#0078D4',m:'W'}; // Windows
- if(Number(e.guest_os)===2)return {c:'#AB2B28',m:'B'}; // FreeBSD
- if(Number(e.guest_os)===3)return {c:'#555',m:'M'};     // macOS
- return {c:'var(--accent)',m:(e.name||'?').charAt(0).toUpperCase()};}
+function catalogBrand(e){var fam=['Linux','Windows','FreeBSD','macOS','Other'][e.guest_os]||'';return osBrand((e.name||'')+' '+(e.id||''),fam);}
 function gb(mb){return Number(mb)>=1024?(Math.round(Number(mb)/102.4)/10+' GB'):(Number(mb)+' MB');}
 var h='';for(var i=0;i<entries.length;i++){var e=entries[i];var osLabel=guestOsLabels[e.guest_os]||'Other';var br=catalogBrand(e);
  h+='<div class="cat-card">'
