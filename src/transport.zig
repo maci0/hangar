@@ -409,6 +409,28 @@ fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+test "transport: parseContentLength is case-insensitive and bounded" {
+    try std.testing.expectEqual(@as(?usize, 1234), parseContentLength("HTTP/1.0 200 OK\r\nContent-Length: 1234\r\n\r\n"));
+    try std.testing.expectEqual(@as(?usize, 1234), parseContentLength("HTTP/1.0 200 OK\r\ncontent-length:1234\r\n\r\n")); // no space, lowercase
+    try std.testing.expectEqual(@as(?usize, 0), parseContentLength("HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n"));
+    try std.testing.expectEqual(@as(?usize, null), parseContentLength("HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n")); // absent
+    try std.testing.expectEqual(@as(?usize, null), parseContentLength("HTTP/1.0 200 OK\r\nContent-Length: notanumber\r\n\r\n"));
+    // A header NAME containing the token must not false-match.
+    try std.testing.expectEqual(@as(?usize, null), parseContentLength("HTTP/1.0 200 OK\r\nX-Content-Length-Hint: 9\r\n\r\n"));
+}
+
+test "fuzz: parseContentLength never panics on random header bytes" {
+    var prng = std.Random.DefaultPrng.init(0xC0_1E_0001);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        _ = parseContentLength(buf[0..len]);
+    }
+}
+
 test "Url parse: tcp" {
     const u = Url.parse("http://192.168.1.1:8080").?;
     try std.testing.expectEqual(Proto.tcp, u.proto);

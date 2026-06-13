@@ -807,6 +807,9 @@ fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     }
     defer _ = std.c.close(fd);
     const written = conn.requestToFd("POST", path, null, fd) catch |e| {
+        // Don't leave a 0-byte/partial vm-N.ova behind — a later consumer must
+        // not mistake a failed export for a valid OVA.
+        _ = std.c.unlink(fname.ptr);
         var ebuf: [160]u8 = undefined;
         const em = std.fmt.bufPrint(&ebuf, "Error: export failed for VM [{d}]: {s}\n", .{ idx, @errorName(e) }) catch "Error: export failed\n";
         fdWrite(c.STDERR_FILENO, em);
