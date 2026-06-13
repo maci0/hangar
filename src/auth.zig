@@ -196,6 +196,18 @@ test "auth: wsOriginOk allows loopback + no-origin, rejects foreign" {
     try std.testing.expect(wsOriginOk("GET /ws/vnc/0 HTTP/1.1\r\nOrigin:http://127.0.0.1:9080\r\n\r\n")); // no space after colon
 }
 
+test "fuzz: wsOriginOk never panics on random request bytes" {
+    var prng = std.Random.DefaultPrng.init(0xA1B2_C3D4);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        _ = wsOriginOk(buf[0..len]);
+    }
+}
+
 test "auth: exposed mode removes data-read exemptions" {
     const prev = token_len;
     defer token_len = prev;

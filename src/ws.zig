@@ -380,6 +380,19 @@ fn fuzzByteIsPrintable(b: u8) bool {
     return b == '\r' or b == '\n' or (b >= 0x20 and b < 0x7f);
 }
 
+test "fuzz: headerValueContains never panics on random request bytes" {
+    var prng = std.Random.DefaultPrng.init(0xBEEF_77AA);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        _ = headerValueContains(buf[0..len], "upgrade:", "websocket");
+        _ = headerValueContains(buf[0..len], "connection:", "upgrade");
+    }
+}
+
 test "headerValueContains: case-insensitive, comma-tolerant (Firefox Connection)" {
     const ff = "GET /ws HTTP/1.1\r\nupgrade: WebSocket\r\nConnection: keep-alive, Upgrade\r\n\r\n";
     try std.testing.expect(headerValueContains(ff, "upgrade:", "websocket"));

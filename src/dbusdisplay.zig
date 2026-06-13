@@ -385,7 +385,6 @@ pub const AuSplitter = struct {
 pub const Session = struct {
     name_buf: [vm.MAX_NAME]u8 = undefined,
     name_len: u8 = 0,
-    alive: bool = true,
     // Reference count guarded by sessions_mutex: the owning listener thread
     // holds one ref, each attached video client holds one. The Session (and
     // its framebuffer) is destroyed only at the final unref — a VM power-off
@@ -402,7 +401,15 @@ pub const Session = struct {
     // Encoder child + the single attached video client.
     enc_mutex: sync.SpinMutex = .{},
     enc_pid: c.pid_t = -1,
+    // enc_in is mutated and closed ONLY by the feed thread (the listener), at
+    // the top of pushFrameNowLocked when it is not mid-write. The client thread
+    // (startEncoder) publishes a freshly-spawned ffmpeg's stdin via
+    // enc_in_pending; the feed thread adopts it (closing any prior enc_in).
+    // This single-owner handoff is what makes the lock-free write safe — an
+    // earlier version had the client thread close enc_in directly, which could
+    // close the fd the feed thread was mid-writing (use-after-close).
     enc_in: c.fd_t = -1,
+    enc_in_pending: c.fd_t = -1,
     enc_out: c.fd_t = -1,
     last_push_ms: u64 = 0,
     fb_dirty: bool = false,
@@ -474,6 +481,10 @@ fn unregisterSession(sess: *Session) void {
     if (sess.enc_in >= 0) {
         _ = c.close(sess.enc_in);
         sess.enc_in = -1;
+    }
+    if (sess.enc_in_pending >= 0) {
+        _ = c.close(sess.enc_in_pending);
+        sess.enc_in_pending = -1;
     }
     sess.enc_mutex.unlock();
     sessionUnref(sess);
@@ -693,8 +704,22 @@ fn pushFrameNowLocked(sess: *Session, now: u64) void {
     // it) or fb_mutex (the listener needs it). stopEncoder does not touch enc_in;
     // it kills ffmpeg, which EPIPEs this write, and we close the fd ourselves.
     sess.enc_mutex.lock();
-    const fd = sess.enc_in;
+    // Adopt a freshly-published encoder stdin and close any prior one. This is
+    // the only place enc_in is closed during normal operation, and we are at
+    // the top of the frame (not mid-write), so no in-flight write references it.
+    if (sess.enc_in_pending >= 0) {
+        if (sess.enc_in >= 0) _ = c.close(sess.enc_in);
+        sess.enc_in = sess.enc_in_pending;
+        sess.enc_in_pending = -1;
+    }
     const alive = sess.enc_pid >= 0;
+    // Encoder stopped (last viewer left) with no replacement: close our stale
+    // stdin now rather than leak it until teardown.
+    if (!alive and sess.enc_in >= 0) {
+        _ = c.close(sess.enc_in);
+        sess.enc_in = -1;
+    }
+    const fd = sess.enc_in;
     sess.enc_mutex.unlock();
     if (fd < 0 or !alive) return;
     sess.last_push_ms = now;
@@ -728,16 +753,6 @@ fn startEncoder(sess: *Session, w: u32, h: u32) bool {
     sess.enc_mutex.lock();
     defer sess.enc_mutex.unlock();
     if (sess.enc_pid >= 0) return true;
-    // Close any stale enc_in left by a prior encoder that was stopped (last
-    // viewer left, or a resolution change): stopEncoderLocked deliberately
-    // doesn't touch enc_in (the feed thread owns it), and the post-stop !alive
-    // short-circuit means the feed thread never EPIPE-closes it either, so
-    // without this every stop+restart leaked the old stdin fd. Safe here: we
-    // hold enc_mutex with enc_pid<0, so no feed-thread write is in flight.
-    if (sess.enc_in >= 0) {
-        _ = c.close(sess.enc_in);
-        sess.enc_in = -1;
-    }
     var size_buf: [32]u8 = undefined;
     const size = std.fmt.bufPrint(&size_buf, "{d}x{d}", .{ w, h }) catch return false;
     var rate_buf: [16]u8 = undefined;
@@ -757,7 +772,9 @@ fn startEncoder(sess: *Session, w: u32, h: u32) bool {
     else
         qemu.forkExecPiped(&x264, std.heap.page_allocator)) catch return false;
     sess.enc_pid = child.pid;
-    sess.enc_in = child.stdin_fd;
+    // Publish stdin for the feed thread to adopt; do NOT touch enc_in here (it
+    // belongs to the feed thread, which may be mid-write on the prior fd).
+    sess.enc_in_pending = child.stdin_fd;
     sess.enc_out = child.stdout_fd;
     var msg: [128]u8 = undefined;
     wlog.logAt(.info, std.fmt.bufPrint(&msg, "dbusdisplay: encoder started vm=\"{s}\" {d}x{d} {s}", .{ sess.nameSlice(), w, h, if (have_vaapi) "h264_vaapi" else "libx264" }) catch "dbusdisplay: encoder started");
@@ -781,6 +798,12 @@ fn stopEncoderLocked(sess: *Session) void {
     const out_fd = sess.enc_out;
     sess.enc_pid = -1;
     sess.enc_out = -1;
+    // If a freshly-spawned stdin was published but the feed thread hasn't
+    // adopted it yet, it belongs to the ffmpeg we are killing — close it here.
+    if (sess.enc_in_pending >= 0) {
+        _ = c.close(sess.enc_in_pending);
+        sess.enc_in_pending = -1;
+    }
     sess.enc_mutex.unlock();
 
     _ = c.kill(pid, .KILL); // EPIPEs any in-flight feed write; ends the pump's read

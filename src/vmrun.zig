@@ -469,29 +469,6 @@ fn findVmIdxInJson(json: []const u8, target: []const u8) ?usize {
     return null;
 }
 
-/// Pure helper: given VM-list JSON and a numeric index, return that VM's
-/// "status" string (e.g. "running", "stopped"). Matches the object whose
-/// `"idx":N` field equals `idx`. Returns null when no such object exists.
-fn findVmStatusInJson(json: []const u8, idx: usize) ?[]const u8 {
-    var rest = json;
-    while (std.mem.indexOfScalar(u8, rest, '{')) |obj_start| {
-        rest = rest[obj_start..];
-        const obj_end = std.mem.indexOfScalar(u8, rest, '}') orelse break;
-        const obj = rest[0 .. obj_end + 1];
-        rest = rest[obj_end + 1 ..];
-        const obj_idx = extractJsonInt(obj, "idx") orelse continue;
-        if (obj_idx == idx) return extractJsonString(obj, "status");
-    }
-    return null;
-}
-
-
-/// True when a VM-list status string denotes a powered-on VM (running or
-/// paused), mirroring the daemon's `VmConfig.isAlive`.
-fn statusIsAlive(status: []const u8) bool {
-    return std.mem.eql(u8, status, "running") or std.mem.eql(u8, status, "paused");
-}
-
 fn resolveVm(allocator: std.mem.Allocator, conn: *transport.Connection, target: []const u8) ?usize {
     // Try parsing as numeric index first.
     if (std.fmt.parseInt(usize, target, 10)) |idx| {
@@ -1099,41 +1076,6 @@ test "findVmIdxInJson: name contains colon or other special chars" {
     const json = "[{\"idx\":3,\"name\":\"test:vm\"}]";
     const idx = findVmIdxInJson(json, "test:vm");
     try std.testing.expectEqual(@as(usize, 3), idx.?);
-}
-
-test "findVmStatusInJson: returns status for matching idx" {
-    const json = "[{\"idx\":0,\"name\":\"a\",\"status\":\"running\"},{\"idx\":1,\"name\":\"b\",\"status\":\"stopped\"}]";
-    try std.testing.expectEqualStrings("running", findVmStatusInJson(json, 0).?);
-    try std.testing.expectEqualStrings("stopped", findVmStatusInJson(json, 1).?);
-}
-
-test "findVmStatusInJson: returns null for missing idx or empty list" {
-    const json = "[{\"idx\":0,\"name\":\"a\",\"status\":\"running\"}]";
-    try std.testing.expect(findVmStatusInJson(json, 9) == null);
-    try std.testing.expect(findVmStatusInJson("[]", 0) == null);
-    try std.testing.expect(findVmStatusInJson("", 0) == null);
-}
-
-test "statusIsAlive: running and paused are alive; others are not" {
-    try std.testing.expect(statusIsAlive("running"));
-    try std.testing.expect(statusIsAlive("paused"));
-    try std.testing.expect(!statusIsAlive("stopped"));
-    try std.testing.expect(!statusIsAlive("suspended"));
-    try std.testing.expect(!statusIsAlive(""));
-}
-
-test "fuzz: findVmStatusInJson and statusIsAlive never panic on random input" {
-    var prng = std.Random.DefaultPrng.init(0x57A705);
-    const rnd = prng.random();
-    var buf: [256]u8 = undefined;
-    var iter: usize = 0;
-    while (iter < 4000) : (iter += 1) {
-        const len = rnd.uintLessThan(usize, buf.len);
-        for (buf[0..len]) |*b| b.* = rnd.int(u8);
-        if (findVmStatusInJson(buf[0..len], rnd.uintLessThan(usize, 8))) |s| {
-            _ = statusIsAlive(s);
-        }
-    }
 }
 
 test "errorEnvelopeMsg: detects error envelope and extracts message" {
