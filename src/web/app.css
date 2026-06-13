@@ -1146,3 +1146,6 @@ aside .vm-item .vm-meta{flex-basis:100%;padding-left:18px}
 .vnet-item-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:auto}
 .vnet-type-badge{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border:1px solid;border-radius:4px;padding:1px 6px;white-space:nowrap}
 .vnet-empty{padding:18px 12px;text-align:center;font-size:12px;color:var(--text-dim)}
+
+.srow dt{display:inline-flex;align-items:center;gap:7px}
+.srow-ico{width:14px;height:14px;color:var(--text-dim);flex:none}

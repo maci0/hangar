@@ -333,7 +333,7 @@ var videoMeta=escHtml(info.embedLabel+' '+info.displayLabel)+' · '+escHtml(info
 var ch=document.getElementById('consoleHint');
 if(ch){if(embeddedDisplayCapable(v)){ch.innerHTML=v.status==='running'?'':'<div class="console-empty"><strong>'+escHtml(v.name)+' is powered off.</strong><span>Power on the VM to open its console here.</span></div>';}
 else{ch.innerHTML='<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}}
-function row(l,vv){return '<div class="srow"><dt>'+l+'</dt><dd>'+vv+'</dd></div>';}
+function row(l,vv,ic){var icon=ic?'<svg class="srow-ico" aria-hidden="true"><use href="#'+ic+'"/></svg>':'';return '<div class="srow"><dt>'+icon+l+'</dt><dd>'+vv+'</dd></div>';}
 const memTxt=Number(v.mem)>=1024?(Math.round(Number(v.mem)/102.4)/10)+' GB':escHtml(v.mem)+' MB';
 let h='<div class="vm-facts">';
 h+='<span class="fact-badge '+sc+'">'+escHtml(statusLabel(v.status))+'</span>';
@@ -345,17 +345,17 @@ if(v.status==='running')h+='<span class="fact">IP <span id="guestIpVal">…</spa
 h+='</div><div class="summary-sections">';
 // VM Hardware
 h+='<section class="sum-section"><h3>VM Hardware</h3><dl class="sum-dl">';
-h+=row('CPU',escHtml(v.cpu)+(Number(v.cpu)===1?' core':' cores')+(Number(v.cpu_sockets)>1?' · '+escHtml(v.cpu_sockets)+' sockets':''));
-h+=row('Memory',escHtml(v.mem)+' MB');
-h+=row('Hard Disk',escHtml(v.disk)+' GB'+(v.hasDisk==='true'?'<div class="usage" id="diskUsageVal">…</div>':''));
+h+=row('CPU',escHtml(v.cpu)+(Number(v.cpu)===1?' core':' cores')+(Number(v.cpu_sockets)>1?' · '+escHtml(v.cpu_sockets)+' sockets':''),'i-cpu');
+h+=row('Memory',escHtml(v.mem)+' MB','i-ram');
+h+=row('Hard Disk',escHtml(v.disk)+' GB'+(v.hasDisk==='true'?'<div class="usage" id="diskUsageVal">…</div>':''),'i-hdd');
 if(v.hasDisk2==='true')h+=row('Disk 2',escHtml(v.disk2_size)+' GB');
 ['extra0','extra1','extra2','extra3'].forEach(function(k,i){if(v[k+'_path'])h+=row('Extra Disk '+(i+1),escHtml(v[k+'_size'])+' GB');});
 if(v.iso_path)h+=row('CD/DVD',escHtml(v.iso_path));
 if(v.hasFloppy==='true')h+=row('Floppy','attached');
-h+=row('Network',escHtml(networkLabel(v))+(v.mac?' · '+escHtml(v.mac):''));
+h+=row('Network',escHtml(networkLabel(v))+(v.mac?' · '+escHtml(v.mac):''),'i-net');
   if(v.vnet)h+=row('Virtual Network',escHtml(v.vnet));
 [2,3,4,5,6,7,8].forEach(function(n){var m=v['nic'+n+'_mode'];if(m&&m!=='none')h+=row('NIC '+n,escHtml(m));});
-h+=row('Video',videoMeta);
+h+=row('Video',videoMeta,'i-monitor');
 if(v.usb_device)h+=row('USB Device',escHtml(v.usb_device));
 h+='</dl></section>';
 // Guest & Tools
@@ -893,18 +893,20 @@ function runPalette(i){var it=paletteItems[i];if(!it)return;closePalette();if(it
 
 // ── Visual network topology (elkjs auto-layout → SVG) ──
 function modeLabel(m){return m==='user'?'NAT (user)':m==='gvproxy'?'gvproxy':m==='bridge'?'Bridged':m==='none'?'Isolated':m;}
+function modeColor(m){return m==='bridge'?'#10B981':(m==='user'||m==='gvproxy')?'#3C6EB4':m==='none'?'var(--text-dim)':'var(--accent)';}
+function vnetColorByName(name){if(vnetsData&&vnetsData.networks)for(var i=0;i<vnetsData.networks.length;i++){if(vnetsData.networks[i].name===name)return vnetTypeMeta(vnetsData.networks[i].type).c;}return 'var(--accent)';}
 function vmModes(v){var m=[v.net||'user'];for(var i=2;i<=8;i++){var nm=v['nic'+i+'_mode'];if(nm&&nm!=='none')m.push(nm);}return m.filter(Boolean);}
 function buildTopologyGraph(){
  var children=[],edges=[],meta={},seen={},eid=0,modesUsed={},anyUplink=false;
  var edgeSeen={};
- function addNode(id,label,kind,act){if(seen[id])return;seen[id]=1;var w=Math.max(96,Math.round(label.length*7.2)+26);children.push({id:id,width:w,height:38,labels:[{text:label}]});meta[id]={kind:kind,act:act,label:label};}
+ function addNode(id,label,kind,act,color){if(seen[id])return;seen[id]=1;var w=Math.max(96,Math.round(label.length*7.2)+26);children.push({id:id,width:w,height:38,labels:[{text:label}]});meta[id]={kind:kind,act:act,label:label,color:color||''};}
  function addEdge(a,b){var key=a+'>'+b;if(edgeSeen[key])return;edgeSeen[key]=1;edges.push({id:'e'+(eid++),sources:[a],targets:[b]});}
  for(var i=0;i<vms.length;i++){var v=vms[i];var vid='vm:'+v.name;addNode(vid,v.name,'vm '+(v.status||''),'data-action="topoSelectVm" data-vm-name="'+escHtml(v.name)+'"');
   // Explicit vnet binding: draw the real VM -> named virtual-network edge.
   var bound=[v.vnet];for(var bn=2;bn<=8;bn++){bound.push(v['nic'+bn+'_vnet']);}
-  for(var bi=0;bi<bound.length;bi++){var bname=bound[bi];if(!bname)continue;var bnid='net:'+bname;addNode(bnid,bname,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(bname)+'"');addEdge(vid,bnid);addEdge(bnid,'host');anyUplink=true;}
-  var modes=vmModes(v),dd={};for(var k=0;k<modes.length;k++){var mode=modes[k];if(dd[mode])continue;dd[mode]=1;var mid='mode:'+mode;addNode(mid,modeLabel(mode),'net','');modesUsed[mode]=1;addEdge(vid,mid);}}
- if(vnetsData&&vnetsData.networks)for(var n=0;n<vnetsData.networks.length;n++){var net=vnetsData.networks[n];var nid='net:'+net.name;addNode(nid,net.name+' · '+net.type,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(net.name)+'"');addEdge(nid,'host');anyUplink=true;}
+  for(var bi=0;bi<bound.length;bi++){var bname=bound[bi];if(!bname)continue;var bnid='net:'+bname;addNode(bnid,bname,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(bname)+'"',vnetColorByName(bname));addEdge(vid,bnid);addEdge(bnid,'host');anyUplink=true;}
+  var modes=vmModes(v),dd={};for(var k=0;k<modes.length;k++){var mode=modes[k];if(dd[mode])continue;dd[mode]=1;var mid='mode:'+mode;addNode(mid,modeLabel(mode),'net','',modeColor(mode));modesUsed[mode]=1;addEdge(vid,mid);}}
+ if(vnetsData&&vnetsData.networks)for(var n=0;n<vnetsData.networks.length;n++){var net=vnetsData.networks[n];var nid='net:'+net.name;addNode(nid,net.name+' · '+net.type,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(net.name)+'"',vnetTypeMeta(net.type).c);addEdge(nid,'host');anyUplink=true;}
  Object.keys(modesUsed).forEach(function(m){if(m!=='none'){addEdge('mode:'+m,'host');anyUplink=true;}});
  if(anyUplink)addNode('host','Host / Physical','host','');
  return {graph:{id:'root',layoutOptions:{'elk.algorithm':'layered','elk.direction':'RIGHT','elk.spacing.nodeNode':'22','elk.layered.spacing.nodeNodeBetweenLayers':'80'},children:children,edges:edges},meta:meta};
@@ -914,8 +916,10 @@ function topoSvg(res,meta){
  var s='<svg viewBox="0 0 '+W+' '+H+'" class="topo-svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Network topology diagram">';
  (res.edges||[]).forEach(function(e){(e.sections||[]).forEach(function(sec){var pts=[sec.startPoint].concat(sec.bendPoints||[]).concat([sec.endPoint]);var d=pts.map(function(p,i){return (i?'L':'M')+Math.round(p.x)+' '+Math.round(p.y);}).join(' ');s+='<path class="topo-edge" d="'+d+'"/>';});});
  (res.children||[]).forEach(function(nd){var m=meta[nd.id]||{};var lab=m.label||nd.id;
+  var col=m.color||'';var stroke=col?' style="stroke:'+col+'"':'';
   s+='<g class="topo-node '+(m.kind||'')+'" '+(m.act||'')+' transform="translate('+Math.round(nd.x)+','+Math.round(nd.y)+')" tabindex="0" role="button" aria-label="'+escHtml(lab)+'">';
-  s+='<rect width="'+nd.width+'" height="'+nd.height+'" rx="9"/>';
+  s+='<rect width="'+nd.width+'" height="'+nd.height+'" rx="9"'+stroke+'/>';
+  if(col)s+='<rect width="4" height="'+nd.height+'" rx="2" fill="'+col+'" stroke="none"/>';
   s+='<text x="'+(nd.width/2)+'" y="'+(nd.height/2+4)+'" text-anchor="middle">'+escHtml(lab)+'</text></g>';});
  return s+'</svg>';
 }
