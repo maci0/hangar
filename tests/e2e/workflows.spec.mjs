@@ -321,6 +321,18 @@ test('settings lock virtual hardware while the VM is running, metadata stays edi
     await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-lock')}/power`, '');
 });
 
+test('dashboard shows host capacity (committed vs physical)', async ({ page }) => {
+    await api(page, 'POST', '/api/vms', 'name=cap-a&mem=2048&cpu=2&disk=10');
+    await page.reload();
+    // No VM selected -> dashboard. The host panel fetches /api/host and renders
+    // committed-vs-physical gauges.
+    await expect.poll(() => page.evaluate(() => { const p = document.querySelector('.cap-panel'); return p ? p.textContent : ''; }), { timeout: 8000 }).toContain('Host Capacity');
+    const txt = await page.evaluate(() => document.querySelector('.cap-panel').textContent);
+    expect(txt).toMatch(/cores/);
+    expect(txt).toMatch(/vCPU committed/);
+    expect(txt).toMatch(/RAM committed/);
+});
+
 test('SSE: a VM created via the API appears in the UI within 3s, no reload', async ({ page }) => {
     const t0 = Date.now();
     await api(page, 'POST', '/api/vms', 'name=wf-sse&mem=1024&cpu=1&disk=1');
@@ -459,9 +471,11 @@ test('inventory table lists VMs, sorts by a column, and selects a row', async ({
     expect(await rows.count()).toBeGreaterThanOrEqual(2);
     // Default sort is name ascending: find the Name column header, click to toggle desc.
     const nameRows = () => page.locator('.inv tbody tr td.inv-name').allTextContents();
+    // The dashboard sorts case-insensitively; match that (the shared daemon
+    // accumulates VMs across tests, so don't assume only this test's rows).
+    const ci = (a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
     const asc = await nameRows();
-    const sortedAsc = [...asc].sort();
-    expect(asc).toEqual(sortedAsc);
+    expect(asc).toEqual([...asc].sort(ci));
     await page.click('.inv thead th[data-col="name"]');
     const desc = await nameRows();
     expect(desc).toEqual([...asc].reverse());

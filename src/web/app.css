@@ -1091,3 +1091,18 @@ aside .vm-item .vm-check{flex:none;margin:0 6px 0 0;accent-color:var(--accent);w
 
 .inv tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .inv thead th:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+/* ── Host capacity panel (dashboard) ── */
+.cap-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin:0 0 16px;max-width:760px}
+.cap-panel-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px}
+.cap-panel-head h3{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-dim);margin:0}
+.cap-row{display:grid;grid-template-columns:120px 1fr 130px 110px;align-items:center;gap:12px;margin:7px 0}
+.cap-label{font-size:13px;color:var(--text-muted)}
+.cap-val{font-size:13px;font-variant-numeric:tabular-nums;color:var(--text);justify-self:end;white-space:nowrap}
+.cap-bar{height:6px;border-radius:3px;background:var(--bg-inset,rgba(127,127,127,.18));overflow:hidden}
+.cap-fill{display:block;height:100%;border-radius:3px;transition:width var(--transition)}
+.cap-over{font-size:11px;font-weight:600;color:var(--danger);white-space:nowrap;justify-self:end}
+
+.vm-meta{font-size:11px;color:var(--text-dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+aside .vm-item{flex-wrap:wrap}
+aside .vm-item .vm-meta{flex-basis:100%;padding-left:18px}

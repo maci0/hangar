@@ -60,6 +60,7 @@ const httpresp = @import("httpresp.zig");
 const auth = @import("auth.zig");
 const netutil = @import("netutil.zig");
 const dbusdisplay = @import("dbusdisplay.zig");
+const hostinfo = @import("hostinfo.zig");
 const wsproxy = @import("wsproxy.zig");
 const vmrender = @import("vmrender.zig");
 const AF_INET = netutil.AF_INET;
@@ -678,6 +679,9 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (routeExact(req, "GET /api/capabilities")) {
         content_type = "application/json; charset=utf-8";
         response = catalog.capabilitiesJson(&snap_buf);
+    } else if (routeExact(req, "GET /api/host")) {
+        content_type = "application/json; charset=utf-8";
+        response = hostinfo.hostJson(&snap_buf);
     } else if (routeExact(req, "GET /api/health")) {
         // Report live state so the check actually verifies the daemon can read
         // its VM table, not just that the socket accepts connections.

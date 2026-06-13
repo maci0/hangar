@@ -97,6 +97,7 @@ pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/app.css")) return true;
     if (std.mem.startsWith(u8, path, "/favicon")) return true;
     if (std.mem.eql(u8, path, "/api/capabilities")) return true;
+    if (std.mem.eql(u8, path, "/api/host")) return true;
     if (std.mem.eql(u8, path, "/api/health")) return true;
     // Data-bearing reads (VM list/detail/log/snapshots, config incl. cloud-init
     // secrets, networks, catalog, the SSE stream) are exempt ONLY in loopback

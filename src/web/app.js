@@ -146,7 +146,7 @@ async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[se
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f)||(v.tags||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
 let hasFavs=false,hasNon=false,maxMem=16384;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;const m=x.v.mem||0;if(m>maxMem)maxMem=m;}
-function vmBars(v){var barMem=v.mem||1024;var memPct=Math.min(100,Math.round(barMem/maxMem*100));var cpu=v.cpu||1;var ch='',cs=Math.min(cpu,8);for(var j=0;j<cs;j++)ch+='<span class="cpu-dot"></span>';if(cpu>8)ch+='<span class="cpu-plus">+</span>';return '<div class="vm-bars" aria-hidden="true"><span class="vm-bar-cpu">'+ch+'</span><span class="vm-bar-mem"><span class="vm-bar-fill" style="width:'+memPct+'%"></span><span class="vm-bar-mem-label">'+barMem+'MB</span></span></div>';}
+function vmBars(v){var cpu=Number(v.cpu)||1;var mb=Number(v.mem)||0;var ramTxt=mb>=1024?(Math.round(mb/102.4)/10+' GB'):(mb+' MB');return '<div class="vm-meta" aria-hidden="true">'+escHtml(cpu)+' vCPU · '+escHtml(ramTxt)+'</div>';}
 function vmItemHtml(x){
  const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
  const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
@@ -197,8 +197,9 @@ var MAX_NICS=8,MAX_EXTRA_DISKS=4;
 function nicRows(v){var r=[];for(var n=2;n<=MAX_NICS;n++){r.push(['NIC '+n,'e_nic'+n,'select',v['nic'+n+'_mode']||'none'],['NIC '+n+' MAC','e_nic'+n+'_mac','text',v['nic'+n+'_mac']||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC '+n+' VMnet','e_nic'+n+'_vnet','text',v['nic'+n+'_vnet']||'','placeholder="virtual network name (optional)"']);}return r;}
 function extraDiskRows(v){var r=[];for(var n=0;n<MAX_EXTRA_DISKS;n++){r.push(['Extra '+n+' Path','e_extra'+n+'_path','text',v['extra'+n+'_path']||''],['Extra '+n+' Size','e_extra'+n+'_size','number',v['extra'+n+'_size']||0,'min="0" max="65536" step="1"'],['Extra '+n+' Format','e_extra'+n+'_format','select',v['extra'+n+'_format']||0]);}return r;}
 
-var vmsState=null,dashSortState=null,dashMounted=false;
+var vmsState=null,dashSortState=null,dashMounted=false,hostState=null;
 function publishVms(){if(window.van){if(!vmsState){vmsState=van.state(vms.slice());}else{vmsState.val=vms.slice();}}}
+function fetchHost(){if(!window.van)return;if(!hostState)hostState=van.state({cpu_cores:0,ram_mb:0});try{fetch('/api/host').then(function(r){return r.json();}).then(function(h){hostState.val={cpu_cores:h.cpu_cores||0,ram_mb:h.ram_mb||0};}).catch(function(){});}catch(e){}}
 function dashStats(list){var st={running:0,stopped:0,paused:0,suspended:0},vcpu=0,ram=0,disk=0,att=[];
  for(var i=0;i<list.length;i++){var v=list[i];st[v.status]=(st[v.status]||0)+1;vcpu+=Number(v.cpu)||0;ram+=Number(v.mem)||0;disk+=Number(v.disk)||0;if(summaryWarnings(v)!=='')att.push(v.name);}
  return {st:st,vcpu:vcpu,ramGB:Math.round(ram/102.4)/10,disk:disk,att:att,count:list.length};}
@@ -207,8 +208,21 @@ function DashView(){
  var t=van.tags;
  if(!dashSortState)dashSortState=van.state({col:dashSort.col,dir:dashSort.dir});
  function card(get,label,cls){return t.div({class:'dash-card'},t.div({class:'dash-num '+(cls||'')},get),t.div({class:'dash-lbl'},label));}
+ function physCpu(){return (hostState&&hostState.val.cpu_cores)||0;}
+ function physRamGb(){var m=(hostState&&hostState.val.ram_mb)||0;return Math.round(m/1024);}
+ function gauge(label,getCommitted,getPhysical,unit){
+  return t.div({class:'cap-row'},
+   t.span({class:'cap-label'},label),
+   t.div({class:'cap-bar'},t.span({class:'cap-fill',style:function(){var c=getCommitted(),p=getPhysical();var pct=p>0?Math.min(100,Math.round(c/p*100)):0;return 'width:'+pct+'%;background:'+(p>0&&c>p?'var(--danger)':'var(--accent)');}})),
+   t.span({class:'cap-val'},function(){var c=getCommitted(),p=getPhysical();return p>0?(c+' / '+p+' '+unit):(c+' '+unit);}),
+   t.span({class:'cap-over'},function(){var c=getCommitted(),p=getPhysical();return (p>0&&c>p)?((Math.round(c/p*100)/100)+'× overcommit'):'';}));
+ }
  return t.div({class:'dash'},
   t.div({class:'dash-head'},t.h2('Inventory'),t.span({class:'muted'},function(){var c=vmsState.val.length;return c+' virtual machine'+(c===1?'':'s');})),
+  t.div({class:'cap-panel',style:function(){return (physCpu()||physRamGb())?'':'display:none';}},
+   t.div({class:'cap-panel-head'},t.h3('Host Capacity'),t.span({class:'muted'},function(){return physCpu()+' cores · '+physRamGb()+' GB RAM';})),
+   gauge('vCPU committed',function(){return dashStats(vmsState.val).vcpu;},physCpu,'vCPU'),
+   gauge('RAM committed',function(){return Math.round(dashStats(vmsState.val).ramGB);},physRamGb,'GB')),
   t.div({class:'dash-cards'},
    card(function(){return String(dashStats(vmsState.val).st.running||0);},'Running','running'),
    card(function(){return String(dashStats(vmsState.val).st.stopped||0);},'Stopped',''),
@@ -241,7 +255,7 @@ function DashView(){
 }
 function mountDashboard(host){
  if(dashMounted&&host.firstChild&&host.firstChild.classList&&host.firstChild.classList.contains('dash'))return;
- publishVms();host.innerHTML='';van.add(host,DashView());dashMounted=true;}
+ publishVms();fetchHost();host.innerHTML='';van.add(host,DashView());dashMounted=true;}
 
 function hostDashboardHtml(){
   var st={running:0,stopped:0,paused:0,suspended:0};var vcpu=0,ram=0,disk=0,attention=[];
