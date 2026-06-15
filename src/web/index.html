@@ -9,8 +9,6 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 </head>
 <body>
-<a href="#maincontent" class="skip-link">Skip to main content</a>
-
 <a id="skip-link" href="#main-content">Skip to main content</a>
 
 <svg style="display:none" aria-hidden="true">
@@ -428,7 +426,7 @@
     <input id="mig_host" type="text" required aria-required="true" placeholder="hostname or IP" style="width:100%;margin:4px 0 12px">
     <label for="mig_port">Target Port</label>
     <input id="mig_port" type="number" value="4444" min="1" max="65535" style="width:100%;margin:4px 0 12px">
-    <label for="mig_uri">Migration URI <span class="muted">(advanced — overrides host/port)</span></label>
+    <label for="mig_uri">Migration URI <span class="muted">(read-only — built from host and port above)</span></label>
     <input id="mig_uri" type="text" readonly placeholder="tcp:host:port" style="width:100%;margin:4px 0 12px;color:var(--text-dim)">
   </div>
   <div class="btn-row">

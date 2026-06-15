@@ -117,3 +117,29 @@ test "catalog: capabilitiesJson reports the compile-time limits" {
     const s = capabilitiesJson(&buf);
     try std.testing.expect(std.mem.indexOf(u8, s, "\"max_nics\":8") != null);
 }
+
+test "fuzz: find never panics on random slug bytes" {
+    // The quickstart endpoint feeds an untrusted path slug straight into find().
+    var prng = std.Random.DefaultPrng.init(0xCA7A106);
+    const rnd = prng.random();
+    var buf: [64]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        _ = find(buf[0..len]);
+    }
+}
+
+test "fuzz: catalogJson/capabilitiesJson never overflow an undersized buffer" {
+    // Both writers must stay within the caller buffer for every capacity and
+    // always return a well-formed (possibly fallback) JSON slice.
+    var buf: [4096]u8 = undefined;
+    var cap: usize = 0;
+    while (cap <= buf.len) : (cap += 1) {
+        const c = catalogJson(buf[0..cap]);
+        try std.testing.expect(c.len > 0 and c[0] == '[' and c[c.len - 1] == ']');
+        const k = capabilitiesJson(buf[0..cap]);
+        try std.testing.expect(k.len > 0 and k[0] == '{' and k[k.len - 1] == '}');
+    }
+}

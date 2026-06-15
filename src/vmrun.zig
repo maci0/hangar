@@ -1,33 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! vmrun — CLI tool for managing Hangar VMs remotely.
 //!
-//! Connects to a Hangar web server via the transport abstraction layer
-//! and issues commands: list, status, start, stop, restart, clone,
-//! linked-clone, delete, suspend, pause, resume, shutdown, reset, rename,
-//! cad, snapshot, import, export.
+//! Connects to a Hangar web server via the transport abstraction layer and
+//! issues VM management commands (list, lifecycle, snapshots, import/export,
+//! migrate, config, ...).
 //!
-//! Usage:
-//!   vmrun <server-url> list
-//!   vmrun <server-url> start    <name|idx>
-//!   vmrun <server-url> stop     <name|idx>
-//!   vmrun <server-url> restart  <name|idx>
-//!   vmrun <server-url> clone    <name|idx>
-//!   vmrun <server-url> delete   <name|idx>
-//!   vmrun <server-url> suspend  <name|idx>
-//!   vmrun <server-url> pause    <name|idx>
-//!   vmrun <server-url> resume   <name|idx>
-//!   vmrun <server-url> shutdown <name|idx>
-//!   vmrun <server-url> reset    <name|idx>
-//!   vmrun <server-url> rename   <name|idx> <new-name>
-//!   vmrun <server-url> cad      <name|idx>
-//!   vmrun <server-url> linked-clone <name|idx>
-//!   vmrun <server-url> snapshot list    <name|idx>
-//!   vmrun <server-url> snapshot take    <name|idx> <tag>
-//!   vmrun <server-url> snapshot revert  <name|idx> <tag>
-//!   vmrun <server-url> snapshot delete  <name|idx> <tag>
-//!   vmrun <server-url> import <disk-path>
-//!   vmrun <server-url> export <name|idx>
-//!   vmrun <server-url> status
+//! Usage: vmrun <server-url> <command> [args...]
+//!
+//! The authoritative command list lives in the `usage` constant below (printed
+//! by `vmrun --help`); keep the two in sync rather than duplicating it here.
 
 const std = @import("std");
 const c = std.c;
@@ -62,7 +43,7 @@ const usage =
     \\  guestinfo   <name|idx>             Show guest IPs (qemu-guest-agent)
     \\  quickstart  <catalog-slug>         Create a VM from a built-in template
     \\  set         <name|idx> <field> <value>  Set a config field
-    \\              (field: mem|cpu|cpu_sockets|network|notes|boot_order|vnc_port|spice_port)
+    \\              (field: mem|cpu|cpu_sockets|network|notes|tags|boot_order|rtc|vnc_port|spice_port)
     \\  cad         <name|idx>  Send Ctrl+Alt+Del to guest
     \\  snapshot list    <name|idx>        List snapshots
     \\  snapshot take    <name|idx> <tag>  Take a snapshot
@@ -241,7 +222,7 @@ fn run(init: std.process.Init) !void {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdRename(allocator, &conn, idx, args[1], init.io);
     } else if (std.mem.eql(u8, command, "resize")) {
-        _ = std.fmt.parseInt(u32, args[1], 10) catch return error.InvalidSize;
+        // new-gb was validated client-side in validateArgs (fail-fast, exit 2).
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdResize(allocator, &conn, idx, args[1], init.io);
     } else if (std.mem.eql(u8, command, "cd")) {
@@ -257,12 +238,7 @@ fn run(init: std.process.Init) !void {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdMigrate(allocator, &conn, idx, args[1], args[2], init.io);
     } else if (std.mem.eql(u8, command, "set")) {
-        if (!isSettableField(args[1])) {
-            var sb: [256]u8 = undefined;
-            const m = std.fmt.bufPrintZ(&sb, "Error: unknown field '{s}' (settable: {s})\n", .{ args[1], SETTABLE_FIELDS_HELP }) catch "Error: unknown field\n";
-            fdWrite(c.STDERR_FILENO, m);
-            std.process.exit(EXIT_USAGE);
-        }
+        // The field name was allowlisted client-side in validateArgs (exit 2).
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
         return cmdSet(allocator, &conn, idx, args[1], args[2], init.io);
     } else {
@@ -337,6 +313,21 @@ fn commandArity(command: []const u8) ?usize {
     return null;
 }
 
+/// Human-readable description of the positional arguments a command expects,
+/// used in "missing arguments" diagnostics. Mirrors the per-command synopsis in
+/// `usage`. Defaults to `<name|idx>` for the single-target VM operations.
+fn argHint(command: []const u8) []const u8 {
+    if (std.mem.eql(u8, command, "import")) return "<disk-path>";
+    if (std.mem.eql(u8, command, "create")) return "<name> <mem-mb> <cpu> <disk-gb>";
+    if (std.mem.eql(u8, command, "quickstart")) return "<catalog-slug>";
+    if (std.mem.eql(u8, command, "rename")) return "<name|idx> <new-name>";
+    if (std.mem.eql(u8, command, "resize")) return "<name|idx> <new-gb>";
+    if (std.mem.eql(u8, command, "cd")) return "<name|idx> <iso-path>";
+    if (std.mem.eql(u8, command, "migrate")) return "<name|idx> <host> <port>";
+    if (std.mem.eql(u8, command, "set")) return "<name|idx> <field> <value>";
+    return "<name|idx>";
+}
+
 /// Validate the command name and positional-argument count before any network
 /// activity. On any problem this prints a one-line diagnostic to stderr and
 /// exits with EXIT_USAGE (2) — usage errors never require a running daemon.
@@ -384,12 +375,12 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
         std.process.exit(EXIT_USAGE);
     };
     if (args.len < arity) {
-        const msg = if (std.mem.eql(u8, command, "import"))
-            "Error: missing disk path\n"
-        else if (arity == 2 and args.len == 1)
-            "Error: missing new name\n"
-        else
-            "Error: missing VM name or index\n";
+        // Name the arguments the command actually expects. A generic "missing VM
+        // name or index" misleads for multi-arg commands (e.g. `create foo` is
+        // missing mem/cpu/disk, not the name; `resize vm` is missing a size, not
+        // a name), so derive the message from the command's real argument shape.
+        var buf: [160]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Error: '{s}' requires {s} (run with --help for usage)\n", .{ command, argHint(command) }) catch "Error: missing arguments\n";
         fdWrite(c.STDERR_FILENO, msg);
         std.process.exit(EXIT_USAGE);
     }
@@ -399,6 +390,49 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
     if (args.len > arity) {
         var buf: [96]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: too many arguments for '{s}' (run with --help for usage)\n", .{command}) catch "Error: too many arguments\n";
+        fdWrite(c.STDERR_FILENO, msg);
+        std.process.exit(EXIT_USAGE);
+    }
+
+    // Validate argument *values* that can be checked without the daemon (numeric
+    // fields, the `set` field name) here too, so a bad number or unknown field
+    // fails fast with exit 2 and never needs a running server — same contract as
+    // the arity checks above. Doing this post-connect instead would force the
+    // user to have a daemon up just to be told they typed a usage mistake.
+    if (std.mem.eql(u8, command, "create")) {
+        validateUint(command, "mem-mb", args[1]);
+        validateUint(command, "cpu", args[2]);
+        validateUint(command, "disk-gb", args[3]);
+    } else if (std.mem.eql(u8, command, "resize")) {
+        validateUint(command, "new-gb", args[1]);
+    } else if (std.mem.eql(u8, command, "migrate")) {
+        validatePort(args[2]);
+    } else if (std.mem.eql(u8, command, "set") and !isSettableField(args[1])) {
+        var sb: [256]u8 = undefined;
+        const m = std.fmt.bufPrintZ(&sb, "Error: unknown field '{s}' (settable: {s})\n", .{ args[1], SETTABLE_FIELDS_HELP }) catch "Error: unknown field\n";
+        fdWrite(c.STDERR_FILENO, m);
+        std.process.exit(EXIT_USAGE);
+    }
+}
+
+/// Validate that `value` parses as a u32 for the `field` positional of
+/// `command`; on failure print a usage diagnostic and exit 2 (no daemon needed).
+fn validateUint(command: []const u8, field: []const u8, value: []const u8) void {
+    _ = std.fmt.parseInt(u32, value, 10) catch {
+        var buf: [192]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Error: {s} {s} must be a non-negative integer, got '{s}'\n", .{ command, field, value }) catch "Error: invalid number\n";
+        fdWrite(c.STDERR_FILENO, msg);
+        std.process.exit(EXIT_USAGE);
+    };
+}
+
+/// Validate a migrate destination port (1-65535); print a usage diagnostic and
+/// exit 2 on failure (no daemon needed).
+fn validatePort(value: []const u8) void {
+    const p = std.fmt.parseInt(u16, value, 10) catch 0;
+    if (p == 0) {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Error: migrate port must be 1-65535, got '{s}'\n", .{value}) catch "Error: invalid port\n";
         fdWrite(c.STDERR_FILENO, msg);
         std.process.exit(EXIT_USAGE);
     }
@@ -714,13 +748,12 @@ fn cmdSet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize,
 /// replies `{"status":"started"}`; poll `info`/the web UI for progress.
 fn cmdMigrate(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, host: []const u8, port: []const u8, io: std.Io) !void {
     _ = io;
-    const port_num = std.fmt.parseInt(u16, port, 10) catch return error.InvalidPort;
-    if (port_num == 0) return error.InvalidPort;
+    // port was validated as 1-65535 client-side in validateArgs (fail-fast, exit 2).
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/migrate", .{idx});
     // dest=tcp:<host>:<port>, percent-encoded so the daemon's URL-decode rebuilds it.
     var dest_buf: [320]u8 = undefined;
-    const dest = try std.fmt.bufPrint(&dest_buf, "tcp:{s}:{d}", .{ host, port_num });
+    const dest = try std.fmt.bufPrint(&dest_buf, "tcp:{s}:{s}", .{ host, port });
     var enc_buf: [960]u8 = undefined;
     const enc = try urlencode.percentEncode(&enc_buf, dest);
     var body_buf: [1024]u8 = undefined;
@@ -736,11 +769,8 @@ fn cmdMigrate(allocator: std.mem.Allocator, conn: *transport.Connection, idx: us
 /// daemon's defaults; edit them afterwards via the web UI or a future setter.
 fn cmdCreate(allocator: std.mem.Allocator, conn: *transport.Connection, name: []const u8, mem: []const u8, cpu: []const u8, disk: []const u8, io: std.Io) !void {
     _ = io;
-    // Validate the numeric fields client-side so a typo fails fast with a clear
-    // message instead of being silently clamped to a default by the daemon.
-    _ = std.fmt.parseInt(u32, mem, 10) catch return error.InvalidMemory;
-    _ = std.fmt.parseInt(u32, cpu, 10) catch return error.InvalidCpu;
-    _ = std.fmt.parseInt(u32, disk, 10) catch return error.InvalidDisk;
+    // mem/cpu/disk were validated client-side in validateArgs (fail-fast, exit
+    // 2) so a typo never reaches the daemon to be silently clamped to a default.
     var name_enc_buf: [vm.MAX_NAME * 3]u8 = undefined;
     const enc_name = try urlencode.percentEncode(&name_enc_buf, name);
     var body_buf: [vm.MAX_NAME * 3 + 64]u8 = undefined;
@@ -1153,10 +1183,27 @@ test "isSettableField: allowlist membership" {
     try std.testing.expect(isSettableField("vnc_port"));
     try std.testing.expect(isSettableField("boot_order"));
     try std.testing.expect(isSettableField("tags"));
+    try std.testing.expect(isSettableField("rtc"));
     try std.testing.expect(!isSettableField("disk")); // not safely settable post-create
     try std.testing.expect(!isSettableField("name")); // use rename
     try std.testing.expect(!isSettableField(""));
     try std.testing.expect(!isSettableField("mem ")); // exact match only
+}
+
+test "isSettableField: allowlist and help text cannot drift" {
+    // SETTABLE_FIELDS (the gate) and SETTABLE_FIELDS_HELP (what the error message
+    // tells the user is settable) are two hand-maintained lists. Every gated
+    // field must be advertised, and the help must not promise a field the gate
+    // rejects — otherwise the diagnostic lies.
+    for (SETTABLE_FIELDS) |f| {
+        try std.testing.expect(isSettableField(f)); // gate accepts every entry
+        try std.testing.expect(std.mem.indexOf(u8, SETTABLE_FIELDS_HELP, f) != null);
+    }
+    // Walk the comma-separated help text; each named field must be gated.
+    var it = std.mem.tokenizeAny(u8, SETTABLE_FIELDS_HELP, ", ");
+    while (it.next()) |f| {
+        try std.testing.expect(isSettableField(f));
+    }
 }
 
 test "fuzz: isSettableField never panics on arbitrary input" {
@@ -1180,6 +1227,32 @@ test "commandArity: unknown command returns null" {
     try std.testing.expectEqual(@as(?usize, null), commandArity("bogus"));
     try std.testing.expectEqual(@as(?usize, null), commandArity(""));
     try std.testing.expectEqual(@as(?usize, null), commandArity("START")); // case-sensitive
+}
+
+test "argHint: names the real arguments per command" {
+    try std.testing.expectEqualStrings("<disk-path>", argHint("import"));
+    try std.testing.expectEqualStrings("<name> <mem-mb> <cpu> <disk-gb>", argHint("create"));
+    try std.testing.expectEqualStrings("<catalog-slug>", argHint("quickstart"));
+    try std.testing.expectEqualStrings("<name|idx> <new-name>", argHint("rename"));
+    try std.testing.expectEqualStrings("<name|idx> <new-gb>", argHint("resize"));
+    try std.testing.expectEqualStrings("<name|idx> <iso-path>", argHint("cd"));
+    try std.testing.expectEqualStrings("<name|idx> <host> <port>", argHint("migrate"));
+    try std.testing.expectEqualStrings("<name|idx> <field> <value>", argHint("set"));
+    // Single-target ops (and anything unlisted) fall back to <name|idx>.
+    try std.testing.expectEqualStrings("<name|idx>", argHint("start"));
+    try std.testing.expectEqualStrings("<name|idx>", argHint("eject"));
+}
+
+test "fuzz: argHint never panics on random input" {
+    var prng = std.Random.DefaultPrng.init(0x4A17_8E72);
+    const rnd = prng.random();
+    var buf: [64]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        _ = argHint(buf[0..len]);
+    }
 }
 
 test "isHelpArg: accepts all help spellings, rejects others" {

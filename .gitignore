@@ -16,6 +16,10 @@ test_rfb_cimport
 check_syntax
 test_json_escape
 test_guest_os
+boundary_test
+test_prune
+test_boundary
+test_vnet
 
 # Secrets / local env
 .env

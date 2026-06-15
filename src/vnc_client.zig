@@ -174,13 +174,12 @@ pub const VncClient = struct {
 
     /// Check and clear the dirty flag.
     ///
-    /// Uses a non-atomic read-then-clear pattern that is safe here:
-    /// the worst case of a missed dirty flag just delays one frame.
-    /// Using seq_cst ensures the clear is visible to the poll thread.
+    /// Atomic test-and-clear: a single seq_cst exchange returns the prior value
+    /// and clears in one step, so a frame the poll thread marks dirty between the
+    /// read and the clear is never silently dropped (a separate load+store would
+    /// race that window away). seq_cst keeps the clear visible to the poll thread.
     pub fn checkDirty(self: *VncClient) bool {
-        const was = @atomicLoad(bool, &self.dirty, .seq_cst);
-        if (was) @atomicStore(bool, &self.dirty, false, .seq_cst);
-        return was;
+        return @atomicRmw(bool, &self.dirty, .Xchg, false, .seq_cst);
     }
 
     /// Send a key press/release event.  `keysym` is an X11 keysym.
@@ -318,6 +317,20 @@ test "vnc: fresh client public API is safe (unconnected)" {
     cl.sendPointer(10, 20, 1);
     _ = cl.lockFb();
     cl.unlockFb();
+}
+
+test "vnc: checkDirty atomically tests-and-clears the flag" {
+    // The poll thread sets dirty; the UI thread drains it via checkDirty. One
+    // call must report the prior state AND clear in a single step so a frame
+    // marked dirty is never reported twice or lost (regression: the old
+    // load-then-store split could race a set in the gap).
+    const cl = VncClient.new() orelse return error.SkipZigTest;
+    defer cl.free();
+    cl.dirty = false;
+    try std.testing.expect(!cl.checkDirty()); // clean stays clean
+    cl.dirty = true;
+    try std.testing.expect(cl.checkDirty()); // reports dirty...
+    try std.testing.expect(!cl.checkDirty()); // ...and cleared it
 }
 
 test "vnc: onMallocFb size math rejects overflowing dimensions" {

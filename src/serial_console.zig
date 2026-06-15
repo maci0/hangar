@@ -93,6 +93,7 @@ pub fn serialConnect(vm_name: []const u8) void {
     app.serial_fd = stream.fd;
     @atomicStore(bool, &app.serial_running, true, .seq_cst);
     app.serial_thread = std.Thread.spawn(std.Thread.SpawnConfig{}, serialReader, .{}) catch {
+        logSerial("serialConnect: failed to spawn serial reader thread");
         @atomicStore(bool, &app.serial_running, false, .seq_cst);
         _ = std.c.close(stream.fd);
         app.serial_fd = null;

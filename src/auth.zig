@@ -26,15 +26,10 @@ pub fn isExposed() bool {
 }
 
 /// Validate a `KV_API_KEY` value: 1-64 bytes of printable ASCII (no control
-/// chars, no spaces). Rejecting whitespace/control bytes fails fast on the
-/// common footgun of a trailing newline from `export KV_API_KEY=$(cat keyfile)`.
-pub fn validApiKey(key: []const u8) bool {
-    if (key.len == 0 or key.len > 64) return false;
-    for (key) |ch| {
-        if (ch <= 0x20 or ch == 0x7f) return false;
-    }
-    return true;
-}
+/// chars, no spaces). Defined in `transport` (the lower layer the HTTP client
+/// also validates against) and re-exported here so daemon and client share one
+/// rule that cannot drift.
+pub const validApiKey = transport.validApiKey;
 
 /// Length-checked, constant-time byte-slice equality. The comparison must not
 /// early-exit on the first differing byte: it runs on the network-exposed

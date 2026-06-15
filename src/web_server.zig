@@ -20,7 +20,6 @@ const guestagent = @import("guestagent.zig");
 const streams = @import("streams.zig");
 const wlog = @import("wlog.zig");
 // Structured logging lives in wlog.zig; alias so call sites read unchanged.
-const LogLevel = wlog.LogLevel;
 const logAt = wlog.logAt;
 const logErr = wlog.logErr;
 const logWarn = wlog.logWarn;
@@ -40,9 +39,7 @@ const requestLine = httpreq.requestLine;
 const parseContentLength = httpreq.parseContentLength;
 const getBody = httpreq.getBody;
 const ws = @import("ws.zig");
-const usock = @import("usock.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
-const ovf = @import("ovf.zig");
 const vnet = @import("vnet.zig");
 const appio = @import("appio.zig");
 const autoprotect = @import("autoprotect.zig");
@@ -74,7 +71,6 @@ const SO_SNDTIMEO = netutil.SO_SNDTIMEO;
 const SHUT_RDWR = netutil.SHUT_RDWR;
 const IPPROTO_IPV6 = netutil.IPPROTO_IPV6;
 const IPV6_V6ONLY = netutil.IPV6_V6ONLY;
-const IPPROTO_TCP = netutil.IPPROTO_TCP;
 const TCP_NODELAY = netutil.TCP_NODELAY;
 const setTcpNoDelay = netutil.setTcpNoDelay;
 // Auth lives in auth.zig; alias so call sites + main read unchanged.
@@ -88,7 +84,6 @@ const secretEql = auth.secretEql;
 // HTTP status codes + response writers live in httpresp.zig; alias so the many
 // call sites below read unchanged.
 const HTTP_OK = httpresp.HTTP_OK;
-const HTTP_CREATED = httpresp.HTTP_CREATED;
 const HTTP_BAD_REQUEST = httpresp.HTTP_BAD_REQUEST;
 const HTTP_UNAUTHORIZED = httpresp.HTTP_UNAUTHORIZED;
 const HTTP_FORBIDDEN = httpresp.HTTP_FORBIDDEN;
@@ -98,12 +93,12 @@ const HTTP_CONFLICT = httpresp.HTTP_CONFLICT;
 const HTTP_PAYLOAD_TOO_LARGE = httpresp.HTTP_PAYLOAD_TOO_LARGE;
 const HTTP_TOO_MANY_REQUESTS = httpresp.HTTP_TOO_MANY_REQUESTS;
 const HTTP_INTERNAL_ERROR = httpresp.HTTP_INTERNAL_ERROR;
+const HTTP_SERVICE_UNAVAILABLE = httpresp.HTTP_SERVICE_UNAVAILABLE;
 const writeAll = httpresp.writeAll;
 const jsonErr = httpresp.jsonErr;
 const writeHttpResponse = httpresp.writeHttpResponse;
 const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
 const isServerErrToken = httpresp.isServerErrToken;
-const EscapeResult = httpresp.EscapeResult;
 const jsonEscape = httpresp.jsonEscape;
 
 const DEFAULT_PORT: u16 = transport.DEFAULT_PORT; // KV_PORT default
@@ -422,6 +417,23 @@ fn lookupPostRoute(req: []const u8) ?ApiHandler {
     return null;
 }
 
+/// Reject an unauthenticated request: log the sanitized request line (so the
+/// audit log shows which endpoint was probed) and send 401. Shared by every
+/// auth gate in `serveHtml` so the log format and response body can't drift.
+fn rejectUnauthorized(conn: c.fd_t, req: []const u8) void {
+    var rl_buf: [128]u8 = undefined;
+    var wb: [192]u8 = undefined;
+    logWarn(std.fmt.bufPrint(&wb, "auth rejected: {s}", .{requestLine(req, &rl_buf)}) catch "auth rejected");
+    writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
+}
+
+/// Log a failed WebSocket-proxy upgrade and reply 500. Shared by the vnc/spice/
+/// serial relay routes so the log context and JSON error body stay identical.
+fn wsProxyErr(conn: c.fd_t, req: []const u8, comptime msg: []const u8, e: anyerror) void {
+    logReqErr(msg, e, req);
+    writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"" ++ msg ++ "\"}");
+}
+
 fn serveHtml(conn: c.fd_t) void {
     defer {
         _ = c.close(conn);
@@ -484,7 +496,7 @@ fn serveHtml(conn: c.fd_t) void {
     // (hostHeaderOk + the POST rate limit already ran above).
     if (std.mem.startsWith(u8, req, "POST ") and parseVmIdxSuffix(req, "POST /api/vms/", "/disk2") != null) {
         if (!checkAuth(req)) {
-            writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
+            rejectUnauthorized(conn, req);
             return;
         }
         streams.upload(conn, req);
@@ -529,7 +541,7 @@ fn serveHtml(conn: c.fd_t) void {
         // exposed-mode rule here: in exposed mode the stream (even just the
         // state-version) requires the key.
         if (auth.isExposed() and !auth.checkAuth(req)) {
-            writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
+            rejectUnauthorized(conn, req);
             return;
         }
         handleEvents(conn);
@@ -539,20 +551,14 @@ fn serveHtml(conn: c.fd_t) void {
     // ── WebSocket VNC Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/vnc/")) {
         if (!wsAuthOk(conn, req, "/ws/vnc")) return;
-        wsproxy.vnc(conn, req) catch |e| {
-            logReqErr("VNC proxy failed", e, req);
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"VNC proxy failed\"}");
-        };
+        wsproxy.vnc(conn, req) catch |e| wsProxyErr(conn, req, "VNC proxy failed", e);
         return;
     }
 
     // ── WebSocket SPICE Proxy ──
     if (std.mem.startsWith(u8, req, "GET /ws/spice/")) {
         if (!wsAuthOk(conn, req, "/ws/spice")) return;
-        wsproxy.spice(conn, req) catch |e| {
-            logReqErr("SPICE proxy failed", e, req);
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"SPICE proxy failed\"}");
-        };
+        wsproxy.spice(conn, req) catch |e| wsProxyErr(conn, req, "SPICE proxy failed", e);
         return;
     }
 
@@ -566,10 +572,7 @@ fn serveHtml(conn: c.fd_t) void {
     // ── WebSocket Serial Console ──
     if (std.mem.startsWith(u8, req, "GET /ws/serial/")) {
         if (!wsAuthOk(conn, req, "/ws/serial")) return;
-        wsproxy.serialConsole(conn, req) catch |e| {
-            logReqErr("Serial proxy failed", e, req);
-            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"Serial proxy failed\"}");
-        };
+        wsproxy.serialConsole(conn, req) catch |e| wsProxyErr(conn, req, "Serial proxy failed", e);
         return;
     }
 
@@ -590,13 +593,7 @@ fn serveHtml(conn: c.fd_t) void {
     const needs_auth = !isAuthExempt(method_get, req_path);
 
     if (needs_auth and !checkAuth(req)) {
-        // Include the sanitized request line so the audit log shows which
-        // endpoint was probed — distinguishes a misconfigured client from
-        // someone scanning state-changing routes.
-        var rl_buf: [128]u8 = undefined;
-        var wb: [192]u8 = undefined;
-        logWarn(std.fmt.bufPrint(&wb, "auth rejected: {s}", .{requestLine(req, &rl_buf)}) catch "auth rejected");
-        writeHttpResponse(conn, HTTP_UNAUTHORIZED, "application/json; charset=utf-8", "{\"error\":\"auth required\"}");
+        rejectUnauthorized(conn, req);
         return;
     }
 
@@ -629,7 +626,11 @@ fn serveHtml(conn: c.fd_t) void {
             HTTP_OK
         else if (std.mem.indexOf(u8, body, "unavailable") != null)
             HTTP_INTERNAL_ERROR
-        else if (std.mem.indexOf(u8, body, "invalid idx") != null)
+        else if (std.mem.indexOf(u8, body, "invalid") != null)
+            // Covers both "invalid" (unparseable index) and "invalid idx" (out of
+            // range): a missing VM resource → 404, matching the central error
+            // mapper, which also maps "invalid" to 404. Returning 400 here for the
+            // same condition was the lone cross-endpoint status inconsistency.
             HTTP_NOT_FOUND
         else
             HTTP_BAD_REQUEST;
@@ -703,9 +704,14 @@ fn serveHtml(conn: c.fd_t) void {
         // Report a degraded status when persistence is disabled (unreadable or
         // newer vms.json) so a probe sees a service that accepts requests but
         // silently drops every config change, instead of a flat "ok".
-        const health_status = if (persist.loadDegraded()) "degraded" else "ok";
+        const degraded = persist.loadDegraded();
+        const health_status = if (degraded) "degraded" else "ok";
         response = std.fmt.bufPrint(&snap_buf, "{{\"status\":\"{s}\",\"version\":\"1.0\",\"vms\":{d},\"running\":{d},\"persist\":\"{s}\"}}", .{ health_status, total, running, health_status }) catch "{\"status\":\"ok\",\"version\":\"1.0\"}";
         content_type = "application/json; charset=utf-8";
+        // Surface degraded state in the HTTP status too: orchestrator/LB probes
+        // key off the code, not the JSON body. A 200 here would keep routing
+        // traffic to a daemon that silently drops every config change.
+        if (degraded) status = HTTP_SERVICE_UNAVAILABLE;
     } else if (routeExact(req, "GET /api/config")) {
         content_type = "application/json; charset=utf-8";
         if (serveConfigRawAlloc()) |raw| {
@@ -1224,7 +1230,12 @@ fn handlePowerLocked(idx: usize) []const u8 {
         appstate.vm_started[idx] = 0;
     } else {
         ensureBindableDisplayPorts(idx);
-        qemu.startVm(v, std.heap.page_allocator) catch return "start err";
+        qemu.startVm(v, std.heap.page_allocator) catch |e| {
+            // Mirror the primary handlePower path: a VM that won't boot must
+            // leave an error-level line with the cause, not just return a token.
+            logOpErr("power on", e, vm_name_buf[0..vm_name.len]);
+            return "start err";
+        };
         appstate.vm_started[idx] = time(null);
     }
     logAudit(if (was_alive) "power off" else "power on", vm_name_buf[0..vm_name.len]);

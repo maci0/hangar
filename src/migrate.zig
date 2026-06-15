@@ -176,3 +176,26 @@ test "migrate: start/cancel return 'invalid' on non-matching request" {
     try std.testing.expectEqualStrings("invalid", try start("POST /api/other HTTP/1.1"));
     try std.testing.expectEqualStrings("invalid", try cancel("POST /api/other HTTP/1.1"));
 }
+
+test "fuzz: isValidDest accepts nothing it claims is unsafe" {
+    // A "valid" dest is echoed into a QMP command + a JSON response; a regression
+    // that admitted a quote/backslash/control byte or `..` must fail this check.
+    var prng = std.Random.DefaultPrng.init(0x7C_9D_E5_70);
+    const rnd = prng.random();
+    const alphabet = "tcp:0123.9 \t\n\x00\x1f\"\\/:ABCabc-";
+    var input: [256]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 6000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, input.len);
+        const structured = (iter & 1) == 0;
+        for (input[0..len]) |*c| {
+            c.* = if (structured) alphabet[rnd.uintLessThan(usize, alphabet.len)] else rnd.int(u8);
+        }
+        const dest = input[0..len];
+        if (isValidDest(dest)) {
+            try std.testing.expect(std.mem.startsWith(u8, dest, "tcp:"));
+            try std.testing.expect(std.mem.indexOf(u8, dest, "..") == null);
+            for (dest) |ch| try std.testing.expect(ch >= 0x20 and ch != '"' and ch != '\\');
+        }
+    }
+}

@@ -355,7 +355,20 @@ fn writeAll(fd: c.fd_t, data: []const u8) void {
 /// authenticated request in loopback mode with no test catching it).
 pub const DEFAULT_API_KEY = "hangar";
 
-/// Resolve the `X-API-Key` value the HTTP client sends. Mirrors the daemon's
+/// Validate a `KV_API_KEY` value: 1-64 bytes of printable ASCII (no control
+/// chars, no spaces). Canonical home for the rule; `auth` re-exports it so the
+/// HTTP client (`apiKey` below) and the daemon (`auth`/`web_server`) share one
+/// definition and cannot silently drift apart. Rejecting whitespace/control
+/// bytes fails fast on the common `export KV_API_KEY=$(cat keyfile)` newline.
+pub fn validApiKey(key: []const u8) bool {
+    if (key.len == 0 or key.len > 64) return false;
+    for (key) |ch| {
+        if (ch <= 0x20 or ch == 0x7f) return false;
+    }
+    return true;
+}
+
+/// Resolve the `X-API-Key` value the HTTP client sends. Uses the daemon's
 /// `validApiKey`: an operator-supplied `KV_API_KEY` takes effect, otherwise the
 /// built-in default the daemon falls back to when no custom key is set. A value
 /// the daemon would reject (empty, over-long, or containing a space/control
@@ -366,11 +379,7 @@ pub const DEFAULT_API_KEY = "hangar";
 fn apiKey() []const u8 {
     const v = std.c.getenv("KV_API_KEY") orelse return DEFAULT_API_KEY;
     const span = std.mem.span(v);
-    if (span.len == 0 or span.len > 64) return DEFAULT_API_KEY;
-    for (span) |ch| {
-        if (ch <= 0x20 or ch == 0x7f) return DEFAULT_API_KEY;
-    }
-    return span;
+    return if (validApiKey(span)) span else DEFAULT_API_KEY;
 }
 
 /// Build the HTTP/1.0 request line and headers (no body) into `buf`. Split out
@@ -684,13 +693,14 @@ test "Connection.request over Unix sends valid HTTP (regression: no //api framin
     // TCP, so a Unix request must be real HTTP with Host + X-API-Key. A prior
     // bug emitted "METHOD /<path>" (yielding "//api/...", no headers), which the
     // server rejected — this guards the request the client actually sends.
-    const path = "/tmp/hangar-transport-utest.sock";
-    _ = c.unlink(path);
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-transport-utest-{d}.sock", .{c.getpid()});
+    _ = c.unlink(path.ptr);
     const lfd = c.socket(c.AF.UNIX, c.SOCK.STREAM, 0);
     if (lfd < 0) return error.SkipZigTest;
     defer {
         _ = c.close(lfd);
-        _ = c.unlink(path);
+        _ = c.unlink(path.ptr);
     }
     var addr: c.sockaddr.un = .{ .family = c.AF.UNIX, .path = undefined };
     @memcpy(addr.path[0..path.len], path);

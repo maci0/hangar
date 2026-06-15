@@ -730,7 +730,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     // actually built (startVm runs generateCloudInitSeed best-effort first) —
     // referencing a missing file would make QEMU refuse to start.
     if (config.hasCloudInit() and config.hasName()) {
-        var seed_buf: [128]u8 = undefined;
+        var seed_buf: [vm.MAX_NAME + 32]u8 = undefined;
         if (cloudInitSeedPath(config.getNameSlice(), &seed_buf)) |seed| {
             if (std.Io.Dir.cwd().access(appio.io(), seed, .{})) |_| {
                 const ci_str = try std.fmt.bufPrint(&bufs.cloudinit_buf, "file={s},if=virtio,format=raw,readonly=on", .{seed});
@@ -1000,10 +1000,11 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try appendExtraNic(args, alloc, &bufs.nic_dev_buf[i], net_id, nic.mode, nic.mac_buf[0..nic.mac_len]);
     }
 
-    // Firmware: Secure Boot implies UEFI. Prefer split pflash (SB enforcement +
-    // persistent NVRAM) when a Secure Boot OVMF and the per-VM VARS exist;
-    // otherwise fall back to plain OVMF via -bios so the VM still boots (SB just
-    // won't enforce). startVm seeds the per-VM VARS before launch.
+    // Firmware (Secure Boot implies UEFI). Three fallbacks in order: 1) Secure
+    // Boot CODE + per-VM VARS on split pflash (SB enforcement + persistent NVRAM)
+    // when a secboot OVMF and the seeded VARS exist; 2) a monolithic OVMF image
+    // via -bios (SB won't enforce); 3) plain split CODE + per-VM VARS on pflash
+    // for split-only distros. startVm seeds the per-VM VARS before launch.
     if (config.firmware == .uefi or config.secure_boot) {
         var used_pflash = false;
         if (config.secure_boot and config.hasName()) {
@@ -1160,9 +1161,9 @@ pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
     // is BIOS or no VARS template is installed.
     if (config.firmware == .uefi or config.secure_boot) {
         generateUefiVars(config, allocator) catch |e| {
-        var nb2: [160]u8 = undefined;
-        wlog.logWarn(std.fmt.bufPrint(&nb2, "uefi vars failed for vm=\"{s}\" ({s}); booting without split pflash", .{ config.getNameSlice(), @errorName(e) }) catch "uefi vars failed");
-    };
+            var nb2: [160]u8 = undefined;
+            wlog.logWarn(std.fmt.bufPrint(&nb2, "uefi vars failed for vm=\"{s}\" ({s}); booting without split pflash", .{ config.getNameSlice(), @errorName(e) }) catch "uefi vars failed");
+        };
     }
 
     var args: std.ArrayList([]const u8) = .empty;
@@ -1302,9 +1303,12 @@ pub fn cloudInitSeedPath(name: []const u8, buf: []u8) ?[:0]const u8 {
 pub fn generateCloudInitSeed(config: *const vm.VmConfig, allocator: std.mem.Allocator) !void {
     if (!config.hasCloudInit() or !config.hasName()) return error.NoCloudInit;
     const name = config.getNameSlice();
-    var ud_buf: [128]u8 = undefined;
-    var md_buf: [128]u8 = undefined;
-    var seed_buf: [128]u8 = undefined;
+    // Sized for the longest valid VM name (MAX_NAME); a 128-byte buffer made
+    // cloud-init silently inert for long-named VMs (bufPrintZ failed → seed
+    // never built, and the matching attach path in buildArgs failed too).
+    var ud_buf: [vm.MAX_NAME + 32]u8 = undefined;
+    var md_buf: [vm.MAX_NAME + 32]u8 = undefined;
+    var seed_buf: [vm.MAX_NAME + 32]u8 = undefined;
     const ud_path = std.fmt.bufPrintZ(&ud_buf, "/tmp/hangar-ci-ud-{s}", .{name}) catch return error.PathTooLong;
     const md_path = std.fmt.bufPrintZ(&md_buf, "/tmp/hangar-ci-md-{s}", .{name}) catch return error.PathTooLong;
     const seed = cloudInitSeedPath(name, &seed_buf) orelse return error.PathTooLong;
@@ -1316,12 +1320,36 @@ pub fn generateCloudInitSeed(config: *const vm.VmConfig, allocator: std.mem.Allo
     _ = std.c.unlink(md_path);
     _ = std.c.unlink(seed);
 
-    try std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ud_path, .data = config.getCloudInitSlice() });
-    var md_content: [256]u8 = undefined;
+    // user-data carries credentials (passwords, SSH keys, tokens) and lands in
+    // shared /tmp, so write it owner-only (matches the 0o600 used for the VM
+    // stderr log in forkExec) and remove it once cloud-localds has consumed it so
+    // the plaintext secret does not linger in /tmp.
+    try writeFile0600(ud_path, config.getCloudInitSlice());
+    defer _ = std.c.unlink(ud_path);
+    var md_content: [2 * vm.MAX_NAME + 64]u8 = undefined;
     const md = std.fmt.bufPrint(&md_content, "instance-id: {s}\nlocal-hostname: {s}\n", .{ name, name }) catch return error.PathTooLong;
-    try std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = md_path, .data = md });
+    try writeFile0600(md_path, md);
+    defer _ = std.c.unlink(md_path);
 
     try runWait(&.{ "cloud-localds", seed, ud_path, md_path }, allocator, null);
+
+    // The seed ISO embeds the user-data credentials; cloud-localds creates it with
+    // the daemon umask (possibly world-readable), so clamp it to owner-only.
+    _ = std.c.chmod(seed, @as(std.c.mode_t, 0o600));
+}
+
+/// Write `data` to `path`, creating/truncating it with owner-only (0o600) perms.
+/// Used for cloud-init temp files in shared /tmp that carry credentials.
+fn writeFile0600(path: [*:0]const u8, data: []const u8) !void {
+    const fd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
+    if (fd < 0) return error.WriteFailed;
+    defer _ = std.c.close(fd);
+    var off: usize = 0;
+    while (off < data.len) {
+        const n = std.c.write(fd, data.ptr + off, data.len - off);
+        if (n <= 0) return error.WriteFailed;
+        off += @intCast(n);
+    }
 }
 
 /// Create a new disk image using `qemu-img`.
@@ -1433,7 +1461,10 @@ pub fn tryReapChild(pid: std.c.pid_t) ?bool {
 /// created near-instantly and consumes almost no space initially. The
 /// backing file must not be modified while linked clones depend on it.
 pub fn createLinkedClone(dest_path: []const u8, backing_path: []const u8, backing_format: vm.DiskFormat, allocator: std.mem.Allocator) !void {
-    var backing_arg: [vm.MAX_PATH + 16]u8 = undefined;
+    // Must hold "backing_file={path},backing_fmt={fmt}": 26 literal bytes plus a
+    // full MAX_PATH backing path plus the format token. +64 matches the sibling
+    // buildLinkedCloneArgs; +16 here truncated (and failed) long backing paths.
+    var backing_arg: [vm.MAX_PATH + 64]u8 = undefined;
     const backing_str = try std.fmt.bufPrint(&backing_arg, "backing_file={s},backing_fmt={s}", .{
         backing_path,
         std.mem.span(backing_format.toStr()),
@@ -2155,10 +2186,12 @@ test "fuzz: forkExec/runWait/runCapture over safe argv" {
 test "fuzz: createDiskImage/resize/snapshot over temp qcow2 with random params" {
     const alloc = std.heap.page_allocator;
     // Probe: skip cleanly if qemu-img is unavailable in this environment.
-    createDiskImage("/tmp/hangar-qprobe.qcow2", 1, .qcow2, alloc) catch {
+    var probe_buf: [64]u8 = undefined;
+    const probe = std.fmt.bufPrintZ(&probe_buf, "/tmp/hangar-qprobe-{d}.qcow2", .{std.c.getpid()}) catch return;
+    createDiskImage(probe, 1, .qcow2, alloc) catch {
         return; // no qemu-img → nothing to fuzz here
     };
-    _ = std.Io.Dir.cwd().deleteFile(appio.io(), "/tmp/hangar-qprobe.qcow2") catch {};
+    _ = std.Io.Dir.cwd().deleteFile(appio.io(), probe) catch {};
 
     var prng = std.Random.DefaultPrng.init(0xD15C_F0FF);
     const rnd = prng.random();
@@ -2506,6 +2539,29 @@ test "fuzz: parseTopLevelU64 never panics on random bytes" {
     }
 }
 
+test "fuzz: parseJsonU64 never panics on random qemu-img output bytes" {
+    // parseJsonU64 runs over untrusted `qemu-img info --output=json` text; a
+    // long digit run must not overflow (parseInt errors fold to null), and the
+    // key search must never read out of bounds.
+    var prng = std.Random.DefaultPrng.init(0x70_1B64);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    const keys = [_][]const u8{ "\"virtual-size\"", "\"actual-size\"", "\"x\"", "" };
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        for (buf[0..len]) |*b| {
+            // Bias toward digits/colons so the numeric tail is actually reached.
+            b.* = switch (rnd.uintLessThan(u8, 4)) {
+                0 => '0' + rnd.uintLessThan(u8, 10),
+                1 => ':',
+                else => rnd.int(u8),
+            };
+        }
+        for (keys) |k| _ = parseJsonU64(buf[0..len], k);
+    }
+}
+
 test "qemu: embedded SPICE binds loopback only (addr=127.0.0.1)" {
     var cfg = vm.VmConfig{};
     cfg.embed_display = true;
@@ -2761,7 +2817,8 @@ test "qemu: tpm does not emit an unbootable bare tpmdev" {
 test "qemu: compactDiskImage rewrites the image in place, preserving validity" {
     const alloc = std.heap.page_allocator;
     runWait(&.{ "qemu-img", "--version" }, alloc, null) catch return; // skip if absent
-    const path = "/tmp/hangar-compact-test.qcow2";
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-compact-test-{d}.qcow2", .{std.c.getpid()}) catch return;
     defer std.Io.Dir.cwd().deleteFile(appio.io(), path) catch {};
     createDiskImage(path, 1, .qcow2, alloc) catch return;
     try compactDiskImage(path, .qcow2, alloc);
@@ -2769,7 +2826,9 @@ test "qemu: compactDiskImage rewrites the image in place, preserving validity" {
     var out: [4096]u8 = undefined;
     const n = runCapture(&.{ "qemu-img", "info", "--output=json", path }, &out, alloc) catch 0;
     try std.testing.expect(n > 0);
-    try std.testing.expect(std.Io.Dir.cwd().access(appio.io(), "/tmp/hangar-compact-test.qcow2.compacting", .{}) == error.FileNotFound);
+    var compacting_buf: [80]u8 = undefined;
+    const compacting = std.fmt.bufPrint(&compacting_buf, "{s}.compacting", .{path}) catch return;
+    try std.testing.expect(std.Io.Dir.cwd().access(appio.io(), compacting, .{}) == error.FileNotFound);
 }
 
 test "qemu: -rtc emits the configured clock base" {

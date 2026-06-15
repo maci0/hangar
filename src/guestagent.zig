@@ -32,6 +32,20 @@ pub fn parseIpv4s(json: []const u8, out: []u8) []const u8 {
         if (std.mem.indexOfScalar(u8, addr, ':') != null) continue;
         if (std.mem.indexOfScalar(u8, addr, '.') == null) continue;
         if (std.mem.startsWith(u8, addr, "127.")) continue;
+        // The `ip-address` field is supplied by the (untrusted) guest agent. Accept
+        // strictly digit+dot bytes so a hostile value can never carry `"` `\` or
+        // markup that would corrupt the emitted JSON response or, if ever rendered
+        // as HTML, inject script host-side (CWE-116/CWE-79).
+        {
+            var ok = true;
+            for (addr) |ch| {
+                if (!(ch >= '0' and ch <= '9') and ch != '.') {
+                    ok = false;
+                    break;
+                }
+            }
+            if (!ok) continue;
+        }
         if (w != 0) {
             if (w >= out.len) break;
             out[w] = ',';
@@ -116,6 +130,14 @@ test "guestagent: parseIpv4s empty when none, joins multiple" {
     try std.testing.expectEqualStrings("", parseIpv4s("{\"return\":[]}", &out));
     const s = "{\"return\":[{\"ip-address\":\"192.168.1.5\"},{\"ip-address\":\"10.1.1.2\"}]}";
     try std.testing.expectEqualStrings("192.168.1.5,10.1.1.2", parseIpv4s(s, &out));
+}
+
+test "guestagent: parseIpv4s rejects non-IPv4 bytes from a hostile guest agent" {
+    var out: [128]u8 = undefined;
+    // Trailing backslash / quote-adjacent injection and markup must be dropped,
+    // keeping only the genuine address.
+    const s = "{\"return\":[{\"ip-address\":\"1.2.3\\\\\"},{\"ip-address\":\"a.<b>\"},{\"ip-address\":\"192.168.1.5\"}]}";
+    try std.testing.expectEqualStrings("192.168.1.5", parseIpv4s(s, &out));
 }
 
 test "guestagent: query returns empty json for a non-matching request" {

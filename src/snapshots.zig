@@ -268,3 +268,26 @@ test "snapshots: handlers return 'invalid' on a non-matching request" {
     try std.testing.expectEqualStrings("invalid", try revert("POST /api/other HTTP/1.1"));
     try std.testing.expectEqualStrings("invalid", try delete("POST /api/other HTTP/1.1"));
 }
+
+test "fuzz: validateTag accepts nothing it claims is unsafe" {
+    // A "valid" tag reaches qemu-img / QMP HMP; a regression that whitelisted a
+    // null/control byte, `..`, empty, or over-length tag must fail this check.
+    var prng = std.Random.DefaultPrng.init(0x5A_AF_7A_67);
+    const rnd = prng.random();
+    const alphabet = "snap.0123 \t\n\x00\x1f-_ABCabc";
+    var input: [MAX_TAG_LEN + 8]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 6000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, input.len);
+        const structured = (iter & 1) == 0;
+        for (input[0..len]) |*c| {
+            c.* = if (structured) alphabet[rnd.uintLessThan(usize, alphabet.len)] else rnd.int(u8);
+        }
+        const tag = input[0..len];
+        if (validateTag(tag)) {
+            try std.testing.expect(tag.len != 0 and tag.len <= MAX_TAG_LEN);
+            for (tag) |b| try std.testing.expect(b >= 0x20);
+            try std.testing.expect(std.mem.indexOf(u8, tag, "..") == null);
+        }
+    }
+}

@@ -439,9 +439,14 @@ test "fuzz: writeFrame2 emits a well-formed header across length boundaries" {
         if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds) != 0) return error.SkipZigTest;
         // Drain reader on a thread so a >SO_SNDBUF frame doesn't deadlock the writer.
         const Reader = struct {
-            fn run(fd: c.fd_t, expect_len: u64) void {
-                const h = readFrameHeader(fd) orelse return;
-                std.testing.expectEqual(expect_len, h.payload_len) catch {};
+            fn run(fd: c.fd_t, expect_len: u64, header_ok: *std.atomic.Value(bool)) void {
+                const h = readFrameHeader(fd) orelse {
+                    header_ok.store(false, .seq_cst);
+                    return;
+                };
+                // Can't bubble an error out of a thread entry point; record the
+                // verdict in a shared flag the main test body asserts on.
+                if (h.payload_len != expect_len) header_ok.store(false, .seq_cst);
                 var buf: [4096]u8 = undefined;
                 var got: usize = 0;
                 while (got < h.payload_len) {
@@ -451,7 +456,8 @@ test "fuzz: writeFrame2 emits a well-formed header across length boundaries" {
                 }
             }
         };
-        const th = std.Thread.spawn(.{}, Reader.run, .{ fds[1], @as(u64, total) }) catch {
+        var header_ok = std.atomic.Value(bool).init(true);
+        const th = std.Thread.spawn(.{}, Reader.run, .{ fds[1], @as(u64, total), &header_ok }) catch {
             _ = c.close(fds[0]);
             _ = c.close(fds[1]);
             continue;
@@ -460,6 +466,7 @@ test "fuzz: writeFrame2 emits a well-formed header across length boundaries" {
         _ = c.close(fds[0]);
         th.join();
         _ = c.close(fds[1]);
+        try std.testing.expect(header_ok.load(.seq_cst));
     }
 }
 

@@ -215,13 +215,12 @@ pub const SpiceClient = struct {
 
     /// Check and clear the dirty flag.
     ///
-    /// Uses seq_cst atomics so writes from the GLib callbacks are visible
-    /// to the UI thread without acquiring the framebuffer mutex.  The
-    /// worst case of a lost dirty flag is a single skipped frame.
+    /// Atomic test-and-clear: a single seq_cst exchange returns the prior value
+    /// and clears in one step, so a frame a GLib callback marks dirty between the
+    /// read and the clear is never silently dropped (a separate load+store would
+    /// race that window away). seq_cst keeps callback writes visible to the UI thread.
     pub fn checkDirty(self: *SpiceClient) bool {
-        const was = @atomicLoad(bool, &self.dirty, .seq_cst);
-        if (was) @atomicStore(bool, &self.dirty, false, .seq_cst);
-        return was;
+        return @atomicRmw(bool, &self.dirty, .Xchg, false, .seq_cst);
     }
 
     /// Send a key press/release.  `scancode` is a PC AT scancode.
@@ -398,6 +397,20 @@ test "spice: fresh client public API is safe (unconnected)" {
     cl.setInvalidateCb(null, null);
     cl.sendKey(0x1c, true); // guarded by inputs==null → no-op
     cl.sendPointer(1, 2, 3);
+}
+
+test "spice: checkDirty atomically tests-and-clears the flag" {
+    // GLib callbacks set dirty; the UI thread drains it via checkDirty. One call
+    // must report the prior state AND clear in a single step so a frame marked
+    // dirty between read and clear is never silently dropped (regression: the
+    // old load-then-store split raced that window away).
+    const cl = SpiceClient.new() orelse return error.SkipZigTest;
+    defer cl.free();
+    cl.dirty = false;
+    try testing.expect(!cl.checkDirty()); // clean stays clean
+    cl.dirty = true;
+    try testing.expect(cl.checkDirty()); // reports dirty...
+    try testing.expect(!cl.checkDirty()); // ...and cleared it
 }
 
 test "spice: GLib signal callbacks guard null data (no deref)" {

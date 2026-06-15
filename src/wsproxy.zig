@@ -50,7 +50,7 @@ pub fn vnc(conn: c.fd_t, req: []const u8) !void {
     // Connect to the VM's VNC server. QEMU reports "running" the moment it
     // forks, but its display listener comes up a beat later — a console that
     // auto-connects on the first running poll would race it and get refused.
-    // Retry briefly (4s budget, 150ms steps, fresh socket per attempt: a failed
+    // Retry briefly (4s budget, 40ms steps, fresh socket per attempt: a failed
     // connect leaves the fd unusable) before failing the upgrade.
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
@@ -70,8 +70,8 @@ pub fn vnc(conn: c.fd_t, req: []const u8) !void {
             try ws.writeClose(conn);
             return;
         }
-        appio.sleepMs(150);
-        waited_ms += 150;
+        appio.sleepMs(40);
+        waited_ms += 40;
     }
     setTcpNoDelay(vnc_fd);
 
@@ -184,7 +184,7 @@ pub fn spice(conn: c.fd_t, req: []const u8) !void {
     // Connect to the VM's SPICE server. QEMU reports "running" the moment it
     // forks, but its display listener comes up a beat later — a console that
     // auto-connects on the first running poll would race it and get refused.
-    // Retry briefly (4s budget, 150ms steps, fresh socket per attempt: a failed
+    // Retry briefly (4s budget, 40ms steps, fresh socket per attempt: a failed
     // connect leaves the fd unusable) before failing the upgrade.
     var addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
     addr.family = AF_INET;
@@ -204,13 +204,13 @@ pub fn spice(conn: c.fd_t, req: []const u8) !void {
             try ws.writeClose(conn);
             return;
         }
-        appio.sleepMs(150);
-        waited_ms += 150;
+        appio.sleepMs(40);
+        waited_ms += 40;
     }
     setTcpNoDelay(spice_fd);
 
     // Spawn threads for bidirectional relay. `wmtx` serializes writes to
-    // `ws_fd` (writeFrame vs writePong) — see handleWsVnc for the rationale.
+    // `ws_fd` (writeFrame vs writePong) — see the vnc relay above for the rationale.
     const RelayCtx = struct {
         ws_fd: c.fd_t,
         spice_fd: c.fd_t,
@@ -340,7 +340,7 @@ pub fn serialConsole(conn: c.fd_t, req: []const u8) !void {
     var ctx = RelayCtx{ .ws_fd = conn, .serial_fd = serial.fd };
 
     // Thread: serial → WebSocket. `wmtx` serializes writes to `ws_fd`
-    // (writeFrame vs writePong) — see handleWsVnc for the rationale.
+    // (writeFrame vs writePong) — see the vnc relay above for the rationale.
     const ser2ws = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
         fn run(ctx_ptr: *RelayCtx) void {
             var buf: [65536]u8 = undefined;

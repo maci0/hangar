@@ -129,7 +129,10 @@ pub fn screenshot(conn: c.fd_t, req: []const u8) void {
     }
     defer _ = c.unlink(png_path);
 
-    const fd = c.open(png_path, .{ .ACCMODE = .RDONLY });
+    // O_NOFOLLOW: refuse a symlink planted at this predictable /tmp path between
+    // QEMU's screendump and this read-back, so the daemon can never be tricked
+    // into serving an arbitrary file it can read (TOCTOU symlink, CWE-59/367).
+    const fd = c.open(png_path, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true });
     if (fd < 0) {
         writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"screenshot read failed\"}");
         return;
@@ -621,7 +624,10 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
         tar_cleanup = true;
     }
 
-    const tar_fd = c.open(tar_path, .{ .ACCMODE = .RDONLY });
+    // O_NOFOLLOW: the tarball sits at a predictable /tmp path; refuse a symlink
+    // swapped in before this read-back so a local attacker can't redirect the
+    // streamed bytes to an arbitrary file (TOCTOU symlink, CWE-59/367).
+    const tar_fd = c.open(tar_path, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true });
     if (tar_fd < 0) return;
     defer _ = c.close(tar_fd);
 
@@ -696,4 +702,34 @@ test "streams: screenshot rejects a non-matching request (writes to a pipe)" {
     const n = c.read(fds[0], &buf, buf.len);
     try std.testing.expect(n > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "400") != null);
+}
+
+test "fuzz: parseUploadFilename never panics and returns a sub-slice" {
+    var prng = std.Random.DefaultPrng.init(0x5170_4144);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    // A small alphabet weighted toward the structural bytes the parser keys on
+    // (quotes, semicolons, '=', CR/LF) so deep paths get exercised, not just
+    // the "filename absent" early return.
+    const alpha = "filename=\";\r\n \t ABxy./0";
+    var i: usize = 0;
+    while (i < 8000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*b| {
+            b.* = if (rnd.boolean()) alpha[rnd.uintLessThan(usize, alpha.len)] else rnd.int(u8);
+        }
+        const headers = buf[0..len];
+        const name = parseUploadFilename(headers);
+        // Result is always empty or a slice contained within the input buffer.
+        if (name.len > 0) {
+            const base = @intFromPtr(headers.ptr);
+            const start = @intFromPtr(name.ptr);
+            std.debug.assert(start >= base);
+            std.debug.assert(start + name.len <= base + headers.len);
+            // Unquoted form trims trailing ASCII whitespace; quoted form keeps it.
+            const last = name[name.len - 1];
+            const quoted = std.mem.indexOf(u8, headers, "filename=\"") != null;
+            std.debug.assert(quoted or (last != ' ' and last != '\t'));
+        }
+    }
 }

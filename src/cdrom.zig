@@ -154,3 +154,26 @@ test "cdrom: change/eject reject a non-matching request" {
     try std.testing.expectEqualStrings("invalid", try change("POST /api/other HTTP/1.1"));
     try std.testing.expectEqualStrings("invalid", try eject("POST /api/other HTTP/1.1"));
 }
+
+test "fuzz: isSafePath accepts nothing it claims is unsafe" {
+    // A "safe" path reaches `-drive file=...`; if it passes it must carry no
+    // `,` / `..` / control byte — a logic regression that whitelisted one of
+    // those would let an injected `-drive` option or arg-splitter slip through.
+    var prng = std.Random.DefaultPrng.init(0xC0_DE_15);
+    const rnd = prng.random();
+    const alphabet = "/iso.,\x00\x01\x7f .ABCabc-_";
+    var input: [128]u8 = undefined;
+    var iter: usize = 0;
+    while (iter < 6000) : (iter += 1) {
+        const len = rnd.uintLessThan(usize, input.len);
+        const structured = (iter & 1) == 0;
+        for (input[0..len]) |*c| {
+            c.* = if (structured) alphabet[rnd.uintLessThan(usize, alphabet.len)] else rnd.int(u8);
+        }
+        const p = input[0..len];
+        if (isSafePath(p)) {
+            try std.testing.expect(std.mem.indexOf(u8, p, "..") == null);
+            for (p) |ch| try std.testing.expect(ch != ',' and ch >= 0x20 and ch != 0x7f);
+        }
+    }
+}

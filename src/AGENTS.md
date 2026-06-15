@@ -31,7 +31,8 @@ globals in `appstate.zig`.
   `wsproxy` `framebuffer` `vmlist` `vmrender` `filter`.
 - **Frontend assets:** `src/web/` — see its AGENTS.md (served by `web_server`, embedded via `@embedFile`).
 - **Leaf helpers:** `sync` `usock` `appio` `ringbuf` `termfilter` `fbmath` `uimath`
-  `snapparse` `ovf` `autoprotect` `path_helpers` `serialpath` `vnet_label`.
+  `snapparse` `ovf` `autoprotect` `path_helpers` `serialpath` `vnet_label` `hostinfo`
+  (host CPU/RAM capacity for the dashboard).
 
 ## Local Contracts
 - **Add a `VmConfig` field →** update `VmJson` + `emitVmJson` + `parseVmObject` +

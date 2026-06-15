@@ -17,6 +17,7 @@ pub const HTTP_CONFLICT: u16 = 409;
 pub const HTTP_PAYLOAD_TOO_LARGE: u16 = 413;
 pub const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 pub const HTTP_INTERNAL_ERROR: u16 = 500;
+pub const HTTP_SERVICE_UNAVAILABLE: u16 = 503;
 
 /// Write exactly `len` bytes to fd, retrying on short writes. Returns false on failure.
 pub fn writeAll(conn: c.fd_t, buf: [*]const u8, len: usize) bool {
@@ -190,6 +191,7 @@ pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []cons
         HTTP_PAYLOAD_TOO_LARGE => "HTTP/1.1 413 Payload Too Large\r\n",
         HTTP_TOO_MANY_REQUESTS => "HTTP/1.1 429 Too Many Requests\r\n",
         HTTP_INTERNAL_ERROR => "HTTP/1.1 500 Internal Server Error\r\n",
+        HTTP_SERVICE_UNAVAILABLE => "HTTP/1.1 503 Service Unavailable\r\n",
         else => "HTTP/1.1 500 Internal Server Error\r\n",
     };
     // Assemble the full header block in one buffer so the response costs two
@@ -252,4 +254,38 @@ test "httpresp: jsonEscape escapes quotes/backslash/control, flags truncation" {
     try std.testing.expectEqualStrings("\\u0000", jsonEscape(&buf, "\x00").escaped);
     var tiny: [1]u8 = undefined;
     try std.testing.expect(jsonEscape(&tiny, "\"x").truncated);
+}
+
+test "fuzz: sanitizeHeaderValue never leaks CR/LF/quote and stays within buf" {
+    // Header-injection (CWE-113) boundary: VM names / filenames flow into
+    // response headers (Content-Disposition). The output must never carry a
+    // bare CR, LF, or `"` no matter the input, and must fit the caller buffer.
+    var prng = std.Random.DefaultPrng.init(0xDEADBE12);
+    const rnd = prng.random();
+    var in_buf: [256]u8 = undefined;
+    var out_buf: [256]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const in_len = rnd.uintLessThan(usize, in_buf.len + 1);
+        for (in_buf[0..in_len]) |*b| b.* = rnd.int(u8);
+        // Vary the output capacity to exercise the truncation cutoff.
+        const out_cap = rnd.uintLessThan(usize, out_buf.len + 1);
+        const out = sanitizeHeaderValue(out_buf[0..out_cap], in_buf[0..in_len]);
+        try std.testing.expect(out.len <= out_cap);
+        for (out) |ch| {
+            try std.testing.expect(ch != '\r' and ch != '\n' and ch != '"');
+        }
+    }
+}
+
+test "fuzz: isServerErrToken never panics on random response bytes" {
+    var prng = std.Random.DefaultPrng.init(0x500_E12);
+    const rnd = prng.random();
+    var buf: [64]u8 = undefined;
+    var i: usize = 0;
+    while (i < 3000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        _ = isServerErrToken(buf[0..len]);
+    }
 }
