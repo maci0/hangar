@@ -302,13 +302,19 @@ fn forkExec(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[
     return pid;
 }
 
-/// Well-known OVMF firmware image paths (searched in order).
-/// Different Linux distributions install OVMF in different locations;
-/// we probe each path at runtime because there is no standard.
+/// Well-known *combined* OVMF firmware image paths (searched in order), suitable
+/// for QEMU's `-bios`. Different Linux distributions install OVMF in different
+/// locations, so we probe each at runtime. CRITICAL: every entry must be a
+/// monolithic CODE+VARS image. Split CODE-only images (e.g.
+/// /usr/share/OVMF/OVMF_CODE.fd, which on modern distros is a 4 MB pflash CODE
+/// half) make `-bios` fail with "could not load PC BIOS" — those belong only in
+/// the split-pflash path, never here.
 const ovmf_search_paths = [_][]const u8{
     "/usr/share/edk2/x64/OVMF.fd",
-    "/usr/share/OVMF/OVMF_CODE.fd",
+    "/usr/share/edk2/x64/OVMF.4m.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF.fd",
     "/usr/share/edk2-ovmf/x64/OVMF.4m.fd",
+    "/usr/share/OVMF/OVMF.fd",
     "/usr/share/qemu/OVMF.fd",
 };
 
@@ -320,6 +326,19 @@ const ovmf_secboot_code_paths = [_][]const u8{
     "/usr/share/edk2/x64/OVMF_CODE.secboot.fd",
     "/usr/share/edk2-ovmf/x64/OVMF_CODE.secboot.fd",
     "/usr/share/qemu/OVMF_CODE.secboot.fd",
+};
+
+/// Plain (non-Secure-Boot) split OVMF CODE images. Used only as a fallback for
+/// distros that ship split-only OVMF with no monolithic image (e.g. modern
+/// Fedora): the CODE half rides `if=pflash,unit=0` alongside a per-VM VARS,
+/// rather than QEMU's `-bios`. These are NOT Secure-Boot-enforcing.
+const ovmf_plain_code_paths = [_][]const u8{
+    "/usr/share/edk2/x64/OVMF_CODE.4m.fd",
+    "/usr/share/edk2/x64/OVMF_CODE.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_CODE.4m.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
+    "/usr/share/OVMF/OVMF_CODE.fd",
+    "/usr/share/qemu/OVMF_CODE.fd",
 };
 
 /// Writable OVMF VARS templates (per-VM NVRAM is copied from one of these).
@@ -350,6 +369,12 @@ fn findOvmfPath() ?[]const u8 {
 /// caller then falls back to plain OVMF — SB won't enforce, but the VM boots).
 fn findSecbootCode() ?[]const u8 {
     return findFirstExisting(&ovmf_secboot_code_paths);
+}
+
+/// Locate a plain (non-Secure-Boot) split OVMF CODE image. Null if none found.
+/// Only used when no monolithic image exists (split-only distros).
+fn findPlainOvmfCode() ?[]const u8 {
+    return findFirstExisting(&ovmf_plain_code_paths);
 }
 
 /// Locate an OVMF VARS template to seed per-VM NVRAM. Null if none found.
@@ -391,11 +416,27 @@ fn buildSecureBootDrives(args: *std.ArrayList([]const u8), alloc: std.mem.Alloca
     try args.append(alloc, vars_str);
 }
 
+/// Plain-UEFI split-pflash fallback: emit the split CODE (read-only) + per-VM
+/// VARS drives when no monolithic OVMF image exists. Returns true if the drives
+/// were appended, false if the VM has no name, no plain CODE image is installed,
+/// or its seeded VARS is missing (the caller then surfaces OvmfNotFound).
+fn appendPlainUefiPflash(args: *std.ArrayList([]const u8), alloc: std.mem.Allocator, bufs: *ArgBuffers, config: *const vm.VmConfig) !bool {
+    if (!config.hasName()) return false;
+    const code = findPlainOvmfCode() orelse return false;
+    var vp_buf: [512]u8 = undefined;
+    const vars = secbootVarsPath(config.getNameSlice(), &vp_buf) orelse return false;
+    std.Io.Dir.cwd().access(appio.io(), vars, .{}) catch return false;
+    try buildSecureBootDrives(args, alloc, bufs, code, vars);
+    return true;
+}
+
 /// Seed a per-VM OVMF VARS (NVRAM) file by copying a VARS template, unless it
 /// already exists (preserving enrolled keys / boot entries across reboots).
-/// Best-effort: caller boots without Secure Boot pflash if this fails.
-pub fn generateSecureBootVars(config: *const vm.VmConfig, allocator: std.mem.Allocator) !void {
-    if (!config.secure_boot or !config.hasName()) return error.NoSecureBoot;
+/// Covers both Secure Boot and the plain-UEFI split-pflash fallback used on
+/// split-only distros. Best-effort: caller boots without split pflash if this
+/// fails (it still has the monolithic `-bios` path when an image exists).
+pub fn generateUefiVars(config: *const vm.VmConfig, allocator: std.mem.Allocator) !void {
+    if (!(config.firmware == .uefi or config.secure_boot) or !config.hasName()) return error.NoUefi;
     var vp_buf: [512]u8 = undefined;
     const vars = secbootVarsPath(config.getNameSlice(), &vp_buf) orelse return error.PathTooLong;
     if (std.Io.Dir.cwd().access(appio.io(), vars, .{})) |_| return else |_| {}
@@ -977,9 +1018,18 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
             }
         }
         if (!used_pflash) {
-            const ovmf = findOvmfPath() orelse return QemuError.OvmfNotFound;
-            try args.append(alloc, "-bios");
-            try args.append(alloc, ovmf);
+            if (findOvmfPath()) |ovmf| {
+                // Monolithic CODE+VARS image: the simple, portable path.
+                try args.append(alloc, "-bios");
+                try args.append(alloc, ovmf);
+            } else {
+                // No combined image (split-only distro, e.g. modern Fedora): ride
+                // a plain split CODE half on pflash with the per-VM VARS startVm
+                // seeded. Without a name (and thus a VARS path) we cannot, so the
+                // VM legitimately has no firmware to boot.
+                used_pflash = appendPlainUefiPflash(args, alloc, bufs, config) catch false;
+                if (!used_pflash) return QemuError.OvmfNotFound;
+            }
         }
     }
 
@@ -1105,12 +1155,13 @@ pub fn startVm(config: *vm.VmConfig, allocator: std.mem.Allocator) !void {
             wlog.logWarn(std.fmt.bufPrint(&nb, "cloud-init seed failed for vm=\"{s}\" ({s}); booting without it", .{ config.getNameSlice(), @errorName(e) }) catch "cloud-init seed failed");
         };
     }
-    // Seed per-VM Secure Boot NVRAM so buildArgs can wire split pflash; harmless
-    // no-op when SB is off or no firmware is installed.
-    if (config.secure_boot) {
-        generateSecureBootVars(config, allocator) catch |e| {
+    // Seed per-VM UEFI NVRAM so buildArgs can wire split pflash (Secure Boot, or
+    // the plain-UEFI fallback on split-only distros); harmless no-op when the VM
+    // is BIOS or no VARS template is installed.
+    if (config.firmware == .uefi or config.secure_boot) {
+        generateUefiVars(config, allocator) catch |e| {
         var nb2: [160]u8 = undefined;
-        wlog.logWarn(std.fmt.bufPrint(&nb2, "secure-boot vars failed for vm=\"{s}\" ({s}); booting without them", .{ config.getNameSlice(), @errorName(e) }) catch "secure-boot vars failed");
+        wlog.logWarn(std.fmt.bufPrint(&nb2, "uefi vars failed for vm=\"{s}\" ({s}); booting without split pflash", .{ config.getNameSlice(), @errorName(e) }) catch "uefi vars failed");
     };
     }
 
@@ -2783,6 +2834,60 @@ test "qemu: secure_boot falls back to plain OVMF when no secboot firmware / VARS
     defer talloc.free(s);
     try expect(!has(s, "unit=1,format=raw,file=/tmp/hangar-ovmf-vars-sbfallback.fd"));
     try expect(has(s, "-bios"));
+}
+
+test "qemu: combined OVMF search list has no split CODE-only images" {
+    // Regression: a split OVMF_CODE.*fd passed to `-bios` makes QEMU fail with
+    // "could not load PC BIOS". The monolithic `-bios` list must contain only
+    // combined CODE+VARS images; CODE-only paths belong in ovmf_plain_code_paths.
+    for (ovmf_search_paths) |p| {
+        try expect(std.mem.indexOf(u8, p, "OVMF_CODE") == null);
+        try expect(std.mem.indexOf(u8, p, "_CODE.") == null);
+    }
+    // And the split-fallback list must be exactly the inverse: every entry is a
+    // CODE image (never a monolithic one, which would lack a VARS store).
+    try expect(ovmf_plain_code_paths.len > 0);
+    for (ovmf_plain_code_paths) |p| {
+        try expect(std.mem.indexOf(u8, p, "OVMF_CODE") != null);
+    }
+}
+
+test "qemu: appendPlainUefiPflash returns false without a VM name" {
+    var args: std.ArrayList([]const u8) = .empty;
+    defer args.deinit(talloc);
+    var bufs = ArgBuffers{};
+    var cfg = vm.VmConfig{}; // no name => no per-VM VARS path => cannot use pflash
+    try expect((try appendPlainUefiPflash(&args, talloc, &bufs, &cfg)) == false);
+    try expect(args.items.len == 0);
+}
+
+test "qemu: generateUefiVars rejects a BIOS VM" {
+    var cfg = vm.VmConfig{};
+    cfg.setName("biosvm");
+    cfg.firmware = .bios;
+    cfg.secure_boot = false;
+    try std.testing.expectError(error.NoUefi, generateUefiVars(&cfg, talloc));
+}
+
+test "fuzz: appendPlainUefiPflash never panics on random configs" {
+    var prng = std.Random.DefaultPrng.init(0x0F1F_2A3B);
+    const rnd = prng.random();
+    var i: usize = 0;
+    while (i < 1500) : (i += 1) {
+        var cfg = vm.VmConfig{};
+        cfg.firmware = if (rnd.boolean()) .uefi else .bios;
+        cfg.secure_boot = rnd.boolean();
+        if (rnd.boolean()) {
+            var nb: [24]u8 = undefined;
+            const n = rnd.uintLessThan(usize, nb.len);
+            for (nb[0..n]) |*b| b.* = 'a' + rnd.uintLessThan(u8, 26);
+            cfg.setName(nb[0..n]);
+        }
+        var args: std.ArrayList([]const u8) = .empty;
+        defer args.deinit(talloc);
+        var bufs = ArgBuffers{};
+        _ = appendPlainUefiPflash(&args, talloc, &bufs, &cfg) catch {};
+    }
 }
 
 test "qemu: buildScriptStr with hugepages emits mem-prealloc" {
