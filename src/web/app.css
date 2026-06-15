@@ -411,14 +411,14 @@ main{
   text-overflow:ellipsis;
   white-space:nowrap;
 }
-.menu-item:hover{background:var(--accent-soft)}
+.menu-item:hover{background:var(--accent-soft);color:var(--accent)}
 .menu-item.danger{color:var(--danger)}
-.menu-item.danger:hover{background:var(--danger-soft)}
+.menu-item.danger:hover{background:var(--danger-soft);color:var(--danger)}
 .menu-item:disabled{opacity:.45;cursor:not-allowed}
 .menu-item:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .menu-sep{display:block;height:1px;margin:4px 6px;background:var(--border-soft)}
 .menu-item .ico{width:13px;height:13px;color:var(--text-dim);flex:0 0 auto}
-.menu-item:hover .ico{color:var(--text-muted)}
+.menu-item:hover .ico{color:var(--accent)}
 .menu-item.danger .ico{color:var(--danger)}
 
 .toolbar-more-popover{
@@ -761,6 +761,7 @@ main{
 .settings-nav-item small{display:block;margin-top:1px;color:var(--text-dim);font-size:11px;line-height:1.35}
 .settings-nav-item:hover{background:var(--surface-2)}
 .settings-nav-item.active{background:var(--accent-soft);border-left-color:var(--accent)}
+.settings-nav-item.active span{color:var(--accent)}
 .settings-detail{min-width:0}
 .settings-panel{
   border:1px solid var(--border-soft);
