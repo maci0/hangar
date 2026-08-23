@@ -398,3 +398,126 @@ test "vmrender: renderVmDetail rejects a non-matching request" {
     var buf: [256]u8 = undefined;
     try std.testing.expectError(error.RenderFailed, renderVmDetail("GET /api/other HTTP/1.1", &buf));
 }
+
+// Populate appstate slot 0 with a VM whose every string field is distinctive,
+// so an emitted-field regression (dropped arg, swapped format slot) fails the
+// containment assertions instead of shipping silently. Caller must hold vms_mutex.
+fn installRenderFixture() void {
+    appstate.vm_count = 1;
+    appstate.vms[0] = .{};
+    const v = &appstate.vms[0];
+    v.setId("deadbeefcafe0009");
+    v.setName("RenderFixture");
+    v.memory_mb = 8192;
+    v.cpu_cores = 4;
+    v.setIsoPath("/iso/fixture.iso");
+    v.setNotes("note with \"quote\" and\\slash");
+    v.setTags("alpha,beta");
+    v.setFolder("Prod/Web");
+    v.setVnet("VMnetFix");
+    v.setPortForwards("8080:80");
+    v.setSharedFolder("/srv/share");
+    v.setUsbDevice("046d:c52b");
+    v.setDisk2Path("/disks/disk2.qcow2");
+    v.disk2_size_gb = 50;
+    v.setFloppyPath("/floppy/boot.img");
+    v.setExtraDiskPath(2, "/disks/extra2.vdi");
+    v.extra_disks[2].size_gb = 30;
+    v.nics[1].mode = .gvproxy;
+    v.setNic2Mac("02:11:22:33:44:55");
+    v.setNicVnetAny(3, "VMnet3Fix");
+    v.setCloudInit("#cloud-config\npackages: [vim]\n");
+    v.vnc_port = 5901;
+    v.favorite = true;
+    appstate.vm_started[0] = 42;
+}
+
+// The render functions take vms_mutex themselves; tests hold it only while
+// mutating appstate (SpinMutex is not recursive).
+
+test "vmrender: renderVmDetail emits populated fields with escaping" {
+    appstate.vms_mutex.lock();
+    installRenderFixture();
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = 0;
+        appstate.vms[0] = .{};
+        appstate.vm_started[0] = 0;
+        appstate.vms_mutex.unlock();
+    }
+
+    var buf: [32 * 1024]u8 = undefined;
+    const out = try renderVmDetail("GET /api/vms/0 HTTP/1.1", &buf);
+
+    // Object framing + distinctive values from every emit block (part1..part2e).
+    for ([_][]const u8{
+        "{\"idx\":0",
+        "\"name\":\"RenderFixture\"",
+        "\"hasIso\":true",
+        "\"iso_path\":\"/iso/fixture.iso\"",
+        "\\\"quote\\\"", // notes escaping
+        "\\\\slash", // notes backslash escaping
+        "\"tags\":\"alpha,beta\"",
+        "\"folder\":\"Prod/Web\"",
+        "\"vnet\":\"VMnetFix\"",
+        "\"port_forwards\":\"8080:80\"",
+        "\"shared_folder\":\"/srv/share\"",
+        "\"usb_device\":\"046d:c52b\"",
+        "\"hasDisk2\":true",
+        "\"disk2_path\":\"/disks/disk2.qcow2\"",
+        "\"disk2_size\":50",
+        "\"floppy_path\":\"/floppy/boot.img\"",
+        "\"nic2_mac\":\"02:11:22:33:44:55\"",
+        "\"nic4_vnet\":\"VMnet3Fix\"",
+        "\"extra2_path\":\"/disks/extra2.vdi\"",
+        "\"extra2_size\":30",
+        "\"cloud_init\":\"#cloud-config\\npackages: [vim]\\n\"",
+        "\"id\":\"deadbeefcafe0009\"",
+        "\"mem\":8192",
+        "\"cpu\":4",
+        "\"vnc_port\":5901",
+        "\"favorite\":true",
+        "\"started\":42",
+        "\"video_stream\":false,\"video_bitrate_kbps\":0}",
+    }) |needle| {
+        try std.testing.expect(std.mem.indexOf(u8, out, needle) != null);
+    }
+
+    // Out-of-range idx renders the empty object, not an OOB read.
+    var small: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("{}", try renderVmDetail("GET /api/vms/99 HTTP/1.1", &small));
+}
+
+test "vmrender: renderJson wraps populated VMs in the list array" {
+    appstate.vms_mutex.lock();
+    installRenderFixture();
+    appstate.vm_count = 2;
+    appstate.vms[1] = .{};
+    appstate.vms[1].setName("SecondFixture");
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = 0;
+        appstate.vms_mutex.unlock();
+    }
+
+    var buf: [32 * 1024]u8 = undefined;
+    const n = renderJson(&buf);
+    try std.testing.expect(n > 2);
+    try std.testing.expectEqual(@as(u8, '['), buf[0]);
+    try std.testing.expectEqual(@as(u8, ']'), buf[n - 1]);
+
+    for ([_][]const u8{
+        "{\"idx\":0,\"name\":\"RenderFixture\"",
+        ",{\"idx\":1,\"name\":\"SecondFixture\"",
+        "\"started\":42",
+        "\"started\":0",
+    }) |needle| {
+        try std.testing.expect(std.mem.indexOf(u8, buf[0..n], needle) != null);
+    }
+
+    // A buffer too small for even one VM reports overflow as 0.
+    var tiny: [64]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), renderJson(&tiny));
+}
