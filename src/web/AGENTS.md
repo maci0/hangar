@@ -7,7 +7,7 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 
 ## Ownership
 - `index.html` — markup, dialogs, the inline SVG icon sprite (`#i-*`), script tags.
-- `app.js` (~1200 lines) — all behavior: refresh poll, render, action dispatch, dialogs,
+- `app.js` (~1750 lines) — all behavior: refresh poll, render, action dispatch, dialogs,
   console/serial viewers, command palette, folders, topology.
 - `app.css` (~1150 lines) — theme (`:root` dark default + `:root.light`) + components;
   a trailing "serious flat reskin" override block wins by cascade order.

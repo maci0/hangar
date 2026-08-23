@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Hangar — Web Frontend (HTTP server + HTML/CSS UI)
-//! Serves a VMware WS7-style UI via embedded HTTP server.
-//! Open http://localhost:9080 in any browser.
+//! Hangar — Web Frontend + remote daemon (HTTP server + HTML/CSS UI).
+//! Router + VM CRUD/lifecycle core; serves the embedded VMware WS7-style UI
+//! and doubles as the daemon that `vmrun`/`hangar-webui` talk to over
+//! transport.zig (see docs/DESIGN.md). Open http://localhost:9080 in any browser.
 const std = @import("std");
 const vm = @import("vm.zig");
 const appstate = @import("appstate.zig");

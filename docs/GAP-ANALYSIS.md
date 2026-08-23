@@ -38,7 +38,7 @@
 | Batch start/stop all | ✅ Web toolbar buttons |
 | Favorites | ✅ Star toggle + grouped with separator |
 | Window geometry save | ✅ Persisted x/y/w/h |
-| vmrun CLI | ✅ 18 operations (list/start/stop/clone/delete/snapshot/...) |
+| vmrun CLI | ✅ 30 commands (list/start/stop/clone/delete/snapshot/...) |
 | HV abstraction layer | ✅ QEMU backend + dispatch table |
 
 ## Web Frontend Parity

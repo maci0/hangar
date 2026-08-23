@@ -83,6 +83,7 @@ Handled in the web UI (`src/web/app.js`); press `?` in the app for the full list
 | Ctrl+W | Deselect VM |
 | Ctrl+F | Focus search |
 | Ctrl+P | Preferences |
+| Ctrl+K | Command palette |
 | F5 | Refresh |
 | F11 | Toggle fullscreen / display-only |
 | Enter | Power on/off selected VM |
@@ -94,9 +95,10 @@ Handled in the web UI (`src/web/app.js`); press `?` in the app for the full list
 
 Resource-rooted under `/api`. State-changing requests require the `X-API-Key`
 header (the bundled UI and `vmrun` send it; the built-in default `hangar` is
-accepted in loopback mode). GET reads are exempt except the sensitive ones,
-which still require auth: `disk2/download`, `framebuffer`, `screenshot`,
-`guestinfo`, and migrate status.
+accepted in loopback mode). In loopback mode GET reads are exempt except the
+sensitive ones, which still require auth: `disk2/download`, `framebuffer`,
+`screenshot`, `guestinfo`, and migrate status. When a real key is configured
+(exposed mode), the data-bearing reads require the key too.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -104,6 +106,7 @@ which still require auth: `disk2/download`, `framebuffer`, `screenshot`,
 | GET | `/api/events` | Server-Sent Events: change notifications (state version bumps on every mutation and unexpected VM exit) |
 | GET | `/api/config` · POST `/api/config` | Read / save preferences |
 | GET | `/api/capabilities` · `/api/catalog` | Host capabilities / VM templates |
+| GET | `/api/host` | Host CPU/RAM capacity (dashboard) |
 | GET | `/api/vms` | List VMs |
 | POST | `/api/vms` | Create VM |
 | POST | `/api/vms/{import,reorder,undo,save}` | Import / reorder / undo-delete / persist-all |
@@ -111,7 +114,7 @@ which still require auth: `disk2/download`, `framebuffer`, `screenshot`,
 | GET | `/api/vms/<id>` | VM detail |
 | POST | `/api/vms/<id>` | Update VM settings |
 | POST | `/api/vms/<id>/delete` | Delete VM |
-| POST | `/api/vms/<id>/{power,pause,resume,suspend,shutdown,reset,cad,clone,rename}` | Lifecycle actions |
+| POST | `/api/vms/<id>/{power,start,stop,pause,resume,suspend,shutdown,reset,cad,clone,rename}` | Lifecycle actions |
 | GET | `/api/vms/<id>/log` | Tail of the QEMU stderr log |
 | GET | `/api/vms/<id>/framebuffer` | Current framebuffer (BMP) |
 | GET | `/api/vms/<id>/diskinfo` | Primary disk virtual + actual byte sizes |
@@ -128,7 +131,8 @@ which still require auth: `disk2/download`, `framebuffer`, `screenshot`,
 | GET | `/api/networks` · POST `/api/networks` | List / save virtual networks |
 
 WebSocket proxies (not under `/api`): `/ws/vnc/<id>`, `/ws/spice/<id>`,
-`/ws/serial/<id>`.
+`/ws/serial/<id>`, and the encoded-video stream `/ws/video/<idx>`
+(docs/VIDEO-PIPELINE.md).
 
 ## vmrun CLI
 

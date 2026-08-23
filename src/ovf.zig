@@ -4,8 +4,8 @@
 //! Exports a VM as a standard OVF 1.0 directory: a `<name>.ovf` XML envelope
 //! plus a `<name>-disk1.vmdk` (produced by `qemu-img convert`). The XML is built
 //! here as pure string formatting so it can be unit-tested + fuzzed without any
-//! filesystem or qemu-img. The IO half (qemu-img convert + writeFile) lives in
-//! `web_server.zig` and calls `buildDescriptor`.
+//! filesystem or qemu-img. The IO half (qemu-img convert + streaming write)
+//! lives in `streams.zig` (`exportOva`) and calls `buildDescriptor`.
 
 const std = @import("std");
 

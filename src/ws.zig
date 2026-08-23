@@ -2,8 +2,9 @@
 //! WebSocket implementation for the embedded HTTP server.
 //!
 //! Provides upgrade handshake parsing and frame read/write.
-//! Used by the VNC WebSocket proxy to stream framebuffer data
-//! from QEMU's VNC server to browser clients.
+//! Used by the WebSocket relays (`wsproxy.zig` for VNC/SPICE/serial,
+//! `dbusdisplay.zig` for the encoded-video stream) to bridge browser
+//! clients to per-VM sockets.
 
 const std = @import("std");
 const c = std.c;

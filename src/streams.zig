@@ -1,6 +1,6 @@
-//! Connection-streaming HTTP handlers — responses written directly to the socket
-//! fd rather than returned as a token. Currently: screenshot (QMP screendump →
-//! PNG). disk2 download/upload and OVF export are candidates to move here too.
+//! Connection-streaming HTTP handlers — responses written directly to the
+//! socket fd rather than returned as a token: screenshot (QMP screendump →
+//! PNG), disk2 download/upload, and OVF export (`exportOva`).
 
 const std = @import("std");
 const c = std.c;

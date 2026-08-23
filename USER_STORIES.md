@@ -1,5 +1,12 @@
 # Hangar User Stories
 
+> **Historical / archived.** This document dates from the FLTK desktop-GUI era
+> (menu bar, toolbar, 800x500 main window, "Export VM as Script" — all removed).
+> The current frontends are `hangar-web` (web UI + remote daemon, see
+> `docs/DESIGN.md` for the HTTP API and keyboard shortcuts), the `vmrun` CLI,
+> and the `hangar-webui` WebView wrapper. Entries below describe removed UI and
+> are kept only for history; feature status lives in `docs/GAP-ANALYSIS.md`.
+
 Comprehensive user journey map covering every interaction path in the application.
 
 ---

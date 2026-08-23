@@ -64,7 +64,7 @@ Runtime config is read once in `web_server.main`. All variables are optional.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `KV_API_KEY` | `hangar` (built-in) | X-API-Key secret. **Setting it also opts the daemon into binding all interfaces (`::`).** With no key set, the daemon binds **loopback only** (`::ffff:127.0.0.1`, the IPv4-mapped loopback on its dual-stack socket) so the weak default is never reachable off-host. Must be 1–64 bytes; an invalid value aborts startup. Setting it to the built-in default value (`hangar`) is treated as unset — the daemon stays loopback-only rather than exposing all interfaces behind the known default. |
+| `KV_API_KEY` | `hangar` (built-in) | X-API-Key secret. **Setting it also opts the daemon into binding all interfaces (`::`).** With no key set, the daemon binds **loopback only** (`::ffff:127.0.0.1`, the IPv4-mapped loopback on its dual-stack socket) so the weak default is never reachable off-host. Must be 1–64 printable-ASCII bytes (no spaces or control characters); an invalid value aborts startup. Setting it to the built-in default value (`hangar`) is treated as unset — the daemon stays loopback-only rather than exposing all interfaces behind the known default. |
 | `KV_PORT` | `9080` | TCP listen port. Must parse as a non-zero `u16`; otherwise startup aborts. |
 | `HANGAR_CONFIG_HOME` | `$HOME` | Base dir for `~/.config/hangar/*` state (see Persistence). |
 

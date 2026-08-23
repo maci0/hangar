@@ -48,7 +48,11 @@ Alternatives rejected:
   video channels anyway.
 - KMS/DRM lease of the virtual scanout — host-config heavy, root-only.
 
-### Daemon-side encoder (new module `videoenc.zig` + `dbusdisplay.zig`)
+### Daemon-side encoder
+> Shipped differently than sketched here: there is no `videoenc.zig` — capture,
+> session lifecycle, and the encoder all live in `dbusdisplay.zig`, and encoding
+> is an **ffmpeg child**, not in-process EGL/VAAPI (see phase 2 below). The
+> original in-process design is kept for reference.
 - P2P D-Bus client (hand-rolled like our QMP client — the wire protocol is
   simple framing; **no** libdbus/glib per project constraints, or `sd-bus` via
   explicit extern decls if hand-rolling proves unreasonable).

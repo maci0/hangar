@@ -54,7 +54,7 @@ commit; run `zig build test` for the authoritative result.
 
 ## Web End-to-End
 
-The Playwright e2e suite is a standalone `zig build web-e2e` step, NOT part of `zig build test` (which stays hermetic), or run on its own:
+The Playwright e2e suite is a standalone `zig build web-e2e` step, NOT part of `zig build test` (which stays hermetic):
 
 ```bash
 zig build web-e2e      # Web UI end-to-end tests (Playwright, temp port + $HOME)
@@ -62,9 +62,11 @@ zig build web-e2e      # Web UI end-to-end tests (Playwright, temp port + $HOME)
 
 ## Web Backend Tests
 
+Standalone integration steps that spawn a real daemon:
+
 ```bash
-zig build web          # Build + launch web backend (HTTP on :9080)
-bash tests/test_web_api.sh  # Curl-based HTTP API validation
+zig build test-api     # HTTP API integration test (tests/test_web_api.sh)
+zig build test-vmrun   # vmrun CLI integration test (tests/test_vmrun.sh)
 ```
 
 ## Visual Tests
@@ -76,7 +78,7 @@ node tests/visual/e2e_web_screenshots.mjs   # Playwright screenshots — web UI 
 ## Running Tests
 
 ```bash
-zig build test         # All unit + fuzz tests + Playwright web E2E
+zig build test         # All unit + fuzz tests (hermetic; no network/browser)
 zig build web          # Build web backend
 zig build webui        # Build native WebView desktop wrapper
 ```
