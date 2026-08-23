@@ -608,8 +608,11 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
         return error.ExportFailed;
     };
 
-    const ovf_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.ovf", .{ dir_path, export_name });
-    defer std.heap.page_allocator.free(ovf_path);
+    var ovf_path_buf: [vm.MAX_PATH + 1]u8 = undefined;
+    const ovf_path = std.fmt.bufPrint(&ovf_path_buf, "{s}/{s}.ovf", .{ dir_path, export_name }) catch {
+        logErr("export: OVF path too long");
+        return error.ExportFailed;
+    };
     std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = ovf_path, .data = xml }) catch {
         logErr("export: failed to write OVF file");
         return error.ExportFailed;

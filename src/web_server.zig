@@ -123,6 +123,14 @@ extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 const MAX_CONNECTIONS: u32 = 256;
 var active_connections: u32 = 0;
 
+/// Grow-only spill buffer for `/api/vms` renders that overflow the per-request
+/// stack buffer. Reused across polls so a large library does not mmap, fault
+/// in, and free fresh pages on every 5-second UI refresh. Guarded by
+/// `vms_spill_mutex`, which must be held from the render through the response
+/// write so the bytes cannot be reallocated mid-flight.
+var vms_spill_mutex: sync.SpinMutex = .{};
+var vms_spill_buf: []u8 = &.{};
+
 
 const SIGPIPE: c_int = 13;
 const SIG_IGN: isize = 1;
@@ -586,6 +594,10 @@ fn serveHtml(conn: c.fd_t) void {
     var snap_buf: [4096]u8 = undefined;
     var response_alloc: ?[]u8 = null;
     defer if (response_alloc) |bytes| std.heap.page_allocator.free(bytes);
+    // Held while a /api/vms poll renders into (and writes from) the shared
+    // spill buffer, so its bytes cannot be reallocated mid-flight.
+    var spill_held = false;
+    defer if (spill_held) vms_spill_mutex.unlock();
 
     // Auth: check X-API-Key for mutating endpoints.
     // Match against the extracted path (not the raw request line) to prevent
@@ -661,8 +673,10 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "application/json; charset=utf-8";
         // Typical fleets fit the 32KB stack json_buf (~25 VMs at the per-VM
         // budget below), so the common /api/vms poll allocates nothing. Only
-        // large libraries spill to a heap buffer sized to the live VM count
-        // rather than always mmapping the MAX_VMS worst case.
+        // large libraries spill to a persistent grow-only buffer reused across
+        // polls: the UI refreshes every 5 seconds per tab, and mmapping fresh
+        // pages (then faulting them in and munmapping) on every poll is pure
+        // churn.
         // Snapshot vm_count under the lock: a concurrent add/delete could
         // otherwise tear this read and mis-size the buffer.
         const vm_count_snapshot = blk: {
@@ -671,11 +685,16 @@ fn serveHtml(conn: c.fd_t) void {
             break :blk appstate.vm_count;
         };
         const need = (vm_count_snapshot + 1) * 4096;
-        const vms_buf: []u8 = if (need > json_buf.len)
-            (std.heap.page_allocator.alloc(u8, need) catch &json_buf)
-        else
-            &json_buf;
-        if (vms_buf.len > json_buf.len) response_alloc = vms_buf;
+        var vms_buf: []u8 = &json_buf;
+        if (need > json_buf.len) {
+            vms_spill_mutex.lock();
+            spill_held = true;
+            if (vms_spill_buf.len < need) {
+                if (vms_spill_buf.len > 0) std.heap.page_allocator.free(vms_spill_buf);
+                vms_spill_buf = std.heap.page_allocator.alloc(u8, need) catch &.{};
+            }
+            if (vms_spill_buf.len >= need) vms_buf = vms_spill_buf;
+        }
         const json_bytes = vmrender.renderJson(vms_buf);
         response = if (json_bytes > 0) vms_buf[0..json_bytes] else "[]";
     } else if (routeExact(req, "GET /api/capabilities")) {

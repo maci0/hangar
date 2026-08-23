@@ -1,6 +1,6 @@
 # Accelerated Video Pipeline — Design
 
-Status: **phase 2 shipped** — end-to-end encoded video verified live: dbus capture → ffmpeg h264_vaapi on the host GPU → /ws/video → WebCodecs decode → overlay canvas painting the guest boot screen. Phase 3 partial: frame pacing + bitrate setting + e2e shipped; cursor channel, multi-client fan-out, and virgl/dmabuf capture remain.
+Status: **phases 1-3 shipped** — end-to-end encoded video verified live: dbus capture → ffmpeg h264_vaapi on the host GPU → /ws/video → WebCodecs decode → overlay canvas painting the guest boot screen. Phase 4 (polish) partial: frame pacing + bitrate setting + e2e shipped; cursor channel, multi-client fan-out, AV1, and virgl/dmabuf capture remain.
 Goal: stream the guest's GPU-rendered display to the browser as **encoded
 video** (H.264/AV1) decoded by **WebCodecs** and presented on the **WebGPU**
 canvas — Moonlight/Parsec-class console latency and quality, replacing

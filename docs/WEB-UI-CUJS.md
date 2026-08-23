@@ -302,72 +302,31 @@ guests.
   troubleshooting.
 - Mobile layout is usable: sidebar collapses, toolbar keeps key actions, and
   content no longer scrolls under the status row.
-- The browser smoke test covers basic launch, create, dialogs, settings,
-  snapshots, theme, clone, favorite, search, delete, and server health.
+- The Playwright e2e suite (`tests/e2e/`, `zig build web-e2e`) covers launch,
+  create/edit/delete/undo, dialogs, settings save, snapshots, theme, clone,
+  rename, search/filters, disk ops, export/import, networking, and server
+  health against the real built binary.
 
 ### Gaps To Address
 
-1. **Toolbar hierarchy is too flat.**
-   Routine, advanced, batch, and dangerous actions all compete in the same
-   toolbar. Workstation-style behavior should make Power On contextual and move
-   Reset, hard Power Off, Delete, batch actions, migration, import/export, and
-   lower-frequency tools behind grouped menus or a context menu.
+Re-verified against the current build (`src/web/app.js`, `src/web/index.html`);
+most gaps from the original review have since shipped:
 
-2. **Empty state needs action affordances.**
-   The empty Summary state explains selection, but it should also offer primary
-   actions: New VM, Import VM, and Catalog. This is the first-run path.
-
-3. **Settings are too field-list oriented.**
-   The current Settings tab exposes many fields in one long responsive grid.
-   That is powerful, but not Workstation-like. A device/category list with a
-   focused detail pane would make CPU, Memory, Disk, Display, Network, Firmware,
-   and Advanced hardware easier to reason about.
-
-4. **Power-state action availability should be stricter.**
-   Commands should disable or demote when irrelevant. For example, Resume should
-   be prominent only for paused VMs; Shut Down Guest should be unavailable for
-   stopped VMs; Reset should be guarded as destructive.
-
-5. **Running VM workspace should prioritize console.**
-   If a running VM has embedded display enabled, the display should appear as
-   the main workspace surface, with Summary still available but secondary. This
-   is closer to Workstation, where the selected running VM is primarily its
-   console.
-
-6. **Snapshot manager is functionally present but visually under-modeled.**
-   The current snapshot dialog lists names and buttons. It should show state,
-   timestamps when available, disabled/reasoned actions, and a clearer revert
-   warning.
-
-7. **Validation should move closer to fields.**
-   Several flows rely on toast/status/backend errors. Workstation-like behavior
-   should show inline validation for ports, display/GPU compatibility, MAC
-   format, disk paths, ISO paths, and running-VM restrictions.
-
-8. **Menus/context menu should carry advanced actions.**
-   The web UI has toolbar and shortcuts, but a VM manager benefits from a
-   selected-VM context menu matching the toolbar/VM menu: Power, Removable
-   Devices, Snapshot, Clone, Settings, Delete.
-
-9. **Display controls are still minimal.**
-   The renderer badge is good, but the console should also expose fit/actual
-   size, display-only, reconnect, send Ctrl+Alt+Del, and keyboard capture
-   status near the display surface.
-
-10. **Network UX needs VMnet mental model.**
-    The VNet editor exists, but Settings/Summary should present NAT, Bridged,
-    Host-only/VMnet in Workstation terms first, with QEMU/user-mode terms as
-    secondary detail.
+| # | Gap | Status |
+|---|-----|--------|
+| 1 | Flat toolbar hierarchy | ✅ Addressed: contextual primary action (`updateCommandState`), grouped action menus, overflow "More" popover |
+| 2 | Empty state lacks affordances | ✅ Addressed: New VM / Import VM / Catalog buttons in both empty states |
+| 3 | Field-list Settings tab | ✅ Addressed: two-pane layout with category nav (`settings-nav`) and focused detail pane |
+| 4 | Power-state action availability too loose | ✅ Addressed: `actionAllowed` / `disabledReason` gate every toolbar, menu, and context-menu item |
+| 5 | Running-VM workspace ignores console | ✅ Addressed: selecting a running embedded-display VM switches to the Console tab automatically |
+| 6 | Snapshot manager under-modeled | ✅ Addressed: timestamps, explicit running-state restrictions, revert confirmation, explained empty state |
+| 7 | Validation only via toasts/backend | ✅ Addressed: `validateNewVm` / `validateSettings` highlight invalid fields inline; HTML5 required/min/max/pattern constraints |
+| 8 | Advanced actions missing from menus | ✅ Addressed: context menu scoped to the selected VM carries the full action set |
+| 9 | Display controls minimal | ◐ Partial: Reconnect Display, Send Ctrl+Alt+Del, and display-only mode ship; fit/actual-size toggle and keyboard-capture indicator do not |
+| 10 | Network UX lacks VMnet mental model | ✅ Addressed: NAT/Bridged/VMnet labels lead, QEMU terms secondary |
 
 ### Recommended Next UI Work
 
-1. Rework toolbar into a contextual primary action plus grouped menus:
-   Power, Snapshot, Removable/Devices, Tools, More.
-2. Replace the flat Settings grid with a two-pane settings layout:
-   hardware/device list on the left, detail form on the right.
-3. Add first-run empty-state actions for New VM, Import VM, and Catalog.
-4. Promote display/console as the default selected view for running embedded
-   VMs, with Summary and Settings as tabs beside it.
-5. Add inline validation and disabled-action reasons for power, display/GPU,
-   ports, MAC, disk, and snapshot operations.
+1. Add display fit/actual-size controls and a keyboard-capture status indicator
+   near the display surface (gap 9).
 

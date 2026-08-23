@@ -1,25 +1,43 @@
 // SPDX-License-Identifier: MIT
 //! Physical host capacity (CPU core count + total RAM) for the dashboard's
 //! capacity-planning view: VM-allocated totals are only meaningful next to what
-//! the host actually has. Linux-only; read once per request (cheap).
+//! the host actually has. Linux-only. Both values are invariant at runtime
+//! (no CPU/RAM hotplug handling), so they are resolved once and cached; the
+//! dashboard polls this endpoint alongside the VM list.
 
 const std = @import("std");
 
+/// Resolved-once caches; 0 means "not yet resolved" (or last attempt failed,
+/// in which case we retry rather than pinning the failure).
+var cpu_cache: u32 = 0;
+var ram_cache: u32 = 0;
+
 /// Number of online CPUs the host exposes, or 0 if it can't be determined.
 pub fn cpuCount() u32 {
+    const cached = @atomicLoad(u32, &cpu_cache, .acquire);
+    if (cached != 0) return cached;
     const n = std.Thread.getCpuCount() catch return 0;
-    return @intCast(@min(n, std.math.maxInt(u32)));
+    if (n != 0) {
+        const v: u32 = @intCast(@min(n, std.math.maxInt(u32)));
+        @atomicStore(u32, &cpu_cache, v, .release);
+        return v;
+    }
+    return 0;
 }
 
 /// Total physical RAM in MiB parsed from /proc/meminfo, or 0 on any failure.
 pub fn totalRamMb() u32 {
+    const cached = @atomicLoad(u32, &ram_cache, .acquire);
+    if (cached != 0) return cached;
     var buf: [4096]u8 = undefined;
     const fd = std.c.open("/proc/meminfo", .{ .ACCMODE = .RDONLY });
     if (fd < 0) return 0;
     defer _ = std.c.close(fd);
     const n = std.c.read(fd, &buf, buf.len);
     if (n <= 0) return 0;
-    return parseMemTotalMb(buf[0..@intCast(n)]);
+    const mb = parseMemTotalMb(buf[0..@intCast(n)]);
+    if (mb != 0) @atomicStore(u32, &ram_cache, mb, .release);
+    return mb;
 }
 
 /// Parse the "MemTotal:    N kB" line of /proc/meminfo into MiB. Pure so it is
@@ -59,6 +77,12 @@ test "hostinfo: parseMemTotalMb returns 0 on absent/garbage" {
 
 test "hostinfo: cpuCount is positive on a real host" {
     try t.expect(cpuCount() > 0);
+}
+
+test "hostinfo: cached capacity stays stable across calls" {
+    // Second call must hit the cache and return the identical value.
+    try t.expectEqual(cpuCount(), cpuCount());
+    try t.expectEqual(totalRamMb(), totalRamMb());
 }
 
 test "fuzz: parseMemTotalMb never panics on random bytes" {
