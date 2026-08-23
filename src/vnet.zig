@@ -118,9 +118,6 @@ pub const VirtualNetwork = struct {
         setBuf(&self.name_buf, &self.name_len, s);
     }
 
-    pub fn getSubnet(self: *const VirtualNetwork) [*:0]const u8 {
-        return @ptrCast(&self.subnet_buf);
-    }
     pub fn getSubnetSlice(self: *const VirtualNetwork) []const u8 {
         return self.subnet_buf[0..self.subnet_len];
     }
@@ -128,9 +125,6 @@ pub const VirtualNetwork = struct {
         setBuf(&self.subnet_buf, &self.subnet_len, s);
     }
 
-    pub fn getMask(self: *const VirtualNetwork) [*:0]const u8 {
-        return @ptrCast(&self.mask_buf);
-    }
     pub fn getMaskSlice(self: *const VirtualNetwork) []const u8 {
         return self.mask_buf[0..self.mask_len];
     }
@@ -138,9 +132,6 @@ pub const VirtualNetwork = struct {
         setBuf(&self.mask_buf, &self.mask_len, s);
     }
 
-    pub fn getDhcpStart(self: *const VirtualNetwork) [*:0]const u8 {
-        return @ptrCast(&self.dhcp_start_buf);
-    }
     pub fn getDhcpStartSlice(self: *const VirtualNetwork) []const u8 {
         return self.dhcp_start_buf[0..self.dhcp_start_len];
     }
@@ -148,9 +139,6 @@ pub const VirtualNetwork = struct {
         setBuf(&self.dhcp_start_buf, &self.dhcp_start_len, s);
     }
 
-    pub fn getDhcpEnd(self: *const VirtualNetwork) [*:0]const u8 {
-        return @ptrCast(&self.dhcp_end_buf);
-    }
     pub fn getDhcpEndSlice(self: *const VirtualNetwork) []const u8 {
         return self.dhcp_end_buf[0..self.dhcp_end_len];
     }
@@ -158,9 +146,6 @@ pub const VirtualNetwork = struct {
         setBuf(&self.dhcp_end_buf, &self.dhcp_end_len, s);
     }
 
-    pub fn getHostIface(self: *const VirtualNetwork) [*:0]const u8 {
-        return @ptrCast(&self.host_iface_buf);
-    }
     pub fn getHostIfaceSlice(self: *const VirtualNetwork) []const u8 {
         return self.host_iface_buf[0..self.host_iface_len];
     }
@@ -814,11 +799,6 @@ test "VirtualNetwork: C-string (NUL-terminated) accessors" {
     n.setHostIface("eth0");
     n.setGateway("10.0.0.1");
     try testing.expectEqualStrings("VMnet5", std.mem.span(n.getName()));
-    try testing.expectEqualStrings("10.0.0.0", std.mem.span(n.getSubnet()));
-    try testing.expectEqualStrings("255.0.0.0", std.mem.span(n.getMask()));
-    try testing.expectEqualStrings("10.0.0.10", std.mem.span(n.getDhcpStart()));
-    try testing.expectEqualStrings("10.0.0.99", std.mem.span(n.getDhcpEnd()));
-    try testing.expectEqualStrings("eth0", std.mem.span(n.getHostIface()));
     try testing.expectEqualStrings("10.0.0.1", std.mem.span(n.getGateway()));
     // Each span length must equal the tracked slice length.
     try testing.expectEqual(n.getNameSlice().len, std.mem.span(n.getName()).len);

@@ -195,12 +195,6 @@ pub const SpiceClient = struct {
         return true;
     }
 
-    /// Get a pointer to the display pixel data (32-bit BGRA).
-    /// Prefer `lockFb`/`unlockFb` for thread-safe access.
-    pub fn getFb(self: *const SpiceClient) ?[*]const u8 {
-        return self.fb_data;
-    }
-
     /// Lock the framebuffer mutex and return a pointer to the pixel data.
     /// Format: 32-bit BGRA.  Caller MUST call `unlockFb` when done.
     pub fn lockFb(self: *SpiceClient) ?[*]const u8 {
@@ -392,7 +386,6 @@ test "spice: fresh client public API is safe (unconnected)" {
     var w: c_int = -1;
     var h: c_int = -1;
     try testing.expect(!cl.getSize(&w, &h)); // no fb yet
-    try testing.expect(cl.getFb() == null);
     _ = cl.checkDirty();
     cl.setInvalidateCb(null, null);
     cl.sendKey(0x1c, true); // guarded by inputs==null → no-op

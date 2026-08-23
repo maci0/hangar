@@ -281,21 +281,6 @@ pub const QmpClient = struct {
         self.connected = false;
     }
 
-    /// Query VM status.  Returns the status string (e.g. "running", "paused")
-    /// in the caller-provided output buffer.
-    pub fn queryStatus(self: *QmpClient, out: []u8) ![]const u8 {
-        if (!self.connected) return error.ConnectionFailed;
-
-        try self.writeAll("{\"execute\": \"query-status\"}\n");
-
-        const resp = try self.readResponse();
-        if (std.mem.indexOf(u8, resp, "\"error\"") != null) {
-            return error.CommandFailed;
-        }
-
-        return extractJsonString(resp, "status", out);
-    }
-
     /// Suspend VM state to a file.
     pub fn suspendToFile(self: *QmpClient, path: []const u8) !void {
         var hmp_buf: [vm.MAX_PATH + 128]u8 = undefined;
@@ -312,14 +297,6 @@ pub const QmpClient = struct {
         var out: [1024]u8 = undefined;
         const result = try self.execHmp(hmp_cmd, &out);
         if (hmpReportedError(result)) return error.CommandFailed;
-    }
-
-    /// Poll migration status via HMP `info migrate`.
-    /// Returns true when migration has completed.
-    pub fn isMigrateComplete(self: *QmpClient) !bool {
-        var out: [2048]u8 = undefined;
-        const result = try self.execHmp("info migrate", &out);
-        return std.mem.indexOf(u8, result, "completed") != null;
     }
 
     /// Block until migration finishes or timeout (30s).
@@ -448,11 +425,6 @@ pub const QmpClient = struct {
     /// Create an internal snapshot (VM must have a qcow2 disk).
     pub fn saveSnapshot(self: *QmpClient, name: []const u8) !void {
         return self.execSnapshotHmp("savevm", name);
-    }
-
-    /// Load (restore) an internal snapshot.
-    pub fn loadSnapshot(self: *QmpClient, name: []const u8) !void {
-        return self.execSnapshotHmp("loadvm", name);
     }
 
     /// Delete an internal snapshot.
@@ -1117,17 +1089,14 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
         client.cont() catch {};
         client.powerdown() catch {};
         client.systemReset() catch {};
-        _ = client.queryStatus(&out) catch {};
         _ = client.listSnapshots(&out) catch {};
         client.saveSnapshot("snap") catch {};
-        client.loadSnapshot("snap") catch {};
         client.deleteSnapshot("snap") catch {};
         client.sendCtrlAltDel() catch {};
         client.changeCdrom("/tmp/x.iso") catch {};
         client.ejectCdrom() catch {};
         client.suspendToFile("/tmp/x.state") catch {};
         _ = client.queryMigrateStatus(&out) catch {};
-        _ = client.isMigrateComplete() catch {};
         client.liveMigrate("tcp:localhost:4444") catch {};
         client.cancelMigrate() catch {};
         client.quit() catch {};

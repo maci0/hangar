@@ -1330,11 +1330,6 @@ pub const VmConfig = struct {
 
     // ── NIC accessors (delegate to nics[i]) ──────────────────────
 
-    /// Returns the MAC address of NIC 0 as a null-terminated C string pointer.
-    pub fn getMacAddress(self: *const VmConfig) [*:0]const u8 {
-        return @ptrCast(&self.nics[0].mac_buf);
-    }
-
     /// Returns the MAC address of NIC 0 as a Zig slice.
     pub fn getMacAddressSlice(self: *const VmConfig) []const u8 {
         return self.nics[0].mac_buf[0..self.nics[0].mac_len];
@@ -1348,17 +1343,7 @@ pub const VmConfig = struct {
         self.nics[0].mac_len = len;
     }
 
-    /// Clears the MAC address of NIC 0 (resets to empty).
-    pub fn clearMacAddress(self: *VmConfig) void {
-        self.nics[0].mac_buf[0] = 0;
-        self.nics[0].mac_len = 0;
-    }
-
     // ── Notes accessors ──────────────────────────────────────────
-
-    pub fn getNotes(self: *const VmConfig) [*:0]const u8 {
-        return @ptrCast(&self.notes_buf);
-    }
 
     pub fn getNotesSlice(self: *const VmConfig) []const u8 {
         return self.notes_buf[0..self.notes_len];
@@ -1438,11 +1423,6 @@ pub const VmConfig = struct {
         return self.cloud_init_len > 0;
     }
 
-    pub fn clearNotes(self: *VmConfig) void {
-        self.notes_buf[0] = 0;
-        self.notes_len = 0;
-    }
-
     // ── Port Forwarding accessors ────────────────────────────────
 
     pub fn getPortForwards(self: *const VmConfig) [*:0]const u8 {
@@ -1466,10 +1446,6 @@ pub const VmConfig = struct {
     }
 
     // ── Saved State accessors ────────────────────────────────────
-
-    pub fn getSavedStatePath(self: *const VmConfig) [*:0]const u8 {
-        return @ptrCast(&self.saved_state_path_buf);
-    }
 
     pub fn getSavedStatePathSlice(self: *const VmConfig) []const u8 {
         return self.saved_state_path_buf[0..self.saved_state_path_len];
@@ -1504,11 +1480,6 @@ pub const VmConfig = struct {
         self.shared_folder_len = len;
     }
 
-    pub fn clearSharedFolder(self: *VmConfig) void {
-        self.shared_folder_buf[0] = 0;
-        self.shared_folder_len = 0;
-    }
-
     pub fn hasSharedFolder(self: *const VmConfig) bool {
         return self.shared_folder_len > 0;
     }
@@ -1528,11 +1499,6 @@ pub const VmConfig = struct {
         @memcpy(self.disk2_path_buf[0..len], s[0..len]);
         self.disk2_path_buf[len] = 0;
         self.disk2_path_len = len;
-    }
-
-    pub fn clearDisk2Path(self: *VmConfig) void {
-        self.disk2_path_buf[0] = 0;
-        self.disk2_path_len = 0;
     }
 
     pub fn hasDisk2(self: *const VmConfig) bool {
@@ -1582,28 +1548,17 @@ pub const VmConfig = struct {
         self.usb_device_len = len;
     }
 
-    pub fn clearUsbDevice(self: *VmConfig) void {
-        self.usb_device_buf[0] = 0;
-        self.usb_device_len = 0;
-    }
-
     pub fn hasUsbDevice(self: *const VmConfig) bool {
         return self.usb_device_len > 0;
     }
 
     // ── Additional NIC accessors ─────────────────────────────────
 
-    pub fn getNic2Mac(self: *const VmConfig) [*:0]const u8 {
-        return @ptrCast(&self.nics[1].mac_buf);
-    }
     pub fn getNic2MacSlice(self: *const VmConfig) []const u8 {
         return self.nics[1].mac_buf[0..self.nics[1].mac_len];
     }
     pub fn setNic2Mac(self: *VmConfig, s: []const u8) void {
         self.setNicMacAny(1, s);
-    }
-    pub fn getNic3Mac(self: *const VmConfig) [*:0]const u8 {
-        return @ptrCast(&self.nics[2].mac_buf);
     }
     pub fn getNic3MacSlice(self: *const VmConfig) []const u8 {
         return self.nics[2].mac_buf[0..self.nics[2].mac_len];
@@ -1651,10 +1606,6 @@ pub const VmConfig = struct {
         @memcpy(self.floppy_path_buf[0..len], s[0..len]);
         self.floppy_path_buf[len] = 0;
         self.floppy_path_len = len;
-    }
-    pub fn clearFloppyPath(self: *VmConfig) void {
-        self.floppy_path_buf[0] = 0;
-        self.floppy_path_len = 0;
     }
     pub fn hasFloppy(self: *const VmConfig) bool {
         return self.floppy_path_len > 0;
@@ -1906,11 +1857,6 @@ test "VmConfig: mac address round-trip" {
     cfg.setMacAddress("00:11:22:33:44:55");
     try std.testing.expect(cfg.hasMacAddress());
     try std.testing.expectEqualStrings("00:11:22:33:44:55", cfg.getMacAddressSlice());
-    try std.testing.expectEqualStrings("00:11:22:33:44:55", std.mem.span(cfg.getMacAddress()));
-
-    cfg.clearMacAddress();
-    try std.testing.expect(!cfg.hasMacAddress());
-    try std.testing.expectEqual(@as(usize, 0), cfg.getMacAddressSlice().len);
 }
 
 test "setNicVnetAny/getNicVnetSliceAny: round-trip, bounds, out-of-range no-op" {
@@ -2662,11 +2608,6 @@ test "VmConfig: notes round-trip" {
     cfg.setNotes("Test notes\nLine 2");
     try std.testing.expect(cfg.hasNotes());
     try std.testing.expectEqualStrings("Test notes\nLine 2", cfg.getNotesSlice());
-    try std.testing.expectEqualStrings("Test notes\nLine 2", std.mem.span(cfg.getNotes()));
-
-    cfg.clearNotes();
-    try std.testing.expect(!cfg.hasNotes());
-    try std.testing.expectEqual(@as(usize, 0), cfg.getNotesSlice().len);
 }
 
 test "VmConfig: port forwards round-trip" {
@@ -2689,7 +2630,6 @@ test "VmConfig: saved state path round-trip" {
     cfg.setSavedStatePath("/tmp/vm.state");
     try std.testing.expect(cfg.hasSavedState());
     try std.testing.expectEqualStrings("/tmp/vm.state", cfg.getSavedStatePathSlice());
-    try std.testing.expectEqualStrings("/tmp/vm.state", std.mem.span(cfg.getSavedStatePath()));
 
     cfg.clearSavedStatePath();
     try std.testing.expect(!cfg.hasSavedState());
@@ -2842,9 +2782,6 @@ test "VmConfig: shared folder get/set/clear/has" {
     try std.testing.expect(cfg.hasSharedFolder());
     try std.testing.expectEqualStrings("/mnt/share", cfg.getSharedFolderSlice());
     try std.testing.expectEqualStrings("/mnt/share", std.mem.span(cfg.getSharedFolder()));
-    cfg.clearSharedFolder();
-    try std.testing.expect(!cfg.hasSharedFolder());
-    try std.testing.expectEqual(@as(usize, 0), cfg.getSharedFolderSlice().len);
 }
 
 test "VmConfig: disk2 get/set/clear/has" {
@@ -2854,8 +2791,6 @@ test "VmConfig: disk2 get/set/clear/has" {
     try std.testing.expect(cfg.hasDisk2());
     try std.testing.expectEqualStrings("/tmp/data.qcow2", cfg.getDisk2PathSlice());
     try std.testing.expectEqualStrings("/tmp/data.qcow2", std.mem.span(cfg.getDisk2Path()));
-    cfg.clearDisk2Path();
-    try std.testing.expect(!cfg.hasDisk2());
 }
 
 test "VmConfig: usb device get/set/clear/has" {
@@ -2865,8 +2800,6 @@ test "VmConfig: usb device get/set/clear/has" {
     try std.testing.expect(cfg.hasUsbDevice());
     try std.testing.expectEqualStrings("1234:5678", cfg.getUsbDeviceSlice());
     try std.testing.expectEqualStrings("1234:5678", std.mem.span(cfg.getUsbDevice()));
-    cfg.clearUsbDevice();
-    try std.testing.expect(!cfg.hasUsbDevice());
 }
 
 test "VmConfig: floppy get/set/clear/has" {
@@ -2876,8 +2809,6 @@ test "VmConfig: floppy get/set/clear/has" {
     try std.testing.expect(cfg.hasFloppy());
     try std.testing.expectEqualStrings("/tmp/boot.img", cfg.getFloppyPathSlice());
     try std.testing.expectEqualStrings("/tmp/boot.img", std.mem.span(cfg.getFloppyPath()));
-    cfg.clearFloppyPath();
-    try std.testing.expect(!cfg.hasFloppy());
 }
 
 test "VmConfig: nic2/nic3 MAC get/set" {
@@ -2885,9 +2816,7 @@ test "VmConfig: nic2/nic3 MAC get/set" {
     cfg.setNic2Mac("AA:BB:CC:DD:EE:01");
     cfg.setNic3Mac("AA:BB:CC:DD:EE:02");
     try std.testing.expectEqualStrings("AA:BB:CC:DD:EE:01", cfg.getNic2MacSlice());
-    try std.testing.expectEqualStrings("AA:BB:CC:DD:EE:01", std.mem.span(cfg.getNic2Mac()));
     try std.testing.expectEqualStrings("AA:BB:CC:DD:EE:02", cfg.getNic3MacSlice());
-    try std.testing.expectEqualStrings("AA:BB:CC:DD:EE:02", std.mem.span(cfg.getNic3Mac()));
 }
 
 test "fuzz: nic2/nic3 + secondary string setters clamp and stay NUL-terminated" {

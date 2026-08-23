@@ -862,7 +862,8 @@ fn skipJsonValue(s: []const u8) []const u8 {
                 }
                 i += 1;
             }
-            return cur[i..];
+            // A trailing backslash inside a string can push i past cur.len; clamp.
+            return cur[@min(i, cur.len)..];
         },
         '[' => {
             // Skip array — count brackets
@@ -881,7 +882,8 @@ fn skipJsonValue(s: []const u8) []const u8 {
                 }
                 i += 1;
             }
-            return cur[i..];
+            // A trailing backslash inside a string can push i past cur.len; clamp.
+            return cur[@min(i, cur.len)..];
         },
         else => {
             // number, bool, null — skip until delimiter
@@ -2881,6 +2883,14 @@ test "skipJsonValue: skips number/bool/null to delimiter" {
     try std.testing.expectEqualStrings(",next", skipJsonValue("123.45,next"));
     try std.testing.expectEqualStrings("}", skipJsonValue("true}"));
     try std.testing.expectEqualStrings("]", skipJsonValue("null]"));
+}
+
+test "skipJsonValue: trailing backslash at buffer end does not overrun" {
+    // A string with a backslash as the final byte (truncated input) used to push
+    // the scan index past the buffer, panicking on the final cur[i..] slice.
+    // Object and array forms both walk strings; assert no panic and an empty rest.
+    try std.testing.expectEqualStrings("", skipJsonValue("{\"a\":\"\\"));
+    try std.testing.expectEqualStrings("", skipJsonValue("[\"\\"));
 }
 
 test "parseVmObject: missing colon between key and value skips" {

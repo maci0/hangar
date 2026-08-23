@@ -4,7 +4,7 @@
 //! These functions map UI label strings (case-insensitive) to their corresponding
 //! enum values. All functions are pure: no I/O, no global state.
 //!
-//! Also includes parseU32OrDefault and themeFromIndex.
+//! Also includes parseU32OrDefault.
 
 const std = @import("std");
 const vm = @import("vm.zig");
@@ -13,17 +13,6 @@ const vm = @import("vm.zig");
 /// Delegates to vm.DiskFormat.fromStr (case-insensitive).
 pub fn parseDiskFormat(s: []const u8) vm.DiskFormat {
     return vm.DiskFormat.fromStr(s);
-}
-
-/// Map a file extension (without dot) to a DiskFormat enum.
-/// Delegates to vm.DiskFormat.fromExtension — kept for backward compatibility.
-pub fn diskFormatFromExtension(ext: []const u8) vm.DiskFormat {
-    // fromExtension expects a path containing a dot; prepend a dummy stem.
-    if (ext.len == 0) return vm.DiskFormat.fromExtension("");
-    // Use a stack buffer to prepend "x." so fromExtension can find the extension.
-    var buf: [64]u8 = undefined;
-    const path = std.fmt.bufPrint(&buf, "x.{s}", .{ext}) catch return .qcow2;
-    return vm.DiskFormat.fromExtension(path);
 }
 
 /// Parse a NIC mode label ("bridged", "none") into a NetworkMode enum.
@@ -109,11 +98,6 @@ pub fn parseAudio(s: []const u8) vm.AudioDevice {
     return vm.AudioDevice.fromStr(s);
 }
 
-/// Map a theme choice index (0 or 1) to a Theme enum.
-pub fn themeFromIndex(idx: u8) vm.Theme {
-    return if (idx == 1) .dark else .light;
-}
-
 /// Parse a string as u32, returning a default on failure or empty input.
 /// Used for numeric form fields (mem, cpu, ap_interval, ap_max).
 pub fn parseU32OrDefault(input: []const u8, default: u32) u32 {
@@ -146,19 +130,6 @@ test "parseDiskFormat: unknown defaults to qcow2" {
     try std.testing.expectEqual(vm.DiskFormat.qcow2, parseDiskFormat("unknown"));
     try std.testing.expectEqual(vm.DiskFormat.qcow2, parseDiskFormat(""));
     try std.testing.expectEqual(vm.DiskFormat.qcow2, parseDiskFormat("foo"));
-}
-
-test "diskFormatFromExtension: known extensions" {
-    try std.testing.expectEqual(vm.DiskFormat.qcow2, diskFormatFromExtension("qcow2"));
-    try std.testing.expectEqual(vm.DiskFormat.vmdk, diskFormatFromExtension("vmdk"));
-    try std.testing.expectEqual(vm.DiskFormat.vdi, diskFormatFromExtension("vdi"));
-    try std.testing.expectEqual(vm.DiskFormat.raw, diskFormatFromExtension("raw"));
-    try std.testing.expectEqual(vm.DiskFormat.raw, diskFormatFromExtension("img"));
-}
-
-test "diskFormatFromExtension: unknown defaults to qcow2" {
-    try std.testing.expectEqual(vm.DiskFormat.qcow2, diskFormatFromExtension("iso"));
-    try std.testing.expectEqual(vm.DiskFormat.qcow2, diskFormatFromExtension(""));
 }
 
 test "parseNicMode: known modes" {
@@ -272,10 +243,6 @@ test "parseAudio: hda, ac97, none" {
     try std.testing.expectEqual(vm.AudioDevice.none, parseAudio("sb16"));
 }
 
-test "themeFromIndex: 0→light, 1→dark" {
-    try std.testing.expectEqual(vm.Theme.light, themeFromIndex(0));
-    try std.testing.expectEqual(vm.Theme.dark, themeFromIndex(1));
-}
 
 test "parseAccel: known accelerators" {
     try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("auto"));
@@ -375,7 +342,6 @@ test "fuzz: all parsers consistency — never panic, return valid enum indices" 
         // arbitrary input — a parser that fell back to an out-of-range
         // @enumFromInt would corrupt config silently, so assert it here.
         try std.testing.expect(@intFromEnum(parseDiskFormat(s)) < vm.DiskFormat.count);
-        try std.testing.expect(@intFromEnum(diskFormatFromExtension(s)) < vm.DiskFormat.count);
         try std.testing.expect(@intFromEnum(parseNicMode(s)) < vm.NetworkMode.count);
         try std.testing.expect(@intFromEnum(parseGuestOs(s)) < vm.GuestOs.count);
         try std.testing.expect(@intFromEnum(parseBootOrder(s)) < vm.BootOrder.count);
@@ -385,7 +351,6 @@ test "fuzz: all parsers consistency — never panic, return valid enum indices" 
         try std.testing.expect(@intFromEnum(parseGpuDevice(s)) < vm.GpuDevice.count);
         try std.testing.expect(@intFromEnum(parseAudio(s)) < vm.AudioDevice.count);
         try std.testing.expect(@intFromEnum(parseAccel(s)) < vm.VmAccel.count);
-        try std.testing.expect(@intFromEnum(themeFromIndex(@intCast(rnd.uintLessThan(u8, 4)))) < vm.Theme.count);
         _ = parseU32OrDefault(s, rnd.int(u32));
     }
 }

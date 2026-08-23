@@ -329,14 +329,6 @@ pub fn writeClose(fd: c.fd_t) !void {
     _ = c.write(fd, &buf, 4);
 }
 
-/// Write a WebSocket ping frame (heartbeat).
-pub fn writePing(fd: c.fd_t) !void {
-    var buf: [2]u8 = undefined;
-    buf[0] = 0x89; // FIN + ping
-    buf[1] = 0; // no payload
-    _ = c.write(fd, &buf, 2);
-}
-
 /// Write a WebSocket pong frame (reply to client ping).
 pub fn writePong(fd: c.fd_t) !void {
     var buf: [2]u8 = undefined;
@@ -580,7 +572,7 @@ test "writeClose: frame encoding" {
     try std.testing.expectEqual(@as(u16, 1000), std.mem.readInt(u16, buf[2..4], .big)); // 1000 = normal
 }
 
-test "writePing/writePong: frame encoding" {
+test "writePong: frame encoding" {
     try std.testing.expectEqual(@as(u8, 0x89), 0x80 | @as(u8, @intFromEnum(Opcode.ping))); // FIN+Ping
     try std.testing.expectEqual(@as(u8, 0x8a), 0x80 | @as(u8, @intFromEnum(Opcode.pong))); // FIN+Pong
 }
