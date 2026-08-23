@@ -97,7 +97,25 @@ pub fn requestedProtocol(req: []const u8) ?[]const u8 {
     if (std.mem.indexOfScalar(u8, first, ',')) |comma| first = first[0..comma];
     first = std.mem.trim(u8, first, " \t");
     if (first.len == 0 or first.len > 64) return null;
+    // The value is echoed verbatim into the 101 response header, so it must be
+    // an RFC 7230 token: this is the only byte class that cannot smuggle CR,
+    // a bare LF, a NUL, or a separator into the response (CWE-113 header
+    // injection). Browsers and every client we serve send plain tokens; an
+    // off-spec value simply loses the echo.
+    for (first) |ch| {
+        if (!isTokenChar(ch)) return null;
+    }
     return first;
+}
+
+/// True if `ch` is an RFC 7230 token character (tchar): the bytes allowed in
+/// a header token such as a WebSocket subprotocol name.
+fn isTokenChar(ch: u8) bool {
+    return switch (ch) {
+        '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~' => true,
+        '0'...'9', 'A'...'Z', 'a'...'z' => true,
+        else => false,
+    };
 }
 
 /// Format the HTTP 101 Switching Protocols response for a WebSocket upgrade,
@@ -468,6 +486,20 @@ test "requestedProtocol: extracts first token, trims, null when absent" {
     try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nHost: x\r\n\r\n") == null);
 }
 
+test "requestedProtocol: header-injection bytes are rejected (CWE-113)" {
+    // The value is echoed into a response header, so a bare LF (which CR-only
+    // extraction does not stop), a CR-adjacent payload, a NUL, and separator
+    // bytes must all yield null — no control byte may reach the 101 response.
+    try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: x\nEvil: 1\r\n\r\n") == null);
+    try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: x\x00y\r\n\r\n") == null);
+    try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: a b\r\n\r\n") == null);
+    try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: a\"b\r\n\r\n") == null);
+    try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: a{b}\r\n\r\n") == null);
+    // Every RFC 7230 tchar still passes.
+    try std.testing.expectEqualStrings("!#$%&'*+-.^_`|~", requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: !#$%&'*+-.^_`|~\r\n\r\n").?);
+    try std.testing.expectEqualStrings("vnc.2-b", requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: vnc.2-b\r\n\r\n").?);
+}
+
 test "formatUpgradeResponse: echoes the requested subprotocol (RFC 6455)" {
     const req = "GET /ws/spice/0 HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: binary\r\n\r\n";
     const accept = parseUpgrade(req).?;
@@ -489,6 +521,35 @@ test "fuzz: formatUpgradeResponse output is printable HTTP for random accept key
         const resp = try formatUpgradeResponse(&buf, key, null);
         try std.testing.expect(std.mem.endsWith(u8, resp, "\r\n\r\n"));
         for (resp) |rb| try std.testing.expect(fuzzByteIsPrintable(rb));
+    }
+}
+
+test "fuzz: echoed subprotocol never injects a header break (CWE-113)" {
+    // Boundary: whatever the request bytes, formatUpgradeResponse's output must
+    // keep every LF CRLF-preceded and every CR LF-followed — i.e. the only line
+    // breaks are the ones the formatter itself wrote — so an injected value can
+    // never add or terminate header lines.
+    var prng = std.Random.DefaultPrng.init(0x113_CAFE);
+    const rnd = prng.random();
+    const alpha = "Sec-WebSocket-Protocol: ,\r\n \txyAB09!#'*-.^_`|~\"\\<>:";
+    var req: [160]u8 = undefined;
+    var i: usize = 0;
+    while (i < 8000) : (i += 1) {
+        const n = rnd.uintLessThan(usize, req.len);
+        for (req[0..n]) |*b| b.* = if (rnd.boolean()) alpha[rnd.uintLessThan(usize, alpha.len)] else rnd.int(u8);
+        const proto = requestedProtocol(req[0..n]);
+        if (proto) |p| {
+            for (p) |b| try std.testing.expect(isTokenChar(b));
+        }
+        var buf: [384]u8 = undefined;
+        var key: [29]u8 = undefined;
+        @memset(key[0..28], 'A');
+        key[28] = 0;
+        const resp = formatUpgradeResponse(&buf, key, proto) catch continue;
+        for (resp, 0..) |b, j| {
+            if (b == '\n') try std.testing.expect(j > 0 and resp[j - 1] == '\r');
+            if (b == '\r') try std.testing.expect(j + 1 < resp.len and resp[j + 1] == '\n');
+        }
     }
 }
 
