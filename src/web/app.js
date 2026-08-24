@@ -544,7 +544,7 @@ async function editVm(){if(sel===null)return;if(activeTab==='settings'&&settings
 const v=vms[sel];
 var tb=document.getElementById('tabBar');var nm=document.getElementById('vmname');if(tb)tb.style.display='flex';if(nm)nm.textContent=v.name;
 const fields=[
-{s:'Basic'},['Name','e_name','text',v.name||'','required maxlength="128"'],['Guest OS','e_guest_os','select',v.guest_os||0],
+{s:'Basic'},['Name','e_name','text',v.name||'','required maxlength="80"'],['Guest OS','e_guest_os','select',v.guest_os||0],
 ['Memory (MB)','e_mem','number',v.mem||2048,'required min="128" max="65536" step="1"'],['CPU Cores','e_cpu','number',v.cpu||2,'required min="1" max="256" step="1"'],
 ['CPU Sockets','e_cpu_sockets','number',v.cpu_sockets||1,'min="1" max="64" step="1"'],
 ['CPU Model','e_cpu_model','select',v.cpu_model||'host'],

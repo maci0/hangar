@@ -1646,6 +1646,19 @@ fn handleQuickstart(req: []const u8) ![]const u8 {
     return "ok";
 }
 
+/// Trim a source VM name so appending the longest clone suffix
+/// (" (clone N)", N < 1000) still fits within `vm.MAX_SOCKET_SAFE_NAME` —
+/// clone names derive their own `/tmp` socket paths, which must stay inside
+/// sockaddr_un's `sun_path` (see `vm.MAX_SOCKET_SAFE_NAME`). Pure; returns a
+/// slice of `buf`, or `base` itself when no trim is needed.
+fn cloneBaseName(base: []const u8, buf: []u8) []const u8 {
+    const max_base = vm.MAX_SOCKET_SAFE_NAME - " (clone 999)".len;
+    if (base.len <= max_base) return base;
+    const n = @min(max_base, buf.len);
+    @memcpy(buf[0..n], base[0..n]);
+    return buf[0..n];
+}
+
 fn handleClone(req: []const u8) ![]const u8 {
     // Hold the lock across the whole operation. The VMM handle captured below
     // points at heap memory a concurrent delete/suspend can free the moment the
@@ -1660,13 +1673,14 @@ fn handleClone(req: []const u8) ![]const u8 {
     const src = &appstate.vms[idx];
     var name_buf: [320]u8 = undefined;
     const base = clone.getNameSlice();
-    var cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{base}) catch return "nameerr";
+    var base_buf: [vm.MAX_NAME]u8 = undefined;
+    var cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone)", .{cloneBaseName(base, &base_buf)}) catch return "nameerr";
     // Avoid colliding with an existing "<name> (clone)" — names derive temp
     // socket/log paths, so duplicates must not happen.
     if (nameTaken(cn, null)) {
         var n: u32 = 2;
         while (n < 1000) : (n += 1) {
-            cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone {d})", .{ base, n }) catch return "nameerr";
+            cn = std.fmt.bufPrintZ(&name_buf, "{s} (clone {d})", .{ cloneBaseName(base, &base_buf), n }) catch return "nameerr";
             if (!nameTaken(cn, null)) break;
         }
     }
@@ -3739,6 +3753,25 @@ test "fuzz: sanitizeSlug stays bounded, non-empty, and shell-safe" {
             try std.testing.expect(safe);
         }
     }
+}
+
+test "cloneBaseName: short names pass through unchanged" {
+    var out: [vm.MAX_NAME]u8 = undefined;
+    const got = cloneBaseName("web", &out);
+    try std.testing.expectEqualStrings("web", got);
+}
+
+test "cloneBaseName: trims long names so the clone suffix fits sun_path" {
+    var out: [vm.MAX_NAME]u8 = undefined;
+    const long = "a" ** vm.MAX_SOCKET_SAFE_NAME;
+    const base = cloneBaseName(long, &out);
+    // Worst-case suffix " (clone 999)" + trimmed base stays within the cap.
+    try std.testing.expect(base.len <= vm.MAX_SOCKET_SAFE_NAME - " (clone 999)".len);
+    try std.testing.expectEqualStrings(long[0..base.len], base);
+    var name_buf: [320]u8 = undefined;
+    const cn = try std.fmt.bufPrintZ(&name_buf, "{s} (clone 999)", .{base});
+    try std.testing.expect(cn.len <= vm.MAX_SOCKET_SAFE_NAME);
+    try std.testing.expect(vm.isValidVmName(std.mem.sliceTo(cn, 0)));
 }
 
 test "writeAll: writes exact bytes to fd via pipe" {

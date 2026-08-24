@@ -245,7 +245,7 @@
     <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">New Virtual Machine</h3>
     <div style="padding:16px 20px">
       <label for="n_name">Name <span class="req" aria-hidden="true">*</span></label>
-      <input id="n_name" type="text" required aria-required="true" maxlength="128" style="width:100%;margin:4px 0 12px">
+      <input id="n_name" type="text" required aria-required="true" maxlength="80" style="width:100%;margin:4px 0 12px">
       <div class="field-error" id="err_n_name" aria-live="polite"></div>
       <label for="n_mem">Memory (MB)</label>
       <input id="n_mem" type="number" value="2048" min="128" max="65536" step="1" style="width:100%;margin:4px 0 12px">
@@ -280,7 +280,7 @@
     <div class="field-error" id="err_imp_path" aria-live="polite"></div>
     <p class="muted" style="margin:2px 0 12px;font-size:11px">Supported: .qcow2, .qcow, .vmdk, .vdi, .vhdx, .raw, .img</p>
     <label for="imp_name">VM Name <span class="muted">(optional — defaults to the file name)</span></label>
-    <input id="imp_name" type="text" maxlength="128" style="width:100%;margin:4px 0 12px">
+    <input id="imp_name" type="text" maxlength="80" style="width:100%;margin:4px 0 12px">
   </div>
   <div class="btn-row">
     <button type="button" class="btn" data-action="closeDlg" data-dialog="importdlg">Cancel</button>

@@ -1724,11 +1724,21 @@ pub fn generateMacAddress(buf: *[18]u8) [*:0]const u8 {
 
 // ── Input validation helpers ─────────────────────────────────────────
 
+/// Longest VM name that keeps every derived per-VM `/tmp` socket path inside
+/// sockaddr_un's 108-byte `sun_path`. The longest derived prefix is
+/// "/tmp/hangar-serial-" (19) + name + ".sock" (5), so longer names pass
+/// creation yet fail to bind their QMP/serial/guest-agent sockets at power-on.
+/// Cloning appends " (clone)" / " (clone N)", so interactive creation caps
+/// further below this (see web_server.handleClone).
+pub const MAX_SOCKET_SAFE_NAME: usize = 80;
+
 /// Returns true if `name` is safe to use as a VM name (no path separators,
-/// no control characters, not empty after trimming).
+/// no control characters, not empty after trimming, short enough that the
+/// derived `/tmp` socket paths fit sockaddr_un's `sun_path`).
 pub fn isValidVmName(name: []const u8) bool {
     const trimmed = std.mem.trim(u8, name, " \t\r\n");
     if (trimmed.len == 0) return false;
+    if (trimmed.len > MAX_SOCKET_SAFE_NAME) return false;
     for (trimmed) |c| {
         // Reject path separators and NUL (path traversal in the /tmp socket and
         // log paths derived from the name). Reject ',' and control bytes: the
@@ -3021,6 +3031,14 @@ test "isValidVmName: rejects path separators and empty names" {
     try std.testing.expect(!isValidVmName("evil,logfile=/tmp/x"));
     try std.testing.expect(!isValidVmName("name\nwith-newline"));
     try std.testing.expect(!isValidVmName("name\twith-tab"));
+}
+
+test "isValidVmName: rejects names whose /tmp socket paths would exceed sun_path" {
+    // Exactly at the cap: "/tmp/hangar-serial-" + 80 + ".sock" = 104 < 108.
+    const at_cap = "a" ** MAX_SOCKET_SAFE_NAME;
+    try std.testing.expect(isValidVmName(at_cap));
+    // One over: the serial socket path would not fit sockaddr_un.sun_path.
+    try std.testing.expect(!isValidVmName(at_cap ++ "a"));
 }
 
 test "isValidMac: validates MAC format" {
