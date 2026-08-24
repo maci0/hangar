@@ -8,13 +8,11 @@
     "e2e:install": "playwright install chromium"
   },
   "devDependencies": {
-    "@playwright/test": "^1.49.1"
-  },
-  "dependencies": {
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/addon-webgl": "^0.19.0",
-    "@xterm/xterm": "^6.0.0",
-    "elkjs": "^0.11.1",
-    "vanjs-core": "^1.6.0"
+    "@playwright/test": "^1.49.1",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/xterm": "6.0.0",
+    "elkjs": "0.11.1",
+    "vanjs-core": "1.6.0"
   }
 }

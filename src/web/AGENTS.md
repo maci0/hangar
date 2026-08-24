@@ -11,10 +11,18 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   console/serial viewers, command palette, folders, topology.
 - `app.css` (~1150 lines) — theme (`:root` dark default + `:root.light`) + components;
   a trailing "serious flat reskin" override block wins by cascade order.
-- Vendored libs (do not hand-edit; treat as binary): `novnc.js`, `spice.js`, `elk.js`,
-  `van.js` (vanjs-core, ESM export converted to `window.van`), `xterm.js`/`xterm.css`/
-  `xterm-fit.js`/`xterm-webgl.js` (@xterm UMD builds), `favicon.svg`. Each is
-  `@embedFile`'d, served at `/novnc.js` etc, and listed in `auth.isAuthExempt`.
+- Vendored libs: `novnc.js`, `spice.js`, `elk.js`, `van.js` (vanjs-core, ESM export
+  converted to `window.van`), `xterm.js`/`xterm.css`/`xterm-fit.js`/`xterm-webgl.js`
+  (@xterm UMD builds), `favicon.svg`. Each is `@embedFile`'d, served at `/novnc.js`
+  etc, and listed in `auth.isAuthExempt`.
+  - **Provenance:** every bundle starts with a header comment naming package@version
+    + license + vendor date. Versions for `elk`/`van`/`xterm*` are pinned as exact
+    devDependencies in `../../package.json` (+ lockfile); re-vendor by bumping there,
+    copying the dist file in, and updating the header. `novnc.js`/`spice.js` have no
+    npm pin (upstream version not recorded at vendor time) — record upstream + date
+    in their headers when re-vendoring.
+  - Treat bundles as binary: never hand-edit code inside them; only prepend/adjust
+    the metadata header.
 
 ## Local Contracts
 - **UI patterns** (keep consistent when adding surfaces): menu items are
