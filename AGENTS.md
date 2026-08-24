@@ -14,6 +14,15 @@ zig build test-api     # HTTP API integration test (spawns a real daemon)
 zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 ```
 
+Static analysis (blocking CI steps, all scoped to git-tracked files so vendored
+code and scratch trees are excluded):
+
+```bash
+zig build fmt-check    # zig fmt --check over tracked *.zig/*.zon
+zig build lint-shell   # shellcheck over tracked *.sh
+zig build lint-js      # node --check over hand-written JS (vendored src/web bundles excluded)
+```
+
 All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`.
 
 ### Running a single test module

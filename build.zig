@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) !void {
 
     // ── Unit tests ──
     const test_step = b.step("test", "Run the hermetic unit + fuzz test suite");
-    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "snapparse", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "urlencode", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "appstate", "appstate_test", "catalog", "framebuffer", "httpreq", "wlog", "snapshots", "migrate", "disk", "cdrom", "guestagent", "httpresp", "streams", "auth", "netutil", "wsproxy", "vmrender", "webui_app", "dbusdisplay", "hostinfo" };
+    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "snapparse", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "urlencode", "vnc_client", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "appstate", "appstate_test", "catalog", "framebuffer", "httpreq", "wlog", "snapshots", "migrate", "disk", "cdrom", "guestagent", "httpresp", "streams", "auth", "netutil", "wsproxy", "vmrender", "webui_app", "dbusdisplay", "hostinfo" };
     for (test_mods) |mod| {
         const src_path = b.fmt("src/{s}.zig", .{mod});
         const tm = b.createModule(.{ .root_source_file = b.path(src_path), .target = target, .optimize = optimize });
@@ -116,8 +116,8 @@ pub fn build(b: *std.Build) !void {
     vmrun_test.dependOn(&vmrun_cmd.step);
 
     // ── Static analysis (also enforced as blocking CI steps) ──
-    // fmt-check scopes to git-tracked files so vendored code (zig-pkg/) and
-    // scratch trees are never formatted or flagged.
+    // fmt-check / lint-* scope to git-tracked files so vendored code (zig-pkg/,
+    // src/web bundles) and scratch trees are never formatted or flagged.
     const fmt_check = b.step("fmt-check", "Check formatting of tracked Zig sources (zig fmt)");
     const fmt_cmd = b.addSystemCommand(&.{
         "bash", "-c", "zig fmt --check $(git ls-files '*.zig' '*.zon')",
@@ -125,8 +125,23 @@ pub fn build(b: *std.Build) !void {
     fmt_check.dependOn(&fmt_cmd.step);
 
     const lint_shell = b.step("lint-shell", "Lint shell scripts (shellcheck)");
+    // Same git-tracked scoping as fmt-check: a newly added .sh is covered
+    // automatically instead of silently falling outside a hardcoded list.
     const lint_shell_cmd = b.addSystemCommand(&.{
-        "shellcheck", "tests/test_web_api.sh", "tests/test_vmrun.sh",
+        "bash", "-c", "git ls-files '*.sh' | xargs shellcheck",
     });
     lint_shell.dependOn(&lint_shell_cmd.step);
+
+    // Syntax gate over hand-written JS (app.js is @embedFile'd raw, so the exe
+    // builds fine even when it does not parse). Excludes the vendored bundles
+    // listed in src/web/AGENTS.md; any new non-vendored file is covered.
+    const lint_js = b.step("lint-js", "Syntax-check hand-written JS (node --check)");
+    const lint_js_cmd = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\git ls-files '*.js' '*.mjs' |
+        \\grep -vE '^src/web/(novnc|spice|elk|van|xterm(-fit|-webgl)?)\.js$' |
+        \\xargs -rn1 node --check
+        \\
+    });
+    lint_js.dependOn(&lint_js_cmd.step);
 }

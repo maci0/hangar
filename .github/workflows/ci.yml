@@ -34,9 +34,10 @@ jobs:
             zig-cache-${{ runner.os }}-
       - name: Build
         run: zig build
-      - name: Static analysis (zig fmt + shellcheck)
+      - name: Static analysis (zig fmt + shellcheck + js syntax)
         run: |
           zig build fmt-check
           zig build lint-shell
+          zig build lint-js
       - name: Hermetic unit + fuzz tests
         run: zig build test
