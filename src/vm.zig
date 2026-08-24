@@ -1045,6 +1045,16 @@ pub const PREF_AUTOPROTECT_INTERVAL_MAX: u32 = 1440;
 pub const PREF_AUTOPROTECT_MAX_MIN: u32 = 1;
 pub const PREF_AUTOPROTECT_MAX_MAX: u32 = 1000;
 
+// Create-time hardware defaults for a fresh VmConfig. Single source of truth
+// shared by the VmConfig field defaults below and the form parsers in
+// web_server.zig, so the two cannot disagree on what an omitted field means.
+pub const DEFAULT_MEMORY_MB: u32 = 2048;
+pub const DEFAULT_CPU_CORES: u32 = 2;
+pub const DEFAULT_CPU_SOCKETS: u32 = 1;
+pub const DEFAULT_DISK_SIZE_GB: u32 = 20;
+/// Upper bound accepted for video_bitrate_kbps form input.
+pub const MAX_VIDEO_BITRATE_KBPS: u32 = 50000;
+
 /// Application-wide preferences (persisted in vms.json alongside VMs).
 pub const Prefs = struct {
     /// UI theme preference.
@@ -1140,11 +1150,11 @@ pub const VmConfig = struct {
     port_fwd_len: u16 = 0,
 
     // ── Hardware settings ────────────────────────────────────────
-    cpu_cores: u32 = 2,
-    cpu_sockets: u32 = 1,
+    cpu_cores: u32 = DEFAULT_CPU_CORES,
+    cpu_sockets: u32 = DEFAULT_CPU_SOCKETS,
     cpu_model: CpuModel = .host,
-    memory_mb: u32 = 2048,
-    disk_size_gb: u32 = 20,
+    memory_mb: u32 = DEFAULT_MEMORY_MB,
+    disk_size_gb: u32 = DEFAULT_DISK_SIZE_GB,
     disk_format: DiskFormat = .qcow2,
     disk_cache: DiskCache = .writeback,
     // Default to VNC, not GTK: Hangar is a web/remote manager, so a host-native

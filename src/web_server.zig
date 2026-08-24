@@ -374,6 +374,127 @@ fn applyStrField(v: *vm.VmConfig, key: []const u8, val: []const u8) bool {
     return false;
 }
 
+/// Presence sentinels for create-time defaults: a field the client omitted
+/// means "apply the pref/default" in handleNewVm, while handleSave treats an
+/// absent field as "keep the stored value". Save passes `null`.
+const FormFlags = struct {
+    autoprotect: bool = false,
+    mac: bool = false,
+    vnc_port: bool = false,
+    spice_port: bool = false,
+};
+
+/// Apply one create/save form key/value pair to `v`; returns an error token
+/// ("invalid name" / "bad path") or null. Single definition shared by
+/// handleNewVm and handleSave so the two parsers cannot drift. On an
+/// unparseable numeric value the current field value is kept (for a fresh
+/// VmConfig that is exactly the create-default the old parser hardcoded).
+/// `flags` records which fields were explicitly present; pass null to ignore.
+fn applyFormField(v: *vm.VmConfig, key: []const u8, val: []const u8, flags: ?*FormFlags) ?[]const u8 {
+    if (std.mem.eql(u8, key, "name")) {
+        if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
+        if (!vm.isValidVmName(val)) return "invalid name";
+        v.setName(val);
+    }
+    if (std.mem.eql(u8, key, "mem")) v.memory_mb = vm.clampMemory(form_parsers.parseU32OrDefault(val, vm.DEFAULT_MEMORY_MB));
+    if (std.mem.eql(u8, key, "cpu")) v.cpu_cores = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, vm.DEFAULT_CPU_CORES));
+    if (std.mem.eql(u8, key, "cpu_sockets")) v.cpu_sockets = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, vm.DEFAULT_CPU_SOCKETS));
+    if (std.mem.eql(u8, key, "cpu_model")) v.cpu_model = vm.CpuModel.fromStr(val);
+    if (std.mem.eql(u8, key, "disk")) v.disk_size_gb = vm.clampDiskSize(form_parsers.parseU32OrDefault(val, vm.DEFAULT_DISK_SIZE_GB));
+    _ = applyEnumField(v, key, val);
+    if (std.mem.eql(u8, key, "iso_path")) {
+        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        v.setIsoPath(val);
+    }
+    if (std.mem.eql(u8, key, "mac_address")) {
+        if (vm.isValidMac(val)) {
+            v.setMacAddress(val);
+            if (flags) |f| f.mac = true;
+        }
+    }
+    if (std.mem.eql(u8, key, "network")) v.nics[0].mode = vm.NetworkMode.fromStr(val);
+    if (std.mem.eql(u8, key, "firmware")) v.firmware = vm.BootFirmware.fromStr(val);
+    if (std.mem.eql(u8, key, "shared_folder")) {
+        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        v.setSharedFolder(val);
+    }
+    if (std.mem.eql(u8, key, "usb")) {
+        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        v.setUsbDevice(val);
+    }
+    _ = applyBoolField(v, key, val);
+    if (std.mem.eql(u8, key, "autoprotect")) {
+        // Same accepted spellings as applyBoolField: the UI sends "1", API
+        // clients commonly send "true".
+        v.autoprotect = std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true");
+        if (flags) |f| f.autoprotect = true;
+    }
+    if (std.mem.eql(u8, key, "ap_interval")) v.autoprotect_interval_min = @max(1, @min(vm.PREF_AUTOPROTECT_INTERVAL_MAX, form_parsers.parseU32OrDefault(val, v.autoprotect_interval_min)));
+    if (std.mem.eql(u8, key, "video_bitrate")) v.video_bitrate_kbps = @min(vm.MAX_VIDEO_BITRATE_KBPS, form_parsers.parseU32OrDefault(val, v.video_bitrate_kbps));
+    if (std.mem.eql(u8, key, "ap_max")) v.autoprotect_max = @max(1, @min(vm.PREF_AUTOPROTECT_MAX_MAX, form_parsers.parseU32OrDefault(val, v.autoprotect_max)));
+    if (std.mem.eql(u8, key, "disk2_path")) {
+        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        v.setDisk2Path(val);
+    }
+    if (std.mem.eql(u8, key, "disk2_size")) v.disk2_size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, v.disk2_size_gb));
+    if (std.mem.eql(u8, key, "floppy")) {
+        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        v.setFloppyPath(val);
+    }
+    if (std.mem.eql(u8, key, "nic2")) v.nics[1].mode = vm.NetworkMode.fromStr(val);
+    if (key.len == 9 and std.mem.startsWith(u8, key, "nic") and std.mem.endsWith(u8, key, "_vnet") and key[3] >= '2' and key[3] <= '8') {
+        // "nicN_vnet" — per-NIC virtual-network binding (free-form name).
+        if (std.mem.indexOfAny(u8, val, "<>&\"'") == null) v.setNicVnetAny(@as(usize, key[3] - '1'), val);
+    }
+    if (std.mem.eql(u8, key, "nic2_mac")) {
+        if (vm.isValidMac(val)) v.setNic2Mac(val);
+    }
+    if (std.mem.eql(u8, key, "nic3")) v.nics[2].mode = vm.NetworkMode.fromStr(val);
+    if (std.mem.eql(u8, key, "nic3_mac")) {
+        if (vm.isValidMac(val)) v.setNic3Mac(val);
+    }
+    _ = applyStrField(v, key, val);
+    if (std.mem.eql(u8, key, "accel")) v.accel = form_parsers.parseAccel(val);
+    if (std.mem.eql(u8, key, "enable_kvm")) {
+        if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg;
+    }
+    if (std.mem.eql(u8, key, "vnc_port")) {
+        const p = std.fmt.parseInt(u16, val, 10) catch v.vnc_port;
+        if (vm.isValidDisplayPort(p)) {
+            v.vnc_port = p;
+            if (flags) |f| f.vnc_port = true;
+        }
+    }
+    if (std.mem.eql(u8, key, "spice_port")) {
+        const p = std.fmt.parseInt(u16, val, 10) catch v.spice_port;
+        if (vm.isValidDisplayPort(p)) {
+            v.spice_port = p;
+            if (flags) |f| f.spice_port = true;
+        }
+    }
+    if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(vm.MAX_DISPLAYS, form_parsers.parseU32OrDefault(val, v.num_displays)));
+    if (std.mem.eql(u8, key, "io_threads")) v.io_threads = form_parsers.parseU32OrDefault(val, v.io_threads);
+    if (std.mem.eql(u8, key, "disk_bps_throttle")) v.disk_bps_throttle = std.fmt.parseInt(u64, val, 10) catch v.disk_bps_throttle;
+    if (std.mem.eql(u8, key, "disk_iops_throttle")) v.disk_iops_throttle = form_parsers.parseU32OrDefault(val, v.disk_iops_throttle);
+    // NICs 4-8 (mode + mac), comptime-unrolled over the slot number.
+    inline for (4..vm.MAX_NICS + 1) |n| {
+        if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}", .{n}))) v.nics[n - 1].mode = vm.NetworkMode.fromStr(val);
+        if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}_mac", .{n}))) {
+            if (vm.isValidMac(val)) v.setNicMacAny(n - 1, val);
+        }
+    }
+    // Extra disks (path/size/format per slot), comptime-unrolled.
+    inline for (0..vm.MAX_EXTRA_DISKS) |i| {
+        if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_path", .{i}))) {
+            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            v.setExtraDiskPath(i, val);
+        }
+        if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_size", .{i}))) v.extra_disks[i].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, v.extra_disks[i].size_gb));
+        if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_format", .{i}))) v.extra_disks[i].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[i].format.toIndex());
+    }
+    return null;
+}
+
 /// A VM-scoped POST handler: takes the raw request, returns a status token.
 /// (These handlers catch their own errors and return a token, so the error set
 /// is effectively empty; the alias type widens it for the table.)
@@ -1395,116 +1516,14 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     const body = req[body_start + 4 ..];
     var cfg = vm.VmConfig{};
     var val_buf: [vm.MAX_CLOUD_INIT * 3]u8 = undefined; // fits URL-encoded cloud-init user-data
-    var has_autoprotect: bool = false;
-    var has_mac: bool = false;
-    var has_vnc_port: bool = false;
-    var has_spice_port: bool = false;
+    var flags = FormFlags{};
     var pairs = std.mem.splitScalar(u8, body, '&');
     while (pairs.next()) |pair| {
         var kv = std.mem.splitScalar(u8, pair, '=');
         const key = kv.next() orelse continue;
         const raw = kv.next() orelse continue;
         const val = if (raw.len <= val_buf.len) urlencode.urlDecode(&val_buf, raw) else raw;
-        if (std.mem.eql(u8, key, "name")) {
-            if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
-            if (!vm.isValidVmName(val)) return "invalid name";
-            cfg.setName(val);
-        }
-        if (std.mem.eql(u8, key, "mem")) cfg.memory_mb = vm.clampMemory(form_parsers.parseU32OrDefault(val, 2048));
-        if (std.mem.eql(u8, key, "cpu")) cfg.cpu_cores = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, 2));
-        if (std.mem.eql(u8, key, "cpu_sockets")) cfg.cpu_sockets = vm.clampCpuCores(form_parsers.parseU32OrDefault(val, 1));
-        if (std.mem.eql(u8, key, "cpu_model")) cfg.cpu_model = vm.CpuModel.fromStr(val);
-        if (std.mem.eql(u8, key, "disk")) cfg.disk_size_gb = vm.clampDiskSize(form_parsers.parseU32OrDefault(val, 20));
-        _ = applyEnumField(&cfg, key, val);
-        if (std.mem.eql(u8, key, "iso_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            cfg.setIsoPath(val);
-        }
-        if (std.mem.eql(u8, key, "mac_address")) {
-            if (vm.isValidMac(val)) {
-                cfg.setMacAddress(val);
-                has_mac = true;
-            }
-        }
-        if (std.mem.eql(u8, key, "network")) cfg.nics[0].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "firmware")) cfg.firmware = vm.BootFirmware.fromStr(val);
-        if (std.mem.eql(u8, key, "shared_folder")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            cfg.setSharedFolder(val);
-        }
-        if (std.mem.eql(u8, key, "usb")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            cfg.setUsbDevice(val);
-        }
-        _ = applyBoolField(&cfg, key, val);
-        if (std.mem.eql(u8, key, "autoprotect")) {
-            cfg.autoprotect = std.mem.eql(u8, val, "1");
-            has_autoprotect = true;
-        }
-        if (std.mem.eql(u8, key, "ap_interval")) cfg.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch cfg.autoprotect_interval_min));
-        if (std.mem.eql(u8, key, "video_bitrate")) cfg.video_bitrate_kbps = @min(50000, std.fmt.parseInt(u32, val, 10) catch cfg.video_bitrate_kbps);
-        if (std.mem.eql(u8, key, "ap_max")) cfg.autoprotect_max = @max(1, @min(1000, std.fmt.parseInt(u32, val, 10) catch cfg.autoprotect_max));
-        if (std.mem.eql(u8, key, "disk2_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            cfg.setDisk2Path(val);
-        }
-        if (std.mem.eql(u8, key, "disk2_size")) cfg.disk2_size_gb = vm.clampOptionalDiskSize(std.fmt.parseInt(u32, val, 10) catch cfg.disk2_size_gb);
-        if (std.mem.eql(u8, key, "floppy")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            cfg.setFloppyPath(val);
-        }
-        if (std.mem.eql(u8, key, "nic2")) cfg.nics[1].mode = vm.NetworkMode.fromStr(val);
-        if (key.len == 9 and std.mem.startsWith(u8, key, "nic") and std.mem.endsWith(u8, key, "_vnet") and key[3] >= '2' and key[3] <= '8') {
-            // "nicN_vnet" — per-NIC virtual-network binding (free-form name).
-            if (std.mem.indexOfAny(u8, val, "<>&\"'") == null) cfg.setNicVnetAny(@as(usize, key[3] - '1'), val);
-        }
-        if (std.mem.eql(u8, key, "nic2_mac")) {
-            if (vm.isValidMac(val)) cfg.setNic2Mac(val);
-        }
-        if (std.mem.eql(u8, key, "nic3")) cfg.nics[2].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic3_mac")) {
-            if (vm.isValidMac(val)) cfg.setNic3Mac(val);
-        }
-        _ = applyStrField(&cfg, key, val);
-        if (std.mem.eql(u8, key, "accel")) cfg.accel = form_parsers.parseAccel(val);
-        if (std.mem.eql(u8, key, "enable_kvm")) {
-            if (std.mem.eql(u8, val, "1")) cfg.accel = .auto else cfg.accel = .tcg;
-        }
-        if (std.mem.eql(u8, key, "vnc_port")) {
-            const p = std.fmt.parseInt(u16, val, 10) catch cfg.vnc_port;
-            if (vm.isValidDisplayPort(p)) {
-                cfg.vnc_port = p;
-                has_vnc_port = true;
-            }
-        }
-        if (std.mem.eql(u8, key, "spice_port")) {
-            const p = std.fmt.parseInt(u16, val, 10) catch cfg.spice_port;
-            if (vm.isValidDisplayPort(p)) {
-                cfg.spice_port = p;
-                has_spice_port = true;
-            }
-        }
-        if (std.mem.eql(u8, key, "num_displays")) cfg.num_displays = @max(1, @min(vm.MAX_DISPLAYS, std.fmt.parseInt(u32, val, 10) catch cfg.num_displays));
-        if (std.mem.eql(u8, key, "io_threads")) cfg.io_threads = std.fmt.parseInt(u32, val, 10) catch cfg.io_threads;
-        if (std.mem.eql(u8, key, "disk_bps_throttle")) cfg.disk_bps_throttle = std.fmt.parseInt(u64, val, 10) catch cfg.disk_bps_throttle;
-        if (std.mem.eql(u8, key, "disk_iops_throttle")) cfg.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch cfg.disk_iops_throttle;
-        // Extra NICs (4-8)
-        // NICs 4-8 (mode + mac), comptime-unrolled over the slot number.
-        inline for (4..vm.MAX_NICS + 1) |n| {
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}", .{n}))) cfg.nics[n - 1].mode = vm.NetworkMode.fromStr(val);
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}_mac", .{n}))) {
-                if (vm.isValidMac(val)) cfg.setNicMacAny(n - 1, val);
-            }
-        }
-        // Extra disks (path/size/format per slot), comptime-unrolled.
-        inline for (0..vm.MAX_EXTRA_DISKS) |i| {
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_path", .{i}))) {
-                if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-                cfg.setExtraDiskPath(i, val);
-            }
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_size", .{i}))) cfg.extra_disks[i].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_format", .{i}))) cfg.extra_disks[i].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch cfg.extra_disks[i].format.toIndex());
-        }
+        if (applyFormField(&cfg, key, val, &flags)) |err| return err;
     }
 
     // Apply defaults for fields not explicitly provided. Reading prefs/ports
@@ -1513,13 +1532,13 @@ fn handleNewVm(req: []const u8) ![]const u8 {
     {
         appstate.vms_mutex.lock();
         defer appstate.vms_mutex.unlock();
-        if (!has_autoprotect) {
+        if (!flags.autoprotect) {
             cfg.autoprotect = appstate.prefs.autoprotect_enabled_default;
             cfg.autoprotect_interval_min = appstate.prefs.autoprotect_interval_min_default;
             cfg.autoprotect_max = appstate.prefs.autoprotect_max_default;
         }
     }
-    if (!has_mac) {
+    if (!flags.mac) {
         var mac_buf: [18]u8 = undefined;
         const mac = vm.generateMacAddress(&mac_buf);
         cfg.setMacAddress(std.mem.span(mac));
@@ -1542,8 +1561,8 @@ fn handleNewVm(req: []const u8) ![]const u8 {
         if (disk_created) cleanupCreatedDisk(&cfg);
         return "name exists";
     }
-    if (!has_vnc_port) cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
-    if (!has_spice_port) cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
+    if (!flags.vnc_port) cfg.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
+    if (!flags.spice_port) cfg.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
     cfg.ensureId();
     appstate.vms[appstate.vm_count] = cfg;
     appstate.vm_count += 1;
@@ -1948,94 +1967,7 @@ fn handleSave(req: []const u8) ![]const u8 {
         const key = kv.next() orelse continue;
         const raw = kv.next() orelse continue;
         const val = if (raw.len <= val_buf.len) urlencode.urlDecode(&val_buf, raw) else raw;
-        if (std.mem.eql(u8, key, "name")) {
-            if (std.mem.indexOfAny(u8, val, "<>&\"'") != null) return "invalid name";
-            if (!vm.isValidVmName(val)) return "invalid name";
-            v.setName(val);
-        }
-        if (std.mem.eql(u8, key, "mem")) v.memory_mb = vm.clampMemory(std.fmt.parseInt(u32, val, 10) catch v.memory_mb);
-        if (std.mem.eql(u8, key, "cpu")) v.cpu_cores = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch v.cpu_cores);
-        if (std.mem.eql(u8, key, "cpu_sockets")) v.cpu_sockets = vm.clampCpuCores(std.fmt.parseInt(u32, val, 10) catch v.cpu_sockets);
-        if (std.mem.eql(u8, key, "cpu_model")) v.cpu_model = vm.CpuModel.fromStr(val);
-        if (std.mem.eql(u8, key, "disk")) v.disk_size_gb = vm.clampDiskSize(std.fmt.parseInt(u32, val, 10) catch v.disk_size_gb);
-        _ = applyEnumField(v, key, val);
-        if (std.mem.eql(u8, key, "iso_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            v.setIsoPath(val);
-        }
-        if (std.mem.eql(u8, key, "mac_address")) {
-            if (vm.isValidMac(val)) v.setMacAddress(val);
-        }
-        if (std.mem.eql(u8, key, "network")) v.nics[0].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "firmware")) v.firmware = vm.BootFirmware.fromStr(val);
-        if (std.mem.eql(u8, key, "shared_folder")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            v.setSharedFolder(val);
-        }
-        if (std.mem.eql(u8, key, "usb")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            v.setUsbDevice(val);
-        }
-        _ = applyBoolField(v, key, val);
-        if (std.mem.eql(u8, key, "autoprotect")) v.autoprotect = std.mem.eql(u8, val, "1");
-        if (std.mem.eql(u8, key, "ap_interval")) v.autoprotect_interval_min = @max(1, @min(1440, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_interval_min));
-        if (std.mem.eql(u8, key, "video_bitrate")) v.video_bitrate_kbps = @min(50000, std.fmt.parseInt(u32, val, 10) catch v.video_bitrate_kbps);
-        if (std.mem.eql(u8, key, "ap_max")) v.autoprotect_max = @max(1, @min(1000, std.fmt.parseInt(u32, val, 10) catch v.autoprotect_max));
-        if (std.mem.eql(u8, key, "disk2_path")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            v.setDisk2Path(val);
-        }
-        if (std.mem.eql(u8, key, "disk2_size")) v.disk2_size_gb = vm.clampOptionalDiskSize(std.fmt.parseInt(u32, val, 10) catch v.disk2_size_gb);
-        if (std.mem.eql(u8, key, "floppy")) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-            v.setFloppyPath(val);
-        }
-        if (std.mem.eql(u8, key, "nic2")) v.nics[1].mode = vm.NetworkMode.fromStr(val);
-        if (key.len == 9 and std.mem.startsWith(u8, key, "nic") and std.mem.endsWith(u8, key, "_vnet") and key[3] >= '2' and key[3] <= '8') {
-            // "nicN_vnet" — per-NIC virtual-network binding (free-form name).
-            if (std.mem.indexOfAny(u8, val, "<>&\"'") == null) v.setNicVnetAny(@as(usize, key[3] - '1'), val);
-        }
-        if (std.mem.eql(u8, key, "nic2_mac")) {
-            if (vm.isValidMac(val)) v.setNic2Mac(val);
-        }
-        if (std.mem.eql(u8, key, "nic3")) v.nics[2].mode = vm.NetworkMode.fromStr(val);
-        if (std.mem.eql(u8, key, "nic3_mac")) {
-            if (vm.isValidMac(val)) v.setNic3Mac(val);
-        }
-        _ = applyStrField(v, key, val);
-        if (std.mem.eql(u8, key, "accel")) v.accel = form_parsers.parseAccel(val);
-        if (std.mem.eql(u8, key, "enable_kvm")) {
-            if (std.mem.eql(u8, val, "1")) v.accel = .auto else v.accel = .tcg;
-        }
-        if (std.mem.eql(u8, key, "vnc_port")) {
-            const p = std.fmt.parseInt(u16, val, 10) catch v.vnc_port;
-            if (vm.isValidDisplayPort(p)) v.vnc_port = p;
-        }
-        if (std.mem.eql(u8, key, "spice_port")) {
-            const p = std.fmt.parseInt(u16, val, 10) catch v.spice_port;
-            if (vm.isValidDisplayPort(p)) v.spice_port = p;
-        }
-        if (std.mem.eql(u8, key, "num_displays")) v.num_displays = @max(1, @min(vm.MAX_DISPLAYS, std.fmt.parseInt(u32, val, 10) catch v.num_displays));
-        if (std.mem.eql(u8, key, "io_threads")) v.io_threads = std.fmt.parseInt(u32, val, 10) catch v.io_threads;
-        if (std.mem.eql(u8, key, "disk_bps_throttle")) v.disk_bps_throttle = std.fmt.parseInt(u64, val, 10) catch v.disk_bps_throttle;
-        if (std.mem.eql(u8, key, "disk_iops_throttle")) v.disk_iops_throttle = std.fmt.parseInt(u32, val, 10) catch v.disk_iops_throttle;
-        // Extra NICs (4-8)
-        // NICs 4-8 (mode + mac), comptime-unrolled over the slot number.
-        inline for (4..vm.MAX_NICS + 1) |n| {
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}", .{n}))) v.nics[n - 1].mode = vm.NetworkMode.fromStr(val);
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("nic{d}_mac", .{n}))) {
-                if (vm.isValidMac(val)) v.setNicMacAny(n - 1, val);
-            }
-        }
-        // Extra disks (path/size/format per slot), comptime-unrolled.
-        inline for (0..vm.MAX_EXTRA_DISKS) |i| {
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_path", .{i}))) {
-                if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
-                v.setExtraDiskPath(i, val);
-            }
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_size", .{i}))) v.extra_disks[i].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, 0));
-            if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_format", .{i}))) v.extra_disks[i].format = vm.DiskFormat.fromIndex(std.fmt.parseInt(usize, val, 10) catch v.extra_disks[i].format.toIndex());
-        }
+        if (applyFormField(v, key, val, null)) |err| return err;
     }
     // Settings edits change disk paths, NIC modes, and display ports — data
     // modifications an operator must be able to reconstruct after the fact. Every
