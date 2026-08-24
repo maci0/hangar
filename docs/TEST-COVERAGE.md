@@ -25,12 +25,7 @@ commit; run `zig build test` for the authoritative result.
 | `vnet.zig` | Virtual network model, JSON/validation |
 | `form_parsers.zig` | Form data parse/emit, enum fromStr |
 | `fbmath.zig` | Math utilities |
-| `ringbuf.zig` | Ring buffer operations |
-| `serial_console.zig` | Serial console reader + connection lifecycle |
-| `serialpath.zig` | Serial Unix-socket path builder |
-| `uimath.zig` | UI positioning math |
 | `snapparse.zig` | Snapshot output parser (QMP + HMP variants) |
-| `termfilter.zig` | Terminal escape filter |
 | `ovf.zig` | OVF manifest generation |
 | `autoprotect.zig` | Auto-snapshot logic |
 | `sync.zig` | SpinMutex operations |
@@ -42,11 +37,6 @@ commit; run `zig build test` for the authoritative result.
 | `urlencode.zig` | URL encoding/decoding |
 | `ws.zig` | WebSocket protocol (RFC 6455) |
 | `transport.zig` | HTTP transport, URL parsing, IPv6 |
-| `filter.zig` | Request filtering |
-| `vmlist.zig` | VM browser line→index mapping |
-| `remote.zig` | Remote config |
-| `vnet_label.zig` | Network label helpers |
-| `spice_client.zig` | SPICE client wrappers |
 | `vnc_client.zig` | VNC client wrappers |
 | `appstate.zig` | Shared global state, config path helpers |
 | `appstate_test.zig` | App-state wiring (test wrapper) |

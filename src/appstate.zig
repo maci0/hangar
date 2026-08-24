@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Shared global state for the Hangar web backend and CLI tools.
 //!
-//! All VM arrays, session state, VNC/SPICE clients, serial state,
-//! remote mode flags, and small cross-cutting helpers live here so that
-//! serial_console, remote, persist, and vnet modules can share them
-//! without circular imports.
+//! All VM arrays, session state, VNC/SPICE clients, and small cross-cutting
+//! helpers live here so that persist, vnet, and the handler modules can share
+//! them without circular imports.
 
 const std = @import("std");
 const vm = @import("vm.zig");
@@ -14,7 +13,6 @@ const hv_backend = @import("hv/qemu_backend.zig");
 const appio = @import("appio.zig");
 
 pub const MAX_VMS = vm.MAX_VMS;
-pub const SERIAL_BUF_SIZE = 64 * 1024;
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
@@ -101,21 +99,6 @@ pub fn getStateVersion() u64 {
 pub var undo_vm: vm.VmConfig = .{};
 pub var undo_idx: usize = 0;
 pub var undo_available: bool = false;
-
-// ── Serial console state ────────────────────────────────────────────
-
-pub var serial_buf: [SERIAL_BUF_SIZE]u8 = undefined;
-pub var serial_len: usize = 0;
-pub var serial_mutex: sync.SpinMutex = .{};
-pub var serial_running: bool = false;
-pub var serial_thread: ?std.Thread = null;
-pub var serial_fd: ?std.c.fd_t = null;
-
-// ── Remote client mode ──────────────────────────────────────────────
-
-pub var remote_mode: bool = false;
-pub var remote_url: [128]u8 = [_]u8{0} ** 128;
-pub var remote_url_len: usize = 0;
 
 // ── VMM handle helpers ──────────────────────────────────────────────
 

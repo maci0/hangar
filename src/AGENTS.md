@@ -13,13 +13,13 @@ globals in `appstate.zig`.
 ## Ownership
 - **Core / router:** `web_server.zig` (router + VM CRUD/lifecycle + renders + main;
   also the remote daemon). `vmrun.zig` (CLI client), `webui_app.zig` (WebView wrapper),
-  `remote.zig` (remote-mode client), `transport.zig` (Unix/TCP + HTTP helpers).
+  `transport.zig` (Unix/TCP + HTTP helpers).
 - **Model / persistence:** `vm.zig` (`VmConfig`, all config enums, `generateId`/`ensureId`,
   `findUnusedVncPort`), `persist.zig` (hand-rolled JSON; `vms.json`), `vnet.zig`
   (`networks.json`), `appstate.zig` (globals + `vms_mutex` + VMM handles), `catalog.zig`.
 - **Hypervisor process control:** `src/hv/` (dispatch table) — see its AGENTS.md.
 - **QEMU / guest:** `qemu.zig` (arg builders + `forkExec`/`runWait`; never `std.process.spawn`),
-  `qmp.zig` (QMP client), `serial_console.zig` (serial reader lifecycle), `framebuffer.zig`, `vnc_client.zig`, `spice_client.zig`.
+  `qmp.zig` (QMP client), `framebuffer.zig`, `vnc_client.zig`.
 - **Video pipeline (phases 1-2):** `dbusdisplay.zig` — QMP add_client + hand-rolled D-Bus
   subset attaches on power-on of a `video_stream` VM; assembles scanouts into a
   framebuffer, encodes via an ffmpeg child (qemu.forkExecPiped), serves H.264 access
@@ -28,10 +28,10 @@ globals in `appstate.zig`.
   POST mutation and unexpected VM exit; `handleEvents` streams change events.
 - **HTTP leaf utils:** `httpreq` `httpresp` `ws` `wlog` `netutil` `auth` `urlencode` `form_parsers`.
 - **Handler groups:** `snapshots` `migrate` `disk` `cdrom` `guestagent` `streams`
-  `wsproxy` `framebuffer` `vmlist` `vmrender` `filter`.
+  `wsproxy` `framebuffer` `vmrender`.
 - **Frontend assets:** `src/web/` — see its AGENTS.md (served by `web_server`, embedded via `@embedFile`).
-- **Leaf helpers:** `sync` `usock` `appio` `ringbuf` `termfilter` `fbmath` `uimath`
-  `snapparse` `ovf` `autoprotect` `path_helpers` `serialpath` `vnet_label` `hostinfo`
+- **Leaf helpers:** `sync` `usock` `appio` `fbmath`
+  `snapparse` `ovf` `autoprotect` `path_helpers` `hostinfo`
   (host CPU/RAM capacity for the dashboard).
 
 ## Local Contracts

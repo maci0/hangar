@@ -154,7 +154,6 @@ function vmFolder(v){return (v&&v.folder)?v.folder.trim():'';}
 function visibleTags(t){return (t||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s&&s.toLowerCase().indexOf('folder:')!==0;});}
 function folderOpen(f){try{var c=JSON.parse(localStorage.getItem('hangar.folders')||'{}');return c[f]!==false;}catch(e){return true;}}
 function setFolderOpen(f,o){try{var c=JSON.parse(localStorage.getItem('hangar.folders')||'{}');c[f]=o;localStorage.setItem('hangar.folders',JSON.stringify(c));}catch(e){}}
-function folderList(){var s={};for(var i=0;i<vms.length;i++){var f=vmFolder(vms[i]);if(f)s[f]=1;}return Object.keys(s).sort();}
 async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[sel];var cur=vmFolder(v);
   var folders=[];vms.forEach(function(x){var fl=vmFolder(x);if(fl&&folders.indexOf(fl)<0)folders.push(fl);});folders.sort();
   var f=await showPromptDialog('Move "'+v.name+'" to folder (blank = none):',cur,folders);if(f===null)return;f=f.trim();
@@ -191,9 +190,6 @@ else{var sb2=document.getElementById('statusmsg');if(sb2)sb2.textContent=parts;}
 async function toggleFavorite(i){if(i>=vms.length)return;const fav=vms[i].favorite==='true'?'0':'1';
 const r=await apiPost('/api/vms/'+i,'favorite='+fav);if(r){if(i<vms.length){vms[i].favorite=fav==='1'?'true':'false';}renderList();if(sel===i)renderDetails();}}
 function selectedVm(){return sel!==null&&sel<vms.length?vms[sel]:null;}
-function isRunning(v){return v&&(v.status==='running'||v.status==='paused');}
-function isPaused(v){return v&&v.status==='paused';}
-function isStopped(v){return !v||v.status==='stopped'||v.status==='suspended';}
 function statusLabel(s){if(s==='running')return 'Running';if(s==='paused')return 'Paused';if(s==='suspended')return 'Suspended';if(s==='stopped')return 'Stopped';return s||'Unknown';}
 function embeddedDisplayCapable(v){var dt=Number(v&&v.display);return v&&v.embed_display==='true'&&(dt===2||dt===3);}
 function networkLabel(v){var n=(v&&v.net)||'user';if(n==='user')return 'NAT (user mode)';if(n==='gvproxy')return 'gvproxy (user mode)';if(n==='bridge')return 'Bridged';if(n==='none')return 'Disconnected';return n;}

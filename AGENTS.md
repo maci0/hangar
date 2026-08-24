@@ -45,13 +45,13 @@ Filesystem, process, networking, and threading go through `std.Io`. Never use th
 - Process spawn for QEMU: `qemu.forkExec` / `qemu.runWait` (manual `fork` + `execvp`). These preserve the real environment (`DISPLAY`, `HOME`, `XDG_RUNTIME_DIR`, ...). Never `std.process.spawn`.
 
 ### No glib `@cImport`
-Zig 0.16's C importer rejects GLib headers (they emit file-scope `_Pragma`). `spice_client.zig` declares the few symbols it needs by hand (`extern fn` + opaque types). rfb (VNC) headers may be `@cImport`'ed.
+Zig 0.16's C importer rejects GLib headers (they emit file-scope `_Pragma`). No module links GLib/gio; the SPICE path is a raw TCP relay in `wsproxy.zig` + the vendored browser client. rfb (VNC) headers may be `@cImport`'ed.
 
 ## State & Wiring
 
 - There is no `App` struct. All shared state lives as module-level globals in `appstate.zig`:
-  - `vms` / `vm_count` / `vms_mutex`, `prefs`, `g_vmm` + `g_vmm_handles`, serial console ring + thread state, remote mode flags, undo state.
-- `web_server.zig` is both the local web UI server and the remote daemon. Remote clients (`remote.zig`, `vmrun`) talk to it via `transport.zig` (Unix/TCP + HTTP helpers).
+  - `vms` / `vm_count` / `vms_mutex`, `prefs`, `g_vmm` + `g_vmm_handles`, undo state.
+- `web_server.zig` is both the local web UI server and the remote daemon. Remote clients (`vmrun`, `webui_app`) talk to it via `transport.zig` (Unix/TCP + HTTP helpers).
 - `web_server.zig` is the router + VM CRUD/lifecycle core; cohesive handler groups and leaf utilities have been carved into their own modules, which `web_server` `@import`s and (for the leaf helpers) aliases so call sites read unchanged:
   - HTTP plumbing (leaf): `httpreq.zig` (request-line/header/route parsers), `httpresp.zig` (status codes + response writer + `isServerErrToken`/`sanitizeHeaderValue`), `wlog.zig` (structured logging), `netutil.zig` (socket constants + `setTcpNoDelay`), `auth.zig` (API-key check, exempt list, host/WS gates).
   - Handler groups: `snapshots.zig`, `migrate.zig`, `disk.zig` (info/compact/resize), `cdrom.zig`, `guestagent.zig`, `streams.zig` (conn-streaming: screenshot/download/upload/exportOva), `wsproxy.zig` (VNC/SPICE/serial relays), `catalog.zig`, `framebuffer.zig`.

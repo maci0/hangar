@@ -48,8 +48,6 @@ pub fn build(b: *std.Build) !void {
 
     web_mod.link_libc = true;
     web_mod.linkSystemLibrary("libvncclient", .{});
-    web_mod.linkSystemLibrary("spice-client-glib-2.0", .{});
-    web_mod.linkSystemLibrary("gio-2.0", .{});
     web_mod.addIncludePath(.{ .cwd_relative = "/usr/include" });
     const web_exe = b.addExecutable(.{ .name = "hangar-web", .root_module = web_mod, .use_llvm = true, .use_lld = true });
     const install_web_exe = b.addInstallArtifact(web_exe, .{});
@@ -69,17 +67,11 @@ pub fn build(b: *std.Build) !void {
 
     // ── Unit tests ──
     const test_step = b.step("test", "Run the hermetic unit + fuzz test suite");
-    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "ringbuf", "serial_console", "serialpath", "uimath", "snapparse", "termfilter", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "remote", "filter", "vmlist", "urlencode", "spice_client", "vnc_client", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "vnet_label", "appstate", "appstate_test", "catalog", "framebuffer", "httpreq", "wlog", "snapshots", "migrate", "disk", "cdrom", "guestagent", "httpresp", "streams", "auth", "netutil", "wsproxy", "vmrender", "webui_app", "dbusdisplay", "hostinfo" };
+    const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "snapparse", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "urlencode", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "appstate", "appstate_test", "catalog", "framebuffer", "httpreq", "wlog", "snapshots", "migrate", "disk", "cdrom", "guestagent", "httpresp", "streams", "auth", "netutil", "wsproxy", "vmrender", "webui_app", "dbusdisplay", "hostinfo" };
     for (test_mods) |mod| {
         const src_path = b.fmt("src/{s}.zig", .{mod});
         const tm = b.createModule(.{ .root_source_file = b.path(src_path), .target = target, .optimize = optimize });
         tm.link_libc = true;
-        if (std.mem.eql(u8, mod, "spice_client")) {
-            tm.linkSystemLibrary("spice-client-glib-2.0", .{});
-            tm.linkSystemLibrary("gio-2.0", .{});
-            tm.linkSystemLibrary("gobject-2.0", .{});
-            tm.linkSystemLibrary("glib-2.0", .{});
-        }
         if (std.mem.eql(u8, mod, "vnc_client") or std.mem.eql(u8, mod, "framebuffer")) {
             tm.linkSystemLibrary("libvncclient", .{});
         }
