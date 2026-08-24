@@ -1212,6 +1212,13 @@ pub const VmConfig = struct {
     // ── Runtime state (not persisted) ────────────────────────────
     status: VmStatus = .stopped,
     pid: ?i32 = null,
+    /// Wall-clock unix time of the last power-on (0 = not running). Informational
+    /// only; uptime must be computed from `started_mono_sec` instead so NTP steps
+    /// and cross-host clock skew cannot corrupt it.
+    started_epoch: i64 = 0,
+    /// CLOCK.MONOTONIC seconds at power-on; the server derives `uptime_sec` from
+    /// this, so elapsed time never depends on any wall clock. Runtime only.
+    started_mono_sec: u64 = 0,
 
     // ── Saved State (persisted) ──────────────────────────────────
     saved_state_path_buf: [MAX_PATH + 1]u8 = [_]u8{0} ** (MAX_PATH + 1),

@@ -51,6 +51,15 @@ pub fn sleepMs(ms: u64) void {
     }
 }
 
+/// Seconds since an arbitrary fixed point, from CLOCK.MONOTONIC. Immune to
+/// wall-clock steps (NTP corrections, manual changes): use for elapsed-time
+/// measurement and uptime; never compare across processes or machines.
+pub fn monoSecs() u64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    return @intCast(@max(0, ts.sec));
+}
+
 /// Write `data` to `file_path` atomically: stage into a temp file, fsync, then
 /// rename over the destination so a crash never leaves a half-written file.
 ///
@@ -87,6 +96,23 @@ test "appio: io() returns a usable instance and caches it" {
 }
 
 extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+
+test "appio: monoSecs never goes backwards" {
+    const a = monoSecs();
+    sleepMs(15);
+    const b = monoSecs();
+    try testing.expect(b >= a);
+}
+
+test "appio fuzz: monoSecs stays monotonic across rapid reads" {
+    var prev = monoSecs();
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const now = monoSecs();
+        try testing.expect(now >= prev);
+        prev = now;
+    }
+}
 
 test "appio: getenv known + unknown" {
     _ = setenv("Hangar_TEST_VAR", "hello123", 1);

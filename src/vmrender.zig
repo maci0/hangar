@@ -6,6 +6,7 @@
 const std = @import("std");
 const vm = @import("vm.zig");
 const appstate = @import("appstate.zig");
+const appio = @import("appio.zig");
 const httpreq = @import("httpreq.zig");
 const httpresp = @import("httpresp.zig");
 const wlog = @import("wlog.zig");
@@ -13,6 +14,14 @@ const wlog = @import("wlog.zig");
 const parseIdx = httpreq.parseIdx;
 const jsonEscape = httpresp.jsonEscape;
 const logErr = wlog.logErr;
+
+/// Elapsed seconds since power-on, measured on the daemon's CLOCK.MONOTONIC so
+/// neither NTP steps nor a client's clock can distort it. 0 when not running.
+fn uptimeSec(v: *const vm.VmConfig) u64 {
+    if (v.started_mono_sec == 0) return 0;
+    const now = appio.monoSecs();
+    return if (now > v.started_mono_sec) now - v.started_mono_sec else 0;
+}
 
 /// Wrapper around jsonEscape that logs truncation. Returns only the escaped slice
 /// so call sites remain concise: escapeJson(&esc, s, "field_name")
@@ -110,7 +119,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     w += part2a.len;
 
     const part2b = std.fmt.bufPrint(buf[w..],
-        \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"rtc":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}
+        \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"rtc":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d},"uptime_sec":{d}
     , .{
         if (v.ballooning) "true" else "false",
         if (v.host_autostart) "true" else "false",
@@ -128,7 +137,8 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         v.vnc_port,
         v.spice_port,
         if (v.favorite) "true" else "false",
-        appstate.vm_started[idx],
+        v.started_epoch,
+        uptimeSec(v),
     }) catch return error.RenderFailed;
     w += part2b.len;
 
@@ -299,7 +309,7 @@ pub fn renderJson(buf: []u8) usize {
         w += part2a.len;
 
         const part2b = std.fmt.bufPrint(buf[w..],
-            \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"rtc":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d}
+            \\,"ballooning":{s},"host_autostart":{s},"enable_3d":{s},"gpu_device":{d},"display":{d},"display_resolution":{d},"guest_os":{d},"audio":{d},"boot_order":{d},"rtc":{d},"cpu_model":"{s}","accel":"{s}","embed_display":{s},"vnc_port":{d},"spice_port":{d},"favorite":{s},"started":{d},"uptime_sec":{d}
         , .{
             if (v.ballooning) "true" else "false",
             if (v.host_autostart) "true" else "false",
@@ -317,7 +327,8 @@ pub fn renderJson(buf: []u8) usize {
             v.vnc_port,
             v.spice_port,
             if (v.favorite) "true" else "false",
-            appstate.vm_started[i],
+            v.started_epoch,
+            uptimeSec(v),
         }) catch {
             w = buf.len;
             break;
@@ -441,7 +452,8 @@ fn installRenderFixture() void {
     v.setCloudInit("#cloud-config\npackages: [vim]\n");
     v.vnc_port = 5901;
     v.favorite = true;
-    appstate.vm_started[0] = 42;
+    v.started_epoch = 42;
+    v.started_mono_sec = 1;
 }
 
 // The render functions take vms_mutex themselves; tests hold it only while
@@ -455,7 +467,6 @@ test "vmrender: renderVmDetail emits populated fields with escaping" {
         appstate.vms_mutex.lock();
         appstate.vm_count = 0;
         appstate.vms[0] = .{};
-        appstate.vm_started[0] = 0;
         appstate.vms_mutex.unlock();
     }
 
@@ -491,6 +502,7 @@ test "vmrender: renderVmDetail emits populated fields with escaping" {
         "\"vnc_port\":5901",
         "\"favorite\":true",
         "\"started\":42",
+        "\"uptime_sec\":", // value varies with the clock; presence is the contract
         "\"video_stream\":false,\"video_bitrate_kbps\":0}",
     }) |needle| {
         try std.testing.expect(std.mem.indexOf(u8, out, needle) != null);

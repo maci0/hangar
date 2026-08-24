@@ -23,7 +23,6 @@ pub var vms: [MAX_VMS]vm.VmConfig = [_]vm.VmConfig{.{}} ** MAX_VMS;
 pub var vm_count: usize = 0;
 pub var vms_mutex: sync.SpinMutex = .{};
 pub var prefs: vm.Prefs = .{};
-pub var vm_started: [MAX_VMS]i64 = [_]i64{0} ** MAX_VMS;
 pub var g_vmm: hv_iface.Vmm = undefined;
 pub var g_vmm_ready: bool = false;
 pub var g_vmm_handles: [MAX_VMS]?hv_iface.VmmHandle = .{null} ** MAX_VMS;

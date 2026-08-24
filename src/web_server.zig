@@ -1312,9 +1312,11 @@ fn powerOp(req: []const u8, mode: PowerMode) ![]const u8 {
             appstate.vms[j].status = copy.status;
             if (was_alive) {
                 appstate.destroyVmmHandle(j);
-                appstate.vm_started[j] = 0;
+                appstate.vms[j].started_epoch = 0;
+                appstate.vms[j].started_mono_sec = 0;
             } else {
-                appstate.vm_started[j] = time(null);
+                appstate.vms[j].started_epoch = time(null);
+                appstate.vms[j].started_mono_sec = appio.monoSecs();
             }
         } else if (!was_alive) {
             // VM deleted while powering on: kill the orphaned process.
@@ -1356,7 +1358,8 @@ fn handlePowerLocked(idx: usize) []const u8 {
         qemu.forceStopVm(v);
         qemu.reapVm(v);
         appstate.destroyVmmHandle(idx);
-        appstate.vm_started[idx] = 0;
+        appstate.vms[idx].started_epoch = 0;
+        appstate.vms[idx].started_mono_sec = 0;
     } else {
         ensureBindableDisplayPorts(idx);
         qemu.startVm(v, std.heap.page_allocator) catch |e| {
@@ -1365,7 +1368,8 @@ fn handlePowerLocked(idx: usize) []const u8 {
             logOpErr("power on", e, vm_name_buf[0..vm_name.len]);
             return "start err";
         };
-        appstate.vm_started[idx] = time(null);
+        appstate.vms[idx].started_epoch = time(null);
+        appstate.vms[idx].started_mono_sec = appio.monoSecs();
     }
     logAudit(if (was_alive) "power off" else "power on", vm_name_buf[0..vm_name.len]);
     return "ok";
@@ -1830,10 +1834,8 @@ fn handleDelete(req: []const u8) ![]const u8 {
             appstate.vms[i] = appstate.vms[i + 1];
             appstate.g_vmm_handles[i] = appstate.g_vmm_handles[i + 1];
             rebindVmmHandleLocked(i);
-            appstate.vm_started[i] = appstate.vm_started[i + 1];
         }
         appstate.g_vmm_handles[appstate.vm_count - 1] = null;
-        appstate.vm_started[appstate.vm_count - 1] = 0;
         appstate.vm_count -= 1;
         persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
             logSaveErr("", e);
@@ -1873,7 +1875,6 @@ fn handleUndo() ![]const u8 {
         appstate.vms[i] = appstate.vms[i - 1];
         appstate.g_vmm_handles[i] = appstate.g_vmm_handles[i - 1];
         rebindVmmHandleLocked(i);
-        appstate.vm_started[i] = appstate.vm_started[i - 1];
         i -= 1;
     }
     appstate.vms[appstate.undo_idx] = appstate.undo_vm;
@@ -1920,7 +1921,6 @@ fn handleReorder(req: []const u8) ![]const u8 {
     // Splice-move: remove element at 'from', insert at 'to' (client semantics).
     const saved_vm = appstate.vms[a];
     const saved_handle = appstate.g_vmm_handles[a];
-    const saved_started = appstate.vm_started[a];
     if (a < b) {
         // Shift [a+1 .. b] left by 1
         var j: usize = a;
@@ -1928,7 +1928,6 @@ fn handleReorder(req: []const u8) ![]const u8 {
             appstate.vms[j] = appstate.vms[j + 1];
             appstate.g_vmm_handles[j] = appstate.g_vmm_handles[j + 1];
             rebindVmmHandleLocked(j);
-            appstate.vm_started[j] = appstate.vm_started[j + 1];
         }
     } else {
         // Shift [b .. a-1] right by 1
@@ -1937,13 +1936,11 @@ fn handleReorder(req: []const u8) ![]const u8 {
             appstate.vms[j] = appstate.vms[j - 1];
             appstate.g_vmm_handles[j] = appstate.g_vmm_handles[j - 1];
             rebindVmmHandleLocked(j);
-            appstate.vm_started[j] = appstate.vm_started[j - 1];
         }
     }
     appstate.vms[b] = saved_vm;
     appstate.g_vmm_handles[b] = saved_handle;
     rebindVmmHandleLocked(b);
-    appstate.vm_started[b] = saved_started;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
         logSaveErr("", e);
         return "save failed";
@@ -2063,7 +2060,8 @@ fn handleSuspend(req: []const u8) ![]const u8 {
         qemu.reapVm(v2);
     }
     appstate.destroyVmmHandle(idx);
-    appstate.vm_started[idx] = 0;
+    appstate.vms[idx].started_epoch = 0;
+    appstate.vms[idx].started_mono_sec = 0;
     persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
         logSaveErr("handleSuspend: ", e);
         return "save failed";
@@ -4186,7 +4184,8 @@ pub fn main(init: std.process.Init) !void {
                 logOpErr("autostart", e, appstate.vms[ai].getNameSlice());
                 continue;
             };
-            appstate.vm_started[ai] = time(null);
+            appstate.vms[ai].started_epoch = time(null);
+            appstate.vms[ai].started_mono_sec = appio.monoSecs();
             logAudit("autostart", appstate.vms[ai].getNameSlice());
         }
     }
