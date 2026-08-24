@@ -269,7 +269,7 @@ fn recvClosingFds(sock: c.fd_t, buf: []u8) isize {
     var off: usize = 0;
     const clen: usize = @intCast(msg.controllen);
     while (off + @sizeOf(Cmsghdr) <= clen) {
-        const hdr: *const Cmsghdr = @alignCast(@ptrCast(&cbuf[off]));
+        const hdr: *const Cmsghdr = @ptrCast(@alignCast(&cbuf[off]));
         if (hdr.len < @sizeOf(Cmsghdr) or off + hdr.len > clen) break;
         if (hdr.level == SOL_SOCKET and hdr.typ == SCM_RIGHTS) {
             const nfds = (hdr.len - @sizeOf(Cmsghdr)) / @sizeOf(c.fd_t);

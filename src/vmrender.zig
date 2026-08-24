@@ -149,7 +149,13 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
         if (v.nics[6].mac_len > 0) v.getNicMacSliceAny(6) else "",
         std.mem.span(v.nics[7].mode.toStr()),
         if (v.nics[7].mac_len > 0) v.getNicMacSliceAny(7) else "",
-        nv_e[0], nv_e[1], nv_e[2], nv_e[3], nv_e[4], nv_e[5], nv_e[6],
+        nv_e[0],
+        nv_e[1],
+        nv_e[2],
+        nv_e[3],
+        nv_e[4],
+        nv_e[5],
+        nv_e[6],
     }) catch return error.RenderFailed;
     w += part2c.len;
 
@@ -335,7 +341,13 @@ pub fn renderJson(buf: []u8) usize {
             if (v.nics[6].mac_len > 0) v.getNicMacSliceAny(6) else "",
             std.mem.span(v.nics[7].mode.toStr()),
             if (v.nics[7].mac_len > 0) v.getNicMacSliceAny(7) else "",
-            nv_e[0], nv_e[1], nv_e[2], nv_e[3], nv_e[4], nv_e[5], nv_e[6],
+            nv_e[0],
+            nv_e[1],
+            nv_e[2],
+            nv_e[3],
+            nv_e[4],
+            nv_e[5],
+            nv_e[6],
         }) catch {
             w = buf.len;
             break;

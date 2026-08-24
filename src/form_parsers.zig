@@ -243,7 +243,6 @@ test "parseAudio: hda, ac97, none" {
     try std.testing.expectEqual(vm.AudioDevice.none, parseAudio("sb16"));
 }
 
-
 test "parseAccel: known accelerators" {
     try std.testing.expectEqual(vm.VmAccel.auto, parseAccel("auto"));
     try std.testing.expectEqual(vm.VmAccel.tcg, parseAccel("tcg"));

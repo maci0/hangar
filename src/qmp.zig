@@ -1192,8 +1192,7 @@ fn isShellSafePath(path: []const u8) bool {
     if (path.len == 0) return false;
     for (path) |c| {
         switch (c) {
-            ' ', ';', '|', '&', '$', '`', '(', ')', '<', '>', '\'', '"',
-            '\\', '~', '#', '!', '*', '?', '\n', '\r', '\t', 0 => return false,
+            ' ', ';', '|', '&', '$', '`', '(', ')', '<', '>', '\'', '"', '\\', '~', '#', '!', '*', '?', '\n', '\r', '\t', 0 => return false,
             else => {},
         }
     }
@@ -1295,8 +1294,7 @@ test "fuzz: isShellSafePath accepts only metacharacter-free, non-empty paths" {
             try std.testing.expect(path.len > 0);
             for (path) |c| {
                 switch (c) {
-                    ' ', ';', '|', '&', '$', '`', '(', ')', '<', '>', '\'', '"',
-                    '\\', '~', '#', '!', '*', '?', '\n', '\r', '\t', 0 => {
+                    ' ', ';', '|', '&', '$', '`', '(', ')', '<', '>', '\'', '"', '\\', '~', '#', '!', '*', '?', '\n', '\r', '\t', 0 => {
                         try std.testing.expect(false);
                     },
                     else => {},

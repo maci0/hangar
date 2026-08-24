@@ -141,10 +141,10 @@ pub fn jsonEscape(buf: []u8, s: []const u8) EscapeResult {
 pub fn isServerErrToken(response: []const u8) bool {
     if (std.mem.startsWith(u8, response, "start err")) return true; // incl. "start err: <detail>"
     const tokens = [_][]const u8{
-        "apply err",  "bd err",     "cad err",   "cancel err",
-        "create err", "delete err", "linkerr",   "migrate err",
-        "nameerr",    "path err",   "qmp err",   "sock err",
-        "write err",  "change err", "eject err", "resize err",
+        "apply err",  "bd err",      "cad err",     "cancel err",
+        "create err", "delete err",  "linkerr",     "migrate err",
+        "nameerr",    "path err",    "qmp err",     "sock err",
+        "write err",  "change err",  "eject err",   "resize err",
         "upload err", "save failed", "compact err", "internal err",
     };
     for (tokens) |t| {

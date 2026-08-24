@@ -292,9 +292,9 @@ fn run(init: std.process.Init) !void {
 fn commandArity(command: []const u8) ?usize {
     const zero = [_][]const u8{ "list", "status" };
     const one = [_][]const u8{
-        "import",       "start", "stop",     "restart", "clone",
+        "import",       "start",  "stop",    "restart", "clone",
         "linked-clone", "delete", "suspend", "pause",   "resume",
-        "shutdown",     "reset", "cad",      "export",  "log",
+        "shutdown",     "reset",  "cad",     "export",  "log",
         "info",
     };
     for (zero) |k| if (std.mem.eql(u8, command, k)) return 0;
@@ -1136,9 +1136,9 @@ test "commandArity: zero-arg commands" {
 
 test "commandArity: single-target commands" {
     const one = [_][]const u8{
-        "import",       "start", "stop",     "restart", "clone",
+        "import",       "start",  "stop",    "restart", "clone",
         "linked-clone", "delete", "suspend", "pause",   "resume",
-        "shutdown",     "reset", "cad",      "export",  "log",
+        "shutdown",     "reset",  "cad",     "export",  "log",
         "info",
     };
     for (one) |cmd| {

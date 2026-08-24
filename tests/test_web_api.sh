@@ -34,8 +34,7 @@ PY
 
 wait_ready() {
     local url="$1"
-    local i
-    for i in $(seq 1 80); do
+    for _ in $(seq 1 80); do
         if curl -fsS --max-time 1 "$url/api/health" >/dev/null 2>&1; then
             return 0
         fi
@@ -94,8 +93,8 @@ expect_status() {
 # save, clone) don't depend on a fixed sleep racing the server.
 expect_body() {
     local desc="$1" url="$2" needle="$3"
-    local body i
-    for i in $(seq 1 30); do
+    local body
+    for _ in $(seq 1 30); do
         body=$(curl -s --max-time 3 "$url" 2>/dev/null || echo "")
         if echo "$body" | grep -qF "$needle"; then
             echo "  PASS: $desc"

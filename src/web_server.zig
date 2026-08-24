@@ -131,7 +131,6 @@ var active_connections: u32 = 0;
 var vms_spill_mutex: sync.SpinMutex = .{};
 var vms_spill_buf: []u8 = &.{};
 
-
 const SIGPIPE: c_int = 13;
 const SIG_IGN: isize = 1;
 
@@ -191,7 +190,6 @@ fn rateLimitCheck() bool {
     return false;
 }
 
-
 fn clampPref(v: []const u8, fallback: u32, lo: u32, hi: u32) u32 {
     const val = std.fmt.parseInt(u32, v, 10) catch return fallback;
     return std.math.clamp(val, lo, hi);
@@ -216,10 +214,6 @@ fn sanitizeSlug(name: []const u8, out: []u8) []const u8 {
     return out[0..n];
 }
 
-
-
-
-
 /// Copy the HTTP request line (method + path, up to the first CR/LF) into
 /// `out`, replacing every non-printable byte with '?'. Request data is
 /// client-controlled, so sanitizing here lets error logs carry route context
@@ -238,7 +232,6 @@ fn anyEql(s: []const u8, set: []const []const u8) bool {
 /// rather than by substring: a substring test for "err" misclassifies legitimate
 /// `text/plain` data — e.g. a snapshot named `fix-error` in the snapshot list —
 /// as a server error.
-
 /// Write an HTTP response with status code, content type, security headers, and
 /// body. The shared security headers are emitted inline below.
 ///
@@ -249,8 +242,6 @@ fn anyEql(s: []const u8, set: []const []const u8) bool {
 /// via a CORS-permitted `X-API-Key` preflight, issue state-changing POSTs
 /// (delete/create/power) cross-origin. Omitting it makes the browser block all
 /// cross-origin reads and the preflight, closing that CSRF/exfiltration path.
-
-
 /// Signal the server to shut down by closing/halting its listen sockets.
 /// Safe to call from any thread — unblocks blocking accept() calls.
 pub fn shutdownSignal() void {
@@ -318,10 +309,10 @@ fn acceptLoop(fd: c.fd_t) void {
 /// is "1" (true) / else (false). Driven by @field so create + save share one
 /// definition (autoprotect is excluded — create also sets a has_* sentinel).
 const bool_form_fields = [_][]const u8{
-    "guest_tools",           "enable_3d",   "embed_display", "enable_serial",
-    "virtio_rng",            "favorite",    "guest_agent",   "tpm",
-    "secure_boot",           "hyperv_enlightenments", "hugepages", "ballooning",
-    "host_autostart",        "video_stream",
+    "guest_tools",    "enable_3d",             "embed_display", "enable_serial",
+    "virtio_rng",     "favorite",              "guest_agent",   "tpm",
+    "secure_boot",    "hyperv_enlightenments", "hugepages",     "ballooning",
+    "host_autostart", "video_stream",
 };
 
 /// Set a boolean VmConfig field from a form key/value via @field. Returns true if
@@ -342,9 +333,9 @@ fn applyBoolField(v: *vm.VmConfig, key: []const u8, val: []const u8) bool {
 /// The enum type is recovered from the field via @TypeOf, so adding a field is
 /// one entry here (no type to repeat).
 const enum_form_fields = [_][]const u8{
-    "disk_format", "disk_cache",  "usb_policy",         "disk2_format",
-    "gpu_device",  "display",     "display_resolution", "guest_os",
-    "audio",       "boot_order",  "rtc",                "watchdog",
+    "disk_format", "disk_cache", "usb_policy",         "disk2_format",
+    "gpu_device",  "display",    "display_resolution", "guest_os",
+    "audio",       "boot_order", "rtc",                "watchdog",
 };
 
 /// Set a combobox-index enum field from a form key/value via @field + @TypeOf.
@@ -1037,9 +1028,6 @@ fn serveConfigRawAlloc() ?[]u8 {
     logWarn(std.fmt.bufPrint(&wb, "vms.json truncated to {d} bytes", .{CONFIG_RAW_MAX}) catch "vms.json truncated");
     return clipped;
 }
-
-
-
 
 /// Per-request error detail buffer for start-failure diagnostics.
 /// Thread-local because each accepted HTTP connection runs in its own thread.
@@ -2345,7 +2333,6 @@ fn handleCad(req: []const u8) ![]const u8 {
 }
 
 /// Parse Content-Length header value from an HTTP request. Returns null if not found.
-
 fn handleVnetsJson(buf: []u8) []const u8 {
     const set = vnet.load();
     const json = vnet.toJson(&set, std.heap.page_allocator) catch return "[]";
@@ -2374,11 +2361,8 @@ fn bodyVal(body: []const u8, key: []const u8) []const u8 {
     return "";
 }
 
-
-
 /// Strip dangerous characters from an HTTP header value.
 /// Replaces double-quote with single-quote and removes CR/LF.
-
 fn handleVnetsSave(req: []const u8) ![]const u8 {
     const body = getBody(req) orelse return "no body";
     // Body is raw JSON — parse and save
@@ -3479,14 +3463,14 @@ test "fuzz: routeExact rejects boundary-confusable requests" {
 
     // Routes that must match exactly (no suffix)
     const exact_routes = [_][]const u8{
-        "GET /api/vms",          "GET /api/health",
-        "GET /api/config",       "GET /api/catalog",
-        "GET /api/networks",     "GET /api/capabilities",
-        "POST /api/vms",         "POST /api/vms/save",
-        "POST /api/vms/undo",    "POST /api/vms/reorder",
-        "POST /api/vms/import",  "POST /api/networks",
-        "POST /api/config",      "GET /app.css",
-        "GET /app.js",           "GET /novnc.js",
+        "GET /api/vms",         "GET /api/health",
+        "GET /api/config",      "GET /api/catalog",
+        "GET /api/networks",    "GET /api/capabilities",
+        "POST /api/vms",        "POST /api/vms/save",
+        "POST /api/vms/undo",   "POST /api/vms/reorder",
+        "POST /api/vms/import", "POST /api/networks",
+        "POST /api/config",     "GET /app.css",
+        "GET /app.js",          "GET /novnc.js",
         "GET /spice.js",
     };
 
@@ -5131,8 +5115,9 @@ test "fuzz: migrate.statusHttpCode never panics and only ever returns mapped cod
     var prng = std.Random.DefaultPrng.init(0x9135_a7c2);
     const rnd = prng.random();
     const fragments = [_][]const u8{
-        "{\"status\":\"error\"", "invalid idx", "bad idx", "not running",
-        "qmp query", "\"status\":\"active\"", "}", ",", "\"", "x",
+        "{\"status\":\"error\"", "invalid idx",           "bad idx", "not running",
+        "qmp query",             "\"status\":\"active\"", "}",       ",",
+        "\"",                    "x",
     };
     var buf: [256]u8 = undefined;
     var i: usize = 0;
@@ -5354,14 +5339,13 @@ test "fuzz: handleUploadDisk multipart parser never panics on structured input" 
 
         // Random filename token, including traversal / injection bait.
         const fnames = [_][]const u8{
-            "disk.qcow2", "../../etc/passwd", "a,b.img", "x\x00y", "", "no-quote",
-            "with space.vmdk", "..", "a\"b", "\r\n",
+            "disk.qcow2",      "../../etc/passwd", "a,b.img", "x\x00y", "", "no-quote",
+            "with space.vmdk", "..",               "a\"b",    "\r\n",
         };
         const fname = fnames[rnd.uintLessThan(usize, fnames.len)];
 
         const quoted = rnd.boolean();
-        const msg = std.fmt.bufPrint(&buf,
-            "POST /api/vms/0/disk2 HTTP/1.1\r\nContent-Length: 200\r\nContent-Type: multipart/form-data; boundary={s}\r\n\r\n" ++
+        const msg = std.fmt.bufPrint(&buf, "POST /api/vms/0/disk2 HTTP/1.1\r\nContent-Length: 200\r\nContent-Type: multipart/form-data; boundary={s}\r\n\r\n" ++
             "--{s}\r\nContent-Disposition: form-data; name=\"file\"; filename={s}{s}{s}\r\n\r\n" ++
             "PAYLOAD-BYTES\r\n--{s}--\r\n", .{
             bnd[0..bnd_len],

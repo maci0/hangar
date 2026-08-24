@@ -24,6 +24,84 @@ const AF_INET = netutil.AF_INET;
 const SOCK_STREAM = netutil.SOCK_STREAM;
 const SHUT_RDWR = netutil.SHUT_RDWR;
 
+/// Shared relay state: one WebSocket fd, one peer fd (VNC/SPICE TCP or serial
+/// Unix socket), and `wmtx`, which serializes writes to `ws_fd`: both the
+/// data-relay thread (writeFrame) and the control path (writePong) write to
+/// the same socket, and writeFrame emits the frame header and payload as two
+/// separate write() calls — without the lock a concurrent pong can interleave
+/// between them and corrupt the WebSocket frame stream.
+const RelayCtx = struct {
+    ws_fd: c.fd_t,
+    peer_fd: c.fd_t,
+    wmtx: sync.SpinMutex = .{},
+};
+
+const RelayThreads = struct { peer2ws: std.Thread, ws2peer: std.Thread };
+
+/// Spawn the bidirectional relay threads between a WebSocket and a raw peer
+/// fd. `ws_data` selects the WS opcode for data frames (.binary for
+/// VNC/SPICE, .text for serial). On error both directions have been shut
+/// down and no thread is left running; fd closing stays with the caller.
+fn spawnRelayThreads(ws_data: ws.Opcode, ctx: *RelayCtx) !RelayThreads {
+    const peer2ws = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+        fn run(ctx_ptr: *RelayCtx, data_opcode: ws.Opcode) void {
+            var buf: [65536]u8 = undefined;
+            while (true) {
+                const n = c.read(ctx_ptr.peer_fd, &buf, buf.len);
+                if (n <= 0) break;
+                ctx_ptr.wmtx.lock();
+                ws.writeFrame(ctx_ptr.ws_fd, data_opcode, buf[0..@intCast(n)]) catch {
+                    ctx_ptr.wmtx.unlock();
+                    break;
+                };
+                ctx_ptr.wmtx.unlock();
+            }
+            // Shutdown both directions so the peer thread unblocks.
+            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
+        }
+    }.run, .{ ctx, ws_data }) catch return error.ThreadSpawnFailed;
+
+    const ws2peer = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
+        fn run(ctx_ptr: *RelayCtx) void {
+            var buf: [65536]u8 = undefined;
+            while (true) {
+                const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
+                if (hdr.opcode == .close) break;
+                if (hdr.opcode == .ping) {
+                    // Drain the ping's payload (RFC 6455 allows ≤125 bytes) before
+                    // replying — leaving it on the wire would desync the next frame.
+                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
+                    ctx_ptr.wmtx.lock();
+                    ws.writePong(ctx_ptr.ws_fd) catch {
+                        ctx_ptr.wmtx.unlock();
+                        break;
+                    };
+                    ctx_ptr.wmtx.unlock();
+                    continue;
+                }
+                // A pong may also carry a payload; consume it to stay frame-aligned.
+                if (hdr.opcode == .pong) {
+                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
+                    continue;
+                }
+                const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
+                if (rlen == 0) continue;
+                if (!writeAll(ctx_ptr.peer_fd, buf[0..rlen].ptr, rlen)) break;
+            }
+            // Shutdown both directions so the peer thread unblocks.
+            _ = c.shutdown(ctx_ptr.peer_fd, SHUT_RDWR);
+        }
+    }.run, .{ctx}) catch {
+        // First thread is running; shut down both FDs to unblock it.
+        _ = c.shutdown(ctx.peer_fd, SHUT_RDWR);
+        _ = c.shutdown(ctx.ws_fd, SHUT_RDWR);
+        peer2ws.join();
+        return error.ThreadSpawnFailed;
+    };
+
+    return .{ .peer2ws = peer2ws, .ws2peer = ws2peer };
+}
+
 /// Handle WebSocket VNC proxy request.
 /// Upgrades the connection to WebSocket, connects to the VM's VNC port,
 /// and spawns bidirectional relay threads.
@@ -75,86 +153,14 @@ pub fn vnc(conn: c.fd_t, req: []const u8) !void {
     }
     setTcpNoDelay(vnc_fd);
 
-    // Spawn threads for bidirectional relay.
-    // `wmtx` serializes writes to `ws_fd`: both the data-relay thread
-    // (writeFrame) and the control thread (writePong) write to the same
-    // socket, and writeFrame emits the frame header and payload as two
-    // separate write() calls — without the lock a concurrent pong can
-    // interleave between them and corrupt the WebSocket frame stream.
-    const RelayCtx = struct {
-        ws_fd: c.fd_t,
-        vnc_fd: c.fd_t,
-        wmtx: sync.SpinMutex = .{},
-    };
-    var ctx = RelayCtx{ .ws_fd = conn, .vnc_fd = vnc_fd };
-
-    // Thread: VNC → WebSocket
-    const vnc2ws = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
-        fn run(ctx_ptr: *RelayCtx) void {
-            var buf: [65536]u8 = undefined;
-            while (true) {
-                const n = c.read(ctx_ptr.vnc_fd, &buf, buf.len);
-                if (n <= 0) break;
-                // Relay VNC bytes to the WebSocket client as a binary frame.
-                ctx_ptr.wmtx.lock();
-                ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch {
-                    ctx_ptr.wmtx.unlock();
-                    break;
-                };
-                ctx_ptr.wmtx.unlock();
-            }
-            // Shutdown both directions so the peer thread unblocks.
-            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
-        }
-    }.run, .{&ctx}) catch {
+    var ctx = RelayCtx{ .ws_fd = conn, .peer_fd = vnc_fd };
+    const threads = spawnRelayThreads(.binary, &ctx) catch {
         _ = c.close(vnc_fd);
         try ws.writeClose(conn);
         return;
     };
-
-    // Thread: WebSocket → VNC
-    const ws2vnc = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
-        fn run(ctx_ptr: *RelayCtx) void {
-            var buf: [65536]u8 = undefined;
-            while (true) {
-                const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
-                if (hdr.opcode == .close) break;
-                if (hdr.opcode == .ping) {
-                    // Drain the ping's payload (RFC 6455 allows ≤125 bytes) before
-                    // replying — leaving it on the wire would desync the next frame.
-                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
-                    ctx_ptr.wmtx.lock();
-                    ws.writePong(ctx_ptr.ws_fd) catch {
-                        ctx_ptr.wmtx.unlock();
-                        break;
-                    };
-                    ctx_ptr.wmtx.unlock();
-                    continue;
-                }
-                // A pong may also carry a payload; consume it to stay frame-aligned.
-                if (hdr.opcode == .pong) {
-                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
-                    continue;
-                }
-                const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
-                if (rlen == 0) continue;
-                if (!writeAll(ctx_ptr.vnc_fd, buf[0..rlen].ptr, rlen)) break;
-            }
-            // Shutdown both directions so the peer thread unblocks.
-            _ = c.shutdown(ctx_ptr.vnc_fd, SHUT_RDWR);
-        }
-    }.run, .{&ctx}) catch {
-        // First thread is running; shut down both FDs to unblock it.
-        _ = c.shutdown(vnc_fd, SHUT_RDWR);
-        _ = c.shutdown(conn, SHUT_RDWR);
-        vnc2ws.join();
-        _ = c.close(vnc_fd);
-        try ws.writeClose(conn);
-        return;
-    };
-
-    vnc2ws.join();
-    ws2vnc.join();
+    threads.peer2ws.join();
+    threads.ws2peer.join();
     _ = c.close(vnc_fd);
 }
 
@@ -209,81 +215,14 @@ pub fn spice(conn: c.fd_t, req: []const u8) !void {
     }
     setTcpNoDelay(spice_fd);
 
-    // Spawn threads for bidirectional relay. `wmtx` serializes writes to
-    // `ws_fd` (writeFrame vs writePong) — see the vnc relay above for the rationale.
-    const RelayCtx = struct {
-        ws_fd: c.fd_t,
-        spice_fd: c.fd_t,
-        wmtx: sync.SpinMutex = .{},
-    };
-    var ctx = RelayCtx{ .ws_fd = conn, .spice_fd = spice_fd };
-
-    // Thread: SPICE → WebSocket
-    const spice2ws = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
-        fn run(ctx_ptr: *RelayCtx) void {
-            var buf: [65536]u8 = undefined;
-            while (true) {
-                const n = c.read(ctx_ptr.spice_fd, &buf, buf.len);
-                if (n <= 0) break;
-                ctx_ptr.wmtx.lock();
-                ws.writeFrame(ctx_ptr.ws_fd, .binary, buf[0..@intCast(n)]) catch {
-                    ctx_ptr.wmtx.unlock();
-                    break;
-                };
-                ctx_ptr.wmtx.unlock();
-            }
-            // Shutdown both directions so the peer thread unblocks.
-            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
-        }
-    }.run, .{&ctx}) catch {
+    var ctx = RelayCtx{ .ws_fd = conn, .peer_fd = spice_fd };
+    const threads = spawnRelayThreads(.binary, &ctx) catch {
         _ = c.close(spice_fd);
         try ws.writeClose(conn);
         return;
     };
-
-    // Thread: WebSocket → SPICE
-    const ws2spice = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
-        fn run(ctx_ptr: *RelayCtx) void {
-            var buf: [65536]u8 = undefined;
-            while (true) {
-                const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
-                if (hdr.opcode == .close) break;
-                if (hdr.opcode == .ping) {
-                    // Drain the ping's payload (RFC 6455 allows ≤125 bytes) before
-                    // replying — leaving it on the wire would desync the next frame.
-                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
-                    ctx_ptr.wmtx.lock();
-                    ws.writePong(ctx_ptr.ws_fd) catch {
-                        ctx_ptr.wmtx.unlock();
-                        break;
-                    };
-                    ctx_ptr.wmtx.unlock();
-                    continue;
-                }
-                // A pong may also carry a payload; consume it to stay frame-aligned.
-                if (hdr.opcode == .pong) {
-                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
-                    continue;
-                }
-                const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
-                if (rlen == 0) continue;
-                if (!writeAll(ctx_ptr.spice_fd, buf[0..rlen].ptr, rlen)) break;
-            }
-            // Shutdown both directions so the peer thread unblocks.
-            _ = c.shutdown(ctx_ptr.spice_fd, SHUT_RDWR);
-        }
-    }.run, .{&ctx}) catch {
-        // First thread is running; shut down both FDs to unblock it.
-        _ = c.shutdown(spice_fd, SHUT_RDWR);
-        _ = c.shutdown(conn, SHUT_RDWR);
-        spice2ws.join();
-        _ = c.close(spice_fd);
-        try ws.writeClose(conn);
-        return;
-    };
-
-    spice2ws.join();
-    ws2spice.join();
+    threads.peer2ws.join();
+    threads.ws2peer.join();
     _ = c.close(spice_fd);
 }
 
@@ -331,81 +270,14 @@ pub fn serialConsole(conn: c.fd_t, req: []const u8) !void {
         return;
     };
 
-    // Spawn threads for bidirectional relay.
-    const RelayCtx = struct {
-        ws_fd: c.fd_t,
-        serial_fd: c.fd_t,
-        wmtx: sync.SpinMutex = .{},
-    };
-    var ctx = RelayCtx{ .ws_fd = conn, .serial_fd = serial.fd };
-
-    // Thread: serial → WebSocket. `wmtx` serializes writes to `ws_fd`
-    // (writeFrame vs writePong) — see the vnc relay above for the rationale.
-    const ser2ws = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
-        fn run(ctx_ptr: *RelayCtx) void {
-            var buf: [65536]u8 = undefined;
-            while (true) {
-                const n = c.read(ctx_ptr.serial_fd, &buf, buf.len);
-                if (n <= 0) break;
-                ctx_ptr.wmtx.lock();
-                ws.writeFrame(ctx_ptr.ws_fd, .text, buf[0..@intCast(n)]) catch {
-                    ctx_ptr.wmtx.unlock();
-                    break;
-                };
-                ctx_ptr.wmtx.unlock();
-            }
-            // Shutdown both directions so the peer thread unblocks.
-            _ = c.shutdown(ctx_ptr.ws_fd, SHUT_RDWR);
-        }
-    }.run, .{&ctx}) catch {
+    var ctx = RelayCtx{ .ws_fd = conn, .peer_fd = serial.fd };
+    const threads = spawnRelayThreads(.text, &ctx) catch {
         serial.close();
         try ws.writeClose(conn);
         return;
     };
-
-    // Thread: WebSocket → serial
-    const ws2ser = std.Thread.spawn(std.Thread.SpawnConfig{}, struct {
-        fn run(ctx_ptr: *RelayCtx) void {
-            var buf: [65536]u8 = undefined;
-            while (true) {
-                const hdr = ws.readFrameHeader(ctx_ptr.ws_fd) orelse break;
-                if (hdr.opcode == .close) break;
-                if (hdr.opcode == .ping) {
-                    // Drain the ping's payload (RFC 6455 allows ≤125 bytes) before
-                    // replying — leaving it on the wire would desync the next frame.
-                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
-                    ctx_ptr.wmtx.lock();
-                    ws.writePong(ctx_ptr.ws_fd) catch {
-                        ctx_ptr.wmtx.unlock();
-                        break;
-                    };
-                    ctx_ptr.wmtx.unlock();
-                    continue;
-                }
-                // A pong may also carry a payload; consume it to stay frame-aligned.
-                if (hdr.opcode == .pong) {
-                    _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
-                    continue;
-                }
-                const rlen = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
-                if (rlen == 0) continue;
-                if (!writeAll(ctx_ptr.serial_fd, buf[0..rlen].ptr, rlen)) break;
-            }
-            // Shutdown both directions so the peer thread unblocks.
-            _ = c.shutdown(ctx_ptr.serial_fd, SHUT_RDWR);
-        }
-    }.run, .{&ctx}) catch {
-        // First thread is running; shut down both FDs to unblock it.
-        _ = c.shutdown(serial.fd, SHUT_RDWR);
-        _ = c.shutdown(conn, SHUT_RDWR);
-        ser2ws.join();
-        serial.close();
-        try ws.writeClose(conn);
-        return;
-    };
-
-    ser2ws.join();
-    ws2ser.join();
+    threads.peer2ws.join();
+    threads.ws2peer.join();
     serial.close();
 }
 

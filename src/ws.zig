@@ -46,7 +46,7 @@ fn headerValueContains(req: []const u8, name: []const u8, token: []const u8) boo
         if (line.len == 0) return false; // end of headers
         const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
         const hname = line[0..colon];
-        if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, hname, " \t"), std.mem.trim(u8, name[0..name.len-1], " "))) continue;
+        if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, hname, " \t"), std.mem.trim(u8, name[0 .. name.len - 1], " "))) continue;
         const value = line[colon + 1 ..];
         var it = std.mem.tokenizeAny(u8, value, ", \t");
         while (it.next()) |tok| {

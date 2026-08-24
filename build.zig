@@ -122,4 +122,19 @@ pub fn build(b: *std.Build) !void {
     const vmrun_cmd = b.addSystemCommand(&.{ "bash", "tests/test_vmrun.sh" });
     vmrun_cmd.step.dependOn(&install_web_exe.step);
     vmrun_test.dependOn(&vmrun_cmd.step);
+
+    // ── Static analysis (also enforced as blocking CI steps) ──
+    // fmt-check scopes to git-tracked files so vendored code (zig-pkg/) and
+    // scratch trees are never formatted or flagged.
+    const fmt_check = b.step("fmt-check", "Check formatting of tracked Zig sources (zig fmt)");
+    const fmt_cmd = b.addSystemCommand(&.{
+        "bash", "-c", "zig fmt --check $(git ls-files '*.zig' '*.zon')",
+    });
+    fmt_check.dependOn(&fmt_cmd.step);
+
+    const lint_shell = b.step("lint-shell", "Lint shell scripts (shellcheck)");
+    const lint_shell_cmd = b.addSystemCommand(&.{
+        "shellcheck", "tests/test_web_api.sh", "tests/test_vmrun.sh",
+    });
+    lint_shell.dependOn(&lint_shell_cmd.step);
 }
