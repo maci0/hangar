@@ -1169,9 +1169,9 @@ pub const VmConfig = struct {
     /// and the app connects as a VNC client to show the display inline.
     embed_display: bool = true,
     /// localhost port for embedded VNC (5900 + N).  Auto-assigned per VM.
-    vnc_port: u16 = 5900,
+    vnc_port: u16 = VNC_PORT_MIN,
     /// localhost port for embedded SPICE.  Auto-assigned per VM.
-    spice_port: u16 = 5930,
+    spice_port: u16 = SPICE_PORT_MIN,
     /// Enable serial console via Unix socket.
     enable_serial: bool = true,
     /// Enable virtio-rng entropy device for the guest.

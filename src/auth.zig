@@ -41,6 +41,22 @@ pub fn secretEql(a: []const u8, b: []const u8) bool {
     return diff == 0;
 }
 
+/// True if a Host/Origin authority (`host`, `host:port`, or bracketed IPv6)
+/// names the loopback interface. Shared by the Host-header gate and the WS
+/// Origin gate so the two allowlists cannot drift.
+fn isLoopbackHost(host_port: []const u8) bool {
+    const addr = if (std.mem.lastIndexOfScalar(u8, host_port, ']')) |rb|
+        host_port[0 .. rb + 1]
+    else if (std.mem.indexOfScalar(u8, host_port, ':')) |colon|
+        host_port[0..colon]
+    else
+        host_port;
+    return std.ascii.eqlIgnoreCase(addr, "localhost") or
+        std.mem.eql(u8, addr, "127.0.0.1") or
+        std.mem.eql(u8, addr, "[::1]") or
+        std.mem.eql(u8, addr, "::1");
+}
+
 /// Validate the request's `Host` header against the loopback allowlist. Only
 /// enforced in loopback mode (no custom key); closes a DNS-rebinding hole
 /// (CWE-350/1385). When a key is set, the secret — not the origin — is the
@@ -49,16 +65,7 @@ pub fn hostHeaderOk(req: []const u8) bool {
     if (token_len > 0) return true; // exposed mode: secret key gates access
     const hdr_end = std.mem.indexOf(u8, req, "\r\n\r\n") orelse req.len;
     const host = httpreq.findHeader(req[0..hdr_end], "Host: ") orelse return false;
-    const addr = if (std.mem.lastIndexOfScalar(u8, host, ']')) |rb|
-        host[0 .. rb + 1]
-    else if (std.mem.indexOfScalar(u8, host, ':')) |colon|
-        host[0..colon]
-    else
-        host;
-    return std.ascii.eqlIgnoreCase(addr, "localhost") or
-        std.mem.eql(u8, addr, "127.0.0.1") or
-        std.mem.eql(u8, addr, "[::1]") or
-        std.mem.eql(u8, addr, "::1");
+    return isLoopbackHost(host);
 }
 
 /// True if the request carries a valid `X-API-Key` (custom token if set, else
@@ -133,16 +140,7 @@ pub fn wsOriginOk(req: []const u8) bool {
     const after_scheme = if (std.mem.indexOf(u8, origin, "://")) |s| origin[s + 3 ..] else return false;
     // Host[:port] — take up to the first '/' if any.
     const host_port = if (std.mem.indexOfScalar(u8, after_scheme, '/')) |sl| after_scheme[0..sl] else after_scheme;
-    const addr = if (std.mem.lastIndexOfScalar(u8, host_port, ']')) |rb|
-        host_port[0 .. rb + 1]
-    else if (std.mem.indexOfScalar(u8, host_port, ':')) |colon|
-        host_port[0..colon]
-    else
-        host_port;
-    return std.ascii.eqlIgnoreCase(addr, "localhost") or
-        std.mem.eql(u8, addr, "127.0.0.1") or
-        std.mem.eql(u8, addr, "[::1]") or
-        std.mem.eql(u8, addr, "::1");
+    return isLoopbackHost(host_port);
 }
 
 /// Auth-gate a WebSocket route. Rejects a foreign Origin first (cross-site WS
@@ -180,6 +178,23 @@ test "auth: secretEql is length-checked equality" {
     try std.testing.expect(secretEql("abc", "abc"));
     try std.testing.expect(!secretEql("abc", "abd"));
     try std.testing.expect(!secretEql("abc", "ab"));
+}
+
+test "auth: isLoopbackHost strips port and accepts all loopback spellings" {
+    try std.testing.expect(isLoopbackHost("localhost"));
+    try std.testing.expect(isLoopbackHost("LocalHost"));
+    try std.testing.expect(isLoopbackHost("localhost:9080"));
+    try std.testing.expect(isLoopbackHost("127.0.0.1"));
+    try std.testing.expect(isLoopbackHost("127.0.0.1:1"));
+    try std.testing.expect(isLoopbackHost("[::1]"));
+    try std.testing.expect(isLoopbackHost("[::1]:9080"));
+    // Bare (unbracketed) IPv6 is not a valid Host/Origin authority and has
+    // never been accepted by this gate — pinned here so it stays that way.
+    try std.testing.expect(!isLoopbackHost("::1"));
+    try std.testing.expect(!isLoopbackHost("127.0.0.2"));
+    try std.testing.expect(!isLoopbackHost("evil.example.com:80"));
+    try std.testing.expect(!isLoopbackHost("[::2]"));
+    try std.testing.expect(!isLoopbackHost(""));
 }
 
 test "auth: wsOriginOk allows loopback + no-origin, rejects foreign" {

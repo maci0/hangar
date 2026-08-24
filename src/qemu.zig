@@ -1540,10 +1540,11 @@ fn isDecimalPort(s: []const u8) bool {
     return n != 0;
 }
 
-/// VNC display number for a TCP port: `port - 5900`, saturated to 0 when
-/// `port < 5900` to prevent u16 underflow (panic in debug, UB in release).
+/// VNC display number for a TCP port: `port - VNC_PORT_MIN`, saturated to 0
+/// when below the range floor to prevent u16 underflow (panic in debug, UB in
+/// release). Uses the canonical bound from vm.zig.
 fn vncDisplayNum(port: u16) u16 {
-    return if (port >= 5900) port - 5900 else 0;
+    return if (port >= vm.VNC_PORT_MIN) port - vm.VNC_PORT_MIN else 0;
 }
 
 /// Returns true if `s` can be safely interpolated into a single value of a
