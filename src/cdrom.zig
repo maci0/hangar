@@ -157,7 +157,7 @@ test "cdrom: change/eject reject a non-matching request" {
 
 test "fuzz: isSafePath accepts nothing it claims is unsafe" {
     // A "safe" path reaches `-drive file=...`; if it passes it must carry no
-    // `,` / `..` / control byte — a logic regression that whitelisted one of
+    // `,` / `..` / control byte, a logic regression that whitelisted one of
     // those would let an injected `-drive` option or arg-splitter slip through.
     var prng = std.Random.DefaultPrng.init(0xC0_DE_15);
     const rnd = prng.random();

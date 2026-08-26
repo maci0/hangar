@@ -27,7 +27,7 @@ pub const SnapNodes = struct {
     }
 };
 
-/// "YYYY-MM-DD" — digits with dashes at positions 4 and 7.
+/// "YYYY-MM-DD": digits with dashes at positions 4 and 7.
 fn isDateTok(s: []const u8) bool {
     if (s.len != 10) return false;
     for (s, 0..) |ch, i| {
@@ -38,7 +38,7 @@ fn isDateTok(s: []const u8) bool {
     return true;
 }
 
-/// "HH:MM:SS" prefix — digits with colons at positions 2 and 5.
+/// "HH:MM:SS" prefix, digits with colons at positions 2 and 5.
 fn isTimeTok(s: []const u8) bool {
     if (s.len < 8) return false;
     for (s[0..8], 0..) |ch, i| {
@@ -56,7 +56,7 @@ pub fn parse(output: []const u8) SnapNodes {
     var nodes = SnapNodes{};
     // Split on \n and lone \r alike (a \r\n pair yields an empty token that the
     // trim/empty-line check below drops), so line splitting is robust for any
-    // line ending and any input size — no fixed-size normalization buffer.
+    // line ending and any input size, no fixed-size normalization buffer.
     var lines = std.mem.splitAny(u8, output, "\r\n");
     while (lines.next()) |line| {
         if (nodes.count >= MAX_SNAP_NODES) break;
@@ -172,7 +172,7 @@ test "fuzz: snapparse never panics and stays bounded" {
         }
         const n = parse(buf[0..len]);
         try t.expect(n.count <= MAX_SNAP_NODES);
-        // Exercise the nameSlice accessor on every parsed node — a regression in
+        // Exercise the nameSlice accessor on every parsed node, a regression in
         // parse that recorded name_len >= SNAP_NAME_CAP would index out of the
         // fixed buffer here, which a count/len-only check would miss.
         for (0..n.count) |k| {
@@ -246,14 +246,14 @@ test "snapparse: tags with spaces are truncated to first token only" {
 }
 
 test "snapparse: empty tag after numeric ID" {
-    // "1  0 B" — second token is "0" (a valid tag name).
+    // "1  0 B": second token is "0" (a valid tag name).
     const n = parse("1  0 B\n");
     try t.expectEqual(@as(usize, 1), n.count);
     try t.expectEqualStrings("0", n.nameSlice(0));
 }
 
 test "snapparse: truly empty tag (single token row)" {
-    // Row with an ID but no second token — skipped.
+    // Row with an ID but no second token, skipped.
     const n = parse("1\n");
     try t.expectEqual(@as(usize, 0), n.count);
 }

@@ -8,7 +8,7 @@
 //! connection: parses incoming method calls (Scanout/Update/ScanoutMap/...),
 //! replies METHOD_RETURN, harvests+closes any passed fds, and logs frame
 //! cadence. The hand-rolled D-Bus marshal/parse below covers exactly the
-//! subset this needs — no libdbus/glib (project constraint).
+//! subset this needs, no libdbus/glib (project constraint).
 
 const std = @import("std");
 const c = std.c;
@@ -252,7 +252,7 @@ fn sendWithFd(sock: c.fd_t, data: []const u8, fd: c.fd_t) bool {
     return c.sendmsg(sock, &msg, 0) > 0;
 }
 
-/// recvmsg that harvests (and immediately closes) any SCM_RIGHTS fds — phase 1
+/// recvmsg that harvests (and immediately closes) any SCM_RIGHTS fds, phase 1
 /// only observes cadence; dmabuf/memfd payloads are not consumed yet, and
 /// leaking them would exhaust the fd table within seconds at 60 fps.
 fn recvClosingFds(sock: c.fd_t, buf: []u8) isize {
@@ -337,7 +337,7 @@ pub const AuSplitter = struct {
 
     /// Append encoder bytes; for each complete AU found, calls
     /// emit(ctx, au_bytes, is_key). Returns false if the buffer overflowed
-    /// (stream hopeless — caller should tear down).
+    /// (stream hopeless, caller should tear down).
     pub fn feed(self: *AuSplitter, data: []const u8, ctx: anytype, comptime emit: fn (@TypeOf(ctx), []const u8, bool) bool) bool {
         if (self.len + data.len > self.buf.len) return false;
         @memcpy(self.buf[self.len..][0..data.len], data);
@@ -387,7 +387,7 @@ pub const Session = struct {
     name_len: u8 = 0,
     // Reference count guarded by sessions_mutex: the owning listener thread
     // holds one ref, each attached video client holds one. The Session (and
-    // its framebuffer) is destroyed only at the final unref — a VM power-off
+    // its framebuffer) is destroyed only at the final unref, a VM power-off
     // mid-stream must not free memory under the video client's feet (that
     // exact use-after-free panicked in serveVideoClient's deferred cleanup).
     refs: u32 = 1,
@@ -405,7 +405,7 @@ pub const Session = struct {
     // the top of pushFrameNowLocked when it is not mid-write. The client thread
     // (startEncoder) publishes a freshly-spawned ffmpeg's stdin via
     // enc_in_pending; the feed thread adopts it (closing any prior enc_in).
-    // This single-owner handoff is what makes the lock-free write safe — an
+    // This single-owner handoff is what makes the lock-free write safe, an
     // earlier version had the client thread close enc_in directly, which could
     // close the fd the feed thread was mid-writing (use-after-close).
     enc_in: c.fd_t = -1,
@@ -520,7 +520,7 @@ pub fn attachThread(ctx: *AttachCtx) void {
     const sess = registerSession(name) orelse return;
     defer unregisterSession(sess);
     // Under load (parallel test suites, many simultaneous boots) QEMU may not
-    // have its QMP socket or dbus display up at the first try — retry the
+    // have its QMP socket or dbus display up at the first try, retry the
     // handshake stages before giving up.
     var tries: u32 = 0;
     while (true) {
@@ -608,7 +608,7 @@ fn attach(sess: *Session) !void {
     }
 
     // On the listener connection QEMU is the AUTH SERVER (it method-calls us
-    // after auth, but the handshake roles are independent of call direction —
+    // after auth, but the handshake roles are independent of call direction,
     // verified: it sat silent waiting for our AUTH until the VM died).
     if (!authClient(lst)) return error.ListenerAuth;
     {
@@ -700,7 +700,7 @@ fn pushFrameNowLocked(sess: *Session, now: u64) void {
     const fb = sess.fb orelse return;
     // enc_in is owned by THIS thread (the single listener/feed thread): only it
     // writes the pipe and only it closes the fd. The write runs WITHOUT any lock
-    // held — a back-pressured ffmpeg must never pin enc_mutex (the killer needs
+    // held, a back-pressured ffmpeg must never pin enc_mutex (the killer needs
     // it) or fb_mutex (the listener needs it). stopEncoder does not touch enc_in;
     // it kills ffmpeg, which EPIPEs this write, and we close the fd ourselves.
     sess.enc_mutex.lock();
@@ -726,7 +726,7 @@ fn pushFrameNowLocked(sess: *Session, now: u64) void {
     sess.fb_dirty = false;
     const ok = writeAllFd(fd, fb);
     if (!ok) {
-        // ffmpeg gone (EPIPE) — close our end and tear down so a reconnect restarts it.
+        // ffmpeg gone (EPIPE): close our end and tear down so a reconnect restarts it.
         sess.enc_mutex.lock();
         if (sess.enc_in == fd) {
             _ = c.close(fd);
@@ -784,7 +784,7 @@ fn startEncoder(sess: *Session, w: u32, h: u32) bool {
 fn stopEncoderLocked(sess: *Session) void {
     // Capture the pid and decide fd ownership under the lock, then kill+waitpid
     // OUTSIDE it: waitpid can block, and a feed thread back-pressured on enc_in
-    // holds no lock but needs ffmpeg dead to unblock — so the killer must not
+    // holds no lock but needs ffmpeg dead to unblock, so the killer must not
     // wait on a lock the writer might hold. enc_in is owned by the feed thread
     // (it closes it on EPIPE); enc_out by the pump (closes on read EOF). We only
     // close a fd here when its owner thread is NOT running.
@@ -799,7 +799,7 @@ fn stopEncoderLocked(sess: *Session) void {
     sess.enc_pid = -1;
     sess.enc_out = -1;
     // If a freshly-spawned stdin was published but the feed thread hasn't
-    // adopted it yet, it belongs to the ffmpeg we are killing — close it here.
+    // adopted it yet, it belongs to the ffmpeg we are killing, close it here.
     if (sess.enc_in_pending >= 0) {
         _ = c.close(sess.enc_in_pending);
         sess.enc_in_pending = -1;
@@ -946,7 +946,7 @@ fn emitAu(sess: *Session, au: []const u8, key: bool) bool {
     // freeze every other viewer + the pump for the 30s send timeout). But a bare
     // snapshotted fd is unsafe: the client thread closes its own fd on exit
     // independently of this lock, and the kernel can recycle that number for a
-    // fresh connection before we write — sending H.264 bytes into an unrelated
+    // fresh connection before we write: sending H.264 bytes into an unrelated
     // socket. A dup holds its own reference to the SAME open socket, so it never
     // aliases a new connection; if the peer is gone the write just fails (EPIPE).
     var dups: [MAX_VIDEO_CLIENTS]c.fd_t = undefined;

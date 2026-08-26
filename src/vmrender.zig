@@ -1,5 +1,5 @@
 //! VM -> JSON rendering: the list payload (GET /api/vms) and the detail payload
-//! (GET /api/vms/<id>, also the settings form source). Pure formatting — reads
+//! (GET /api/vms/<id>, also the settings form source). Pure formatting: reads
 //! VMs under vms_mutex, writes JSON into a caller buffer. String fields are
 //! escaped via httpresp.jsonEscape.
 
@@ -46,7 +46,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
 
     // Pre-escape user-controlled strings. Each needs its own buffer because
     // bufPrint tuple args are evaluated left-to-right, and each escapeJson
-    // call overwrites the same buffer — earlier slices would dangle.
+    // call overwrites the same buffer: earlier slices would dangle.
     var name_buf: [vm.MAX_NAME * 2 + 64]u8 = undefined;
     const name_e = escapeJson(&name_buf, v.getNameSlice(), "name");
 
@@ -94,7 +94,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     }) catch return error.RenderFailed;
     w += part1.len;
 
-    // Remaining fields — split to stay under 32-arg limit
+    // Remaining fields: split to stay under 32-arg limit
     const part2a = std.fmt.bufPrint(buf[w..],
         \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"guest_agent":{s},"watchdog":{d},"tpm":{s},"secure_boot":{s},"hyperv_enlightenments":{s},"hugepages":{s},"io_threads":{d},"disk_bps_throttle":{d},"disk_iops_throttle":{d}
     , .{
@@ -198,7 +198,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     }) catch return error.RenderFailed;
     w += part2d.len;
 
-    // cloud-init user-data can be multi-KB and contain quotes/newlines — escape
+    // cloud-init user-data can be multi-KB and contain quotes/newlines, escape
     // it into its own buffer. This part closes the JSON object.
     var ci_esc: [vm.MAX_CLOUD_INIT * 3]u8 = undefined;
     const ci_e = if (v.hasCloudInit()) escapeJson(&ci_esc, v.getCloudInitSlice(), "cloud_init") else "";
@@ -281,7 +281,7 @@ pub fn renderJson(buf: []u8) usize {
         };
         w += part1.len;
 
-        // Remaining fields — split to stay under 32-arg limit
+        // Remaining fields: split to stay under 32-arg limit
         const part2a = std.fmt.bufPrint(buf[w..],
             \\,"mac":"{s}","nic2_mode":"{s}","nic2_mac":"{s}","nic3_mode":"{s}","nic3_mac":"{s}","num_displays":{d},"hasSerial":{s},"virtio_rng":{s},"guest_agent":{s},"watchdog":{d},"tpm":{s},"secure_boot":{s},"hyperv_enlightenments":{s},"hugepages":{s},"io_threads":{d},"disk_bps_throttle":{d},"disk_iops_throttle":{d}
         , .{

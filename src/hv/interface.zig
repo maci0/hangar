@@ -105,8 +105,8 @@ pub fn resolveAccel(accel: vm.VmAccel, checkAvail: *const fn (Accelerator) bool)
 /// liveness / reap / linked-clone / teardown), which is the part that genuinely
 /// differs between backends. Guest CONTROL (pause/resume/shutdown/reset/cdrom/
 /// migrate/screenshot) and offline disk ops (create/resize/convert/snapshot) are
-/// driven directly from the request handlers — for QEMU via QMP over a fresh
-/// connection (web_server.vmQmpByName) and via qemu-img — because routing them
+/// driven directly from the request handlers, for QEMU via QMP over a fresh
+/// connection (web_server.vmQmpByName) and via qemu-img, because routing them
 /// through the dispatch added a second QEMU-specific code path with no benefit
 /// while a single backend exists. When a real second backend lands, extend this
 /// interface with the control/disk members it needs (history: the prior 23-member
@@ -118,7 +118,7 @@ pub const Vmm = struct {
     /// The accelerator this VM instance is using.
     accelerator: Accelerator,
 
-    /// Spawn the VM process. Non-blocking — returns immediately.
+    /// Spawn the VM process. Non-blocking: returns immediately.
     /// The `config` pointer is an opaque VM config (VmConfig from vm.zig).
     startFn: *const fn (ctx: VmmHandle, config: *anyopaque) VmmError!void,
 

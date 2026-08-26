@@ -20,7 +20,7 @@ pub const IPPROTO_TCP: c_int = 6;
 pub const TCP_NODELAY: c_int = 1;
 
 /// 127.0.0.1 in the in_addr wire format (big-endian byte order in memory).
-/// `[4]u8{127,0,0,1}` bit-cast to u32 IS already network byte order — do NOT
+/// `[4]u8{127,0,0,1}` bit-cast to u32 IS already network byte order, do NOT
 /// apply nativeToBig on top: the double swap produces 1.0.0.127, a black-hole
 /// address whose SYNs hang forever (this exact bug silently broke the VNC and
 /// SPICE WebSocket relays).
@@ -28,14 +28,14 @@ pub const LOOPBACK_V4: u32 = @bitCast([4]u8{ 127, 0, 0, 1 });
 
 /// Disable Nagle on a TCP socket. Interactive VNC/SPICE relay traffic is
 /// dominated by small mouse/keyboard packets; without this, Nagle coalescing
-/// adds up to ~40ms of latency per input event. Best-effort — failure is
+/// adds up to ~40ms of latency per input event. Best-effort: failure is
 /// non-fatal (the relay still works, just with higher latency).
 pub fn setTcpNoDelay(fd: c.fd_t) void {
     const one: c_int = 1;
     _ = c.setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, @sizeOf(c_int));
 }
 
-/// True if some process is already listening on `port` at the IPv4 loopback —
+/// True if some process is already listening on `port` at the IPv4 loopback,
 /// detected by attempting a connection (a refused connect means the port is
 /// free). Connect-probing (not bind-probing) is used deliberately: it mirrors
 /// the VNC/SPICE relay path, needs no bind permission, and correctly spots an
@@ -57,7 +57,7 @@ pub fn portInUse(port: u16) bool {
     return c.connect(fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) == 0;
 }
 
-test "netutil: portInUse — a listening port reads as in-use, a refused one free" {
+test "netutil: portInUse, a listening port reads as in-use, a refused one free" {
     // Stand up a listener, confirm portInUse sees it; an un-listened port is free.
     const fd = c.socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return error.SkipZigTest;

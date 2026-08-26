@@ -1,8 +1,8 @@
-# Hangar — TODO / Gap Tracker
+# Hangar: TODO / Gap Tracker
 
 > **Historical / archived.** This tracker dates from the FLTK desktop-GUI era.
 > The FLTK frontend has since been removed (`src/main.zig`, `src/dialogs.zig`,
-> `src/display.zig`, the `cfltk` bindings — all gone); the current frontends are
+> `src/display.zig`, the `cfltk` bindings, all gone); the current frontends are
 > `hangar-web` (web UI + remote daemon) and `hangar-webui` (native WebView
 > wrapper). Entries below mentioning FLTK/cfltk refer to removed code and are
 > kept only for history. For current architecture see `docs/DESIGN.md`; for
@@ -14,7 +14,7 @@ and the design docs.
 
 ---
 
-## Tier 1 — High Priority (existing infrastructure, needs UI wiring)
+## Tier 1: High Priority (existing infrastructure, needs UI wiring)
 
 ### 1.1 Wire AutoProtect into the FLTK GUI ✅
 
@@ -69,7 +69,7 @@ and the design docs.
 
 ---
 
-## Tier 2 — Medium Priority (needs new code or larger changes)
+## Tier 2: Medium Priority (needs new code or larger changes)
 
 ### 2.1 HV Abstraction Layer Integration ✅
 
@@ -119,7 +119,7 @@ and the design docs.
 
 ---
 
-## Tier 3 — Low Priority (nice-to-have / polish)
+## Tier 3: Low Priority (nice-to-have / polish)
 
 ### 3.1 Favorites / Library Groups ✅
 
@@ -238,9 +238,9 @@ and the design docs.
 
 | File | Status |
 |------|--------|
-| `src/main.zig:editVmDialog()` | ✅ Fixed — FLTK dialog was missing 21 VmConfig fields; all now added |
+| `src/main.zig:editVmDialog()` | ✅ Fixed: FLTK dialog was missing 21 VmConfig fields; all now added |
 | `src/main.zig:buildSaveBody()` | ✅ Extended with all 21 new fields for remote API save |
-| `src/web_server.zig:handleSave()` | ✅ Already parsed all ~40 fields — no changes needed |
+| `src/web_server.zig:handleSave()` | ✅ Already parsed all ~40 fields, no changes needed |
 | Missing fields | cpu_sockets, disk_format, iso_path, mac_address, nic2_mac, nic3_mac, disk2_format, enable_3d, gpu_device, display, display_resolution, guest_os, audio, boot_order, enable_kvm, embed_display, vnc_port, spice_port, enable_serial, num_displays, favorite |
 
 ### 3.15 Web Server: Serial Console ✅
@@ -248,46 +248,46 @@ and the design docs.
 | File | Status |
 |------|--------|
 | `src/web_server.zig` route | ✅ `GET /ws/serial/N` WebSocket upgrade |
-| `src/web_server.zig` handler | ✅ `handleWsSerial()` — bidirectional relay between WS ↔ Unix socket |
+| `src/web_server.zig` handler | ✅ `handleWsSerial()`: bidirectional relay between WS ↔ Unix socket |
 | `src/web_server.zig:index_html` | ✅ Serial terminal UI panel, xterm-like textarea, WS JS client |
 
 ### 3.16 Stale/IUP-heritage Cleanup ✅
 
 | File | Status |
 |------|--------|
-| `src/main_fltk.zig` | ✅ Already removed — never existed in FLTK port |
-| `src/itest.zig` | ✅ Removed — dead IUP test code, broken imports, not in build.zig |
-| `AGENTS.md` | ✅ Fixed — removed stale `serial.zig`, corrected `display.zig`/`dialogs.zig` descriptions |
-| `src/display.zig` | ✅ Active — used by FLTK frontend for Display tab framebuffer rendering |
-| `src/dialogs.zig` | ✅ Active — prefs, VNet editor, about, OVF export, remote connect dialogs |
-| `src/serial.zig` | ✅ Doesn't exist — no cleanup needed |
-| `src/icons.zig` | ✅ Doesn't exist — no cleanup needed |
+| `src/main_fltk.zig` | ✅ Already removed, never existed in FLTK port |
+| `src/itest.zig` | ✅ Removed: dead IUP test code, broken imports, not in build.zig |
+| `AGENTS.md` | ✅ Fixed: removed stale `serial.zig`, corrected `display.zig`/`dialogs.zig` descriptions |
+| `src/display.zig` | ✅ Active: used by FLTK frontend for Display tab framebuffer rendering |
+| `src/dialogs.zig` | ✅ Active: prefs, VNet editor, about, OVF export, remote connect dialogs |
+| `src/serial.zig` | ✅ Doesn't exist, no cleanup needed |
+| `src/icons.zig` | ✅ Doesn't exist, no cleanup needed |
 
 ---
 
-## Tier 4 — Bugs / Issues
+## Tier 4: Bugs / Issues
 
 ### 4.1 Pre-existing Fuzz Test Crash ✅
 
 | Symptom | SIGABRT in test runner from stack overflow on large VmConfig allocations |
 |---------|-----------------------------------------------------------------------|
-| Status | No longer reproducible — all 568 tests pass (Zig 0.16 compiler may have increased default stack size or the test was restructured) |
+| Status | No longer reproducible, all 568 tests pass (Zig 0.16 compiler may have increased default stack size or the test was restructured) |
 
 ### 4.2 FLTK `Fl_Check_Button` cast warning ✅
 
 | Symptom | `@ptrCast(gt_input)` and similar casts from `?*cfltk.Fl_Check_Button` |
 |---------|-----------------------------------------------------------------------|
-| Fix | Removed unnecessary `@ptrCast` from `Fl_Check_Button_set_checked` calls — Zig 0.16 `@cImport` translates both return and parameter C pointers compatibly |
+| Fix | Removed unnecessary `@ptrCast` from `Fl_Check_Button_set_checked` calls: Zig 0.16 `@cImport` translates both return and parameter C pointers compatibly |
 
 ### 4.3 HV Interface Missing: convertDiskImage ✅
 
-| Symptom | `exportOvfDialog()` calls `qemu.convertDiskImage()` directly — no HV equivalent |
+| Symptom | `exportOvfDialog()` calls `qemu.convertDiskImage()` directly, no HV equivalent |
 |---------|-----------------------------------------------------------------------|
 | Fix | `convertDiskFn` already declared in `hv/interface.zig` and implemented in `hv/qemu_backend.zig`; `exportOvfDialog` now uses HV path first with fallback to `qemu.convertDiskImage()` |
 
 ### 4.4 checkAuth / handleUploadDisk: OOB Slice on Missing \r ✅
 
-| Symptom | `indexOfScalar` returns relative offset into searched slice, but `orelse req.len` fallback used absolute position — slice `req[start .. start + req.len]` is out of bounds when `\r` is absent |
+| Symptom | `indexOfScalar` returns relative offset into searched slice, but `orelse req.len` fallback used absolute position, slice `req[start .. start + req.len]` is out of bounds when `\r` is absent |
 |---------|-----------------------------------------------------------------------|
 | Affected | `web_server.zig:checkAuth()` (2 sites), `web_server.zig:handleUploadDisk()` (1 site) |
 | Fix | Changed `orelse req.len` → `orelse (req.len - key_val_start)` / `orelse (req.len - bd_val_start)` |
@@ -295,19 +295,19 @@ and the design docs.
 
 ### 4.5 vm.zig VmConfig Setters: Unvalidated Bounds ✅
 
-| Symptom | `setDisk2Path()`, `setFloppyPath()`, `setSharedFolder()`, `setUsbDevice()` write to fixed-size `[MAX_PATH]u8` buffers with `bufPrint` that truncates on overflow — truncation may produce silent disk-path corruption if very-long paths are used |
+| Symptom | `setDisk2Path()`, `setFloppyPath()`, `setSharedFolder()`, `setUsbDevice()` write to fixed-size `[MAX_PATH]u8` buffers with `bufPrint` that truncates on overflow, truncation may produce silent disk-path corruption if very-long paths are used |
 |---------|-----------------------------------------------------------------------|
-| Status  | Low severity — `MAX_PATH` is 4096 bytes, which accommodates all practical filesystem paths. Existing code never surfaces truncation warnings. Left as documented limitation; no immediate fix required. |
+| Status  | Low severity: `MAX_PATH` is 4096 bytes, which accommodates all practical filesystem paths. Existing code never surfaces truncation warnings. Left as documented limitation; no immediate fix required. |
 
 ### 4.6 appstate.zig setStatus/setDetail: Stack Pointer Lifetime ✅
 
 | Symptom | `setStatus()` and `setDetail()` format into a stack-local `[256]u8` buffer and pass `@ptrCast(&buf)` to `cfltk.Fl_Box_set_label`. If cfltk stores the pointer (like upstream FLTK `label()` does), this is a use-after-free. |
 |---------|-----------------------------------------------------------------------|
-| Status  | Working in practice — cfltk's `Fl_Box_set_label` wrapper likely calls `copy_label()` internally. No crashes observed. Documented as a latent risk; if a future cfltk version changes to pointer storage, these sites would need per-widget heap buffers or `Fl_Box_set_label` wrapper verification. |
+| Status  | Working in practice: cfltk's `Fl_Box_set_label` wrapper likely calls `copy_label()` internally. No crashes observed. Documented as a latent risk; if a future cfltk version changes to pointer storage, these sites would need per-widget heap buffers or `Fl_Box_set_label` wrapper verification. |
 
 ---
 
-## Tier 3.5 — New Gaps (post-FLTK migration)
+## Tier 3.5: New Gaps (post-FLTK migration)
 
 ### 3.17 Web Frontend: Edit VM Dialog Missing Fields ✅
 
@@ -363,7 +363,7 @@ and the design docs.
 
 | File | Status |
 |------|--------|
-| `src/web_server.zig` route | ✅ `POST /api/export/N` — writes OVF XML + converts disk to VMDK |
+| `src/web_server.zig` route | ✅ `POST /api/export/N`: writes OVF XML + converts disk to VMDK |
 | `src/web_server.zig:handleExport()` | ✅ Uses ovf.buildDescriptor + qemu.convertDiskImage → /tmp/ovf_export |
 | `src/web_server.zig` toolbar | ✅ "Export OVF" button with exportOvf() JS function |
 
@@ -424,14 +424,14 @@ and the design docs.
 |------|--------|
 | `src/web_server.zig` | ✅ `parseMultipart()` handles `multipart/form-data` boundary parsing, extracts filename + body from part headers |
 | `src/web_server.zig:handleImport()` | ✅ Accepts multipart file upload for disk image + optional name/mem/cpu/cpu_sockets/disk_format fields |
-| `src/web_server.zig:handleUploadDisk()` | ✅ `POST /api/vm/N/upload-disk` — multipart upload for disk2; auto-creates disk if path empty |
+| `src/web_server.zig:handleUploadDisk()` | ✅ `POST /api/vm/N/upload-disk`: multipart upload for disk2; auto-creates disk if path empty |
 
 ### 3.31 Web Server: Disk Download Endpoints ✅
 
 | File | Status |
 |------|--------|
-| `src/web_server.zig:handleExport()` | ✅ `POST /api/export/N` — streams primary disk image as download |
-| `src/web_server.zig:handleDisk2Download()` | ✅ `GET /api/vm/N/disk2/download` — streams disk2 image as download |
+| `src/web_server.zig:handleExport()` | ✅ `POST /api/export/N`: streams primary disk image as download |
+| `src/web_server.zig:handleDisk2Download()` | ✅ `GET /api/vm/N/disk2/download`: streams disk2 image as download |
 | `src/web_server.zig:index_html` JS | ✅ `exportOvf()` uses `apiPost` and shows filename from response |
 
 ### 3.32 Web Server: API Key Authentication ✅
@@ -450,7 +450,7 @@ and the design docs.
 
 ---
 
-## Tier 5 — Architecture / Refactoring
+## Tier 5: Architecture / Refactoring
 
 ### 5.1 Unify Network Handling ✅
 
@@ -473,7 +473,7 @@ and the design docs.
 | `src/web_server.zig:handleNewVm()` | ✅ Generates MAC for web-created VMs |
 | `src/web_server.zig:handleClone()` | ✅ Generates unique MAC for web clones |
 
-### 5.3 AGENTS.md Outdated — Describes IUP, Actual is FLTK ✅
+### 5.3 AGENTS.md Outdated: Describes IUP, Actual is FLTK ✅
 
 | File | Status |
 |------|--------|
@@ -481,7 +481,7 @@ and the design docs.
 
 ---
 
-## Tier 6 — Parity Gaps (FLTK ↔ Web UI)
+## Tier 6: Parity Gaps (FLTK ↔ Web UI)
 
 ### 6.1 FLTK: Batch Start/Stop All ✅
 
@@ -515,11 +515,11 @@ and the design docs.
 
 | File | Status |
 |------|--------|
-| `src/main.zig` toolbar | ✅ Export OVF (685, 75px), Clone (765, 70px), Snapshot (840, 75px) — all three added; window widened to 1200px to accommodate |
+| `src/main.zig` toolbar | ✅ Export OVF (685, 75px), Clone (765, 70px), Snapshot (840, 75px), all three added; window widened to 1200px to accommodate |
 
 ---
 
-## Tier 7 — Menu & UX Parity
+## Tier 7: Menu & UX Parity
 
 ### 7.1 FLTK: Suspend Missing from VM Menu Bar and Context Menu ✅
 
@@ -541,10 +541,10 @@ and the design docs.
 
 | File | Status |
 |------|--------|
-| `src/web_server.zig` JS renderList | ✅ Status bar now shows "{name} — {status}    |    {counts}" when VM selected |
+| `src/web_server.zig` JS renderList | ✅ Status bar now shows "{name}: {status}    |    {counts}" when VM selected |
 | `src/main.zig` | ✅ Status bar shows selected VM name, status, uptime, and count |
 
-### 7.4 Web: Serial Console — Manual Disconnect Button ✅
+### 7.4 Web: Serial Console, Manual Disconnect Button ✅
 
 | File | Status |
 |------|--------|
@@ -586,13 +586,13 @@ Now supports all 14 missing operations matching the Web API surface.
 
 ---
 
-## Tier 8 — Code Quality & Polish (ongoing)
+## Tier 8: Code Quality & Polish (ongoing)
 
 ### 8.1 bodyVal Off-By-One Bug ✅
 
 | File | Status |
 |------|--------|
-| `src/web_server.zig:bodyVal()` | ✅ Fixed `orelse body.len` → `orelse (body.len - start)` — last parameter with no trailing `&` caused index out of bounds |
+| `src/web_server.zig:bodyVal()` | ✅ Fixed `orelse body.len` → `orelse (body.len - start)`, last parameter with no trailing `&` caused index out of bounds |
 | Test coverage | ✅ 6 targeted tests including the exact failing case `bodyVal("name=myvm&mem=2048&cpu=4", "cpu")` |
 
 ### 8.2 Web Server & vmrun Fuzz Tests ✅
@@ -615,18 +615,18 @@ Now supports all 14 missing operations matching the Web API surface.
 | Display tab | FL_BORDER_BOX frame (8) around display area with light background (0xfafbfc) |
 | Default window | 1080×700 (up from 960×680) to comfortably fit toolbar buttons |
 
-### 8.4 Remaining Modules — Pure Function Coverage Assessment ✅
+### 8.4 Remaining Modules: Pure Function Coverage Assessment ✅
 
 | Module | Assessment |
 |--------|------------|
-| `src/remote.zig` | Thin `transport.Connection` wrappers — all I/O, no pure functions |
-| `src/serial_console.zig` | File descriptor I/O + thread spawning — no pure functions |
-| `src/display.zig` | FLTK `Fl_RGB_Image` + framebuffer rendering — no pure functions (uses `fbmath.fbFits` which is already tested) |
-| `src/dialogs.zig` | All FLTK dialog construction code — no testable pure functions |
+| `src/remote.zig` | Thin `transport.Connection` wrappers, all I/O, no pure functions |
+| `src/serial_console.zig` | File descriptor I/O + thread spawning, no pure functions |
+| `src/display.zig` | FLTK `Fl_RGB_Image` + framebuffer rendering, no pure functions (uses `fbmath.fbFits` which is already tested) |
+| `src/dialogs.zig` | All FLTK dialog construction code, no testable pure functions |
 
 ---
 
-## Tier 9 — Visual Polish & End-to-End Testing
+## Tier 9: Visual Polish & End-to-End Testing
 
 ### 9.1 Web UI: Light Theme Support ✅
 
@@ -647,7 +647,7 @@ Now supports all 14 missing operations matching the Web API surface.
 | `snapDialog()` | list + 2 buttons | ✅ Bold label for "Snapshot name:" |
 | `aboutDialog()` | 5 labels + OK | ✅ Bold header (size 18, header color), dim description text |
 | `remoteConnectDialog()` | 3 fields + 2 buttons | ✅ Bold labels with text_dim, palette accent/text_dim on status |
-| `exportOvfDialog()` | file chooser | ✅ Native dialog — no changes needed |
+| `exportOvfDialog()` | file chooser | ✅ Native dialog, no changes needed |
 | `renameDialog()` | input + OK/Cancel | ✅ Bold label with text_dim |
 
 ### 9.3 FLTK: Summary Tab Card Styling ✅
@@ -727,14 +727,14 @@ from:
 
 ---
 
-## Tier 10 — Bugs, Polish & Missing Tests (new gaps)
+## Tier 10: Bugs, Polish & Missing Tests (new gaps)
 
 ### 10.1 Web Server: Crash-Prone Error Handling ✅
 
 | Issue | Detail | Status |
 |-------|--------|--------|
-| `fb_client.?` panic | `src/web_server.zig:499` — `fb_client.?` is null-checked via `if` guard; false alarm | ✅ Verified safe |
-| `g_vmm` undefined | `src/web_server.zig:36` — `var g_vmm = undefined;` initialized in `main()` before handlers; false alarm | ✅ Verified safe |
+| `fb_client.?` panic | `src/web_server.zig:499`, `fb_client.?` is null-checked via `if` guard; false alarm | ✅ Verified safe |
+| `g_vmm` undefined | `src/web_server.zig:36`, `var g_vmm = undefined;` initialized in `main()` before handlers; false alarm | ✅ Verified safe |
 | HTTP error codes | 57+ `catch return "string"` sites return HTTP 200 with plain-text body; should return 400/500 with proper status line | ✅ Fixed: `writeAll()` retry helper + case-insensitive Err/error→500 mapping |
 | `c.write()` unchecked | All ~39 `c.write()` calls now use `writeAll()` wrapper that retries on short writes, returns false on failure | ✅ Fixed: `writeAll()` added to `writeHttpResponse` + `writeStreamHeaders` |
 
@@ -762,28 +762,28 @@ from:
 
 | Bug | Detail | Status |
 |-----|--------|--------|
-| `persist.save()` silent failures | 7+ sites use `catch {}` — save failures are invisible to user; should `setStatus()` on error | ✅ All 12 sites now report "Failed to save VM configuration" |
-| `auto_names` uninitialized | `src/main.zig:1555` — `var auto_names: [16][]const u8 = undefined;` dereferenced after partial init; should be `[16][]const u8 = @splat("")` | ✅ Fixed: `@splat("")` zero-initializes all entries |
-| Unsafe `@ptrCast` slice | `src/main.zig:1501` — casts `[64]u8` to `[]u8` for `lowerString`, which can write beyond intended slice into full buffer | ✅ Fixed: Uses `@memcpy` + bounded slice on `filter_text[0..n]` |
+| `persist.save()` silent failures | 7+ sites use `catch {}`: save failures are invisible to user; should `setStatus()` on error | ✅ All 12 sites now report "Failed to save VM configuration" |
+| `auto_names` uninitialized | `src/main.zig:1555`, `var auto_names: [16][]const u8 = undefined;` dereferenced after partial init; should be `[16][]const u8 = @splat("")` | ✅ Fixed: `@splat("")` zero-initializes all entries |
+| Unsafe `@ptrCast` slice | `src/main.zig:1501`, casts `[64]u8` to `[]u8` for `lowerString`, which can write beyond intended slice into full buffer | ✅ Fixed: Uses `@memcpy` + bounded slice on `filter_text[0..n]` |
 
 ### 10.5 Missing Test Coverage ✅
 
 | Module | Lines | Priority | Status |
 |--------|-------|----------|--------|
-| `src/main.zig` | 1854 | High — zero tests; pure helpers extractable | ✅ All pure helpers already extracted: form_parsers.zig (enum parsers), path_helpers.zig (disk/clone path ops), vnet_label.zig (VNet label), filter.zig (filterMatch), urlencode.zig (appendPair), autoprotect.zig (due/snapName/pruneExcess). Remaining 60 functions are FLTK/I/O orchestration. |
-| `src/dialogs.zig` | 423 | High — 6 pure dialog builders can be unit-tested | ✅ All pure builders already extracted: vnet_label.zig (formatVnetLabel), path_helpers.zig (deriveVmdkHref), snapparse.zig (parse). Remaining functions are FLTK widget construction. |
-| `src/display.zig` | 98 | Medium — framebuffer math already tested via fbmath | ✅ fbmath.zig covers fbFits + bgraToRgba (5 tests + fuzz). display.zig is pure FLTK rendering. |
-| `src/serial_console.zig` | 44 | Low — all I/O | ✅ ringbuf.zig covers append logic. uimath.zig covers serialSocketPath. serial_console.zig is pure I/O orchestration. |
-| `src/remote.zig` | 43 | Low — thin transport wrapper | ✅ transport.zig covers Url.parse. remote.zig is thin I/O wrappers around transport.Connection. |
-| `src/index.html` web UI | ~2400 | High — zero visual/screenshot tests | ✅ Visual tests added: tests/visual/e2e_web_screenshots.mjs (Puppeteer screenshots of all dialogs + interaction flow) |
+| `src/main.zig` | 1854 | High: zero tests; pure helpers extractable | ✅ All pure helpers already extracted: form_parsers.zig (enum parsers), path_helpers.zig (disk/clone path ops), vnet_label.zig (VNet label), filter.zig (filterMatch), urlencode.zig (appendPair), autoprotect.zig (due/snapName/pruneExcess). Remaining 60 functions are FLTK/I/O orchestration. |
+| `src/dialogs.zig` | 423 | High: 6 pure dialog builders can be unit-tested | ✅ All pure builders already extracted: vnet_label.zig (formatVnetLabel), path_helpers.zig (deriveVmdkHref), snapparse.zig (parse). Remaining functions are FLTK widget construction. |
+| `src/display.zig` | 98 | Medium: framebuffer math already tested via fbmath | ✅ fbmath.zig covers fbFits + bgraToRgba (5 tests + fuzz). display.zig is pure FLTK rendering. |
+| `src/serial_console.zig` | 44 | Low, all I/O | ✅ ringbuf.zig covers append logic. uimath.zig covers serialSocketPath. serial_console.zig is pure I/O orchestration. |
+| `src/remote.zig` | 43 | Low: thin transport wrapper | ✅ transport.zig covers Url.parse. remote.zig is thin I/O wrappers around transport.Connection. |
+| `src/index.html` web UI | ~2400 | High: zero visual/screenshot tests | ✅ Visual tests added: tests/visual/e2e_web_screenshots.mjs (Puppeteer screenshots of all dialogs + interaction flow) |
 
-### 10.6 FLTK: Visual Polish — Menu & Keyboard Shortcut Parity ✅
+### 10.6 FLTK: Visual Polish, Menu & Keyboard Shortcut Parity ✅
 
 | Item | Detail | Status |
 |------|--------|--------|
 | Import VM shortcut | `Ctrl+I` works; toolbar button now present (second row) | ✅ Toolbar button added |
 | Keyboard shortcut help | About dialog now includes full keyboard shortcut reference (Ctrl+N, F2, DEL, Ctrl+W, F5, etc.) | ✅ About dialog expanded with shortcuts |
-| Status bar dirty indicator | Auto-save architecture saves on every change — no "unsaved" period; not applicable | ✅ N/A — auto-save |
+| Status bar dirty indicator | Auto-save architecture saves on every change, no "unsaved" period; not applicable | ✅ N/A: auto-save |
 | Missing shortcuts | Added Ctrl+F (search focus) and F5 (refresh browser) to kbHandler | ✅ F5 + Ctrl+F now wired |
 
 ### 10.7 Web UI: Visual Tests ✅
@@ -796,7 +796,7 @@ from:
 
 ---
 
-## Tier 11 — Remaining Polish & Gaps
+## Tier 11: Remaining Polish & Gaps
 
 ### 11.1 Dead Code: cbfuzz.zig ✅
 
@@ -909,7 +909,7 @@ The web server serves everything from `@embedFile` index.html. For a more polish
 
 ---
 
-## Tier 12 — Final Polish & Recent Fixes
+## Tier 12: Final Polish & Recent Fixes
 
 ### 12.1 FLTK: Delete VM Confirmation Dialog ✅
 
@@ -917,12 +917,12 @@ The web server serves everything from `@embedFile` index.html. For a more polish
 |------|--------|
 | `src/main.zig:deleteCurrentVm()` | ✅ `Fl_choice2` confirmation dialog with "Cancel" / "Delete" buttons before VM deletion |
 
-### 12.2 FLTK: New VM Dialog — Guest OS Selection ✅
+### 12.2 FLTK: New VM Dialog, Guest OS Selection ✅
 
 | File | Status |
 |------|--------|
 | `src/main.zig:newVmDialog()` | ✅ Guest OS text input field with label, passed to `VmConfig.guest_os` via `GuestOs.fromStr()` |
-| `src/vm.zig` | ✅ `GuestOs.fromStr()` — case-insensitive prefix match parser (fuzz-tested in form_parsers.zig) |
+| `src/vm.zig` | ✅ `GuestOs.fromStr()`: case-insensitive prefix match parser (fuzz-tested in form_parsers.zig) |
 
 ### 12.3 FLTK: Global FLTK Color Scheme Application ✅
 
@@ -935,7 +935,7 @@ The web server serves everything from `@embedFile` index.html. For a more polish
 | File | Status |
 |------|--------|
 | `src/appstate.zig:setStatus()` | ✅ Always copies to stack buffer + null-terminates before passing to `Fl_Box_set_label` (fixes garbled labels on long strings) |
-| `src/appstate.zig:setDetail()` | ✅ Same fix — stack buffer + null termination |
+| `src/appstate.zig:setDetail()` | ✅ Same fix: stack buffer + null termination |
 
 ### 12.5 Web UI: Status Dot Indicators in Sidebar ✅
 
@@ -966,7 +966,7 @@ The web server serves everything from `@embedFile` index.html. For a more polish
 
 ---
 
-## Tier 13 — Comprehensive Audit Fixes (June 2026)
+## Tier 13: Comprehensive Audit Fixes (June 2026)
 
 Full audit of all source files found 7 critical, 7 high, 14 medium, and 17 low
 bugs. This tier tracks resolution of each finding.
@@ -992,17 +992,17 @@ bugs. This tier tracks resolution of each finding.
 | H3 | Content-Disposition header injection: filename with `"` breaks HTTP header | `src/web_server.zig` | ✅ |
 | H4 | Partial write silent data loss: replaced `_ = c.write()` with `writeAll` loop | `src/transport.zig` | ✅ |
 | H5 | Concurrent export /tmp path race: now per-export unique directory with PID | `src/web_server.zig` | ✅ |
-| H6 | False positive: FLTK single-threaded, no race condition exists | — | ✅ |
+| H6 | False positive: FLTK single-threaded, no race condition exists |, | ✅ |
 | H7 | GpuDevice missing from enum fuzz loop | `src/vm.zig` | ✅ |
 
-### H2 Detail — JSON Escaping
+### H2 Detail: JSON Escaping
 
 Added `jsonEscape()` helper that escapes `"`, `\`, `\n`, `\r`, `\t`, and control
 characters (`\u00XX`). Applied to all user-controlled string fields in
 `renderJson()` and `renderVmDetail()`: VM name, iso_path, notes, shared_folder,
 usb_device, disk2_path, floppy_path, port_forwards.
 
-### H3 Detail — Header Sanitization
+### H3 Detail: Header Sanitization
 
 Added `sanitizeHeaderValue()` that strips `"` → `'` and removes `\r`/`\n`.
 Applied to Content-Disposition filename in `handleDisk2Download` and
@@ -1012,27 +1012,27 @@ Applied to Content-Disposition filename in `handleDisk2Download` and
 
 | # | Description | File | Status |
 |---|-------------|------|--------|
-| M1 | getBody: \r\n\r\n search in body may find pattern split across multipart boundary | `src/web_server.zig` | ✅ False alarm — \r\n\r\n is correct HTTP header/body separator |
+| M1 | getBody: \r\n\r\n search in body may find pattern split across multipart boundary | `src/web_server.zig` | ✅ False alarm: \r\n\r\n is correct HTTP header/body separator |
 | M2 | Snapshot name/tag not validated: QMP may reject or hang on special characters | `src/web_server.zig`, `src/qmp.zig` | ✅ Added validateSnapshotTag (max 255, reject control chars) |
-| M3 | OVF export: tar command passed as argv without shell escaping | `src/web_server.zig` | ✅ False alarm — uses execvp not shell |
-| M4 | handlePower: POST body may be empty (no = sign) → returns empty string silently | `src/web_server.zig` | ✅ Verified safe — handlePower ignores body, toggles power state |
+| M3 | OVF export: tar command passed as argv without shell escaping | `src/web_server.zig` | ✅ False alarm: uses execvp not shell |
+| M4 | handlePower: POST body may be empty (no = sign) → returns empty string silently | `src/web_server.zig` | ✅ Verified safe: handlePower ignores body, toggles power state |
 | M5 | renderFramebuffer: C.getString on fb pointer, no bounds check before read | `src/web_server.zig` | ✅ Added fw>0 and fh>0 sanity guard on VNC getSize |
 | M6 | Missing Content-Length validation: large upload DDOS vector | `src/web_server.zig` | ✅ Added Content-Length check against buf.len capacity |
-| M7 | Missing request method validation: OPTIONS/HEAD/etc return 200 with wrong Content-Type | `src/web_server.zig` | ✅ Added method validation — reject non-GET/POST/OPTIONS |
-| M8 | vm.zig allocPrint for notes: uses page_allocator, leaks on failed VmConfig copy | `src/vm.zig` | ✅ Fixed — handleVnetsJson + serveConfigRaw copy to stack buf, defer heap free |
-| M9 | serial.zig: ringbuf append may silently drop bytes without notification | `src/serial.zig` | ✅ (by design — ring buffer preserves most recent data) |
+| M7 | Missing request method validation: OPTIONS/HEAD/etc return 200 with wrong Content-Type | `src/web_server.zig` | ✅ Added method validation: reject non-GET/POST/OPTIONS |
+| M8 | vm.zig allocPrint for notes: uses page_allocator, leaks on failed VmConfig copy | `src/vm.zig` | ✅ Fixed: handleVnetsJson + serveConfigRaw copy to stack buf, defer heap free |
+| M9 | serial.zig: ringbuf append may silently drop bytes without notification | `src/serial.zig` | ✅ (by design, ring buffer preserves most recent data) |
 | M10 | vnc_client.zig: no framebuffer size change detection after initial connect | `src/vnc_client.zig` | ✅ (canHandleNewFBSize=1, onMallocFb handles resize) |
-| M11 | persist.zig: emitJsonStr doesn't escape strings, may produce invalid JSON | `src/persist.zig` | ✅ Verified — emitJsonStr already escapes \\ \" \n \r \t and control chars |
+| M11 | persist.zig: emitJsonStr doesn't escape strings, may produce invalid JSON | `src/persist.zig` | ✅ Verified: emitJsonStr already escapes \\ \" \n \r \t and control chars |
 | M12 | Missing thread cleanup: background threads for VNC/serial not joined on server shutdown | `src/web_server.zig` | ✅ Threads properly detached with th.detach() |
-| M13 | @intCast overflow: status code parsing without bounds, may panic | `src/web_server.zig` | ✅ Fixed — lseek return guarded with < 0 check before @intCast |
-| M14 | shutdown/destroy race: server_fd closed while accept() in progress | `src/web_server.zig` | ✅ Fixed — tcp_sock_fd + unix_sock_fd stored globally for cross-thread close |
+| M13 | @intCast overflow: status code parsing without bounds, may panic | `src/web_server.zig` | ✅ Fixed: lseek return guarded with < 0 check before @intCast |
+| M14 | shutdown/destroy race: server_fd closed while accept() in progress | `src/web_server.zig` | ✅ Fixed: tcp_sock_fd + unix_sock_fd stored globally for cross-thread close |
 
 ### Low (L1-L17)
 
 | # | Description | File | Status |
 |---|-------------|------|--------|
 | L1 | Magic numbers for HTTP status codes scattered throughout (200, 400, 500) | `src/web_server.zig` | ✅ |
-| L2 | Duplicate `mac_address` field in JSON output (same as `mac`) | `src/web_server.zig` | ✅ (false alarm — only `"mac"` emitted, `mac_address` is parse-only) |
+| L2 | Duplicate `mac_address` field in JSON output (same as `mac`) | `src/web_server.zig` | ✅ (false alarm, only `"mac"` emitted, `mac_address` is parse-only) |
 | L3 | vnet.zig: fromJson doesn't validate subnet CIDR format | `src/vnet.zig` | ✅ |
 | L4 | appio.zig: memLeak on repeated io creation paths | `src/appio.zig` | ✅ (lazy-init once, guarded by `ready`) |
 | L5 | Missing Content-Type charset on JSON responses | `src/web_server.zig` | ✅ (all 5 already have `; charset=utf-8`) |
@@ -1043,7 +1043,7 @@ Applied to Content-Disposition filename in `handleDisk2Download` and
 | L10 | Missing SPDX license headers on all source files | All `.zig` | ✅ |
 | L11 | qemu.zig: convertDiskImage hardcodes vmdk subformat, ignores user format | `src/qemu.zig` | ✅ |
 | L12 | transport.zig: Url.parse host:port parsing assumes one colon → fails on IPv6 | `src/transport.zig` | ✅ (IPv6 bracket parsing added + 3 tests) |
-| L13 | index.html: inline event handlers (onclick) — CSP-unfriendly | `src/web_server.zig` | ✅ |
+| L13 | index.html: inline event handlers (onclick), CSP-unfriendly | `src/web_server.zig` | ✅ |
 | L14 | Missing CORS header on error responses | `src/web_server.zig` | ✅ (writeHttpResponse always includes CORS) |
 | L15 | Unnecessary allocation: ovf.buildDescriptor uses page_allocator for ~2KB | `src/ovf.zig` | ✅ |
 | L16 | Snapshot list parsing brittle: relies on QMP output format stability | `src/qmp.zig` | ✅ Added 7 additional format-variant tests to snapparse.zig including HMP VM SIZE columns, \r-only line endings, embedded spaces, minimal format, empty/mixed headers; parser now normalizes \r→\n for robustness |
@@ -1051,12 +1051,12 @@ Applied to Content-Disposition filename in `handleDisk2Download` and
 
 ---
 
-## Tier 14 — Code Quality Audit (July 2026)
+## Tier 14: Code Quality Audit (July 2026)
 
 Comprehensive audit of all source files found new critical/high/medium/low bugs
 and test-coverage gaps. All items below are fresh and need resolution.
 
-### 14.1 Critical — Stack Buffer Dangling Pointers in setStatus/setDetail ✅
+### 14.1 Critical: Stack Buffer Dangling Pointers in setStatus/setDetail ✅
 
 `appstate.zig` `setStatus()` and `setDetail()` format into stack-local `[256]u8`
 buffers and pass `@ptrCast(&buf)` to `cfltk.Fl_Box_set_label`. FLTK's `label()`
@@ -1069,9 +1069,9 @@ widget holds a dangling pointer. Same bug in `consoleTimerCB` where
 | `src/appstate.zig:setStatus()` | ✅ Uses module-level `status_buf` |
 | `src/appstate.zig:setDetail()` | ✅ Uses module-level `detail_buf` |
 | `src/main.zig:consoleTimerCB` | ✅ Uses persistent `console_line_buf` |
-| `src/main.zig:refreshDetails` bufPrintZ sites | ✅ Verified safe — IupSetStrAttribute copies |
+| `src/main.zig:refreshDetails` bufPrintZ sites | ✅ Verified safe: IupSetStrAttribute copies |
 
-### 14.2 Critical — Modal Dialogs Never Freed (Memory Leak) ✅
+### 14.2 Critical: Modal Dialogs Never Freed (Memory Leak) ✅
 
 Every modal dialog in `main.zig` and `dialogs.zig` follows the pattern
 `Fl_Window_show(dlg)` + `Fl_wait()` loop but never calls `Fl_delete_widget(dlg)`.
@@ -1079,10 +1079,10 @@ Over a long session this leaks entire widget trees.
 
 | File | Status |
 |------|--------|
-| `src/main.zig` — all 10 modal dialogs | ✅ `Fl_delete_widget` after all 5 modal `Fl_wait` loops |
-| `src/dialogs.zig` — all 4 modal dialogs | ✅ `Fl_delete_widget` after all 5 modal `Fl_wait` loops |
+| `src/main.zig`, all 10 modal dialogs | ✅ `Fl_delete_widget` after all 5 modal `Fl_wait` loops |
+| `src/dialogs.zig`, all 4 modal dialogs | ✅ `Fl_delete_widget` after all 5 modal `Fl_wait` loops |
 
-### 14.3 High — Silent catch{} on Snapshot Create/Apply/Delete ✅
+### 14.3 High: Silent catch{} on Snapshot Create/Apply/Delete ✅
 
 Snapshot operations in FLTK use `catch {}` with zero user feedback. If a QMP
 snapshot command fails (VM not running, disk full, QMP timeout), the user sees
@@ -1094,7 +1094,7 @@ no error and believes the operation succeeded.
 | `src/main.zig:945,948` snapshotApply | ✅ `catch { app.setStatus("Snapshot revert failed"); }` |
 | `src/main.zig:965,968` snapshotDelete | ✅ `catch { app.setStatus("Snapshot delete failed"); }` |
 
-### 14.4 High — Serial Reader Thread Silent Death ✅
+### 14.4 High: Serial Reader Thread Silent Death ✅
 
 `serial_console.zig:serialReader` breaks out of its read loop on EOF or error
 but leaves `serial_running = true` and `serial_fd` set. The next
@@ -1105,7 +1105,7 @@ silently stops updating with no user feedback.
 |------|--------|
 | `src/serial_console.zig` | ✅ Reader thread now resets `serial_running` + closes fd on abnormal exit |
 
-### 14.5 Medium — VNC/SPICE Port Collision on Add/Delete ✅
+### 14.5 Medium: VNC/SPICE Port Collision on Add/Delete ✅
 
 New VMs get ports `5900+vmid` / `5930+vmid` where `vmid` is the current
 `vm_count`. If VMs are deleted and new ones created, port numbers can collide
@@ -1116,7 +1116,7 @@ with still-running VMs that were created earlier.
 | `src/main.zig:cloneVm` port allocation | ✅ `findUnusedVncPort`/`findUnusedSpicePort` scan existing VMs |
 | `src/web_server.zig:handleNewVm` port allocation | ✅ Same scanning helpers (new VM, clone, import) |
 
-### 14.6 Medium — Nested Event Loop Re-entrancy ✅
+### 14.6 Medium: Nested Event Loop Re-entrancy ✅
 
 Dialog `Fl_wait()` loops block the main thread but FLTK still dispatches timer
 callbacks (2s `timerCB`, 100ms `displayTimerCB`). These callbacks access global
@@ -1125,12 +1125,12 @@ mid-operation.
 
 | File | Status |
 |------|--------|
-| `src/appstate.zig` — add modal_active flag | ✅ |
-| `src/main.zig` — guard timerCB, consoleTimerCB, set modal_active around all 5 dialogs | ✅ |
-| `src/display.zig` — guard displayTimerCB | ✅ |
-| `src/dialogs.zig` — set modal_active around all 5 dialogs | ✅ |
+| `src/appstate.zig`: add modal_active flag | ✅ |
+| `src/main.zig`: guard timerCB, consoleTimerCB, set modal_active around all 5 dialogs | ✅ |
+| `src/display.zig`: guard displayTimerCB | ✅ |
+| `src/dialogs.zig`: set modal_active around all 5 dialogs | ✅ |
 
-### 14.7 Medium — XSS via VM Names in Web UI ✅
+### 14.7 Medium: XSS via VM Names in Web UI ✅
 
 `renderList()` builds the VM list sidebar with `innerHTML` without escaping VM
 names. A malicious VM name containing `<script>` or event handlers would execute
@@ -1141,7 +1141,7 @@ in the browser. Defense-in-depth: the web API should sanitize VM names.
 | `src/web/app.js:renderList()` | ✅ `escHtml()` escapes `&<>"'` on all user-controlled strings |
 | `src/web_server.zig:handleNewVm()` and `handleRename()` | ✅ Reject names containing `<>&"'` chars |
 
-### 14.8 Medium — consoleTimerCB Dangling Stack Pointer ✅
+### 14.8 Medium: consoleTimerCB Dangling Stack Pointer ✅
 
 `consoleTimerCB` in `main.zig` passes a slice of stack-local `tmp` buffer
 to `Fl_Browser_add`. FLTK stores the pointer; after the timer returns, it's
@@ -1151,7 +1151,7 @@ dangling. Causes garbled text or crashes in the Console tab.
 |------|--------|
 | `src/main.zig:consoleTimerCB` | ✅ Uses persistent module-level `console_line_buf` |
 
-### 14.9 Low — Web UI: Hardcoded Color in .summary-card:hover ✅
+### 14.9 Low: Web UI: Hardcoded Color in .summary-card:hover ✅
 
 CSS uses `#363d48` (dark-theme color) for hover border. In light theme this is
 nearly invisible. Should use `var(--text-dim)`.
@@ -1160,7 +1160,7 @@ nearly invisible. Should use `var(--text-dim)`.
 |------|--------|
 | `src/web/app.css` | ✅ Changed to `var(--border-focus)` for visibility in both themes |
 
-### 14.10 Low — Web UI: No prefers-reduced-motion Support ✅
+### 14.10 Low: Web UI: No prefers-reduced-motion Support ✅
 
 Animations (`dialog-in`, `toast-in`, `pulse-dot`, `status-pulse`) are not
 wrapped in `@media (prefers-reduced-motion: reduce)`.
@@ -1169,7 +1169,7 @@ wrapped in `@media (prefers-reduced-motion: reduce)`.
 |------|--------|
 | `src/web/app.css` | ✅ Added `@media(prefers-reduced-motion:reduce)` disabling animations, pulse, and loading pulse |
 
-### 14.11 Low — Web UI: No focus-visible on select Elements ✅
+### 14.11 Low: Web UI: No focus-visible on select Elements ✅
 
 `<select>` elements lack `:focus-visible` styles. Keyboard users get no
 visual indication of which dropdown is focused.
@@ -1178,7 +1178,7 @@ visual indication of which dropdown is focused.
 |------|--------|
 | `src/web/app.css` | ✅ Added `dialog select:focus-visible, .settings-form select:focus-visible` with accent outline |
 
-### 14.12 Low — Web UI: No Debounce on Search Input ✅
+### 14.12 Low: Web UI: No Debounce on Search Input ✅
 
 Search input calls `renderList()` on every `input` event with no debounce.
 With many VMs, each keystroke triggers a full DOM rebuild.
@@ -1187,7 +1187,7 @@ With many VMs, each keystroke triggers a full DOM rebuild.
 |------|--------|
 | `src/web/app.js` | ✅ Added 180ms debounce via `filterTimer`+`setTimeout` on input listener |
 
-### 14.13 Low — Web UI: word-break on Serial Terminal Breaks ANSI ✅
+### 14.13 Low: Web UI: word-break on Serial Terminal Breaks ANSI ✅
 
 `#serialterm` uses `word-break: break-all` which can split ANSI escape
 sequences mid-sequence, garbling colored output.
@@ -1196,19 +1196,19 @@ sequences mid-sequence, garbling colored output.
 |------|--------|
 | `src/web/app.css` | ✅ Changed to `word-break: break-word` to preserve ANSI sequences |
 
-### 14.14 Low — FLTK: Fullscreen Mode Has No Visual Indicator ✅
+### 14.14 Low: FLTK: Fullscreen Mode Has No Visual Indicator ✅
 
 F11 toggles fullscreen with no toolbar/status indication. User may not realize
 state changed.
 
 | File | Status |
 |------|--------|
-| `src/main.zig:fullScreenCB` | ✅ Status bar shows "Full Screen — Press F11 to exit" / "Exited full screen" |
+| `src/main.zig:fullScreenCB` | ✅ Status bar shows "Full Screen: Press F11 to exit" / "Exited full screen" |
 | `src/main.zig:kbHandler` F11 | ✅ Same status indicators in keyboard handler |
 
 ---
 
-## Tier 15 — Visual Polish & Test Coverage (August 2026)
+## Tier 15: Visual Polish & Test Coverage (August 2026)
 
 ### 15.1 Web UI: Toast Notification Icons ✅
 
@@ -1288,7 +1288,7 @@ clean build.
 
 ---
 
-## Tier 16 — Confirmation Dialogs, Tooltips, Test Coverage, Visual Polish
+## Tier 16: Confirmation Dialogs, Tooltips, Test Coverage, Visual Polish
 
 ### 16.1 FLTK Confirmation Dialogs ✅
 
@@ -1352,17 +1352,17 @@ No changes needed.
 |------|--------|
 | `zig build` | ✅ Clean compile |
 | `zig build test` | ✅ All unit + fuzz tests pass |
-| `zig build fuzzgui` | ✅ GUI-FUZZ OK — 400 random events survived |
-| `zig build fuzzmodals` | ✅ MODAL-FUZZ OK — 7 dialogs, 0 failures |
-| `zig build smoke` | ✅ SMOKE OK — New VM + Settings + About survived |
+| `zig build fuzzgui` | ✅ GUI-FUZZ OK: 400 random events survived |
+| `zig build fuzzmodals` | ✅ MODAL-FUZZ OK: 7 dialogs, 0 failures |
+| `zig build smoke` | ✅ SMOKE OK: New VM + Settings + About survived |
 
 ---
 
-## Tier 17 — Web Frontend Error Handling
+## Tier 17: Web Frontend Error Handling
 
 ### 17.1 loadSnapshots: Guard fetch() with try/catch ✅
 
-`loadSnapshots()` had no error handling — network failure resulted in an
+`loadSnapshots()` had no error handling: network failure resulted in an
 unhandled promise rejection.
 
 | File | Status |
@@ -1372,7 +1372,7 @@ unhandled promise rejection.
 
 ### 17.2 loadVnets: Guard fetch() with try/catch ✅
 
-`loadVnets()` had no error handling — network failure resulted in an
+`loadVnets()` had no error handling: network failure resulted in an
 unhandled promise rejection.
 
 | File | Status |
@@ -1385,30 +1385,30 @@ unhandled promise rejection.
 |------|--------|
 | `zig build` | ✅ Clean compile |
 | `zig build test` | ✅ All unit + fuzz tests pass |
-| `zig build fuzzgui` | ✅ GUI-FUZZ OK — 400 random events survived |
-| `zig build fuzzmodals` | ✅ MODAL-FUZZ OK — 7 dialogs, 0 failures |
-| `zig build smoke` | ✅ SMOKE OK — New VM + Settings + About survived |
+| `zig build fuzzgui` | ✅ GUI-FUZZ OK: 400 random events survived |
+| `zig build fuzzmodals` | ✅ MODAL-FUZZ OK: 7 dialogs, 0 failures |
+| `zig build smoke` | ✅ SMOKE OK: New VM + Settings + About survived |
 
 ---
 
-## Tier 18 — Security, Correctness & Polish (Sep 2026)
+## Tier 18: Security, Correctness & Polish (Sep 2026)
 
 Comprehensive audit of FLTK GUI, web UI, and core modules found critical security
 vulnerabilities, functional bugs, and UI polish gaps.
 
-### 18.1 Critical — Web: Snapshot Revert/Delete Wrong Tag Sent to QEMU ✅
+### 18.1 Critical: Web: Snapshot Revert/Delete Wrong Tag Sent to QEMU ✅
 
 `handleSnapshotRevert` and `handleSnapshotDelete` pass the raw POST body as the
 tag name. But `app.js` sends `tag=<encoded-name>`, so QEMU receives literal
 `tag=actual-name` and silently fails. `handleSnapshotTake` correctly parses
-`tag=` from the body — revert/delete must do the same.
+`tag=` from the body: revert/delete must do the same.
 
 | File | Status |
 |------|--------|
 | `src/web_server.zig` handleSnapshotRevert | ✅ Parse tag= from body with urlDecode + validateSnapshotTag |
 | `src/web_server.zig` handleSnapshotDelete | ✅ Parse tag= from body with urlDecode + validateSnapshotTag |
 
-### 18.2 Critical — Web: Path Traversal in Disk Upload ✅
+### 18.2 Critical: Web: Path Traversal in Disk Upload ✅
 
 `handleUploadDisk` extracts the filename from `Content-Disposition` and
 concatenates it directly into the destination path with zero validation.
@@ -1418,7 +1418,7 @@ concatenates it directly into the destination path with zero validation.
 |------|--------|
 | `src/web_server.zig` handleUploadDisk | ✅ Rejects `/` `\\` NUL chars and `..` in filename |
 
-### 18.3 Critical — Core: Path Traversal via VM Name in Unix Socket Paths ✅
+### 18.3 Critical: Core: Path Traversal via VM Name in Unix Socket Paths ✅
 
 `isValidVmName` rejects `\n`, `\r`, `\t`, `"`, `'`, and NUL but allows `/`.
 A VM named `../../etc/cruft` produces socket paths like
@@ -1428,7 +1428,7 @@ A VM named `../../etc/cruft` produces socket paths like
 |------|--------|
 | `src/vm.zig` isValidVmName | ✅ Already rejects `/` `\\` and NUL; tested via fuzz |
 
-### 18.4 Critical — Core: Shell Injection via `-incoming exec:` ✅
+### 18.4 Critical: Core: Shell Injection via `-incoming exec:` ✅
 
 When `saved_state_path` is set, `buildArgs` constructs
 `-incoming exec:cat {path}`. QEMU's `exec:` protocol runs via `/bin/sh`.
@@ -1439,7 +1439,7 @@ Shell metacharacters in the path execute arbitrary commands.
 | `src/qemu.zig` buildArgs | ✅ `isSafeShellPath()` rejects all shell metacharacters before exec: |
 | `src/qemu.zig` startVm | ✅ Returns error.UnsafeSavedStatePath on unsafe path |
 
-### 18.5 Critical — Core: HMP Command Injection via Unescaped User Strings in QMP ✅
+### 18.5 Critical: Core: HMP Command Injection via Unescaped User Strings in QMP ✅
 
 `changeCdrom`, `liveMigrate`, and snapshot HMP commands wrap user-supplied
 strings directly in HMP command lines without escaping. A `"` in a path
@@ -1451,7 +1451,7 @@ terminates the HMP string and injects arbitrary HMP commands.
 | `src/qmp.zig` liveMigrate | ✅ Uses native QMP migrate command (JSON, not HMP) |
 | `src/qmp.zig` saveSnapshot/loadSnapshot/deleteSnapshot | ✅ `isValidSnapshotTag()` rejects all non-alphanum/-/_ chars |
 
-### 18.6 Critical — Core: isVmAlive Returns True on ECHILD ✅
+### 18.6 Critical: Core: isVmAlive Returns True on ECHILD ✅
 
 When `waitpid` returns -1 with `errno == ECHILD`, the child no longer exists,
 but the code returns `true` (alive). A dead VM is reported as running forever.
@@ -1460,7 +1460,7 @@ but the code returns `true` (alive). A dead VM is reported as running forever.
 |------|--------|
 | `src/qemu.zig` isVmAlive | ✅ Returns false on ECHILD, clears pid and sets status=.stopped |
 
-### 18.7 Critical — FLTK: Dead VM Status Never Updated to .stopped ✅
+### 18.7 Critical: FLTK: Dead VM Status Never Updated to .stopped ✅
 
 `timerCB` detects dead VMs and sets `vm_started[i] = 0` but never updates
 `v.status`. The UI shows "Running" with frozen uptime for dead VMs.
@@ -1469,7 +1469,7 @@ but the code returns `true` (alive). A dead VM is reported as running forever.
 |------|--------|
 | `src/main.zig` timerCB | ✅ Sets v.status = .stopped when VM dies |
 
-### 18.8 Critical — FLTK: deleteCurrentVm No Check for Running VM ✅
+### 18.8 Critical: FLTK: deleteCurrentVm No Check for Running VM ✅
 
 `deleteCurrentVm` deletes a VM without checking if it's running, orphaning
 the QEMU process.
@@ -1480,7 +1480,7 @@ the QEMU process.
 
 ---
 
-### 18.9 High — Web: Missing Security Headers ✅
+### 18.9 High: Web: Missing Security Headers ✅
 
 No `X-Content-Type-Options`, `X-Frame-Options`, or `Content-Security-Policy`
 on any response. Plus wide-open `Access-Control-Allow-Origin: *` with static
@@ -1491,7 +1491,7 @@ API key.
 | `src/web_server.zig` writeHttpResponse | ✅ X-Content-Type-Options, X-Frame-Options, CSP added |
 | `src/web_server.zig` writeStreamHeaders | ✅ Headers added to streaming responses |
 
-### 18.10 High — Web: Missing Rate Limiting ✅
+### 18.10 High: Web: Missing Rate Limiting ✅
 
 Zero rate limiting on any endpoint. Attacker can spam `/api/power/N` or flood
 `/api/new` to exhaust resources.
@@ -1500,7 +1500,7 @@ Zero rate limiting on any endpoint. Attacker can spam `/api/power/N` or flood
 |------|--------|
 | `src/web_server.zig` | ✅ Atomic rate limiter with 20 req/sec window |
 
-### 18.11 High — Web: Missing Request Timeout on Client Connections ✅
+### 18.11 High: Web: Missing Request Timeout on Client Connections ✅
 
 `serveHtml` does a single blocking `read()` with no `SO_RCVTIMEO`. A slowloris
 attacker keeps a thread blocked indefinitely.
@@ -1509,7 +1509,7 @@ attacker keeps a thread blocked indefinitely.
 |------|--------|
 | `src/web_server.zig` serveHtml | ✅ 30-second SO_RCVTIMEO added |
 
-### 18.12 High — FLTK: renameVm Dialog Non-Modal (Race on selected_idx) ✅
+### 18.12 High: FLTK: renameVm Dialog Non-Modal (Race on selected_idx) ✅
 
 `renameVm` creates the dialog with `Fl_Window_make_modal(rw, 0)` (non-modal).
 User can change selection while rename is open; callback uses stale `idx`.
@@ -1518,7 +1518,7 @@ User can change selection while rename is open; callback uses stale `idx`.
 |------|--------|
 | `src/main.zig` renameVm | ✅ Changed `Fl_Window_make_modal(rw, 1)` |
 
-### 18.13 High — FLTK: editVmDialog No Input Validation on Numeric Fields ✅
+### 18.13 High: FLTK: editVmDialog No Input Validation on Numeric Fields ✅
 
 Memory, cores, disk size, VNC/SPICE ports parse with `catch` falling back to
 current value. Empty/negative/zero values silently accepted.
@@ -1527,7 +1527,7 @@ current value. Empty/negative/zero values silently accepted.
 |------|--------|
 | `src/main.zig` editVmDialog save callback | ✅ clampNum32/clampNum16 for all numeric fields |
 
-### 18.14 High — FLTK: startAllVms Silent Failure + vm_started Set on Failure ✅
+### 18.14 High: FLTK: startAllVms Silent Failure + vm_started Set on Failure ✅
 
 Individual start failures swallowed with `catch continue`; `vm_started[i] = 1`
 set before start calls. User sees "All VMs powered on" even when half failed.
@@ -1536,7 +1536,7 @@ set before start calls. User sees "All VMs powered on" even when half failed.
 |------|--------|
 | `src/main.zig` startAllVms | ✅ Track started/failed counts, report in status |
 
-### 18.15 High — Core: Double-Close Race in Serial Console ✅
+### 18.15 High: Core: Double-Close Race in Serial Console ✅
 
 `serialReader` thread and `serialDisconnect` can close the same fd concurrently.
 After one closes, the OS may recycle the fd number; the second close hits an
@@ -1546,7 +1546,7 @@ unrelated socket.
 |------|--------|
 | `src/serial_console.zig` serialDisconnect | ✅ shutdown() before close, join before final close |
 
-### 18.16 High — Core: Dangling Framebuffer Pointer in VNC Client After Failed Connect ✅
+### 18.16 High: Core: Dangling Framebuffer Pointer in VNC Client After Failed Connect ✅
 
 When `rfbInitClient` fails, libvncclient frees the framebuffer but `VncClient`
 still holds the pointer. `lockFb()` returns freed memory.
@@ -1557,7 +1557,7 @@ still holds the pointer. `lockFb()` returns freed memory.
 
 ---
 
-### 18.17 Medium — Web: Auth Exemption Uses Loose startsWith Matching ✅
+### 18.17 Medium: Web: Auth Exemption Uses Loose startsWith Matching ✅
 
 Auth bypass uses `startsWith(u8, req, "GET /api/vm/")`. Path traversal in URL
 could bypass auth then match a different handler.
@@ -1566,7 +1566,7 @@ could bypass auth then match a different handler.
 |------|--------|
 | `src/web_server.zig` | ✅ isAuthExempt() with extracted path, exact matching |
 
-### 18.18 Medium — Web: Missing Input Clamping on Preferences Save ✅
+### 18.18 Medium: Web: Missing Input Clamping on Preferences Save ✅
 
 `handleConfigSave` parses `default_memory_mb`/`default_cpu_cores` without
 clamping. User can set absurd defaults propagated to all new VMs.
@@ -1575,7 +1575,7 @@ clamping. User can set absurd defaults propagated to all new VMs.
 |------|--------|
 | `src/web_server.zig` handleConfigSave | ✅ clampPref() with bounds for memory/cpu/autoprotect |
 
-### 18.19 Medium — Web: No Persistent Save After Suspend ✅
+### 18.19 Medium: Web: No Persistent Save After Suspend ✅
 
 `handleSuspend` calls `persist.save()` but `catch` only logs; returns `"ok"`
 even when save failed. Suspended state lost on restart.
@@ -1584,7 +1584,7 @@ even when save failed. Suspended state lost on restart.
 |------|--------|
 | `src/web_server.zig` handleSuspend | ✅ Return "save failed" on persist error |
 
-### 18.20 Medium — Web: Export Temp Directory Leaks on Failure ✅
+### 18.20 Medium: Web: Export Temp Directory Leaks on Failure ✅
 
 `handleExport` creates `/tmp/ovf_export.N.PID` but early returns (convert
 failure, tar failure) skip cleanup. Temp dir + converted VMDK leaked on disk.
@@ -1593,7 +1593,7 @@ failure, tar failure) skip cleanup. Temp dir + converted VMDK leaked on disk.
 |------|--------|
 | `src/web_server.zig` handleExport | ✅ deferred cleanup with dir_cleanup/tar_cleanup flags |
 
-### 18.21 Medium — Web: Serial WebSocket Reconnection Too Aggressive ✅
+### 18.21 Medium: Web: Serial WebSocket Reconnection Too Aggressive ✅
 
 `setInterval(..., 3000)` tears down and reconnects the serial WebSocket every 3
 seconds even when already connected. Causes input loss.
@@ -1602,7 +1602,7 @@ seconds even when already connected. Causes input loss.
 |------|--------|
 | `src/web/app.js` startSerial | ✅ readyState check + keep terminal on reconnect |
 
-### 18.22 Medium — FLTK: importVm No Preview/Edit Dialog ✅
+### 18.22 Medium: FLTK: importVm No Preview/Edit Dialog ✅
 
 File chooser returns → VM immediately created with hardcoded defaults. No
 chance to adjust name, memory, cores, or disk size.
@@ -1611,7 +1611,7 @@ chance to adjust name, memory, cores, or disk size.
 |------|--------|
 | `src/main.zig` importVm | ✅ Opens editVmDialogEx(true) after import for preview/edit |
 
-### 18.23 Medium — FLTK: Enum Fields Use Free-Text Input Instead of Dropdowns ✅
+### 18.23 Medium: FLTK: Enum Fields Use Free-Text Input Instead of Dropdowns ✅
 
 editVmDialog uses `Fl_Input` for Network mode, Firmware, Display, GPU, Disk
 Format, Guest OS, Boot Order, Audio, NIC modes. Typo → silent fallback to
@@ -1621,7 +1621,7 @@ default.
 |------|--------|
 | `src/main.zig` editVmDialog | ✅ All enum fields use Fl_Choice + populateEnum()/readEnum() |
 
-### 18.24 Medium — FLTK: migrateDialog Stack-Local String with Fl_Box_set_label (Use-After-Free) ✅
+### 18.24 Medium: FLTK: migrateDialog Stack-Local String with Fl_Box_set_label (Use-After-Free) ✅
 
 Migration polling loop calls `Fl_Box_set_label(sl, lbl.ptr)` where `lbl` is
 from a stack-local `[128]u8`. FLTK stores the pointer; after the callback
@@ -1631,7 +1631,7 @@ returns, label shows garbage.
 |------|--------|
 | `src/dialogs.zig` migrateDialog | ✅ cfltk Fl_Box_set_label calls copy_label() internally |
 
-### 18.25 Medium — FLTK: exportOvfDialog Blocking Disk Conversion Freezes UI ✅
+### 18.25 Medium: FLTK: exportOvfDialog Blocking Disk Conversion Freezes UI ✅
 
 OVF export calls `qemu.convertDiskImage()` synchronously inside dialog
 callback. For large disks, UI freezes for minutes with no feedback.
@@ -1641,7 +1641,7 @@ and `tryReapChild` (non-blocking `waitpid` with `W.NOHANG`) to `src/qemu.zig`.
 `exportOvfDialog` now uses `convertDiskImageNoWait` for local conversion paths,
 with `Fl_repeat_timeout` polling via `checkOvfConversion` callback. Status bar
 shows progress message ("Converting disk...") while running and success/failure
-on completion. Remote path via getVmHandle still uses synchronous convert —
+on completion. Remote path via getVmHandle still uses synchronous convert,
 that path doesn't involve qemu-img.
 
 | File | Status |
@@ -1649,7 +1649,7 @@ that path doesn't involve qemu-img.
 | `src/dialogs.zig` exportOvfDialog | ✅ async conversion + polling |
 | `src/qemu.zig` convertDiskImageNoWait / tryReapChild | ✅ added |
 
-### 18.26 Medium — Core: buildScriptStr Incomplete Shell Quoting ✅
+### 18.26 Medium: Core: buildScriptStr Incomplete Shell Quoting ✅
 
 Generated bash script wraps args in single quotes but doesn't escape single
 quotes within arguments. Path like `/home/user/VM's Data/disk.qcow2` breaks.
@@ -1658,7 +1658,7 @@ quotes within arguments. Path like `/home/user/VM's Data/disk.qcow2` breaks.
 |------|--------|
 | `src/qemu.zig` buildScriptStr | ✅ added appendShellQuoted with '\'' escape pattern |
 
-### 18.27 Medium — Core: extractJsonString Unicode Escapes ✅
+### 18.27 Medium: Core: extractJsonString Unicode Escapes ✅
 
 QMP responses can contain `\uXXXX` sequences. Parser writes literal 6-byte
 sequences into output instead of decoding to UTF-8.
@@ -1672,12 +1672,12 @@ ASCII, 2-byte, 3-byte, and surrogate-pair paths.
 |------|--------|
 | `src/qmp.zig` extractJsonString | ✅ \uXXXX + surrogate pairs + 4 tests |
 
-### 18.28 Medium — Core: FLTK Image Leak in Display ✅
+### 18.28 Medium: Core: FLTK Image Leak in Display ✅
 
 `renderFramebuffer` creates new `Fl_RGB_Image` each frame without freeing the
 old one. Leaks ~500 MB/min at 1920×1080×60fps.
 
-**Fixed:** Added `prev_img` module-level variable — tracks the previous
+**Fixed:** Added `prev_img` module-level variable, tracks the previous
 `Fl_RGB_Image`, freed via `Fl_RGB_Image_delete` before creating a new one in
 `renderFramebuffer()`. Also freed in `clearDisplay()` to avoid leak on VM stop.
 
@@ -1685,7 +1685,7 @@ old one. Leaks ~500 MB/min at 1920×1080×60fps.
 |------|--------|
 | `src/display.zig` renderFramebuffer | ✅ prev_img + Fl_RGB_Image_delete |
 
-### 18.29 Medium — Core: SPICE Client Framebuffer Mutex ✅
+### 18.29 Medium: Core: SPICE Client Framebuffer Mutex ✅
 
 Unlike VNC client (uses `SpinMutex`), SPICE client uses plain atomic reads on
 dirty flag but non-atomic accesses to framebuffer pointer. UI thread sees
@@ -1705,7 +1705,7 @@ to `seq_cst` atomics for consistency.
 
 ---
 
-### 18.30 Low — Web: Missing focus-visible Styles on Interactive Elements ✅
+### 18.30 Low: Web: Missing focus-visible Styles on Interactive Elements ✅
 
 `.vm-item`, `.clear-btn`, `.star`, `.hamburger`, `.ctx-item` have hover styles
 but no `:focus-visible`. Keyboard users get invisible focus rings.
@@ -1714,7 +1714,7 @@ but no `:focus-visible`. Keyboard users get invisible focus rings.
 |------|--------|
 | `src/web/app.css` | ✅ All 5 selectors have `:focus-visible` rules with accent outline |
 
-### 18.31 Low — Web: Missing aria-expanded on Sidebar Toggle ✅
+### 18.31 Low: Web: Missing aria-expanded on Sidebar Toggle ✅
 
 Hamburger button toggles sidebar but lacks `aria-expanded` and `aria-controls`.
 
@@ -1722,7 +1722,7 @@ Hamburger button toggles sidebar but lacks `aria-expanded` and `aria-controls`.
 |------|--------|
 | `src/web/app.js` toggleSidebar | ✅ `setAttribute('aria-expanded', ...)` + `aria-controls='sidebar'` |
 
-### 18.32 Low — Web: Settings Labels Not Associated with Inputs ✅
+### 18.32 Low: Web: Settings Labels Not Associated with Inputs ✅
 
 Labels are rendered as `<label>Text</label>` without `for` attribute. Clicking
 label doesn't focus the associated input.
@@ -1731,7 +1731,7 @@ label doesn't focus the associated input.
 |------|--------|
 | `src/web/app.js` editVm | ✅ Labels use `for="${id}"` matching input/select IDs |
 
-### 18.33 Low — Web: No Loading/Disabled State on Save Button ✅
+### 18.33 Low: Web: No Loading/Disabled State on Save Button ✅
 
 Save button not disabled during API call. Double-click triggers two saves.
 
@@ -1739,16 +1739,16 @@ Save button not disabled during API call. Double-click triggers two saves.
 |------|--------|
 | `src/web/app.js` saveVm | ✅ `btn.disabled=true; btn.textContent='Saving...'` during API call |
 
-### 18.34 Low — Web: Server-Unavailable Handling in Frontend ✅
+### 18.34 Low: Web: Server-Unavailable Handling in Frontend ✅
 
 `refresh()` `catch` only logs to console. UI shows stale data indefinitely
 when server is unreachable.
 
 | File | Status |
 |------|--------|
-| `src/web/app.js` refresh | ✅ `serverDown` flag + `setStatus('Server unreachable — retrying...')` |
+| `src/web/app.js` refresh | ✅ `serverDown` flag + `setStatus('Server unreachable, retrying...')` |
 
-### 18.35 Low — FLTK: homeCB Doesn't Clear Display/Serial on Deselection ✅
+### 18.35 Low: FLTK: homeCB Doesn't Clear Display/Serial on Deselection ✅
 
 Home button only clears selection and refreshes browser/details. Display tab
 continues showing last VM's framebuffer.
@@ -1757,7 +1757,7 @@ continues showing last VM's framebuffer.
 |------|--------|
 | `src/main.zig` homeCB | ✅ Calls `display_mod.clearDisplay()` + `serial.serialDisconnect()` |
 
-### 18.36 Low — FLTK: Dead Code Cleanup ✅
+### 18.36 Low: FLTK: Dead Code Cleanup ✅
 
 Orphaned doc comments in main.zig after refactoring; unused `test_fltk.zig`
 and `build_fltk.zig` files.
@@ -1765,12 +1765,12 @@ and `build_fltk.zig` files.
 | File | Status |
 |------|--------|
 | `src/main.zig` | ✅ Removed orphaned `getOrCreateVmm`/`destroyVmm` doc comments (lines 1080/1082) |
-| `src/test_fltk.zig` | ✅ Already deleted — no such file |
-| `build_fltk.zig` | ✅ Already deleted — no such file |
+| `src/test_fltk.zig` | ✅ Already deleted, no such file |
+| `build_fltk.zig` | ✅ Already deleted, no such file |
 
 ---
 
-### 18.37 Tests — Behavioral Unit Tests for QEMU Snapshot/Disk Functions ✅
+### 18.37 Tests: Behavioral Unit Tests for QEMU Snapshot/Disk Functions ✅
 
 Snapshot/disk functions (`snapshotList`, `snapshotCreate`, `convertDiskImage`,
 `createLinkedClone`) tested only via fuzz (crash-safety). No behavioral
@@ -1780,7 +1780,7 @@ assertions on output format, file existence, or backing file references.
 |------|--------|
 | `src/qemu.zig` tests | ✅ Added tests for snapshotList (parse), snapshotCreate (output path), convertDiskImage (QCOW2 output), createLinkedClone (backing_file=) |
 
-### 18.38 Tests — parseAccel Dedicated Tests ✅
+### 18.38 Tests: parseAccel Dedicated Tests ✅
 
 `parseAccel` tested only indirectly through `parseVmObject`. No edge-case tests
 for unknown strings, empty input, or case-insensitivity.
@@ -1801,7 +1801,7 @@ for unknown strings, empty input, or case-insensitivity.
 
 ---
 
-## Tier 19 — Documentation Freshness & Remaining Polish (Oct 2026)
+## Tier 19: Documentation Freshness & Remaining Polish (Oct 2026)
 
 ### 19.1 Docs: TEST-COVERAGE.md References Stale Test Steps ✅
 
@@ -1816,7 +1816,7 @@ count which is stale.
 ### 19.2 Docs: GAP-ANALYSIS.md Out of Date ✅
 
 Claims multi-display, USB passthrough, shared folders, guest tools, linked
-clones are "not yet" — all are completed features.
+clones are "not yet", all are completed features.
 
 | File | Status |
 |------|--------|
@@ -1861,7 +1861,7 @@ with `catch {}` during autoprotect pruning. Delete failures are invisible.
 
 ---
 
-## Tier 20 — Finalization Audit Fixes (Nov 2026)
+## Tier 20: Finalization Audit Fixes (Nov 2026)
 
 ### 20.1 TEST-COVERAGE.md: Replace ~Approximations with Precise Counts ✅
 
@@ -1932,7 +1932,7 @@ Added `w <= 0 || h <= 0 || w > 8192 || h > 8192` guard.
 |------|--------|
 | `src/web/app.js:parseBmp()` | ✅ Rejects zero, negative, or >8192 px dimensions |
 
-## Tier 21 — Audit: Inconsistencies & Missing Error Logging (2025-07-16)
+## Tier 21: Audit: Inconsistencies & Missing Error Logging (2025-07-16)
 
 ### 21.1 num_displays Cap Mismatch (web_server vs main/app.js) ✅
 
@@ -1975,7 +1975,7 @@ the button always restores on success or failure.
 |------|--------|
 | `src/web/app.js:saveVm()` | ✅ Button re-enabled in finally block |
 
-### 21.5 Extract `serialpath.zig` — Serial Socket Path Builder ✅
+### 21.5 Extract `serialpath.zig`: Serial Socket Path Builder ✅
 
 `serial_console.zig` built the serial Unix-socket path inline with
 `bufPrintZ`. Extracted to `serialpath.zig` as a pure function so the
@@ -1990,7 +1990,7 @@ exact fit, consistent format.
 | `src/serial_console.zig` | ✅ Uses `serialpath.serialSocketPath` |
 | `build.zig` | ✅ `serialpath` added to test_mods (30 modules) |
 
-### 21.6 Extract `vmlist.zig` — Browser Line→VM-Index Mapping ✅
+### 21.6 Extract `vmlist.zig`: Browser Line→VM-Index Mapping ✅
 
 `appstate.zig:selectCurrent()` contained a non-trivial loop that maps
 FLTK browser line numbers to VM array indices, accounting for the
@@ -2012,7 +2012,7 @@ plus a fuzz harness.
 | `src/appstate.zig` | ✅ `selectCurrent` delegates to `vmlist.lineToVmIndex` |
 | `build.zig` | ✅ `vmlist` added to test_mods (31 modules) |
 
-## Tier 22 — Comprehensive Audit & Visual Verification
+## Tier 22: Comprehensive Audit & Visual Verification
 
 ### 22.1 Final catch{} Audit ✅
 
@@ -2034,12 +2034,12 @@ dependent (integration-only). Pure helpers already extracted:
 
 | Module | Why Untestable | Extracted |
 |--------|---------------|-----------|
-| `main.zig` | Entry point, all FLTK | — |
-| `dialogs.zig` | All FLTK dialog building | — |
+| `main.zig` | Entry point, all FLTK |: |
+| `dialogs.zig` | All FLTK dialog building |: |
 | `appstate.zig` | FLTK browser/display glue | `vmlist.zig`, `filter.zig` |
 | `serial_console.zig` | FLTK + Unix socket I/O | `serialpath.zig` |
-| `display_gl.zig` | OpenGL + FLTK GL window | — |
-| `cfltk_import.zig` | Pure @cImport wrapper | — |
+| `display_gl.zig` | OpenGL + FLTK GL window |: |
+| `cfltk_import.zig` | Pure @cImport wrapper |: |
 
 ### 22.3 Visual Test Suite Verification ✅
 
@@ -2049,13 +2049,13 @@ All visual tests pass end-to-end, verifying both UIs render correctly:
 |------|------------|--------|
 | FLTK `e2e_fltk_screenshots.sh` | 22 | ✅ All non-blank |
 | Web `e2e_web_screenshots.mjs` | 11 | ✅ All 9 checks pass |
-| `smoke_gui.sh` | — | ✅ App survives create+settings+about |
-| `fuzz_gui.sh` (400 events) | — | ✅ App survives random event storm |
-| `fuzz_modals.sh` | — | ✅ All 7 modal dialogs OK |
+| `smoke_gui.sh` |: | ✅ App survives create+settings+about |
+| `fuzz_gui.sh` (400 events) |: | ✅ App survives random event storm |
+| `fuzz_modals.sh` |: | ✅ All 7 modal dialogs OK |
 
 ### 22.4 Web UI CSS Audit ✅
 
-`app.css` uses CSS custom properties exclusively — zero hardcoded
+`app.css` uses CSS custom properties exclusively: zero hardcoded
 colors. Both light and dark themes defined via `classList.toggle`.
 All interactive elements have focus-visible outlines, ARIA
 attributes, keyboard shortcuts, and prefers-reduced-motion support.
@@ -2080,14 +2080,14 @@ Theme selection (System/Light/Dark).
 | Web API test endpoints | All 25+ endpoints |
 | CLI test operations | 18 vmrun operations |
 
-## Tier 23 — Deep Function Coverage Audit & Web Server Test Gap Fill
+## Tier 23: Deep Function Coverage Audit & Web Server Test Gap Fill
 
 ### 23.1 Web Server Pure Helper Tests ✅
 
-- ✅ `isAuthExempt`: 7 tests — root/static assets, favicon prefix, API reads,
+- ✅ `isAuthExempt`: 7 tests, root/static assets, favicon prefix, API reads,
   prefix paths (/api/vm/, /api/fb/, /api/snapshot/list/), non-exempt writes,
   non-GET rejection, path traversal prefix match
-- ✅ `clampPref`: 8 tests — within-range, below-lo, above-hi, non-numeric
+- ✅ `clampPref`: 8 tests, within-range, below-lo, above-hi, non-numeric
   fallback, empty string fallback, negative fallback, exact boundaries, zero
   when within range
 - ✅ Total: 83 web_server tests (was 69)
@@ -2115,9 +2115,9 @@ Theme selection (System/Light/Dark).
 | Web API test endpoints | All 25+ endpoints |
 | CLI test operations | 18 vmrun operations |
 
-## Tier 24 — Web Frontend Bug Fixes & Visual Polish (2025-07-16)
+## Tier 24: Web Frontend Bug Fixes & Visual Polish (2025-07-16)
 
-### 24.1 Bug — serialManualOff Resets After 3s, Re-enabling Serial ✅
+### 24.1 Bug: serialManualOff Resets After 3s, Re-enabling Serial ✅
 
 `manualDisconnectSerial()` set `serialManualOff = true` but the 3s polling
 interval compared `serialIdx !== sel` (null !== index → true), which reset
@@ -2133,7 +2133,7 @@ guard because the flag was already cleared.
 |------|--------|
 | `src/web/app.js` serialManualOffVmIdx, startSerial, manualDisconnectSerial | ✅ |
 
-### 24.2 Bug — Busy Flag Timeout Stale Clear During Active Request ✅
+### 24.2 Bug: Busy Flag Timeout Stale Clear During Active Request ✅
 
 `setBusy()` scheduled a 5s fallback timeout to clear `busy=false`. If a
 request completed at t=1s (setting busy=false) and a new request started at
@@ -2148,7 +2148,7 @@ requests see a clean state.
 |------|--------|
 | `src/web/app.js` busyGen, setBusy, apiPost | ✅ |
 
-### 24.3 Bug — Context Menu Overflow Off Viewport Edges ✅
+### 24.3 Bug: Context Menu Overflow Off Viewport Edges ✅
 
 `ctxMenu` was positioned at raw `clientX/clientY` without clamping. Right-click
 near the bottom or right edge rendered the menu partially off-screen.
@@ -2161,7 +2161,7 @@ before showing.
 |------|--------|
 | `src/web/app.js` contextmenu handler | ✅ |
 
-### 24.4 Visual — Global Loading Bar (NProgress-Style) ✅
+### 24.4 Visual: Global Loading Bar (NProgress-Style) ✅
 
 API calls only showed "⏳ Working..." in the status bar. Added a 2px animated
 gradient bar at the top of the page (`#loadbar`) that slides during pending
@@ -2172,7 +2172,7 @@ requests, providing immediate visual feedback without reading the status bar.
 | `src/web/app.css` | ✅ #loadbar element + loadbar-slide animation |
 | `src/web/app.js` | ✅ initLoadBar, setLoadBar, wired into apiPost |
 
-### 24.5 Visual — Serial Terminal Connection Glow ✅
+### 24.5 Visual: Serial Terminal Connection Glow ✅
 
 Serial terminal panel had no visual indication of WebSocket connection state.
 Added `.connected` class with a green-tinted border and subtle box-shadow glow
@@ -2183,7 +2183,7 @@ when the WebSocket `onopen` fires, removed on close/error/disconnect.
 | `src/web/app.css` | ✅ #serialpanel.connected border-color + box-shadow + transition |
 | `src/web/app.js` | ✅ onopen adds class, stopSerial removes it |
 
-### 24.6 Visual — Display Canvas Viewport Constraint ✅
+### 24.6 Visual: Display Canvas Viewport Constraint ✅
 
 Display canvas had `max-height: 420px` which wasted space on large displays
 and didn't scale down on small ones. Changed to `max-height: 70vh` with
@@ -2193,9 +2193,9 @@ and didn't scale down on small ones. Changed to `max-height: 70vh` with
 |------|--------|
 | `src/web/app.css` | ✅ #fbcanvas max-height:70vh + object-fit:contain |
 
-## Tier 25 — Visual Polish & Consistency Pass (2025-07-16)
+## Tier 25: Visual Polish & Consistency Pass (2025-07-16)
 
-### 25.1 Web — Settings Form Input Validation Visual Feedback ✅
+### 25.1 Web: Settings Form Input Validation Visual Feedback ✅
 
 Settings form fields had HTML5 validation attributes (`required`, `min`, `max`,
 `pattern`) but no visual indication of validation failure beyond the browser's
@@ -2207,32 +2207,32 @@ palette. Applied to both `.settings-form` and `<dialog>` inputs/selects.
 |------|--------|
 | `src/web/app.css` | ✅ :user-invalid border-color + box-shadow rules |
 
-### 25.2 FLTK — Input Widget Theme Consistency ✅
+### 25.2 FLTK: Input Widget Theme Consistency ✅
 
 Audited all `Fl_Input_new` call sites across `main.zig` and `dialogs.zig`.
 Confirmed Fl_Input widgets inherit their background/text colors from the
 FLTK theme (set via `Fl_Window_set_color` on parent dialogs). The search
 input in the sidebar already has explicit `Fl_Input_set_color` and
 `Fl_Input_set_text_color` calls via `appstate.applyTheme()`. No changes
-needed — FLTK themes handle the rest.
+needed: FLTK themes handle the rest.
 
 | File | Status |
 |------|--------|
 | `src/appstate.zig` applyTheme | ✅ Already applies pal.surface/pal.text to search input |
 
-### 25.3 FLTK — Summary Tab Empty State ✅
+### 25.3 FLTK: Summary Tab Empty State ✅
 
 Verified `refreshDetails()` in `appstate.zig`: when no VM is selected,
 `sum_name` shows "No virtual machine selected.", all detail labels are
 cleared, and the status bar shows "{d} virtual machine(s)". When the VM
 library is empty (0 VMs), the status bar reads "0 virtual machine(s)".
-No changes needed — the empty state is already functional and clear.
+No changes needed, the empty state is already functional and clear.
 
 | File | Status |
 |------|--------|
 | `src/appstate.zig` refreshDetails | ✅ Empty state messaging already present |
 
-### 25.4 Verification — Full Suite Pass ✅
+### 25.4 Verification: Full Suite Pass ✅
 
 All verification passes with Tier 25 changes applied.
 
@@ -2243,12 +2243,12 @@ All verification passes with Tier 25 changes applied.
 | Web screenshots (9 scenarios) | 9/9 passed, 0 blank |
 | FLTK screenshots (22 scenarios) | 22/22 non-blank |
 
-## Tier 26 — Deep Audit Bug Fixes (2025-07-16)
+## Tier 26: Deep Audit Bug Fixes (2025-07-16)
 
 Thorough code audits of `main.zig` and `web_server.zig` found 10 concrete
 bugs and code-quality issues. Every finding verified and fixed.
 
-### 26.1 main.zig — Off-by-One in Import Name Extraction ✅
+### 26.1 main.zig: Off-by-One in Import Name Extraction ✅
 
 `importVm` rejected VM names that exactly filled `name_buf` (`len >= MAX_NAME`).
 Changed `>=` to `>` so names at the exact buffer boundary are accepted. Same
@@ -2259,7 +2259,7 @@ bug existed in `web_server.zig` `handleImport`.
 | `src/main.zig` | ~335 | `>=` → `>` |
 | `src/web_server.zig` | ~1463 | `>=` → `>`, uninitialized → `[0..name_slice.len]` |
 
-### 26.2 main.zig — newVmDialog Remote URL-Encoding ✅
+### 26.2 main.zig: newVmDialog Remote URL-Encoding ✅
 
 Remote-mode `CreateCB.go` built the POST body with raw `bufPrint` (`name={s}&`)
 which broke when VM names contained `&`, `=`, or `%`. Replaced with
@@ -2269,7 +2269,7 @@ which broke when VM names contained `&`, `=`, or `%`. Replaced with
 |------|-----|
 | `src/main.zig` | Replaced 4 raw bufPrint calls with urlencode.appendPair |
 
-### 26.3 web_server.zig — handleRename Missing Validation ✅
+### 26.3 web_server.zig: handleRename Missing Validation ✅
 
 `handleRename` was missing URL-decoding and `isValidVmName` checks that all
 other name-setting endpoints (`handleSave`, `handleNewVm`) already had.
@@ -2279,7 +2279,7 @@ Added `urlencode.urlDecode` + `isValidVmName` guard.
 |------|-----|
 | `src/web_server.zig` | Added val_buf, urlDecode, isValidVmName to handleRename |
 
-### 26.4 web_server.zig — handleImport Name Validation ✅
+### 26.4 web_server.zig: handleImport Name Validation ✅
 
 Imported VM names derived from filenames were stored without `isValidVmName`
 check. Added validation that rejects names with invalid characters.
@@ -2288,7 +2288,7 @@ check. Added validation that rejects names with invalid characters.
 |------|-----|
 | `src/web_server.zig` | Added `isValidVmName(name)` check in handleImport |
 
-### 26.5 web_server.zig — autoprotect_max Clamp Inconsistency ✅
+### 26.5 web_server.zig: autoprotect_max Clamp Inconsistency ✅
 
 Per-VM `ap_max` was clamped to 100 in `handleSave` but the default preference
 was clamped to 1000 in `handleConfigSave`. Aligned both to 1000.
@@ -2297,7 +2297,7 @@ was clamped to 1000 in `handleConfigSave`. Aligned both to 1000.
 |------|-----|
 | `src/web_server.zig` | `@min(100, ...)` → `@min(1000, ...)` |
 
-### 26.6 web_server.zig — Disk Capacity Integer Overflow ✅
+### 26.6 web_server.zig: Disk Capacity Integer Overflow ✅
 
 `handleExport` computed `disk_cap = u32 * 1024^3` in u64, which could overflow
 for extreme `disk_size_gb` values. Switched to saturating arithmetic (`*|`)
@@ -2307,7 +2307,7 @@ to prevent wrap-around to small values in OVF descriptors.
 |------|-----|
 | `src/web_server.zig` | `*` → `*|` for saturating multiply |
 
-### 26.7 web_server.zig — renderVmDetail Error Propagation ✅
+### 26.7 web_server.zig: renderVmDetail Error Propagation ✅
 
 `renderVmDetail` silently returned `"{}"` when buffer overflow occurred,
 giving clients an empty-but-valid JSON object with no error indication.
@@ -2318,7 +2318,7 @@ logs the error and falls back to `"{}"`.
 |------|-----|
 | `src/web_server.zig` | Changed return type to `![]const u8`, added RenderFailed error |
 
-### 26.8 web_server.zig — Path Traversal Guards ✅
+### 26.8 web_server.zig: Path Traversal Guards ✅
 
 File path fields (`iso_path`, `shared_folder`, `disk2_path`, `floppy`) in
 `handleSave` accepted arbitrary paths without traversal checks. Added `..`
@@ -2328,7 +2328,7 @@ rejection matching the existing `handleImport` guard.
 |------|-----|
 | `src/web_server.zig` | Added `..` check to 4 path field setters in handleSave |
 
-### 26.9 VNC Framebuffer OOB — Confirmed False Positive ✅
+### 26.9 VNC Framebuffer OOB: Confirmed False Positive ✅
 
 Audit flagged potential OOB read in `renderFramebuffer`'s `@memcpy` from VNC
 pixel buffer. Verified: `onMallocFb` allocates exactly `w*h*4` via `fbmath.fbFits`
@@ -2338,7 +2338,7 @@ needed.
 
 | File | Status |
 |------|--------|
-| `src/web_server.zig:renderFramebuffer` | ✅ Safe — buffer matches dimensions |
+| `src/web_server.zig:renderFramebuffer` | ✅ Safe: buffer matches dimensions |
 
 ### 26.10 Verification ✅
 
@@ -2349,16 +2349,16 @@ needed.
 
 ---
 
-## Tier 27 — Deep Audit Fixes (March 2025)
+## Tier 27: Deep Audit Fixes (March 2025)
 
 Comprehensive audit of `src/web/app.js`, `src/web/app.css`, and untested
 pure functions. ~60 findings across 3 files.
 
-### 27.1 app.js — High Severity ✅
+### 27.1 app.js: High Severity ✅
 
 #### 27.1.1 Race: apiPost busy TOCTOU
 
-`apiPost` checks `busy` then calls `setBusy()` — two non-atomic operations.
+`apiPost` checks `busy` then calls `setBusy()`, two non-atomic operations.
 A rapid double-click can pass the guard and submit two requests.
 
 **Fix:** `setBusy()` returns `bool` (`false` if already busy), `apiPost` returns
@@ -2403,7 +2403,7 @@ input.
 
 **Fix:** Check `busy` before closing the dialog.
 
-### 27.2 app.js — Medium Severity ✅
+### 27.2 app.js: Medium Severity ✅
 
 #### 27.2.1 DOM null checks (~30 sites) ✅ DONE
 
@@ -2420,14 +2420,14 @@ Already guarded before: `setStatus`, `showToast`, `renderList`, `startFb`,
 `stopFb`, `stopSerial`, serial term listener, `vmlist` roles.
 
 
-#### 27.2.2 Input sanitization — VNet fields ✅ DONE
+#### 27.2.2 Input sanitization: VNet fields ✅ DONE
 
 Fixed: `n.gateway` uses trimmed `gw` variable (was DOM raw value).
 `n.port_forwards` strips control chars. `name` and `host_iface` already
 had control-char stripping. Subnet/mask/dstart/dend/gateway validated by IP regex.
 
 
-#### 27.2.3 Input sanitization — Import path ✅ DONE
+#### 27.2.3 Input sanitization: Import path ✅ DONE
 
 Already implemented: `importGuest()` rejects paths containing `..`.
 
@@ -2451,7 +2451,7 @@ Already implemented: `.tab-bar` has `role="tablist"`, `.tab-btn` has `role="tab"
 
 Already implemented: Escape handler uses `d.hasAttribute('open')`.
 
-### 27.3 app.css — High Severity ✅
+### 27.3 app.css: High Severity ✅
 
 #### 27.3.1 Firefox scrollbar missing ✅ DONE
 
@@ -2462,7 +2462,7 @@ Already implemented: `scrollbar-width: thin` + `scrollbar-color` present on
 
 Already implemented: dialog inputs/selects use `:focus-visible`.
 
-### 27.4 app.css — Medium Severity ✅
+### 27.4 app.css: Medium Severity ✅
 
 #### 27.4.1 Overbroad `transition: all` ✅ DONE
 
@@ -2482,7 +2482,7 @@ Already removed (no `.empty-state .icon` rule in app.css).
 Already normalized: `.card-label` uses `margin-bottom: 4px`, `.card-value` spacing
 is consistent.
 
-### 27.5 persist.zig — Missing Test ✅
+### 27.5 persist.zig: Missing Test ✅
 
 #### 27.5.1 loadFromSlice has no direct unit test ✅ DONE
 
@@ -2500,120 +2500,120 @@ malformed JSON, and interleaved whitespace.
 
 ---
 
-## Tier 29 — Visual Polish & Bug Fixes (from code audit)
+## Tier 29: Visual Polish & Bug Fixes (from code audit)
 
 Comprehensive audit of FLTK and Web UIs found ~40 issues across visual polish,
 bugs, and UX gaps. This tier tracks the fixes.
 
-### 29.1 FLTK — Dark Mode Widget Theming
+### 29.1 FLTK: Dark Mode Widget Theming
 
 | # | Description | Status |
 |---|-------------|--------|
-| 1 | All `Fl_Input` widgets in dialogs have no color theming — invisible in dark mode | ✅ |
-| 2 | All `Fl_Choice` dropdowns have no color theming — dark mode mismatch | ✅ |
-| 3 | `Fl_Check_Button` backgrounds never set — white squares in dark mode | ✅ |
-| 4 | Console `Fl_Browser` lacks `text_color` — invisible output in dark mode | ✅ |
+| 1 | All `Fl_Input` widgets in dialogs have no color theming, invisible in dark mode | ✅ |
+| 2 | All `Fl_Choice` dropdowns have no color theming, dark mode mismatch | ✅ |
+| 3 | `Fl_Check_Button` backgrounds never set: white squares in dark mode | ✅ |
+| 4 | Console `Fl_Browser` lacks `text_color`: invisible output in dark mode | ✅ |
 | 5 | `vnetDialog` `Fl_Browser` has zero color calls | ✅ |
 | 6 | `editVmDialogEx` `Fl_Scroll` container has no background color | ✅ |
 | 7 | `Fl_Window_set_color` not called on all dialogs (migrateDialog, renameVm) | ✅ |
 
-### 29.2 FLTK — Theme Switch & Layout
+### 29.2 FLTK: Theme Switch & Layout
 
 | # | Description | Status |
 |---|-------------|--------|
-| 8 | Toolbar buttons don't update colors on theme switch — restart required | ✅ |
+| 8 | Toolbar buttons don't update colors on theme switch, restart required | ✅ |
 | 9 | Summary tab detail boxes: label_color only set in refreshDetails, not on theme change | ✅ |
 | 10 | Dialog header/section styles inconsistent (font size, separators) | ✅ |
 | 11 | Button sizes vary across dialogs (25/28/30/34px heights) | ✅ |
 | 12 | Toolbar hardcoded x-positions fragile at 1200px window edge | ✅ |
 
-### 29.3 Web — Visual Bugs (CSS/HTML)
+### 29.3 Web: Visual Bugs (CSS/HTML)
 
 | # | Description | Status |
 |---|-------------|--------|
 | 13 | Tab bar border permanently suppressed by inline `style="border-bottom:none"` | ✅ |
 | 14 | VM name margin permanently suppressed by inline `style="margin-bottom:0"` | ✅ |
 | 15 | `#loadbar` absolute positioning without `position: relative` on `main` | ✅ |
-| 16 | Settings form inputs use `:focus` instead of `:focus-visible` — blue ring on click | ✅ |
+| 16 | Settings form inputs use `:focus` instead of `:focus-visible`, blue ring on click | ✅ |
 | 17 | Non-standard `word-break: break-word` on `.card-value` (use `overflow-wrap`) | ✅ |
 | 18 | Non-standard `font-weight: 550` in 4 places (only multiples of 100 guaranteed) | ✅ |
-| 19 | No `color-scheme` CSS property on `:root` — native controls mismatch in dark mode | ✅ |
-| 20 | `.toast` has no max-height/overflow — long messages extend beyond viewport | ✅ |
+| 19 | No `color-scheme` CSS property on `:root`, native controls mismatch in dark mode | ✅ |
+| 20 | `.toast` has no max-height/overflow: long messages extend beyond viewport | ✅ |
 | 21 | No `aria-hidden` toggling on tab panels | ✅ |
 | 22 | Missing `prefers-color-scheme` media query CSS fallback | ✅ |
 
-### 29.4 Web — JavaScript Bugs & UX
+### 29.4 Web: JavaScript Bugs & UX
 
 | # | Description | Status |
 |---|-------------|--------|
 | 23 | Race condition: `vms` array can mutate between guard check and access → TypeError | ✅ |
-| 24 | `apiPost` returns null silently when busy — callers don't check → no feedback | ✅ |
-| 25 | Settings form remains editable during async save — user can modify stale fields | ✅ |
+| 24 | `apiPost` returns null silently when busy: callers don't check → no feedback | ✅ |
+| 25 | Settings form remains editable during async save, user can modify stale fields | ✅ |
 | 26 | ~210 lines of dead GPU rendering code (GpuRenderer class, parseBmp, initGpuRenderer) | ✅ |
 | 27 | Serial reconnect timer runs `startFb()`/`startSerial()` every 3s unconditionally | ✅ |
 | 28 | `showShortcutsModal()` JS fallback is dead code (static HTML always exists) | ✅ |
 | 29 | No transitional state indicators on VM list items during power toggle | ✅ |
 | 30 | Serial terminal `preventDefault()` blocks text selection/copy | ✅ |
 | 31 | `apiPost` pending count prevents error status display when concurrent | ✅ |
-| 32 | No max-toast limit — rapid failures can stack dozens of toasts | ✅ |
+| 32 | No max-toast limit: rapid failures can stack dozens of toasts | ✅ |
 
-### 29.5 Web Server — CSP & Security
+### 29.5 Web Server: CSP & Security
 
 | # | Description | Status |
 |---|-------------|--------|
-| 33 | CSP `script-src 'unsafe-inline'` unnecessary — all JS is external. Remove it. | ✅ |
+| 33 | CSP `script-src 'unsafe-inline'` unnecessary, all JS is external. Remove it. | ✅ |
 | 34 | CSP missing `frame-ancestors 'none'`, `form-action 'self'`, `base-uri 'self'` | ✅ |
-| 35 | `Server: hangar/1.0` header leaks version — use generic `Server: hangar` | ✅ |
+| 35 | `Server: hangar/1.0` header leaks version, use generic `Server: hangar` | ✅ |
 
-### 29.6 Docs — Factual Error
+### 29.6 Docs: Factual Error
 
 | # | Description | Status |
 |---|-------------|--------|
-| 36 | About dialog in web UI says "Built with FLTK" — should say "FLTK + vanilla HTML/CSS/JS" (it's correct actually, the frontend IS FLTK) | ✅ |
+| 36 | About dialog in web UI says "Built with FLTK", should say "FLTK + vanilla HTML/CSS/JS" (it's correct actually, the frontend IS FLTK) | ✅ |
 
 Comprehensive audit of `src/web/app.js` and `src/web/app.css` found ~49 issues
 across bugs, visual polish, accessibility, and feature gaps. This tier tracks
 the high-impact fixes.
 
-### 28.1 Bugs — app.js
+### 28.1 Bugs: app.js
 
 | # | Description | Status |
 |---|-------------|--------|
-| 1 | Serial reconnect timer re-opens WebSocket during CONNECTING state — guard `readyState === OPEN || CONNECTING`, close before reconnect | ✅ |
-| 2 | `busy` auto-reset timeout defeats guard for slow requests (>5s) — increase to 30s with warning | ✅ |
-| 3 | Canvases accumulate in DOM from noVNC — `stopFb` should `querySelectorAll` and remove all | ✅ |
-| 4 | `parseBmp` doesn't validate minimum `offBits` (<54) — corrupt BMP could read garbage | ✅ |
+| 1 | Serial reconnect timer re-opens WebSocket during CONNECTING state, guard `readyState === OPEN || CONNECTING`, close before reconnect | ✅ |
+| 2 | `busy` auto-reset timeout defeats guard for slow requests (>5s), increase to 30s with warning | ✅ |
+| 3 | Canvases accumulate in DOM from noVNC: `stopFb` should `querySelectorAll` and remove all | ✅ |
+| 4 | `parseBmp` doesn't validate minimum `offBits` (<54): corrupt BMP could read garbage | ✅ |
 | 5 | `loadSnapshots` doesn't trim response before `==='(none)'` comparison | ✅ |
-| 6 | Theme select fires `applyTheme` before Save — inconsistent with other prefs | ✅ |
-| 7 | `renameGuest` silently fails on whitespace-only input — no user feedback | ✅ |
-| 8 | Snapshot "Take" button not disabled during in-flight request — double-click risk | ✅ |
-| 9 | `powerToggle` assumes immediate effect — no visual transition indication | ✅ |
+| 6 | Theme select fires `applyTheme` before Save: inconsistent with other prefs | ✅ |
+| 7 | `renameGuest` silently fails on whitespace-only input, no user feedback | ✅ |
+| 8 | Snapshot "Take" button not disabled during in-flight request, double-click risk | ✅ |
+| 9 | `powerToggle` assumes immediate effect, no visual transition indication | ✅ |
 
-### 28.2 Visual Polish — app.css
+### 28.2 Visual Polish: app.css
 
 | # | Description | Status |
 |---|-------------|--------|
-| 10 | `.summary-card:hover` overwrites status `box-shadow` (loses left-edge glow) — combine shadows | ✅ |
-| 11 | `#fbcanvas` hardcodes `aspect-ratio: 4/3` — should be dynamic from framebuffer dimensions | ✅ |
-| 12 | `.btn.danger` transparent background — low visual weight in light theme — add tint | ✅ |
-| 13 | `#loadbar` spans full viewport including sidebar — constrain to `main` area | ✅ |
-| 14 | `.summary-card .card-label` uses 10px font — bump to 11px minimum | ✅ |
+| 10 | `.summary-card:hover` overwrites status `box-shadow` (loses left-edge glow), combine shadows | ✅ |
+| 11 | `#fbcanvas` hardcodes `aspect-ratio: 4/3`, should be dynamic from framebuffer dimensions | ✅ |
+| 12 | `.btn.danger` transparent background: low visual weight in light theme, add tint | ✅ |
+| 13 | `#loadbar` spans full viewport including sidebar: constrain to `main` area | ✅ |
+| 14 | `.summary-card .card-label` uses 10px font: bump to 11px minimum | ✅ |
 | 15 | No `cursor: not-allowed` on `.btn:disabled` | ✅ |
 | 16 | `.hamburger` button `aria-controls` points to non-existent `id` before first toggle | ✅ |
-| 17 | No fade-out transition when switching tabs — add exit animation | ✅ |
-| 18 | Search icon contrast ratio ~1.4:1 — bump opacity from 0.35 to 0.5 | ✅ |
-| 19 | `.toast` uses `margin-right` on icon child instead of `gap` on parent — inconsistent | ✅ |
+| 17 | No fade-out transition when switching tabs: add exit animation | ✅ |
+| 18 | Search icon contrast ratio ~1.4:1, bump opacity from 0.35 to 0.5 | ✅ |
+| 19 | `.toast` uses `margin-right` on icon child instead of `gap` on parent, inconsistent | ✅ |
 
-### 28.3 UX — app.js
+### 28.3 UX: app.js
 
 | # | Description | Status |
 |---|-------------|--------|
-| 20 | Batch operations have no progress feedback — show "Starting VM 3 of 12..." | ✅ |
-| 21 | Uptime display wraps after 24h (shows 24:00:00, 25:00:00) — add days component | ✅ |
-| 22 | No arrow-key navigation in VM list — Up/Down to move selection | ✅ |
-| 23 | "Unsaved changes" lost on tab switch — warn before discarding Settings edits | ✅ |
-| 24 | Dialog width 460px fixed — narrow viewports may overflow 3-button rows | ✅ |
-| 25 | Skip-link missing for keyboard navigation — add "Skip to main content" | ✅ |
+| 20 | Batch operations have no progress feedback: show "Starting VM 3 of 12..." | ✅ |
+| 21 | Uptime display wraps after 24h (shows 24:00:00, 25:00:00), add days component | ✅ |
+| 22 | No arrow-key navigation in VM list: Up/Down to move selection | ✅ |
+| 23 | "Unsaved changes" lost on tab switch: warn before discarding Settings edits | ✅ |
+| 24 | Dialog width 460px fixed: narrow viewports may overflow 3-button rows | ✅ |
+| 25 | Skip-link missing for keyboard navigation: add "Skip to main content" | ✅ |
 
 ### 28.4 Verification
 
@@ -2624,25 +2624,25 @@ the high-impact fixes.
 | Web visual tests (11 scenarios) | ✅ PASS (9/9 checks, 11 screenshots) |
 | FLTK visual tests (22 scenarios) | ✅ PASS (22/22 screenshots, 0 blank) |
 
-## Tier 30 — FLTK Polish: Remaining Gaps (2025 audit pass)
+## Tier 30: FLTK Polish: Remaining Gaps (2025 audit pass)
 
-### 30.1 Toolbar — Window Resize
+### 30.1 Toolbar: Window Resize
 
 | # | Description | Status |
 |---|-------------|--------|
 | 1 | Toolbar button positions computed at creation only; don't reposition on window resize | ✅ |
-| 2 | Toolbar button widths hardcoded (80/75/70/55/65) — should scale fractionally on wide windows | ✅ |
+| 2 | Toolbar button widths hardcoded (80/75/70/55/65): should scale fractionally on wide windows | ✅ |
 | 3 | Utility toolbar row 2 background strip height 42 doesn't match row 1 height 40 | ✅ |
 
-### 30.2 Dialogs — Minor Polish
+### 30.2 Dialogs: Minor Polish
 
 | # | Description | Status |
 |---|-------------|--------|
 | 4 | Clone type dialog "Choose clone type:" label has no explicit label color set | ✅ |
 | 5 | migrateDialog missing `Fl_Window_size_range` to prevent impossible shrink | ✅ |
-| 6 | renameVm window height 110 barely fits content (5px margin) — bump to 120 | ✅ |
+| 6 | renameVm window height 110 barely fits content (5px margin), bump to 120 | ✅ |
 
-### 30.3 Testing — Visual Regression
+### 30.3 Testing: Visual Regression
 
 | # | Description | Status |
 |---|-------------|--------|
@@ -2650,65 +2650,65 @@ the high-impact fixes.
 | 8 | No test for toolbar dynamic position calculation | ✅ |
 | 9 | `fbmath.zig` framebuffer-fit logic not exercised with real framebuffer sizes | ✅ |
 
-### 30.4 Web — Remaining Sharp Edges
+### 30.4 Web: Remaining Sharp Edges
 
 | # | Description | Status |
 |---|-------------|--------|
-| 10 | Web serial terminal scrollback limited to 500 lines in ringbuf — no export/clear button | ✅ |
+| 10 | Web serial terminal scrollback limited to 500 lines in ringbuf, no export/clear button | ✅ |
 | 11 | Web VM list doesn't show CPU/memory usage bars (only status icon) | ✅ |
 | 12 | No web favicon (browser tab shows default) | ✅ |
 
-### 30.5 Testing — Dark Mode
+### 30.5 Testing: Dark Mode
 
 | # | Description | Status |
 |---|-------------|--------|
-| 13 | Automated FLTK dark mode screenshot test — script exists but blocked by Xvfb cfltk crash on this machine | ✅ — `tests/visual/e2e_fltk_screenshots_dark.sh` runs cleanly under Xvfb; all 22 screenshots captured; registered as `zig build fltk-screenshots-dark` |
+| 13 | Automated FLTK dark mode screenshot test: script exists but blocked by Xvfb cfltk crash on this machine | ✅: `tests/visual/e2e_fltk_screenshots_dark.sh` runs cleanly under Xvfb; all 22 screenshots captured; registered as `zig build fltk-screenshots-dark` |
 
 ---
 
-## Tier 31 — Visual Polish & Sleekness (2025-07)
+## Tier 31: Visual Polish & Sleekness (2025-07)
 
-### 31.1 FLTK — Dialog Consistency
+### 31.1 FLTK: Dialog Consistency
 
 | # | Description | Status |
 |---|-------------|--------|
-| 14 | Some dialogs use `Fl_Window_set_color` but not all — migrateDialog, aboutDialog miss it | ✅ |
+| 14 | Some dialogs use `Fl_Window_set_color` but not all, migrateDialog, aboutDialog miss it | ✅ |
 | 15 | Button styling inconsistent: some use `Fl_Button_set_color`+`Fl_Button_set_label_color`, others don't | ✅ |
 | 16 | Scroll widgets (VM settings, snapshots) need `Fl_Browser_set_text_color` for dark mode legibility | ✅ |
 | 17 | Toolbar button tooltips missing on 6+ buttons (hover for 1s shows nothing) | ✅ |
 | 18 | Fl_Input placeholder text not visible in dark mode (white-on-near-black) | ✅ |
 
-### 31.2 FLTK — Window Management
+### 31.2 FLTK: Window Management
 
 | # | Description | Status |
 |---|-------------|--------|
-| 19 | Window resize stutters — repositionToolbars runs on every resize event, need debounce | ✅ |
+| 19 | Window resize stutters: repositionToolbars runs on every resize event, need debounce | ✅ |
 | 20 | No window maximise-to-fill available space on startup (hardcoded 1200×700) | ✅ |
 
-### 31.3 Web — Visual Polish
+### 31.3 Web: Visual Polish
 
 | # | Description | Status |
 |---|-------------|--------|
 | 21 | Toast notification animation is instant (no CSS transition on opacity/transform) | ✅ |
 | 22 | VM list item hover/active transitions could be smoother | ✅ |
-| 23 | VNC canvas "connecting" state shows blank — needs loading spinner overlay | ✅ |
-| 24 | Serial terminal uses browser default monospace — should force `font-family: monospace` | ✅ |
+| 23 | VNC canvas "connecting" state shows blank: needs loading spinner overlay | ✅ |
+| 24 | Serial terminal uses browser default monospace: should force `font-family: monospace` | ✅ |
 | 25 | Dark theme CSS custom properties not fully consistent between sidebar and main area | ✅ |
-| 26 | Empty-state illustrations are inline SVGs repeated 4× — factor into CSS class | ✅ |
+| 26 | Empty-state illustrations are inline SVGs repeated 4×, factor into CSS class | ✅ |
 | 27 | Sidebar search clear button (✕) has no visible hover state | ✅ |
 | 28 | Tab bar (Summary / Settings) has no transition animation between tabs | ✅ |
 
-### 31.4 Web — Responsive & Accessibility
+### 31.4 Web: Responsive & Accessibility
 
 | # | Description | Status |
 |---|-------------|--------|
-| 29 | No responsive breakpoints — layout breaks below ~800px viewport width | ✅ |
+| 29 | No responsive breakpoints: layout breaks below ~800px viewport width | ✅ |
 | 30 | Toolbar wraps with no collapse/hamburger menu on narrow screens | ✅ |
 | 31 | Color contrast on `--text-dim` elements may fail WCAG AA (need audit) | ✅ |
 | 32 | Dialog modals don't trap focus (Tab key escapes to background elements) | ✅ |
 | 33 | No `prefers-reduced-motion` media query support | ✅ |
 
-## Tier 32 — Code Audit: Bugs & Untested Gaps (2025-07-19)
+## Tier 32: Code Audit: Bugs & Untested Gaps (2025-07-19)
 
 Comprehensive codebase audit revealed the following remaining issues.
 
@@ -2716,38 +2716,38 @@ Comprehensive codebase audit revealed the following remaining issues.
 
 | # | Description | Location | Resolution |
 |---|-------------|----------|------------|
-| 1 | Fl_Choice widgets stored as Fl_Input in Ed struct → @ptrCast back (UB) | `main.zig` ~810-862 | ✅ False positive — Ed struct already uses correct `?*cfltk.Fl_Choice` types; @ptrCast is from generic `Fl_Widget*` |
-| 2 | JSON `"vms"` key search matches inside string values (data corruption) | `persist.zig` ~1035-1058 | ✅ Fixed — two guards: byte-before must be JSON key-position char, consumeLiteral on `"vms"` won't match inside strings |
-| 3 | `\uXXXX` escape truncated to single u8 instead of UTF-8 sequence | `persist.zig` ~524-551 | ✅ Fixed — decodes into proper 1/2/3-byte UTF-8 sequences based on codepoint range |
-| 4 | `skipJsonValue` doesn't handle `\\"` escape (escaped backslash + quote) | `persist.zig` ~598-650 | ✅ False positive — backtrack escape skip (`if (cur[i] == '\\') i += 1`) handles `\\` correctly; closing quote detected after skipping escaped char |
-| 5 | Malformed JSON can cause near-infinite loop (skipJsonValue stagnation) | `persist.zig` ~660-676 | ✅ Fixed — `cur = if (skipped.len < cur.len) skipped else cur[1..]` guarantees ≥1 byte progress on parse failures |
+| 1 | Fl_Choice widgets stored as Fl_Input in Ed struct → @ptrCast back (UB) | `main.zig` ~810-862 | ✅ False positive: Ed struct already uses correct `?*cfltk.Fl_Choice` types; @ptrCast is from generic `Fl_Widget*` |
+| 2 | JSON `"vms"` key search matches inside string values (data corruption) | `persist.zig` ~1035-1058 | ✅ Fixed, two guards: byte-before must be JSON key-position char, consumeLiteral on `"vms"` won't match inside strings |
+| 3 | `\uXXXX` escape truncated to single u8 instead of UTF-8 sequence | `persist.zig` ~524-551 | ✅ Fixed: decodes into proper 1/2/3-byte UTF-8 sequences based on codepoint range |
+| 4 | `skipJsonValue` doesn't handle `\\"` escape (escaped backslash + quote) | `persist.zig` ~598-650 | ✅ False positive: backtrack escape skip (`if (cur[i] == '\\') i += 1`) handles `\\` correctly; closing quote detected after skipping escaped char |
+| 5 | Malformed JSON can cause near-infinite loop (skipJsonValue stagnation) | `persist.zig` ~660-676 | ✅ Fixed: `cur = if (skipped.len < cur.len) skipped else cur[1..]` guarantees ≥1 byte progress on parse failures |
 
 ### 32.2 Medium
 
 | # | Description | Location | Resolution |
 |---|-------------|----------|------------|
-| 6 | bufPrintZ failures silently return from callbacks (41 call sites) | `main.zig` | ✅ Audited — all call sites use `catch continue` which is safe: buffers are 256+ bytes and VM names/paths are bounded well below that |
-| 7 | migrateDialog passes unvalidated URI directly to QMP liveMigrate | `dialogs.zig` ~594 | ✅ False positive — live migration dialog removed in FLTK rewrite; no such code path exists |
-| 8 | SpinMutex busy-waits without yield — 100% CPU under contention | `sync.zig` 16-28 | ✅ Fixed — `std.Thread.yield()` called every 64 spins with `spinLoopHint()` between |
-| 9 | VM disk paths from config used without sanitization in export handlers | `web_server.zig` handleExport | ✅ False positive — no export-file handler exists in web_server; paths are only used server-side for QEMU launch |
-| 10 | vnetDialog AddCB uses hardcoded subnet values (duplicate conflicts) | `dialogs.zig` ~280 | ✅ By design — hardcoded subnets follow VMware Workstation convention; user can edit after creation |
+| 6 | bufPrintZ failures silently return from callbacks (41 call sites) | `main.zig` | ✅ Audited, all call sites use `catch continue` which is safe: buffers are 256+ bytes and VM names/paths are bounded well below that |
+| 7 | migrateDialog passes unvalidated URI directly to QMP liveMigrate | `dialogs.zig` ~594 | ✅ False positive: live migration dialog removed in FLTK rewrite; no such code path exists |
+| 8 | SpinMutex busy-waits without yield: 100% CPU under contention | `sync.zig` 16-28 | ✅ Fixed: `std.Thread.yield()` called every 64 spins with `spinLoopHint()` between |
+| 9 | VM disk paths from config used without sanitization in export handlers | `web_server.zig` handleExport | ✅ False positive, no export-file handler exists in web_server; paths are only used server-side for QEMU launch |
+| 10 | vnetDialog AddCB uses hardcoded subnet values (duplicate conflicts) | `dialogs.zig` ~280 | ✅ By design: hardcoded subnets follow VMware Workstation convention; user can edit after creation |
 
 ### 32.3 Low / Polish
 
 | # | Description | Location | Resolution |
 |---|-------------|----------|------------|
-| 11 | `@ptrCast` from `*VmConfig` to `?*anyopaque` strips type safety | `main.zig` 1145, 1181 | ✅ Standard FLTK pattern — `Fl_Widget_set_user_data`/get takes `void*`; callback casts back immediately |
-| 12 | parseInt uses silent fallback defaults in prefsDialog save | `dialogs.zig` 90-118 | ✅ Intentional UX — safe defaults (30s poll, 5 snapshots) are applied when field is empty or unparseable |
-| 13 | Theme registration silently drops widgets beyond 128 (MAX_THEMED) | `appstate.zig` 189-235 | ✅ Fixed — MAX_THEMED bumped to 256; stderr warning logged on overflow |
-| 14 | Rate limiter `@cmpxchgWeak` can spuriously fail on ARM | `web_server.zig` ~100 | ✅ False positive — no rate limiter exists in codebase; item was based on hypothetical concern |
-| 15 | setStatusIcon uses magic number 255 instead of status_buf.len | `appstate.zig` 318 | ✅ Fixed — `status_buf.len - 1` replaces hardcoded 255; both setStatus and setStatusIcon use the same pattern |
+| 11 | `@ptrCast` from `*VmConfig` to `?*anyopaque` strips type safety | `main.zig` 1145, 1181 | ✅ Standard FLTK pattern: `Fl_Widget_set_user_data`/get takes `void*`; callback casts back immediately |
+| 12 | parseInt uses silent fallback defaults in prefsDialog save | `dialogs.zig` 90-118 | ✅ Intentional UX: safe defaults (30s poll, 5 snapshots) are applied when field is empty or unparseable |
+| 13 | Theme registration silently drops widgets beyond 128 (MAX_THEMED) | `appstate.zig` 189-235 | ✅ Fixed: MAX_THEMED bumped to 256; stderr warning logged on overflow |
+| 14 | Rate limiter `@cmpxchgWeak` can spuriously fail on ARM | `web_server.zig` ~100 | ✅ False positive, no rate limiter exists in codebase; item was based on hypothetical concern |
+| 15 | setStatusIcon uses magic number 255 instead of status_buf.len | `appstate.zig` 318 | ✅ Fixed: `status_buf.len - 1` replaces hardcoded 255; both setStatus and setStatusIcon use the same pattern |
 
 **Tier 32 summary:** 8 genuine fixes (5 code changes + 3 audit-confirmed safe), 7 false positives.
 All 15 items resolved. Zero known crash/data-loss bugs remain.
 
 ---
 
-## Tier 33 — Future Work & Stretch Features
+## Tier 33: Future Work & Stretch Features
 
 | # | Description | Priority | Status |
 |---|-------------|----------|--------|
@@ -2760,7 +2760,7 @@ All 15 items resolved. Zero known crash/data-loss bugs remain.
 | 7 | VNC canvas loading spinner overlay | Low | ✅ (#display.loading::after with spin animation) |
 | 8 | Test-coverage gaps: ~145 untested lines across persist.zig (emitVmJson w/ snapshot lists, link-clone emit), qmp.zig (response timeout path), dialogs.zig (migrate/vnet save paths) | Low | ✅ (link-clone removed; snapshot lists not in JSON config; response timeout covered by qmpFuzzServer fuzz; migrate is FLTK UI code; VNet save paths in vnet.zig already tested; added parseGpuDevice test) |
 
-## Tier 34 — Continuous Polish (2025-07-19)
+## Tier 34: Continuous Polish (2025-07-19)
 
 | # | Description | Status |
 |---|-------------|--------|
@@ -2773,9 +2773,9 @@ All 15 items resolved. Zero known crash/data-loss bugs remain.
 | 7 | VM list item drag-to-reorder | ✅ API /api/reorder + frontend DnD with drag/dragover/drop |
 | 8 | Keyboard shortcut overlay shows on first visit | ✅ localStorage flag + 1.5s delay then showShortcutsModal |
 | 9 | Settings form dirty-state detection (warn before losing unsaved edits) | ✅ select/deselectVm/Escape/editVm all guarded |
-| 10 | FLTK: automated screenshot diff test for light/dark theme | ❌ WONTFIX — already covered by 22-scenario `tests/visual/e2e_fltk_screenshots.sh` + dark variant (see `zig build fltk-screenshots` / `fltk-screenshots-dark`); per-pixel diff test adds no value beyond what the script validates |
+| 10 | FLTK: automated screenshot diff test for light/dark theme | ❌ WONTFIX: already covered by 22-scenario `tests/visual/e2e_fltk_screenshots.sh` + dark variant (see `zig build fltk-screenshots` / `fltk-screenshots-dark`); per-pixel diff test adds no value beyond what the script validates |
 
-## Tier 35 — Web UI Polish & Gaps (2025-07-19)
+## Tier 35: Web UI Polish & Gaps (2025-07-19)
 
 | # | Description | Status |
 |---|-------------|--------|
@@ -2785,10 +2785,10 @@ All 15 items resolved. Zero known crash/data-loss bugs remain.
 | 4 | Web UI: `Ctrl+S` save shortcut should work in settings tab even when no input is focused | ✅ added before input-guard in keydown handler |
 | 5 | Web UI: server-connection-lost recovery banner (prominent banner, not just status bar) | ✅ `#connbanner` element with warn styling, `setServerDown()` JS helper, dismiss button |
 | 6 | Web UI: undo toast after drag-to-reorder (5s undo window) | ✅ toastUndo in reorderVm: captures old positions, 5s dismiss, reverse-reorder callback |
-| 7 | Web UI: unused CSS audit and cleanup | ✅ All selectors verified referenced in HTML/JS — no dead code |
-| 8 | Web UI: `prefers-color-scheme` media query auto-detection for theme default | ✅ already implemented — `applyTheme` checks matchMedia, listens for changes |
+| 7 | Web UI: unused CSS audit and cleanup | ✅ All selectors verified referenced in HTML/JS, no dead code |
+| 8 | Web UI: `prefers-color-scheme` media query auto-detection for theme default | ✅ already implemented: `applyTheme` checks matchMedia, listens for changes |
 
-## Tier 36 — Expanded Test Coverage & CSS Polish (2025-07-20)
+## Tier 36: Expanded Test Coverage & CSS Polish (2025-07-20)
 
 | # | Description | Status |
 |---|-------------|--------|
@@ -2801,91 +2801,91 @@ All 15 items resolved. Zero known crash/data-loss bugs remain.
 | 7 | `migrateGuest` dialog test | ✅ Opens migratedlg modal, handles close gracefully with Escape |
 | 8 | `cloneGuest` dialog test with Full Clone button | ✅ Opens clonedlg, clicks Full Clone button, verifies VM count increases |
 
-## Tier 37 — Audit Fixes: Bugs & Polish (ongoing)
+## Tier 37: Audit Fixes: Bugs & Polish (ongoing)
 
 Comprehensive audit of main.zig, web_server.zig, web/app.js, and web/app.css
 found ~25 issues across security, correctness, and visual polish.
 
-### 37.1 Critical / High — FLTK
+### 37.1 Critical / High: FLTK
 
 | # | Description | Status |
 |---|-------------|--------|
-| H1 | Themed widget arrays UAF: dialog widgets registered via `themeInput()`/`themeChoice()`/`themeCheckButton()`/`themeBrowser()`/`themeScroll()` are never unregistered on dialog close. `updateWidgetColors()` calls FLTK methods on freed pointers after theme switch. | ✅ Fixed — added `unthemeInput`/`unthemeChoice`/`unthemeBrowser`/`unthemeCheckButton`/`unthemeScroll` swap-remove functions in `appstate.zig` |
-| H2 | `kbHandler` has no `modal_active` guard: keyboard shortcuts (Ctrl+N, Ctrl+E, F2, DEL, etc.) fire during modal dialog spin loops, triggering nested dialogs that corrupt shared VM state and stale `Ed` contexts. | ✅ Fixed — added `if (app.modal_active) return 0;` guard at top of `kbHandler` |
+| H1 | Themed widget arrays UAF: dialog widgets registered via `themeInput()`/`themeChoice()`/`themeCheckButton()`/`themeBrowser()`/`themeScroll()` are never unregistered on dialog close. `updateWidgetColors()` calls FLTK methods on freed pointers after theme switch. | ✅ Fixed: added `unthemeInput`/`unthemeChoice`/`unthemeBrowser`/`unthemeCheckButton`/`unthemeScroll` swap-remove functions in `appstate.zig` |
+| H2 | `kbHandler` has no `modal_active` guard: keyboard shortcuts (Ctrl+N, Ctrl+E, F2, DEL, etc.) fire during modal dialog spin loops, triggering nested dialogs that corrupt shared VM state and stale `Ed` contexts. | ✅ Fixed: added `if (app.modal_active) return 0;` guard at top of `kbHandler` |
 
-### 37.2 Critical / High — Web Server
-
-| # | Description | Status |
-|---|-------------|--------|
-| H3 | SIGPIPE risk in streaming download paths: `handleDisk2Download` and `handleExport` use raw `c.write()` without checking return values. Client disconnect mid-response sends SIGPIPE, killing the server. | ✅ Fixed — `signal(SIGPIPE, SIG_IGN)` at top of `main()` |
-| H4 | Unix socket setup errors silently ignored: `main()` uses bare `catch {}` on `setsockopt`/`bind`/`listen`. Server prints banner claiming socket is ready but it's broken. | ✅ Fixed — proper error checks + logErr on all three Unix socket calls |
-| H5 | WebSocket endpoints (`/ws/vnc/*`, `/ws/spice/*`, `/ws/serial/*`) are auth-exempt — unauthenticated VM console access via trivially enumerable VM indices. | ✅ Fixed — inline `checkAuth()` call before each WS upgrade; WS paths removed from `isAuthExempt` |
-| H6 | Framebuffer snapshot endpoint (`/api/fb/*`) is auth-exempt — leaks visual content of running VMs. | ✅ Fixed — removed `/api/fb/` from `isAuthExempt`; now requires `X-API-Key` header |
-
-### 37.3 Critical / High — Web Frontend
+### 37.2 Critical / High: Web Server
 
 | # | Description | Status |
 |---|-------------|--------|
-| H7 | Focus trap listener leak: `trapFocus()` adds `keydown` listener to each dialog but `releaseFocus()` never removes it. Every dialog open accumulates handlers. | ✅ Already fixed — `releaseFocus` calls `dlg.removeEventListener('keydown', handler)` and deletes `_trapFocusHandler` (stale TODO). |
-| H8 | Null pointer crashes: `showVnetFields()` and `vnetSaveCurrent()` call `document.getElementById(...).value` without null checks on ~9 elements. Missing HTML element → TypeError crash. | ✅ Already fixed — all `getElementById` calls have null checks via `if(!el)return;` or `el?el.value:''` (stale TODO). |
-| H9 | `refresh()` interval races with `powerToggle()`/`saveVm()`: 5-second setInterval can overwrite `vms` mid-operation. | ✅ Already fixed — `refresh()` guards with `if(transitioningIdx!==null||saveInFlight)return;` at top, preventing interval runs during power toggle or save. |
+| H3 | SIGPIPE risk in streaming download paths: `handleDisk2Download` and `handleExport` use raw `c.write()` without checking return values. Client disconnect mid-response sends SIGPIPE, killing the server. | ✅ Fixed: `signal(SIGPIPE, SIG_IGN)` at top of `main()` |
+| H4 | Unix socket setup errors silently ignored: `main()` uses bare `catch {}` on `setsockopt`/`bind`/`listen`. Server prints banner claiming socket is ready but it's broken. | ✅ Fixed: proper error checks + logErr on all three Unix socket calls |
+| H5 | WebSocket endpoints (`/ws/vnc/*`, `/ws/spice/*`, `/ws/serial/*`) are auth-exempt, unauthenticated VM console access via trivially enumerable VM indices. | ✅ Fixed: inline `checkAuth()` call before each WS upgrade; WS paths removed from `isAuthExempt` |
+| H6 | Framebuffer snapshot endpoint (`/api/fb/*`) is auth-exempt: leaks visual content of running VMs. | ✅ Fixed: removed `/api/fb/` from `isAuthExempt`; now requires `X-API-Key` header |
 
-### 37.4 Medium — FLTK
-
-| # | Description | Status |
-|---|-------------|--------|
-| M1 | Silent `catch {}` in remote mode: body construction for `newVmDialog` CreateCB swallows urlencode failures for disk_path and iso_path — server receives incomplete VM creation request. | ✅ Fixed — `catch {}` replaced with `catch { app.setStatusErr(...) }` for both disk_path and iso. |
-| M2 | Silent disk directory creation failure in `newVmDialog`: `createDirPath` error swallowed — user sees success but VM will fail to start. | ✅ Fixed — `catch {}` replaced with `catch { app.setStatusErr("Failed to create disk directory — VM may fail to start") }`. |
-
-### 37.5 Medium — Web Server
+### 37.3 Critical / High: Web Frontend
 
 | # | Description | Status |
 |---|-------------|--------|
-| M3 | `handleExport`: `catch return` on tar failure, OVF build failure, and disk conversion failure all silently return without logging — client sees dropped connection with no explanation. | ✅ Already fixed — every `catch return` in handleExport has `logErr(...)` before `return` (stale TODO). |
-| M4 | `jsonEscape` truncation produces malformed JSON: buffer overflow silently truncates at buffer boundary, embedding a broken JSON string into the response document. | ✅ Fixed — `escapeJson` now returns `""` when truncation occurs, keeping JSON valid. Truncation is still logged. |
-| M5 | `writeStreamHeaders` duplicates ~25 lines of `writeHttpResponse` — missing headers (CSP, X-Content-Type-Options, X-Frame-Options) on streaming responses. | ✅ All security headers present — stale TODO. Both functions include CSP, X-Content-Type-Options, X-Frame-Options, CORS, Server, and Cache-Control. |
-| M6 | `main()` thread spawn failures silently ignored: Unix accept thread and autoprotect ticker failures are swallowed with `else |_| {}`. | ✅ Fixed — spawn failures now logged via `logErr` with error name. |
+| H7 | Focus trap listener leak: `trapFocus()` adds `keydown` listener to each dialog but `releaseFocus()` never removes it. Every dialog open accumulates handlers. | ✅ Already fixed: `releaseFocus` calls `dlg.removeEventListener('keydown', handler)` and deletes `_trapFocusHandler` (stale TODO). |
+| H8 | Null pointer crashes: `showVnetFields()` and `vnetSaveCurrent()` call `document.getElementById(...).value` without null checks on ~9 elements. Missing HTML element → TypeError crash. | ✅ Already fixed, all `getElementById` calls have null checks via `if(!el)return;` or `el?el.value:''` (stale TODO). |
+| H9 | `refresh()` interval races with `powerToggle()`/`saveVm()`: 5-second setInterval can overwrite `vms` mid-operation. | ✅ Already fixed: `refresh()` guards with `if(transitioningIdx!==null||saveInFlight)return;` at top, preventing interval runs during power toggle or save. |
+
+### 37.4 Medium: FLTK
+
+| # | Description | Status |
+|---|-------------|--------|
+| M1 | Silent `catch {}` in remote mode: body construction for `newVmDialog` CreateCB swallows urlencode failures for disk_path and iso_path, server receives incomplete VM creation request. | ✅ Fixed: `catch {}` replaced with `catch { app.setStatusErr(...) }` for both disk_path and iso. |
+| M2 | Silent disk directory creation failure in `newVmDialog`: `createDirPath` error swallowed, user sees success but VM will fail to start. | ✅ Fixed: `catch {}` replaced with `catch { app.setStatusErr("Failed to create disk directory, VM may fail to start") }`. |
+
+### 37.5 Medium: Web Server
+
+| # | Description | Status |
+|---|-------------|--------|
+| M3 | `handleExport`: `catch return` on tar failure, OVF build failure, and disk conversion failure all silently return without logging, client sees dropped connection with no explanation. | ✅ Already fixed, every `catch return` in handleExport has `logErr(...)` before `return` (stale TODO). |
+| M4 | `jsonEscape` truncation produces malformed JSON: buffer overflow silently truncates at buffer boundary, embedding a broken JSON string into the response document. | ✅ Fixed: `escapeJson` now returns `""` when truncation occurs, keeping JSON valid. Truncation is still logged. |
+| M5 | `writeStreamHeaders` duplicates ~25 lines of `writeHttpResponse`: missing headers (CSP, X-Content-Type-Options, X-Frame-Options) on streaming responses. | ✅ All security headers present: stale TODO. Both functions include CSP, X-Content-Type-Options, X-Frame-Options, CORS, Server, and Cache-Control. |
+| M6 | `main()` thread spawn failures silently ignored: Unix accept thread and autoprotect ticker failures are swallowed with `else |_| {}`. | ✅ Fixed: spawn failures now logged via `logErr` with error name. |
 | M7 | `main()` acceptLoop thread: `catch continue` swallows spawn failures without logging or closing the accepted connection fd. | ✅ already fixed in pending diff |
 
-### 37.6 Medium — Web Frontend
+### 37.6 Medium: Web Frontend
 
 | # | Description | Status |
 |---|-------------|--------|
-| M8 | `saveVm()` sets `settingsDirty=false` before API returns — if the save fails, unsaved-changes protection is already lost. | ✅ `settingsDirty=false` is inside `if(r)` block, after API success. `saveInFlight` flag properly guards `refresh()` during save. |
+| M8 | `saveVm()` sets `settingsDirty=false` before API returns: if the save fails, unsaved-changes protection is already lost. | ✅ `settingsDirty=false` is inside `if(r)` block, after API success. `saveInFlight` flag properly guards `refresh()` during save. |
 | M9 | `powerToggle()` button stays disabled permanently if `refresh()` inside the success path throws. | ✅ Moved button re-enable into `finally` block so it runs on both success and failure. |
 | M10 | Ghost element leak in touch reorder: if neither `pointerup` nor `pointercancel` fires (tab loses focus mid-drag), ghost stays in DOM permanently. | ✅ `lostpointercapture` handler also cleans up ghost. Three cleanup paths: pointerup, pointercancel, lostpointercapture. |
-| M11 | `loadVnets()` doesn't handle `!r.ok`: non-2xx response leaves stale `vnetsData` — no error path. | ✅ Error logging added; stale data replaced with `{networks:[]}` on failure. |
-| M12 | `batchStart()`/`batchStop()` abort all remaining operations on single failure — no skip-and-continue. | ✅ Now track `failed` count and continue on individual failures. |
+| M11 | `loadVnets()` doesn't handle `!r.ok`: non-2xx response leaves stale `vnetsData`, no error path. | ✅ Error logging added; stale data replaced with `{networks:[]}` on failure. |
+| M12 | `batchStart()`/`batchStop()` abort all remaining operations on single failure, no skip-and-continue. | ✅ Now track `failed` count and continue on individual failures. |
 
-### 37.7 Low — Web Server
-
-| # | Description | Status |
-|---|-------------|--------|
-| L1 | `handleExport`: wrapping multiplication `*|` for `disk_cap` — would silently wrap if `disk_size_gb` exceeded clamp, producing corrupt OVF descriptor. | ✅ No overflow possible — `disk_size_gb` is u32, max u32 × 1GiB fits in u64. Also clamped to 65536 by HTML input. |
-| L2 | `handleImport`: path traversal check on raw (possibly URL-encoded) input — `..` literal check passes on `%2e%2e`. | ✅ Already fixed — path is URL-decoded via `urlencode.urlDecode` before `..` check (stale TODO). |
-| L3 | `handleExport`: predictable temp paths `/tmp/ovf_export.{idx}.{pid}` — symlink attack risk. | ✅ Low risk — path now includes `nsec` (nanosecond component from CLOCK_MONOTONIC) providing ~1B possible values. Compromise requires predicting exact nanosecond of `clock_gettime` call. |
-| L4 | `c.lseek()` return value unchecked in `handleDisk2Download` and `handleExport` — seek-to-start failure causes incorrect download content. | ✅ Already fixed — `if (c.lseek(fd, 0, 0) < 0) return;` checks return in both functions (stale TODO). |
-
-### 37.8 Low — Web Frontend
+### 37.7 Low: Web Server
 
 | # | Description | Status |
 |---|-------------|--------|
-| L5 | Dead code: double `document.body.appendChild(ctxMenu)` — second call is a no-op. | ✅ Only one `appendChild(ctxMenu)` exists — stale TODO. |
-| L6 | Duplicate focus-trap implementations: `trapFocus()` (per-dialog) and `getFocusable()` (global document listener) both handle Tab in dialogs. The global one is correct; per-dialog listeners are dead weight. | ✅ `trapFocus()` already guarded by `_trapFocusHandler` check — no double-registration. No global `getFocusable()` exists; per-dialog focus trap is the only implementation. |
-| L7 | `exportSerial()`: `URL.revokeObjectURL(a.href)` called synchronously before browser processes download click — race condition. | ✅ 100ms `setTimeout` delay before revoke gives browser time to process the download. Adequate for practical use. |
-| L8 | CSS: duplicate `border-color` on `#serialpanel.connected` — first value immediately overridden. | ✅ Fixed in uncommitted diff — first value removed. |
-| L9 | CSS: dialog inputs have hover style but settings form inputs do not — visual inconsistency. | ✅ Fixed in uncommitted diff — `.settings-form input:hover` and `.settings-form select:hover` styles added. |
-| L10 | CSS: `@media(prefers-color-scheme:light)` fallback block duplicates all custom properties — maintenance hazard. | ✅ Comment added noting the duplication requirement for both blocks. |
+| L1 | `handleExport`: wrapping multiplication `*|` for `disk_cap`, would silently wrap if `disk_size_gb` exceeded clamp, producing corrupt OVF descriptor. | ✅ No overflow possible: `disk_size_gb` is u32, max u32 × 1GiB fits in u64. Also clamped to 65536 by HTML input. |
+| L2 | `handleImport`: path traversal check on raw (possibly URL-encoded) input, `..` literal check passes on `%2e%2e`. | ✅ Already fixed: path is URL-decoded via `urlencode.urlDecode` before `..` check (stale TODO). |
+| L3 | `handleExport`: predictable temp paths `/tmp/ovf_export.{idx}.{pid}`, symlink attack risk. | ✅ Low risk: path now includes `nsec` (nanosecond component from CLOCK_MONOTONIC) providing ~1B possible values. Compromise requires predicting exact nanosecond of `clock_gettime` call. |
+| L4 | `c.lseek()` return value unchecked in `handleDisk2Download` and `handleExport`, seek-to-start failure causes incorrect download content. | ✅ Already fixed: `if (c.lseek(fd, 0, 0) < 0) return;` checks return in both functions (stale TODO). |
+
+### 37.8 Low: Web Frontend
+
+| # | Description | Status |
+|---|-------------|--------|
+| L5 | Dead code: double `document.body.appendChild(ctxMenu)`, second call is a no-op. | ✅ Only one `appendChild(ctxMenu)` exists: stale TODO. |
+| L6 | Duplicate focus-trap implementations: `trapFocus()` (per-dialog) and `getFocusable()` (global document listener) both handle Tab in dialogs. The global one is correct; per-dialog listeners are dead weight. | ✅ `trapFocus()` already guarded by `_trapFocusHandler` check, no double-registration. No global `getFocusable()` exists; per-dialog focus trap is the only implementation. |
+| L7 | `exportSerial()`: `URL.revokeObjectURL(a.href)` called synchronously before browser processes download click, race condition. | ✅ 100ms `setTimeout` delay before revoke gives browser time to process the download. Adequate for practical use. |
+| L8 | CSS: duplicate `border-color` on `#serialpanel.connected`, first value immediately overridden. | ✅ Fixed in uncommitted diff: first value removed. |
+| L9 | CSS: dialog inputs have hover style but settings form inputs do not, visual inconsistency. | ✅ Fixed in uncommitted diff: `.settings-form input:hover` and `.settings-form select:hover` styles added. |
+| L10 | CSS: `@media(prefers-color-scheme:light)` fallback block duplicates all custom properties, maintenance hazard. | ✅ Comment added noting the duplication requirement for both blocks. |
 
 ---
 
-## Tier 38 — Web UI Sleek Modern Redesign (2025-07)
+## Tier 38: Web UI Sleek Modern Redesign (2025-07)
 
 Complete CSS rewrite of the web frontend for a polished, contemporary
 glass-morphism aesthetic with gradient accents, depth layering, and
 micro-interactions.
 
-### 38.1 Design System — CSS Custom Properties
+### 38.1 Design System: CSS Custom Properties
 
 | Token | Dark Value | Light Value | Purpose |
 |-------|-----------|-------------|--------|
@@ -2915,14 +2915,14 @@ micro-interactions.
 
 Applied `backdrop-filter: blur(var(--glass-blur))` with semi-transparent
 `var(--glass)` backgrounds to:
-- Sidebar (`aside`) — frosted glass with subtle border
-- Toolbar (`.toolbar`) — floating glass bar, sticky
-- All dialogs (`dialog`) — elevated glass panels
-- Status bar (`#statusbar`) — pinned glass footer
-- Summary cards (`.summary-card`) — raised glass tiles
-- Toasts (`#toast-container`) — floating glass notifications
-- Context menus (`.ctx-menu`) — glass dropdowns
-- Toolbar "More" popover — glass floating panel
+- Sidebar (`aside`): frosted glass with subtle border
+- Toolbar (`.toolbar`): floating glass bar, sticky
+- All dialogs (`dialog`): elevated glass panels
+- Status bar (`#statusbar`): pinned glass footer
+- Summary cards (`.summary-card`): raised glass tiles
+- Toasts (`#toast-container`): floating glass notifications
+- Context menus (`.ctx-menu`): glass dropdowns
+- Toolbar "More" popover: glass floating panel
 
 ### 38.4 Micro-Interactions
 
@@ -2987,74 +2987,74 @@ tokens. Light theme uses brighter surfaces with slightly stronger blur
 
 ---
 
-## Tier 39 — Cross-UI Feature Parity & QEMU Capability Gaps
+## Tier 39: Cross-UI Feature Parity & QEMU Capability Gaps
 
 Audit of FLTK ↔ Web feature parity plus QEMU capabilities not yet surfaced
 in either UI.
 
-### 39.1 — Web UI features missing from FLTK
+### 39.1: Web UI features missing from FLTK
 
 | # | Description | Status |
 |---|-------------|--------|
-| 1 | Interactive serial terminal input: FLTK serial is read-only `Fl_Browser`; Web serial is fully interactive (sends escape sequences, arrow keys, Ctrl+letter) | ✅ — `serial_input_widget` added to FLTK, sends typed input through serial socket |
-| 2 | Toast notification system: Web has success/error/info/warn toasts with auto-dismiss; FLTK has only status bar text | ✅ — `showToast()` added to `appstate.zig` with auto-dismiss timer, icon + colored background per type |
-| 3 | Undo delete: Web shows undo toast on VM delete with full config restore; FLTK has no undo mechanism | ✅ — `undo_vm`/`undo_idx`/`undo_available` in `appstate`, Ctrl+Z restores deleted VM with preserved index |
-| 4 | Drag-to-reorder VM list: Web has HTML5 DnD + touch pointer-event reorder; FLTK `Fl_Browser` does not support DnD — consider click-button reorder (Move Up/Move Down) | ✅ — Move Up/Move Down buttons (▲ Up / ▼ Dn) on utility toolbar, Alt+Up/Alt+Down keyboard shortcuts, swap array position + persist |
-| 5 | Skeleton loading states: Web shows shimmer placeholders during initial VM list load; FLTK directly populates | ✅ N/A — FLTK populates the VM list synchronously from in-memory data (no async I/O), so skeleton loading states add no measurable UX benefit |
-| 6 | Serial terminal export/clear: Web has Export .txt + Clear buttons; FLTK serial has neither | ✅ — Export and Clear buttons wired in FLTK Console tab with native file chooser + full browser dump |
+| 1 | Interactive serial terminal input: FLTK serial is read-only `Fl_Browser`; Web serial is fully interactive (sends escape sequences, arrow keys, Ctrl+letter) | ✅: `serial_input_widget` added to FLTK, sends typed input through serial socket |
+| 2 | Toast notification system: Web has success/error/info/warn toasts with auto-dismiss; FLTK has only status bar text | ✅: `showToast()` added to `appstate.zig` with auto-dismiss timer, icon + colored background per type |
+| 3 | Undo delete: Web shows undo toast on VM delete with full config restore; FLTK has no undo mechanism | ✅: `undo_vm`/`undo_idx`/`undo_available` in `appstate`, Ctrl+Z restores deleted VM with preserved index |
+| 4 | Drag-to-reorder VM list: Web has HTML5 DnD + touch pointer-event reorder; FLTK `Fl_Browser` does not support DnD, consider click-button reorder (Move Up/Move Down) | ✅: Move Up/Move Down buttons (▲ Up / ▼ Dn) on utility toolbar, Alt+Up/Alt+Down keyboard shortcuts, swap array position + persist |
+| 5 | Skeleton loading states: Web shows shimmer placeholders during initial VM list load; FLTK directly populates | ✅ N/A: FLTK populates the VM list synchronously from in-memory data (no async I/O), so skeleton loading states add no measurable UX benefit |
+| 6 | Serial terminal export/clear: Web has Export .txt + Clear buttons; FLTK serial has neither | ✅: Export and Clear buttons wired in FLTK Console tab with native file chooser + full browser dump |
 
-### 39.2 — FLTK features missing from Web
-
-| # | Description | Status |
-|---|-------------|--------|
-| 7 | Migration with progress/polling/cancel: FLTK migration does QMP polling with progress bar and cancel; Web is fire-and-forget | ✅ — Web now polls `GET /api/migrate/status/N` every 500ms, shows progress bar + cancel button, `handleMigrateCancel` sends QMP `migrate_cancel` |
-| 8 | Real OVF export with `qemu-img convert` to VMDK: FLTK does async disk conversion with progress; Web streams a pre-built OVA blob | ✅ — Web `handleExport()` already calls `qemu.convertDiskImage()` to VMDK, builds OVF descriptor, tar+gzip, streams as .ova download |
-| 9 | MAC address auto-generation on VM create/edit: FLTK generates unique MACs with collision checking; Web delegates to server (create endpoint may not set MAC) | ✅ — `web_server.zig` already calls `vm.generateMacAddress()` when MAC is empty (create, import, and clone paths) |
-| 10 | VM liveness polling timer: FLTK has a 2-second timer that reaps dead VMs and disconnects dead displays; Web relies on periodic refresh() calls | ✅ — `livenessTicker` background thread polls every 2s under `vms_mutex`, reaps dead VMs via HV `isAliveFn`/`qemu.isVmAlive` fallback, destroys VMM handles |
-| 11 | Context menu on VM list: FLTK has right-click context menu (Power, Settings, Clone, Rename, Delete, Snapshot); Web has context menu but fewer items | ✅ — Web has 7 items (Power, Settings, Rename, Clone, Ctrl+Alt+Del, Toggle Favorite, Delete) vs FLTK's 6 (Power, Settings, Clone, Rename, Delete, Snapshot); web is actually richer |
-
-### 39.3 — QEMU features not surfaced in either UI
+### 39.2: FLTK features missing from Web
 
 | # | Description | Status |
 |---|-------------|--------|
-| 12 | Boot order UI: backend supports `pxe` in boot order enum; neither UI exposes boot device ordering or PXE boot | ✅ — `BootOrder` enum (disk_first/cdrom_first/network_first) already exposed in both UIs: FLTK combo box in Edit VM dialog, Web select in Settings tab |
-| 13 | USB tablet toggle: `-device usb-tablet` provides smooth mouse in VNC/SPICE; not configurable in either UI | ✅ — always enabled by default in `qemu.zig` (hardcoded `-device qemu-xhci -device usb-tablet`); it's essential for VNC/SPICE mouse tracking so a toggle would degrade UX |
-| 14 | virtio-rng toggle: `-object rng-random -device virtio-rng-pci` for guest entropy; not exposed | ✅ — `virtio_rng` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
-| 15 | Guest agent channel: virtio-serial channel for `qemu-guest-agent` (guest-info, guest-shutdown, guest-network-get-interfaces); not configured or queried | ✅ — `guest_agent` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
-| 16 | CPU model selection: always defaults to `host` (KVM) or `qemu64` (TCG); no UI to pick specific models | ✅ — `CpuModel` enum with 16 variants (host, max, qemu64, kvm64, EPYC, EPYC-Rome, EPYC-Milan, Skylake-Server, etc.), persisted in JSON, wired in FLTK edit dialog + web save/create |
-| 17 | Watchdog: `-watchdog i6300esb` with action (reset/poweroff/pause/none); not exposed | ✅ — `wd` Fl_Choice dropdown (None/Reset Guest/Power Off Guest/Pause Guest) in FLTK edit dialog + Web select, persisted as JSON int, wired in QEMU args |
-| 18 | Disk cache mode: `-drive cache=writeback|writethrough|none|directsync|unsafe`; hardcoded in arg builder | ✅ — `DiskCache` enum (writeback/writethrough/none/directsync/unsafe), persisted in JSON, wired in both UIs + QEMU arg builder |
-| 19 | TPM: `-tpmdev` + `-device tpm-tis` for virtual TPM 2.0 (required for Windows 11 guests) | ✅ — `tpm` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
-| 20 | Secure Boot / SMM: `-machine q35,smm=on` + UEFI firmware vars for Secure Boot | ✅ — `secure_boot` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
-| 21 | Hyper-V enlightenments: `-cpu host,hv_relaxed,hv_spinlocks=0x1fff,...` for Windows guest optimization | ✅ — `hyperv_enlightenments` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
-| 22 | Hugepages / memory backend: `-mem-prealloc`, `-mem-path /dev/hugepages` for performance | ✅ — `hugepages` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
-| 23 | IO threads: `-object iothread` + `virtio-blk-pci,iothread=...` for block I/O threading | ✅ — `io_threads` number input in FLTK edit dialog + Web number field, persisted in JSON, wired in QEMU args |
-| 24 | Disk I/O throttling: `-drive throttling.bps-total=...` for rate limiting; not in VM config model | ✅ — `disk_bps_throttle` (u64) + `disk_iops_throttle` (u32) number inputs in FLTK edit dialog + Web number fields, persisted in JSON, wired in QEMU args |
-| 25 | Ballooning: `-balloon virtio` for memory balloon driver; no QMP balloon commands | ✅ — `ballooning` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
-| 26 | Host autostart: no option to auto-start VMs when host boots (systemd service per VM) | ✅ — `host_autostart` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 7 | Migration with progress/polling/cancel: FLTK migration does QMP polling with progress bar and cancel; Web is fire-and-forget | ✅: Web now polls `GET /api/migrate/status/N` every 500ms, shows progress bar + cancel button, `handleMigrateCancel` sends QMP `migrate_cancel` |
+| 8 | Real OVF export with `qemu-img convert` to VMDK: FLTK does async disk conversion with progress; Web streams a pre-built OVA blob | ✅: Web `handleExport()` already calls `qemu.convertDiskImage()` to VMDK, builds OVF descriptor, tar+gzip, streams as .ova download |
+| 9 | MAC address auto-generation on VM create/edit: FLTK generates unique MACs with collision checking; Web delegates to server (create endpoint may not set MAC) | ✅: `web_server.zig` already calls `vm.generateMacAddress()` when MAC is empty (create, import, and clone paths) |
+| 10 | VM liveness polling timer: FLTK has a 2-second timer that reaps dead VMs and disconnects dead displays; Web relies on periodic refresh() calls | ✅: `livenessTicker` background thread polls every 2s under `vms_mutex`, reaps dead VMs via HV `isAliveFn`/`qemu.isVmAlive` fallback, destroys VMM handles |
+| 11 | Context menu on VM list: FLTK has right-click context menu (Power, Settings, Clone, Rename, Delete, Snapshot); Web has context menu but fewer items | ✅: Web has 7 items (Power, Settings, Rename, Clone, Ctrl+Alt+Del, Toggle Favorite, Delete) vs FLTK's 6 (Power, Settings, Clone, Rename, Delete, Snapshot); web is actually richer |
 
-### 39.4 — Polish & Infrastructure
+### 39.3: QEMU features not surfaced in either UI
 
 | # | Description | Status |
 |---|-------------|--------|
-| 27 | FLTK dark mode screenshots auto-compare against golden references (add to `zig build test` or smoke) | ✅ — Golden references in `tests/visual/screenshots_dark_golden/`, script `e2e_fltk_screenshots_dark.sh` compares new captures via RMSE, fails on regressions > 30.0 |
-| 28 | Web UI fullscreen (F11) mode for display-only view (hide sidebar/toolbar/statusbar when in display tab) | ✅ — Display-only fullscreen: body.displayonly hides sidebar/toolbar/statusbar/content, shows #display canvas full-window, floating hint bar on hover, Esc/F11 to exit |
-| 29 | Keyboard shortcut reference overlay parity: FLTK shows in About dialog; Web shows dedicated modal on first visit | ✅ — Added Ctrl+Shift+N (Clone), F2 (Edit), updated shortcutsdlg with 18 entries, About dialog inline list updated |
-| 30 | `zig build web-smoke` should run as part of CI-like `zig build test` umbrella (currently separate step) | ✅ — `test_step.dependOn(&web_smoke_cmd.step)` added in build.zig, so `zig build test` now includes web-smoke |
+| 12 | Boot order UI: backend supports `pxe` in boot order enum; neither UI exposes boot device ordering or PXE boot | ✅: `BootOrder` enum (disk_first/cdrom_first/network_first) already exposed in both UIs: FLTK combo box in Edit VM dialog, Web select in Settings tab |
+| 13 | USB tablet toggle: `-device usb-tablet` provides smooth mouse in VNC/SPICE; not configurable in either UI | ✅: always enabled by default in `qemu.zig` (hardcoded `-device qemu-xhci -device usb-tablet`); it's essential for VNC/SPICE mouse tracking so a toggle would degrade UX |
+| 14 | virtio-rng toggle: `-object rng-random -device virtio-rng-pci` for guest entropy; not exposed | ✅: `virtio_rng` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 15 | Guest agent channel: virtio-serial channel for `qemu-guest-agent` (guest-info, guest-shutdown, guest-network-get-interfaces); not configured or queried | ✅: `guest_agent` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 16 | CPU model selection: always defaults to `host` (KVM) or `qemu64` (TCG); no UI to pick specific models | ✅: `CpuModel` enum with 16 variants (host, max, qemu64, kvm64, EPYC, EPYC-Rome, EPYC-Milan, Skylake-Server, etc.), persisted in JSON, wired in FLTK edit dialog + web save/create |
+| 17 | Watchdog: `-watchdog i6300esb` with action (reset/poweroff/pause/none); not exposed | ✅: `wd` Fl_Choice dropdown (None/Reset Guest/Power Off Guest/Pause Guest) in FLTK edit dialog + Web select, persisted as JSON int, wired in QEMU args |
+| 18 | Disk cache mode: `-drive cache=writeback|writethrough|none|directsync|unsafe`; hardcoded in arg builder | ✅: `DiskCache` enum (writeback/writethrough/none/directsync/unsafe), persisted in JSON, wired in both UIs + QEMU arg builder |
+| 19 | TPM: `-tpmdev` + `-device tpm-tis` for virtual TPM 2.0 (required for Windows 11 guests) | ✅: `tpm` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 20 | Secure Boot / SMM: `-machine q35,smm=on` + UEFI firmware vars for Secure Boot | ✅: `secure_boot` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 21 | Hyper-V enlightenments: `-cpu host,hv_relaxed,hv_spinlocks=0x1fff,...` for Windows guest optimization | ✅: `hyperv_enlightenments` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 22 | Hugepages / memory backend: `-mem-prealloc`, `-mem-path /dev/hugepages` for performance | ✅: `hugepages` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 23 | IO threads: `-object iothread` + `virtio-blk-pci,iothread=...` for block I/O threading | ✅: `io_threads` number input in FLTK edit dialog + Web number field, persisted in JSON, wired in QEMU args |
+| 24 | Disk I/O throttling: `-drive throttling.bps-total=...` for rate limiting; not in VM config model | ✅: `disk_bps_throttle` (u64) + `disk_iops_throttle` (u32) number inputs in FLTK edit dialog + Web number fields, persisted in JSON, wired in QEMU args |
+| 25 | Ballooning: `-balloon virtio` for memory balloon driver; no QMP balloon commands | ✅: `ballooning` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
+| 26 | Host autostart: no option to auto-start VMs when host boots (systemd service per VM) | ✅: `host_autostart` checkbox in FLTK edit dialog + Web select, persisted in JSON, wired in QEMU args |
 
-## Tier 41 — Test Coverage Gaps: Enum Tests & Persist Round-Tripping (2026)
+### 39.4: Polish & Infrastructure
 
-### 41.1 — Missing Enum Unit Tests in vm.zig
+| # | Description | Status |
+|---|-------------|--------|
+| 27 | FLTK dark mode screenshots auto-compare against golden references (add to `zig build test` or smoke) | ✅: Golden references in `tests/visual/screenshots_dark_golden/`, script `e2e_fltk_screenshots_dark.sh` compares new captures via RMSE, fails on regressions > 30.0 |
+| 28 | Web UI fullscreen (F11) mode for display-only view (hide sidebar/toolbar/statusbar when in display tab) | ✅: Display-only fullscreen: body.displayonly hides sidebar/toolbar/statusbar/content, shows #display canvas full-window, floating hint bar on hover, Esc/F11 to exit |
+| 29 | Keyboard shortcut reference overlay parity: FLTK shows in About dialog; Web shows dedicated modal on first visit | ✅: Added Ctrl+Shift+N (Clone), F2 (Edit), updated shortcutsdlg with 18 entries, About dialog inline list updated |
+| 30 | `zig build web-smoke` should run as part of CI-like `zig build test` umbrella (currently separate step) | ✅: `test_step.dependOn(&web_smoke_cmd.step)` added in build.zig, so `zig build test` now includes web-smoke |
+
+## Tier 41: Test Coverage Gaps: Enum Tests & Persist Round-Tripping (2026)
+
+### 41.1: Missing Enum Unit Tests in vm.zig
 
 | # | Enum | Tests Added |
 |---|------|-------------|
 | 1 | `WatchdogAction` | fromIndex, toIndex, toStr, label, fromStr round-trip |
 | 2 | `CpuModel` | toStr values (all 18 variants), fromStr round-trip, `@intFromEnum` alignment |
 
-`WatchdogAction` had no `fromStr` / `toStr` and no tests — the fuzz harness was the
+`WatchdogAction` had no `fromStr` / `toStr` and no tests, the fuzz harness was the
 only coverage. `CpuModel` had all enum methods but only fuzz coverage.
 
-### 41.2 — Persist Round-Trip Tests Now Cover All VmJson Fields
+### 41.2: Persist Round-Trip Tests Now Cover All VmJson Fields
 
 Both the `VmConfig→VmJson fields→VmConfig` test and the
 `emitVmJson→parseVmObject` round-trip test now verify every field in the
@@ -3066,7 +3066,7 @@ Both the `VmConfig→VmJson fields→VmConfig` test and the
 - `ballooning`, `host_autostart`, `gpu_device`, `favorite`
 - `disk_cache`, `num_displays`
 
-### 41.3 — New Parse-Function Unit Tests
+### 41.3: New Parse-Function Unit Tests
 
 | Function | Test |
 |----------|------|
@@ -3074,7 +3074,7 @@ Both the `VmConfig→VmJson fields→VmConfig` test and the
 | `parseDiskCache` | All variants round-trip + unknown → writeback + empty → writeback |
 
 
-## Multi-review pass — remaining deferred items
+## Multi-review pass: remaining deferred items
 
 Most findings from the 8-agent review were fixed (security, correctness,
 concurrency incl. the handlePower lock and the dbusdisplay video locks, tests,
@@ -3093,7 +3093,7 @@ churn currently exceeds its value:
   parse status + Content-Length. Parsing status in the buffered path too would
   be cleaner but is a signature change across all callers for marginal gain.
 - **display_resolution persisted as a numeric index** (rest of the enums use
-  toStr). Internally consistent — only mis-maps if the enum is reordered, a
+  toStr). Internally consistent: only mis-maps if the enum is reordered, a
   code-review-time concern, not a runtime bug.
-- **guestinfo returns 200 {"ips":""} for stopped/no-agent/bad-idx alike** —
+- **guestinfo returns 200 {"ips":""} for stopped/no-agent/bad-idx alike**,
   minor: clients can't distinguish "no IPs" from "wrong VM". Cosmetic.

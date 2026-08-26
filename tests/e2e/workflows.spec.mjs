@@ -3,7 +3,7 @@
 // operations that are deterministic on a freshly-created, stopped VM with a
 // real qcow2 disk (created by the daemon via qemu-img): clone, rename,
 // delete+undo, snapshot take/list/delete, secondary-disk upload/download, and
-// OVF export. Power-on/migration are intentionally excluded — they need a real
+// OVF export. Power-on/migration are intentionally excluded, they need a real
 // booted guest / a second host and would be flaky here.
 import { test, expect } from '@playwright/test';
 import { execSync } from 'child_process';

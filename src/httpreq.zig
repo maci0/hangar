@@ -6,7 +6,7 @@
 const std = @import("std");
 
 /// True if `req` starts with `prefix` and the next byte ends the path (space or
-/// `?`) — i.e. an exact route match, not a longer path that merely shares the
+/// `?`): i.e. an exact route match, not a longer path that merely shares the
 /// prefix.
 pub fn routeExact(req: []const u8, prefix: []const u8) bool {
     if (!std.mem.startsWith(u8, req, prefix)) return false;
@@ -34,7 +34,7 @@ pub fn parseIdx(req: []const u8, prefix: []const u8) ?usize {
 
 /// Parse a VM index from the URL and verify the path suffix after the index.
 /// E.g. `parseVmIdxSuffix(req, "GET /api/vms/", "/disk2/download")` for URL
-/// `GET /api/vms/0/disk2/download`. Returns null on mismatch — safer than a
+/// `GET /api/vms/0/disk2/download`. Returns null on mismatch: safer than a
 /// substring search which might match ambiguous segments.
 pub fn parseVmIdxSuffix(req: []const u8, prefix: []const u8, suffix: []const u8) ?usize {
     const start = std.mem.indexOf(u8, req, prefix) orelse return null;
@@ -54,7 +54,7 @@ pub fn parseVmIdxSuffix(req: []const u8, prefix: []const u8, suffix: []const u8)
 
 /// Parse a VM index from a BARE item path with no trailing `/segment`.
 /// E.g. matches `GET /api/vms/12 HTTP/1.1` (and `?query`) but returns null for
-/// `GET /api/vms/12/log` — that has an action suffix and must be routed by
+/// `GET /api/vms/12/log`, that has an action suffix and must be routed by
 /// `parseVmIdxSuffix`. Returns the index only when the char after the digits is
 /// a space, `?`, or end of input.
 pub fn parseVmIdxExact(req: []const u8, prefix: []const u8) ?usize {

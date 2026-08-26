@@ -217,7 +217,7 @@ pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []cons
     if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null or std.mem.indexOf(u8, ct, "image/svg+xml") != null) {
         append(&hbuf, &hlen, "\r\nCache-Control: public, max-age=86400");
     } else {
-        // Dynamic responses (API JSON, errors) carry auth-gated VM state — disk
+        // Dynamic responses (API JSON, errors) carry auth-gated VM state, disk
         // paths, MACs, notes. Forbid browser/proxy caching so they are never
         // persisted to a shared-machine disk cache or replayed from history
         // (CWE-525).

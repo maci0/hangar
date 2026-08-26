@@ -1,9 +1,9 @@
-# Accelerated Video Pipeline — Design
+# Accelerated Video Pipeline: Design
 
-Status: **phases 1-3 shipped** — end-to-end encoded video verified live: dbus capture → ffmpeg h264_vaapi on the host GPU → /ws/video → WebCodecs decode → overlay canvas painting the guest boot screen. Phase 4 (polish) partial: frame pacing + bitrate setting + e2e shipped; cursor channel, multi-client fan-out, AV1, and virgl/dmabuf capture remain.
+Status: **phases 1-3 shipped**, end-to-end encoded video verified live: dbus capture → ffmpeg h264_vaapi on the host GPU → /ws/video → WebCodecs decode → overlay canvas painting the guest boot screen. Phase 4 (polish) partial: frame pacing + bitrate setting + e2e shipped; cursor channel, multi-client fan-out, AV1, and virgl/dmabuf capture remain.
 Goal: stream the guest's GPU-rendered display to the browser as **encoded
 video** (H.264/AV1) decoded by **WebCodecs** and presented on the **WebGPU**
-canvas — Moonlight/Parsec-class console latency and quality, replacing
+canvas: Moonlight/Parsec-class console latency and quality, replacing
 framebuffer tiles for high-motion content.
 
 ## Where we are today (shipped, verified)
@@ -42,18 +42,18 @@ state, and input interfaces. No scraping, no copies until the encoder, and it
 coexists with `-vnc`/`-spice` (fallback console stays).
 
 Alternatives rejected:
-- QMP `screendump` loop — PNG round-trip per frame; slow, disk-touching.
-- spice `gl=on` remote — requires GStreamer-enabled spice-server (distro
+- QMP `screendump` loop: PNG round-trip per frame; slow, disk-touching.
+- spice `gl=on` remote: requires GStreamer-enabled spice-server (distro
   builds lack it; fatal "invalid video codec"), and spice-html5 can't do its
   video channels anyway.
-- KMS/DRM lease of the virtual scanout — host-config heavy, root-only.
+- KMS/DRM lease of the virtual scanout: host-config heavy, root-only.
 
 ### Daemon-side encoder
-> Shipped differently than sketched here: there is no `videoenc.zig` — capture,
+> Shipped differently than sketched here: there is no `videoenc.zig`, capture,
 > session lifecycle, and the encoder all live in `dbusdisplay.zig`, and encoding
 > is an **ffmpeg child**, not in-process EGL/VAAPI (see phase 2 below). The
 > original in-process design is kept for reference.
-- P2P D-Bus client (hand-rolled like our QMP client — the wire protocol is
+- P2P D-Bus client (hand-rolled like our QMP client, the wire protocol is
   simple framing; **no** libdbus/glib per project constraints, or `sd-bus` via
   explicit extern decls if hand-rolling proves unreasonable).
 - EGL: import dmabuf as `EGLImage` (extern decls against libEGL, mirroring the
@@ -81,14 +81,14 @@ Auth/handshake identical to the other WS routes (subprotocol echoed).
   WebGL2 `texImage2D(frame)` fallback; `frame.close()` after upload.
 - Renderer badge becomes `H264 · WEBGPU`.
 - Capability gate: `'VideoDecoder' in window` AND the daemon advertises the
-  encoder in `/api/capabilities` — otherwise the console silently stays on the
+  encoder in `/api/capabilities`: otherwise the console silently stays on the
   current noVNC/spice path. The video path is an *upgrade*, never a
   requirement.
 
 ## Spike results (verified on the reference host, QEMU 11.0)
 
 - `-display dbus,p2p=yes` boots; clients attach by passing one end of a
-  socketpair via QMP `add_client` (the daemon already speaks QMP — no bus
+  socketpair via QMP `add_client` (the daemon already speaks QMP, no bus
   broker needed).
 - **GL exclusivity**: `dbus,gl=on` cannot coexist with `-vnc` ("Display vnc is
   incompatible with the GL context"). So with virgl + video streaming, the
@@ -101,37 +101,37 @@ Auth/handshake identical to the other WS routes (subprotocol echoed).
   D-Bus input work to the virgl phase.
 
 ## Phases
-1. **Capture** — shipped (`dbusdisplay.zig`): per-VM `video_stream` flag adds
+1. **Capture**: shipped (`dbusdisplay.zig`): per-VM `video_stream` flag adds
    `-display dbus,p2p=yes` (non-virgl embedded VMs; coexists with the VNC
-   console — verified live side-by-side), the daemon attaches via QMP
+   console: verified live side-by-side), the daemon attaches via QMP
    `getfd`+`add_client` SCM_RIGHTS, hand-rolled D-Bus auth + marshal/parse,
    registers a Listener and serves it (METHOD_RETURN replies, passed fds
    closed), logging frame cadence. Live: 37–67 fps of Scanout/Update traffic
    during firmware boot. Auth-role gotcha for phase 2: on the listener
-   connection QEMU is the AUTH **server** — the daemon must speak
+   connection QEMU is the AUTH **server**, the daemon must speak
    `\0AUTH EXTERNAL` first even though QEMU is the method-caller afterwards.
-2. **Encoder** — shipped. Implementation note: instead of in-process libva
+2. **Encoder**: shipped. Implementation note: instead of in-process libva
    (hundreds of lines of hand-declared VAAPI structs + bitstream packing), the
    encoder is an **ffmpeg child** (`h264_vaapi` when /dev/dri/renderD128 is
    openable, `libx264 -tune zerolatency` otherwise) fed raw BGRX frames on
-   stdin — the same subprocess pattern as qemu-img, via qemu.forkExecPiped.
+   stdin, the same subprocess pattern as qemu-img, via qemu.forkExecPiped.
    The session assembles Scanout/Update bodies into a heap framebuffer and
    pushes full frames; an Annex-B access-unit splitter (unit+fuzz tested)
    chunks the output, `-bsf:v dump_extra=freq=keyframe` repeats SPS/PPS so any
    key frame is a valid decoder entry point. Native libva remains a future
    optimization, not a requirement.
-3. **Client** — shipped: /ws/video frames (0x01 config w/h/codec, 0x02 delta,
+3. **Client**: shipped: /ws/video frames (0x01 config w/h/codec, 0x02 delta,
    0x03 key) feed a VideoDecoder (`avc1.42E01F`, optimizeForLatency); decoded
    frames draw onto a pointer-events:none overlay canvas above the noVNC layer
    (input keeps flowing to VNC), badge `H264 · WEBCODECS`. Silently absent
    without VideoDecoder or video_stream. Verified live: overlay painting the
    guest's iPXE boot screen via hardware encode at 70 fps capture cadence.
-4. **Polish** (partial): frame pacing shipped — pushes coalesce to ~30 fps
+4. **Polish** (partial): frame pacing shipped, pushes coalesce to ~30 fps
    with trailing-frame flush (unpaced damage bursts shoved ~80MB/s of redundant
    full frames into ffmpeg). `video_bitrate_kbps` shipped (persisted; Settings
    field; -b:v/-maxrate; 0 = auto 4000k). Hardening from live debugging:
    Sessions are refcounted (power-off mid-stream destroyed the Session under
-   the video client's feet — observed use-after-free panic), the attach thread
+   the video client's feet: observed use-after-free panic), the attach thread
    retries the handshake up to 6× (QMP/display not up at +900ms under load),
    serveVideoClient waits up to 8s for the session (a client connecting right
    at the running flip beat the attach), and the browser retries an

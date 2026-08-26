@@ -27,7 +27,7 @@ async function dialogOpen(page, id) {
 }
 
 // Load the app shell before every test. The server is shared across tests, so
-// state created by an earlier test may still be present — assertions below are
+// state created by an earlier test may still be present, assertions below are
 // written to tolerate a non-empty starting list.
 test.beforeEach(async ({ page }) => {
     await page.goto('/');
@@ -57,7 +57,7 @@ test('create VM workflow adds a VM to the list', async ({ page }) => {
 
 test('new VMs default to the VNC display (web-usable, not GTK)', async ({ page }) => {
     // Read the freshly created VM's config from the API and assert the display
-    // index is VNC (3), not GTK (0) — GTK opens a host-native window the browser
+    // index is VNC (3), not GTK (0), GTK opens a host-native window the browser
     // cannot show and disables the embedded console.
     const detail = await page.evaluate(async (key) => {
         const r = await fetch('/api/vms/0', { headers: { 'X-API-Key': key } });
@@ -78,7 +78,7 @@ test('view QEMU log workflow opens the log dialog', async ({ page }) => {
     await page.locator('#vmlist .vm-item').first().click();
     await invoke(page, 'viewLog');
     await expect.poll(() => dialogOpen(page, 'logdlg')).toBe(true);
-    // The VM was never started, so the daemon has no log file yet — the dialog
+    // The VM was never started, so the daemon has no log file yet, the dialog
     // must say so rather than hang on "Loading…".
     await expect(page.locator('#logbody')).toContainText(/No log output yet|empty|Failed/i);
 });

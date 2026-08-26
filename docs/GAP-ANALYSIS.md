@@ -1,4 +1,4 @@
-# Hangar — Gap Analysis vs VMware Workstation 17
+# Hangar: Gap Analysis vs VMware Workstation 17
 
 ## Feature Status
 
@@ -37,7 +37,7 @@
 | Remote client/daemon | ✅ transport.zig + HTTP API + vmrun CLI |
 | Batch start/stop all | ✅ Web toolbar buttons |
 | Favorites | ✅ Star toggle + grouped with separator |
-| Window geometry save | ❌ Removed with the FLTK frontend — `Prefs` still persists `win_x/y/w/h` but no current UI saves or restores geometry |
+| Window geometry save | ❌ Removed with the FLTK frontend: `Prefs` still persists `win_x/y/w/h` but no current UI saves or restores geometry |
 | vmrun CLI | ✅ 30 commands (list/start/stop/clone/delete/snapshot/...) |
 | HV abstraction layer | ✅ QEMU backend + dispatch table |
 | Live migration | ✅ QMP live migrate + status/cancel (Web + vmrun) |

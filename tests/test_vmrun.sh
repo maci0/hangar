@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vmrun CLI integration test — drives the real daemon over TCP and Unix.
+# vmrun CLI integration test: drives the real daemon over TCP and Unix.
 # Guards the whole vmrun client path, including the per-request redial behavior
 # (the daemon answers Connection: close, so every resolve-then-act command
 # issues 2+ requests on one Connection and must redial). Requires: python3, Zig.
@@ -38,7 +38,7 @@ expect_contains() {
     if printf '%s' "$out" | grep -qF "$needle"; then
         echo "  PASS: $desc"; PASS=$((PASS + 1))
     else
-        echo "  FAIL: $desc — output missing '$needle'"
+        echo "  FAIL: $desc, output missing '$needle'"
         echo "        got: $out"
         FAIL=$((FAIL + 1))
     fi
@@ -48,7 +48,7 @@ expect_contains() {
 expect_fails() {
     local desc="$1"; shift
     if "$@" >/dev/null 2>&1; then
-        echo "  FAIL: $desc — expected non-zero exit"; FAIL=$((FAIL + 1))
+        echo "  FAIL: $desc, expected non-zero exit"; FAIL=$((FAIL + 1))
     else
         echo "  PASS: $desc"; PASS=$((PASS + 1))
     fi
