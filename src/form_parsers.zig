@@ -328,7 +328,7 @@ test "fuzz: parseU32OrDefault never panics" {
     }
 }
 
-test "fuzz: all parsers consistency — never panic, return valid enum indices" {
+test "fuzz: all parsers consistency, never panic, return valid enum indices" {
     var prng = std.Random.DefaultPrng.init(0xDA1AFA5E);
     const rnd = prng.random();
     for (0..5000) |_| {
@@ -338,7 +338,7 @@ test "fuzz: all parsers consistency — never panic, return valid enum indices" 
         const s = buf[0..n];
 
         // Every parser must return an in-range variant (index < count) for
-        // arbitrary input — a parser that fell back to an out-of-range
+        // arbitrary input, a parser that fell back to an out-of-range
         // @enumFromInt would corrupt config silently, so assert it here.
         try std.testing.expect(@intFromEnum(parseDiskFormat(s)) < vm.DiskFormat.count);
         try std.testing.expect(@intFromEnum(parseNicMode(s)) < vm.NetworkMode.count);

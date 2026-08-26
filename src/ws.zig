@@ -87,7 +87,7 @@ pub fn parseUpgrade(req: []const u8) ?[29]u8 {
 /// First requested WebSocket subprotocol from the upgrade request, if any
 /// (e.g. spice-html5 asks for "binary"). RFC 6455 §4.2.2: when the client
 /// requests a subprotocol, the server must echo one back or the browser fails
-/// the whole handshake — silently dropping it broke the SPICE console while
+/// the whole handshake: silently dropping it broke the SPICE console while
 /// VNC (which requests none) worked.
 pub fn requestedProtocol(req: []const u8) ?[]const u8 {
     const marker = "Sec-WebSocket-Protocol: ";
@@ -123,7 +123,7 @@ fn isTokenChar(ch: u8) bool {
 /// echoing the client's requested subprotocol when present (see
 /// `requestedProtocol`). MUST use a normal string literal: Zig multiline (`\\`)
 /// literals do not process escapes, so a `\r` inside one is the two characters
-/// backslash+r — browsers then never see a real CRLF header terminator and the
+/// backslash+r: browsers then never see a real CRLF header terminator and the
 /// WebSocket stays in CONNECTING forever (this silently broke all consoles).
 pub fn formatUpgradeResponse(buf: []u8, accept_key: [29]u8, protocol: ?[]const u8) ![]const u8 {
     if (protocol) |p| {
@@ -144,11 +144,11 @@ pub fn writeUpgradeResponse(fd: c.fd_t, accept_key: [29]u8, req: []const u8) !vo
 /// `c.read` may return fewer bytes than requested on a fragmented TCP
 /// stream (the VNC proxy serves possibly-remote browser clients), so the
 /// fixed-size header reads below must accumulate rather than demand the
-/// full count in one syscall — otherwise a split header is misread as a
+/// full count in one syscall: otherwise a split header is misread as a
 /// protocol error and the connection is dropped spuriously.
 /// read() that retries on EINTR and on a recv timeout (EAGAIN). The WebSocket
 /// fd inherits the HTTP connection's 30s SO_RCVTIMEO, but an idle viewer that
-/// sends no frames is healthy — a timeout must not be mistaken for EOF and tear
+/// sends no frames is healthy, a timeout must not be mistaken for EOF and tear
 /// the connection down (a mid-frame timeout would also drop a live stream).
 /// Returns the byte count (>0), 0 on EOF, or -1 on a genuine error.
 fn readRetry(fd: c.fd_t, dst: [*]u8, len: usize) isize {
@@ -211,7 +211,7 @@ pub fn readFrameHeader(fd: c.fd_t) ?FrameHeader {
 pub fn readFramePayload(fd: c.fd_t, buf: []u8, header: FrameHeader) ?usize {
     const len: usize = @intCast(@min(header.payload_len, buf.len));
     if (len == 0 and header.mask) {
-        // Mask key is still on the wire even with zero payload — consume it.
+        // Mask key is still on the wire even with zero payload, consume it.
         var mask_key: [4]u8 = undefined;
         if (!readFull(fd, &mask_key)) return null;
         return 0;
@@ -377,7 +377,7 @@ test "formatUpgradeResponse: real CRLF line endings and terminator (RFC 6455)" {
     const accept = parseUpgrade(req).?;
     var buf: [256]u8 = undefined;
     const resp = try formatUpgradeResponse(&buf, accept, null);
-    // Every line must end in a REAL CR+LF — a literal backslash-r (from a Zig
+    // Every line must end in a REAL CR+LF, a literal backslash-r (from a Zig
     // multiline string) leaves browsers waiting for end-of-headers forever.
     try std.testing.expect(std.mem.indexOf(u8, resp, "\\r") == null);
     try std.testing.expect(std.mem.startsWith(u8, resp, "HTTP/1.1 101 Switching Protocols\r\n"));
@@ -490,7 +490,7 @@ test "requestedProtocol: extracts first token, trims, null when absent" {
 test "requestedProtocol: header-injection bytes are rejected (CWE-113)" {
     // The value is echoed into a response header, so a bare LF (which CR-only
     // extraction does not stop), a CR-adjacent payload, a NUL, and separator
-    // bytes must all yield null — no control byte may reach the 101 response.
+    // bytes must all yield null, no control byte may reach the 101 response.
     try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: x\nEvil: 1\r\n\r\n") == null);
     try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: x\x00y\r\n\r\n") == null);
     try std.testing.expect(requestedProtocol("GET /ws HTTP/1.1\r\nSec-WebSocket-Protocol: a b\r\n\r\n") == null);
@@ -527,8 +527,8 @@ test "fuzz: formatUpgradeResponse output is printable HTTP for random accept key
 
 test "fuzz: echoed subprotocol never injects a header break (CWE-113)" {
     // Boundary: whatever the request bytes, formatUpgradeResponse's output must
-    // keep every LF CRLF-preceded and every CR LF-followed — i.e. the only line
-    // breaks are the ones the formatter itself wrote — so an injected value can
+    // keep every LF CRLF-preceded and every CR LF-followed, i.e. the only line
+    // breaks are the ones the formatter itself wrote, so an injected value can
     // never add or terminate header lines.
     var prng = std.Random.DefaultPrng.init(0x113_CAFE);
     const rnd = prng.random();
@@ -592,7 +592,7 @@ test "writeFrame: binary frame encoding" {
 
 test "writeFrame: header sizes for different payload lengths" {
     // Verify header byte layout for small (<126), medium (126-65535), and large payloads.
-    // Small payload (125 bytes) — 2-byte header
+    // Small payload (125 bytes): 2-byte header
     {
         var header: [10]u8 = undefined;
         const len: usize = 125;
@@ -601,7 +601,7 @@ test "writeFrame: header sizes for different payload lengths" {
         try std.testing.expectEqual(@as(u8, 0x82), header[0]); // FIN+Binary
         try std.testing.expectEqual(@as(u8, 125), header[1]);
     }
-    // Medium payload (126 bytes) — 4-byte header
+    // Medium payload (126 bytes): 4-byte header
     {
         var header: [10]u8 = undefined;
         const len: usize = 126;
@@ -611,7 +611,7 @@ test "writeFrame: header sizes for different payload lengths" {
         try std.testing.expectEqual(@as(u8, 126), header[1]);
         try std.testing.expectEqual(@as(u16, 126), std.mem.readInt(u16, header[2..4], .big));
     }
-    // Large payload (65536 bytes) — 10-byte header
+    // Large payload (65536 bytes): 10-byte header
     {
         var header: [10]u8 = undefined;
         const len: usize = 65536;
@@ -1026,7 +1026,7 @@ test "readFramePayload: zero-length masked consumes mask key" {
     const n = readFramePayload(fds[0], &buf, hdr);
     try std.testing.expectEqual(@as(usize, 0), n.?);
 
-    // The 'X' should still be readable — mask key was consumed.
+    // The 'X' should still be readable, mask key was consumed.
     var ch: [1]u8 = undefined;
     try std.testing.expectEqual(@as(isize, 1), c.read(fds[0], &ch, 1));
     try std.testing.expectEqual(@as(u8, 'X'), ch[0]);
@@ -1177,7 +1177,7 @@ test "fuzz: readFramePayload never panics on random masked data" {
         var buf: [200]u8 = undefined;
         const hdr = FrameHeader{ .fin = true, .opcode = .binary, .mask = masked, .payload_len = payload_len };
         const n = readFramePayload(fds[0], &buf, hdr);
-        // EOF can happen if the OS buffer swallows only part — tolerate null.
+        // EOF can happen if the OS buffer swallows only part, tolerate null.
         if (n) |len| {
             try std.testing.expectEqualStrings(plain[0..payload_len], buf[0..len]);
         }

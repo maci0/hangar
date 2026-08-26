@@ -7,6 +7,7 @@ const std = @import("std");
 const appstate = @import("appstate.zig");
 const vnc = @import("vnc_client.zig");
 const sync = @import("sync.zig");
+const wlog = @import("wlog.zig");
 
 /// Max BMP payload: 2 MB of 32-bit pixels + the 54-byte header.
 pub const BMP_BUF_SIZE = 2 * 1024 * 1024 + 54;
@@ -19,9 +20,7 @@ var fb_vm_idx: usize = appstate.MAX_VMS;
 var fb_vnc_port: c_int = -1;
 var fb_mutex: sync.SpinMutex = .{};
 
-fn warn(msg: []const u8) void {
-    _ = std.c.write(2, msg.ptr, msg.len);
-}
+const warn = wlog.logWarn;
 
 /// Render VM `idx`'s current framebuffer into `out` as a top-down 32-bit BMP.
 /// Returns the BMP slice on success, or a short error token ("no vm", "off",
@@ -68,7 +67,7 @@ pub fn render(idx: usize, out: []u8) []const u8 {
             const copy_size = @min(pixel_size, out.len - 54);
             if (pixel_size > out.len - 54) {
                 var wb: [128]u8 = undefined;
-                warn(std.fmt.bufPrint(&wb, "[hangar] VNC framebuffer {d}x{d} ({d} bytes) truncated to {d} bytes\n", .{ fw, fh, pixel_size, out.len - 54 }) catch "[hangar] VNC framebuffer truncated\n");
+                warn(std.fmt.bufPrint(&wb, "VNC framebuffer {d}x{d} ({d} bytes) truncated to {d} bytes", .{ fw, fh, pixel_size, out.len - 54 }) catch "VNC framebuffer truncated");
             }
             const file_size: u32 = @intCast(54 + copy_size);
 

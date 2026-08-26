@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-//! Virtual network model + persistence — the data behind the Virtual Network
+//! Virtual network model + persistence, the data behind the Virtual Network
 //! Editor (VMware Workstation-style "VMnet" switches).
 //!
 //! Each `VirtualNetwork` is a named host switch (VMnet0, VMnet1, ...) with a
 //! type (bridged / NAT / host-only), an IPv4 subnet + mask, an optional DHCP
-//! range, and — for bridged switches — the host interface it bridges to.
+//! range, and, for bridged switches, the host interface it bridges to.
 //!
 //! Stored separately from VM configs in `~/.config/hangar/networks.json`, so
 //! the editor owns its own tiny hand-rolled JSON reader/writer here (std.json
@@ -14,6 +14,7 @@
 const std = @import("std");
 const appio = @import("appio.zig");
 const appstate = @import("appstate.zig");
+const wlog = @import("wlog.zig");
 
 /// Hard cap on virtual switches. VMware Workstation exposes VMnet0..VMnet19.
 pub const MAX_VNETS: usize = 20;
@@ -209,7 +210,7 @@ pub const NetworkSet = struct {
     }
 
     /// The factory defaults VMware ships: a bridged auto switch, a host-only
-    /// switch, and a NAT switch with DHCP — so the editor is never empty.
+    /// switch, and a NAT switch with DHCP, so the editor is never empty.
     pub fn defaults() NetworkSet {
         var s = NetworkSet{};
         _ = s.add("VMnet0", .bridged, "", "", false, "", "", "auto");
@@ -307,7 +308,7 @@ pub fn save(set: *const NetworkSet) !void {
     if (appstate.configDir(&dir_buf)) |dir_path| {
         // Owner-only (0o700): keep network config unreadable to other local users.
         _ = std.Io.Dir.cwd().createDirPathStatus(appio.io(), dir_path, .fromMode(0o700)) catch {
-            _ = std.c.write(2, "vnet: createDirPath failed\n", 27);
+            wlog.logErr("vnet: createDirPath failed");
         };
     }
 
@@ -347,10 +348,9 @@ pub fn parseVersion(content: []const u8) u32 {
                 val = val *| 10 +| (cur[i] - '0');
             }
             if (i == 0) return 1; // non-numeric (e.g. "abc", true) → default
-            if (val > CUR_VERSION and !@import("builtin").is_test) {
+            if (val > CUR_VERSION) {
                 var msg_buf: [128]u8 = undefined;
-                const msg = std.fmt.bufPrint(&msg_buf, "hangar: networks file version newer than supported (max {d}); some settings may be ignored\n", .{CUR_VERSION}) catch "hangar: networks file version newer than supported; some settings may be ignored\n";
-                _ = std.c.write(2, msg.ptr, msg.len);
+                wlog.logWarn(std.fmt.bufPrint(&msg_buf, "networks file version newer than supported (max {d}); some settings may be ignored", .{CUR_VERSION}) catch "networks file version newer than supported; some settings may be ignored");
             }
             return val;
         }
@@ -465,8 +465,8 @@ fn isValidSubnetMask(s: []const u8) bool {
     return (inv & (inv +% 1)) == 0;
 }
 
-/// Find `"key"` used as an object key — i.e. an occurrence followed (after
-/// optional whitespace) by `:` — and return the slice starting just after that
+/// Find `"key"` used as an object key, i.e. an occurrence followed (after
+/// optional whitespace) by `:`, and return the slice starting just after that
 /// colon (whitespace-trimmed). Occurrences that appear as string *values* (a
 /// value equal to some other field's key name, e.g. a network literally named
 /// "type") are not followed by `:`, so they are skipped rather than mistaken for
@@ -590,7 +590,7 @@ pub fn fromJson(content: []const u8) NetworkSet {
 }
 
 /// Load the saved switches, or the factory defaults if the file is absent or
-/// empty. Never fails — the editor always has something to show.
+/// empty. Never fails, the editor always has something to show.
 pub fn load() NetworkSet {
     const alloc = std.heap.page_allocator;
     var path_buf: [512]u8 = undefined;
@@ -603,11 +603,10 @@ pub fn load() NetworkSet {
         .limited(4 * 1024 * 1024),
     ) catch |e| {
         // FileNotFound is normal before the first save. Any other failure means
-        // an existing networks.json could not be read — surface it instead of
+        // an existing networks.json could not be read, surface it instead of
         // silently falling back to defaults (which a later save would persist).
         if (e != error.FileNotFound) {
-            const msg = "vnet: load failed to read networks.json (existing config not loaded)\n";
-            _ = std.c.write(2, msg, msg.len);
+            wlog.logErr("vnet: load failed to read networks.json (existing config not loaded)");
             @atomicStore(bool, &load_read_failed, true, .seq_cst);
         }
         return NetworkSet.defaults();
@@ -738,7 +737,7 @@ test "vnet fuzz: fromJson never panics and stays bounded" {
 
 test "vnet: parseVersion reads version from JSON" {
     try testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":1}"));
-    try testing.expectEqual(@as(u32, 7), parseVersion("{\"version\": 7}")); // newer than supported — warns to stderr (suppressed in test)
+    try testing.expectEqual(@as(u32, 7), parseVersion("{\"version\": 7}")); // newer than supported: warns (wlog drops it in test builds)
     try testing.expectEqual(@as(u32, 1), parseVersion("{\"networks\":[]}")); // absent → default 1
 }
 
@@ -1085,8 +1084,8 @@ test "fuzz: fromJson on mutated valid JSON never crashes" {
 
 test "fuzz: isValidIpv4/isValidSubnetMask never panic and stay consistent" {
     // These validators gate untrusted network config from both networks.json
-    // and the Virtual Network Editor web form. Random bytes — including
-    // arithmetic-overflow bait like long digit runs — must never panic, and a
+    // and the Virtual Network Editor web form. Random bytes: including
+    // arithmetic-overflow bait like long digit runs, must never panic, and a
     // value accepted as a subnet mask must always be a valid IPv4 address.
     var prng = std.Random.DefaultPrng.init(0x176E_7A11);
     const rnd = prng.random();

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Hangar — Transport Abstraction Layer
+//! Hangar: Transport Abstraction Layer
 //! Supports Unix sockets and TCP/HTTP for client↔daemon communication.
 const std = @import("std");
 const c = std.c;
@@ -61,7 +61,7 @@ fn connectWithTimeout(fd: c.fd_t, addr: *const c.sockaddr, addrlen: c.socklen_t,
     if (pr <= 0) return false; // 0 = timeout, <0 = poll error
     if (pfd.revents & c.POLL.OUT == 0) return false;
 
-    // Writable can mean "connected" or "failed" — SO_ERROR disambiguates.
+    // Writable can mean "connected" or "failed", SO_ERROR disambiguates.
     var so_err: c_int = 0;
     var len: c.socklen_t = @sizeOf(c_int);
     if (c.getsockopt(fd, c.SOL.SOCKET, c.SO.ERROR, @ptrCast(&so_err), &len) != 0) return false;
@@ -70,8 +70,8 @@ fn connectWithTimeout(fd: c.fd_t, addr: *const c.sockaddr, addrlen: c.socklen_t,
 
 /// Transport protocol variants.
 pub const Proto = enum {
-    unix, // unix:///path/to/socket — AF_UNIX same-machine
-    tcp, // http://host:port — HTTP over TCP (local or remote)
+    unix, // unix:///path/to/socket, AF_UNIX same-machine
+    tcp, // http://host:port, HTTP over TCP (local or remote)
 };
 
 /// Parsed connection URL.
@@ -306,11 +306,30 @@ fn connectTcpFd(url: *const Url) c.fd_t {
     const host_z = std.fmt.bufPrintZ(&host_buf, "{s}", .{url.host[0..url.host_len]}) catch return -1;
     if (@intFromEnum(c.getaddrinfo(host_z, null, &hints, &res)) != 0) return -1;
     defer if (res) |r| c.freeaddrinfo(r);
-    const ai = res orelse return -1;
+
+    return connectChain(res, url.port);
+}
+
+/// Walk a getaddrinfo result chain and return the first address that connects.
+/// Every address is tried, not just the first: a dual-stack name (e.g.
+/// "localhost") commonly resolves to ::1 ahead of 127.0.0.1, and a daemon bound
+/// to only one of them refuses the other. Returns -1 if none connect.
+fn connectChain(first: ?*c.addrinfo, port: u16) c.fd_t {
+    var next = first;
+    while (next) |ai| : (next = ai.next) {
+        const fd = connectResolved(ai, port);
+        if (fd >= 0) return fd;
+    }
+    return -1;
+}
+
+/// Connect to one resolved address, overriding its port with `port`.
+/// Returns the connected fd, or -1 if this address is unusable.
+fn connectResolved(ai: *c.addrinfo, port: u16) c.fd_t {
     const ai_addr = ai.addr orelse return -1;
 
     // Copy the resolved sockaddr into a local union so we can set the port.
-    // sockaddr_storage is large enough for any address family (≥128 bytes).
+    // sockaddr_storage is large enough for any address family (>=128 bytes).
     const SockAddrUnion = extern union {
         in: c.sockaddr.in,
         in6: c.sockaddr.in6,
@@ -318,14 +337,19 @@ fn connectTcpFd(url: *const Url) c.fd_t {
     };
     var addr: SockAddrUnion = .{ .raw = [_]u8{0} ** 128 };
     if (ai.addrlen > 128) return -1;
-    @memcpy(addr.raw[0..ai.addrlen], std.mem.asBytes(ai_addr)[0..ai.addrlen]);
+    // Copy through a byte pointer, not asBytes(ai_addr): `c.sockaddr` is the
+    // 16-byte generic struct, while ai.addrlen is the real length of what
+    // getaddrinfo allocated (28 for sockaddr_in6), so slicing asBytes would
+    // read past the end.
+    const src: [*]const u8 = @ptrCast(ai_addr);
+    @memcpy(addr.raw[0..ai.addrlen], src[0..ai.addrlen]);
 
     // Set port on the copy.  Both sockaddr_in and sockaddr_in6 store the
     // port as a big-endian u16 at the same offset (2).
     if (ai.family == c.AF.INET) {
-        addr.in.port = std.mem.nativeToBig(u16, url.port);
+        addr.in.port = std.mem.nativeToBig(u16, port);
     } else if (ai.family == c.AF.INET6) {
-        addr.in6.port = std.mem.nativeToBig(u16, url.port);
+        addr.in6.port = std.mem.nativeToBig(u16, port);
     } else return -1;
 
     const sock = c.socket(@intCast(ai.family), c.SOCK.STREAM, 0);
@@ -372,7 +396,7 @@ pub fn validApiKey(key: []const u8) bool {
 /// `validApiKey`: an operator-supplied `KV_API_KEY` takes effect, otherwise the
 /// built-in default the daemon falls back to when no custom key is set. A value
 /// the daemon would reject (empty, over-long, or containing a space/control
-/// byte — e.g. the trailing newline from `export KV_API_KEY=$(cat keyfile)`) is
+/// byte: e.g. the trailing newline from `export KV_API_KEY=$(cat keyfile)`) is
 /// invalid: the daemon refuses to start with one, so we send the default rather
 /// than splice a stray byte into the `X-API-Key:` header and corrupt request
 /// framing.
@@ -383,8 +407,8 @@ fn apiKey() []const u8 {
 }
 
 /// Build the HTTP/1.0 request line and headers (no body) into `buf`. Split out
-/// of `httpRequest` so the exact header set — crucially the `X-API-Key` the
-/// daemon requires on every state-changing endpoint — is unit-testable without
+/// of `httpRequest` so the exact header set, crucially the `X-API-Key` the
+/// daemon requires on every state-changing endpoint, is unit-testable without
 /// a live socket. Returns null if `buf` is too small.
 fn buildHttpRequest(buf: []u8, method: []const u8, path: []const u8, host: []const u8, key: []const u8, body_len: usize) ?[:0]u8 {
     return std.fmt.bufPrintZ(buf, "{s} {s} HTTP/1.0\r\nHost: {s}\r\nX-API-Key: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ method, path, host, key, body_len }) catch null;
@@ -558,7 +582,7 @@ test "apiKey: default when unset, honors custom, rejects invalid" {
     try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
 
     // Trailing newline (the `$(cat keyfile)` footgun) and embedded spaces are
-    // control/space bytes the daemon rejects — the client must too, else the
+    // control/space bytes the daemon rejects, the client must too, else the
     // byte corrupts the X-API-Key header. Falls back to the default.
     _ = setenv("KV_API_KEY", "secret\n", 1);
     try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
@@ -692,7 +716,7 @@ test "Connection.request over Unix sends valid HTTP (regression: no //api framin
     // The daemon serves Unix-socket clients through the same HTTP accept loop as
     // TCP, so a Unix request must be real HTTP with Host + X-API-Key. A prior
     // bug emitted "METHOD /<path>" (yielding "//api/...", no headers), which the
-    // server rejected — this guards the request the client actually sends.
+    // server rejected, this guards the request the client actually sends.
     var path_buf: [64]u8 = undefined;
     const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-transport-utest-{d}.sock", .{c.getpid()});
     _ = c.unlink(path.ptr);
@@ -763,4 +787,70 @@ test "fuzz: Url.parse never panics on random inputs" {
             try std.testing.expect(u.path_len <= u.path.len);
         }
     }
+}
+
+test "transport: connectTcpFd dials an IPv6 listener (sockaddr_in6 is 28 bytes)" {
+    // Regression: the resolved sockaddr was copied through asBytes() on the
+    // 16-byte generic `c.sockaddr`, so any AF_INET6 result (addrlen 28) read
+    // out of bounds and panicked before a connection was ever attempted.
+    const fd = c.socket(c.AF.INET6, c.SOCK.STREAM, 0);
+    if (fd < 0) return error.SkipZigTest;
+    defer _ = c.close(fd);
+    var addr: c.sockaddr.in6 = std.mem.zeroes(c.sockaddr.in6);
+    addr.family = c.AF.INET6;
+    addr.addr = [_]u8{0} ** 15 ++ [_]u8{1}; // ::1
+    addr.port = 0; // OS-assigned ephemeral
+    if (c.bind(fd, @ptrCast(&addr), @sizeOf(c.sockaddr.in6)) != 0 or c.listen(fd, 1) != 0) {
+        return error.SkipZigTest; // no IPv6 loopback here
+    }
+    var bound: c.sockaddr.in6 = undefined;
+    var blen: c.socklen_t = @sizeOf(c.sockaddr.in6);
+    if (c.getsockname(fd, @ptrCast(&bound), &blen) != 0) return error.SkipZigTest;
+
+    var url = Url{ .proto = .tcp, .port = std.mem.bigToNative(u16, bound.port) };
+    @memcpy(url.host[0..3], "::1");
+    url.host_len = 3;
+
+    const client = connectTcpFd(&url);
+    try std.testing.expect(client >= 0);
+    _ = c.close(client);
+}
+
+test "transport: connectChain skips an unusable address and connects to the next" {
+    // Regression: only the first getaddrinfo result was tried, so a name whose
+    // first address is unreachable (::1 ahead of 127.0.0.1 for "localhost")
+    // never reached the daemon.
+    const fd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
+    if (fd < 0) return error.SkipZigTest;
+    defer _ = c.close(fd);
+    var listen_addr: c.sockaddr.in = std.mem.zeroes(c.sockaddr.in);
+    listen_addr.family = c.AF.INET;
+    listen_addr.addr = std.mem.nativeToBig(u32, 0x7f000001); // 127.0.0.1
+    listen_addr.port = 0; // OS-assigned ephemeral
+    if (c.bind(fd, @ptrCast(&listen_addr), @sizeOf(c.sockaddr.in)) != 0 or c.listen(fd, 1) != 0) {
+        return error.SkipZigTest; // sandbox forbids bind/listen
+    }
+    var bound: c.sockaddr.in = undefined;
+    var blen: c.socklen_t = @sizeOf(c.sockaddr.in);
+    if (c.getsockname(fd, @ptrCast(&bound), &blen) != 0) return error.SkipZigTest;
+
+    // A two-entry chain whose head has an address family connectResolved cannot
+    // use, so only the second entry can produce a connection.
+    var good: c.addrinfo = std.mem.zeroes(c.addrinfo);
+    good.family = c.AF.INET;
+    good.socktype = c.SOCK.STREAM;
+    good.addrlen = @sizeOf(c.sockaddr.in);
+    good.addr = @ptrCast(&listen_addr);
+    var bad: c.addrinfo = std.mem.zeroes(c.addrinfo);
+    bad.family = c.AF.UNSPEC;
+    bad.socktype = c.SOCK.STREAM;
+    bad.addrlen = @sizeOf(c.sockaddr.in);
+    bad.addr = @ptrCast(&listen_addr);
+
+    const port = std.mem.bigToNative(u16, bound.port);
+    try std.testing.expectEqual(@as(c.fd_t, -1), connectChain(&bad, port)); // head alone fails
+    bad.next = &good;
+    const client = connectChain(&bad, port);
+    try std.testing.expect(client >= 0);
+    _ = c.close(client);
 }

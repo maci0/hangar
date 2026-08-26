@@ -5,16 +5,18 @@
 // specs in tests/e2e against it. Build the binary first: `zig build` (the
 // `web-e2e` build step does this for you).
 import { defineConfig } from '@playwright/test';
-import { mkdtempSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, mkdtempSync } from 'fs';
 import { resolve } from 'path';
 
 const ROOT = import.meta.dirname;
 const BINARY = resolve(ROOT, 'zig-out/bin/hangar-web');
 const PORT = process.env.KV_PORT || '19087';
 // A throwaway HOME so test runs never touch real ~/.config/hangar state. The
-// child server inherits it via the webServer env below.
-const TMP_HOME = process.env.HANGAR_E2E_HOME || mkdtempSync(resolve(tmpdir(), 'hangar-e2e-'));
+// child server inherits it via the webServer env below. Kept under the repo's
+// gitignored .scratch/ rather than os.tmpdir(), which is tmpfs (RAM-backed).
+const SCRATCH = resolve(ROOT, '.scratch');
+mkdirSync(SCRATCH, { recursive: true });
+const TMP_HOME = process.env.HANGAR_E2E_HOME || mkdtempSync(resolve(SCRATCH, 'hangar-e2e-'));
 const BASE = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({

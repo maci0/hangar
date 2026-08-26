@@ -4,13 +4,25 @@ Lightweight QEMU virtual-machine manager with a web UI and an optional native
 WebView desktop wrapper. No libvirt. Single Zig daemon serves the HTTP API, the
 embedded web UI, and the remote control protocol; `vmrun` is a CLI client.
 
+![Hangar web UI: host dashboard and VM inventory](docs/screenshot.png)
+
+## Why
+
+Running a handful of QEMU VMs on a workstation usually means one of two things:
+hand-written `qemu-system-*` command lines that nobody can remember, or libvirt
+with its daemon, XML domain format, and policy layers. Hangar keeps QEMU's
+process model and drops everything else: one static binary owns the VM configs
+(a single JSON file), spawns QEMU directly, and talks QMP for guest control.
+The web UI is embedded in that binary with no build step, so `zig build web`
+and a browser is the whole install.
+
 ## Features
 
 - Create, clone (full or linked), rename, delete (with undo), import VMs.
 - Power on/off, suspend/resume, pause, reset, snapshots (take/revert/delete),
   live CD/ISO change, disk resize/compact, secondary + extra disks, OVF export.
 - Browser consoles: VNC (noVNC) and SPICE (spice-html5) with a WebGPU/WebGL2
-  presenter, plus a real xterm.js serial terminal — all in the Console tab.
+  presenter, plus a real xterm.js serial terminal, all in the Console tab.
 - Optional hardware-accelerated H.264 video streaming of the guest display to
   the browser via WebCodecs (see `docs/VIDEO-PIPELINE.md`).
 - Virtual networks (NAT/host-only/bridged) with a visual topology view.
@@ -21,11 +33,11 @@ embedded web UI, and the remote control protocol; `vmrun` is a CLI client.
 
 - **Zig 0.16.0** (the build pins backend/linker flags for this version).
 - **QEMU** (`qemu-system-x86_64`, `qemu-img`); `cloud-localds` for cloud-init,
-  `swtpm` for TPM, OVMF for UEFI — all optional per feature.
+  `swtpm` for TPM, OVMF for UEFI, all optional per feature.
 - For the encoded-video pipeline: `ffmpeg` (uses `h264_vaapi` when a
   `/dev/dri/renderD*` node is available, else `libx264`).
-- For the e2e tests only: Node.js, `npm install`, and Chromium
-  (`npm run e2e:install`).
+- For the e2e tests only: Bun, `bun install`, and Chromium
+  (`bun run e2e:install`).
 
 ## Build / Run / Test
 
@@ -33,12 +45,56 @@ embedded web UI, and the remote control protocol; `vmrun` is a CLI client.
 zig build web          # build + launch the web backend (HTTP on :9080)
 zig build webui        # build + launch the native WebView desktop wrapper
 zig build test         # all hermetic unit + fuzz tests (no network/browser)
-zig build web-e2e      # Playwright web UI e2e (standalone; needs npm + chromium)
+zig build web-e2e      # Playwright web UI e2e (standalone; needs bun + chromium)
 zig build test-api     # HTTP API integration test (spawns a real daemon)
 zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 ```
 
-Open http://127.0.0.1:9080 after `zig build web`.
+Open http://127.0.0.1:9080 after `zig build web`. A daemon started without
+`KV_API_KEY` binds the IPv4 loopback, so address it as `127.0.0.1`, not
+`localhost` (which resolves to `::1` on most distributions).
+
+## Using the CLI
+
+`vmrun` talks to the same daemon over HTTP or a Unix socket. A real session:
+
+```console
+$ vmrun http://127.0.0.1:9080 create web-01 4096 4 40
+create web-01: ok
+
+$ vmrun http://127.0.0.1:9080 list
+[0] web-01  status=stopped  mem=4096MB  cpu=4
+[1] db-primary  status=stopped  mem=8192MB  cpu=8
+
+$ vmrun http://127.0.0.1:9080 info web-01
+VM [0] web-01
+  Status:  stopped
+  Guest:   Linux
+  Memory:  4096 MB
+  CPU:     4 cores
+  Disk:    40 GB
+  Network: user
+```
+
+`vmrun --help` lists all 30 commands (power, snapshots, disks, migration,
+import/export). Set `KV_API_KEY` in the environment to reach an exposed daemon.
+
+## Status
+
+Working and covered by tests: the VM lifecycle (create, clone, rename, delete
+with undo, import, OVF export), power and guest control over QMP, snapshots,
+disk resize/compact, virtual networks, live migration, the browser consoles
+(VNC, SPICE, serial), and the `vmrun` CLI. `docs/GAP-ANALYSIS.md` tracks
+feature-by-feature parity with VMware Workstation 17.
+
+Partial: the H.264 video pipeline needs a `dbus` display and ffmpeg, and falls
+back to `libx264` without a VAAPI render node (`docs/VIDEO-PIPELINE.md`).
+Window geometry is still persisted in `Prefs` but no current frontend restores
+it, a leftover from the removed FLTK desktop UI.
+
+Not built: TLS termination (front the daemon with a reverse proxy), multi-user
+accounts, and any hypervisor backend other than QEMU, though the process
+lifecycle already goes through a dispatch table (`src/hv/`).
 
 ## Configuration
 
@@ -55,11 +111,19 @@ and front the daemon with TLS.
 
 ## Layout
 
-- `src/` — Zig daemon, CLI, and web assets (see `src/AGENTS.md` for the module
+- `src/`: Zig daemon, CLI, and web assets (see `src/AGENTS.md` for the module
   map). `src/web/` is the embedded vanilla-JS UI.
-- `docs/` — design notes (`DESIGN.md`, `VIDEO-PIPELINE.md`, gap analysis, CUJs).
-- `tests/` — standalone integration/e2e suites (the in-module unit/fuzz tests
+- `docs/`: design notes (`DESIGN.md`, `VIDEO-PIPELINE.md`, gap analysis, CUJs).
+- `tests/`: standalone integration/e2e suites (the in-module unit/fuzz tests
   live at the bottom of each `.zig`).
 
 State lives in `~/.config/hangar/` (`vms.json`, `networks.json`); only
 configuration is persisted, never runtime status.
+
+## Docs
+
+- `docs/DESIGN.md`: architecture, HTTP API, keyboard shortcuts.
+- `docs/GAP-ANALYSIS.md`: feature parity against VMware Workstation 17.
+- `docs/VIDEO-PIPELINE.md`: the encoded guest-video path.
+- `docs/TEST-COVERAGE.md`: what each suite covers and how to run it.
+- `AGENTS.md`: build constraints and code conventions.

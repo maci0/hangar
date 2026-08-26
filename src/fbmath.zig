@@ -2,7 +2,7 @@
 //! Pure framebuffer geometry math + pixel conversion helpers.
 //!
 //! Remote VNC/SPICE servers report the framebuffer width/height, so these are
-//! untrusted `c_int` values — `fw * fh` must not overflow `i32` before the
+//! untrusted `c_int` values: `fw * fh` must not overflow `i32` before the
 //! size check (a forged/huge guest video mode otherwise crashes the UI).
 
 const std = @import("std");
@@ -83,7 +83,7 @@ test "fbFits: realistic framebuffer sizes" {
         .{ .w = 3840, .h = 2160, .expected = 3840 * 2160 },
         .{ .w = 4096, .h = 2160, .expected = 4096 * 2160 },
         .{ .w = 5120, .h = 2880, .expected = 5120 * 2880 },
-        // 7680×4320 exceeds 64 MB — tested separately in "8K exceeds 64MB cap" below.
+        // 7680×4320 exceeds 64 MB: tested separately in "8K exceeds 64MB cap" below.
     };
     for (cases) |c| {
         const result = fbFits(c.w, c.h, cap);
@@ -101,7 +101,7 @@ test "fbFits: 8K exceeds 64MB cap" {
 }
 
 test "fbFits: huge dimensions that overflow i32 do not crash" {
-    // 50000*50000 = 2.5e9 > i32 max — the old `fw*fh` (c_int) panicked here.
+    // 50000*50000 = 2.5e9 > i32 max, the old `fw*fh` (c_int) panicked here.
     try std.testing.expectEqual(@as(?usize, null), fbFits(50000, 50000, 3840 * 2160 * 4));
     try std.testing.expectEqual(@as(?usize, null), fbFits(std.math.maxInt(c_int), std.math.maxInt(c_int), 3840 * 2160 * 4));
 }

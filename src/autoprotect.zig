@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! AutoProtect — scheduled automatic snapshots (VMware Workstation feature).
+//! AutoProtect: scheduled automatic snapshots (VMware Workstation feature).
 //!
 //! Pure scheduling/naming/pruning logic, separated from the timer + qemu-img/QMP
 //! IO so it can be unit-tested + fuzzed. The background ticker in `web_server.zig`

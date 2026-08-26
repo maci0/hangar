@@ -4,11 +4,11 @@
 //! Defines all types needed to describe a QEMU virtual machine's hardware
 //! settings and runtime state.  Every enum provides a symmetric API surface:
 //!
-//!   - `count`     — comptime-derived variant count (always in sync)
-//!   - `toIndex`   — convert to `usize` for combobox index / serialisation
-//!   - `fromIndex` — convert from `usize`, with a safe default for out-of-range
-//!   - `toStr`     — QEMU command-line value (where applicable)
-//!   - `label`     — human-readable UI label
+//!   - `count`: comptime-derived variant count (always in sync)
+//!   - `toIndex`: convert to `usize` for combobox index / serialisation
+//!   - `fromIndex`: convert from `usize`, with a safe default for out-of-range
+//!   - `toStr`: QEMU command-line value (where applicable)
+//!   - `label`: human-readable UI label
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -24,7 +24,7 @@ pub const MAX_PATH: usize = 4095;
 
 /// Maximum cloud-init user-data size (bytes). The single source of truth for the
 /// VmConfig field and every buffer that must hold it raw, URL-encoded (×3), or
-/// JSON-escaped in the detail render (×6) — see persist.zig / web_server.zig.
+/// JSON-escaped in the detail render (×6), see persist.zig / web_server.zig.
 pub const MAX_CLOUD_INIT: usize = 8192;
 
 // ── Disk Format ──────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ pub const DiskFormat = enum(u8) {
     vmdk = 2,
     vdi = 3,
 
-    /// Number of variants — comptime-derived, always in sync.
+    /// Number of variants: comptime-derived, always in sync.
     pub const count: usize = @typeInfo(@This()).@"enum".fields.len;
 
     /// Convert to a combobox / serialisation index.
@@ -326,7 +326,7 @@ pub const DisplayType = enum(u8) {
     }
 
     /// Maps a combobox index to a `DisplayType`.  Out-of-range defaults to `.vnc`
-    /// — the web-usable default, never a host-native GTK window.
+    ///, the web-usable default, never a host-native GTK window.
     pub fn fromIndex(i: usize) DisplayType {
         if (i >= count) return .vnc;
         return @enumFromInt(@as(u8, @intCast(i)));
@@ -420,7 +420,7 @@ pub const VmStatus = enum(u8) {
 
 // ── Guest OS Type ────────────────────────────────────────────────────
 
-/// Guest operating system type — used for display in the Summary tab
+/// Guest operating system type: used for display in the Summary tab
 /// and potentially for future OS-specific QEMU tuning.
 pub const GuestOs = enum(u8) {
     linux = 0,
@@ -1072,7 +1072,7 @@ pub const Prefs = struct {
     autoprotect_interval_min_default: u32 = 60,
     /// Default max auto-protect snapshots.
     autoprotect_max_default: u32 = 10,
-    /// Last window geometry — x, -1 means "not saved yet".
+    /// Last window geometry: x, -1 means "not saved yet".
     win_x: i32 = -1,
     win_y: i32 = -1,
     win_w: i32 = 0,
@@ -1080,7 +1080,7 @@ pub const Prefs = struct {
 
     /// Clamp the numeric preferences into their valid ranges. Applied after
     /// loading from disk so a hand-edited or corrupt vms.json cannot install
-    /// defaults (e.g. 0 cores / 0 MB) that would yield unbootable VMs — the
+    /// defaults (e.g. 0 cores / 0 MB) that would yield unbootable VMs, the
     /// same bounds the HTTP settings handler enforces via clampPref.
     pub fn clampToValidRanges(self: *Prefs) void {
         self.default_memory_mb = std.math.clamp(self.default_memory_mb, PREF_MEMORY_MB_MIN, PREF_MEMORY_MB_MAX);
@@ -1134,7 +1134,7 @@ pub const VmConfig = struct {
     folder_len: u16 = 0,
 
     // ── Primary NIC's virtual-network binding (a VirtualNetwork name; empty =
-    //    none — the NIC connects by its raw mode only). Makes the VM↔vnet link
+    //    none, the NIC connects by its raw mode only). Makes the VM↔vnet link
     //    explicit (topology, future per-vnet config). ──
     vnet_buf: [64]u8 = [_]u8{0} ** 64,
     vnet_len: u16 = 0,
@@ -1761,7 +1761,7 @@ pub fn isValidVmName(name: []const u8) bool {
         // log paths derived from the name). Reject ',' and control bytes: the
         // name is interpolated into comma-separated QEMU chardev property lists
         // (`-qmp`/`-serial`/`-chardev` specs in qemu.zig), where a comma would
-        // inject extra chardev properties — e.g. a `logfile=` to a chosen path
+        // inject extra chardev properties: e.g. a `logfile=` to a chosen path
         // (argument injection, CWE-88). Mirrors `qemu.isSafeQemuPropValue`.
         if (c == '/' or c == '\\' or c == ',' or c < 0x20 or c == 0x7f) return false;
     }
@@ -1819,7 +1819,7 @@ pub fn findUnusedVncPort(vms: []VmConfig) u16 {
 /// Find an unused SPICE port by scanning existing VMs. Falls back to
 /// `SPICE_PORT_MIN` when every port in the range is reserved.
 ///
-/// Reserves both `vnc_port` and `spice_port` of every VM — see `findUnusedVncPort`.
+/// Reserves both `vnc_port` and `spice_port` of every VM, see `findUnusedVncPort`.
 pub fn findUnusedSpicePort(vms: []VmConfig) u16 {
     var reserved = [_]bool{false} ** DISPLAY_PORT_SPAN;
     for (vms) |*v| {
@@ -2864,7 +2864,7 @@ test "fuzz: nic2/nic3 + secondary string setters clamp and stay NUL-terminated" 
         cfg.setFloppyPath(s);
         // Every slice must stay within its buffer; the C-string span never
         // exceeds the tracked slice length (it stops at an embedded NUL, which
-        // arbitrary fuzz bytes can introduce — real paths/MACs never do).
+        // arbitrary fuzz bytes can introduce: real paths/MACs never do).
         try std.testing.expect(cfg.getNic2MacSlice().len < 18);
         try std.testing.expect(cfg.getNic3MacSlice().len < 18);
         try std.testing.expect(std.mem.span(cfg.getSharedFolder()).len <= cfg.getSharedFolderSlice().len);

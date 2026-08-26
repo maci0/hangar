@@ -112,7 +112,7 @@ pub fn resize(req: []const u8) ![]const u8 {
     };
 
     // Record the new size, re-validating the VM didn't move/disappear while
-    // unlocked. If it did, the image is already grown — report success.
+    // unlocked. If it did, the image is already grown, report success.
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
     if (idx_saved < appstate.vm_count and std.mem.eql(u8, appstate.vms[idx_saved].getNameSlice(), name_buf[0..name_len])) {

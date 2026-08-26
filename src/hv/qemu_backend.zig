@@ -61,7 +61,7 @@ pub fn createHandle(config: *vm.VmConfig, accel: vm.VmAccel, allocator: std.mem.
     return @ptrCast(qv);
 }
 
-/// Create a QEMU-backed Vmm for a specific VM config (convenience — calls createVmm + createHandle).
+/// Create a QEMU-backed Vmm for a specific VM config (convenience, calls createVmm + createHandle).
 pub fn create(config: *vm.VmConfig, accel: vm.VmAccel, allocator: std.mem.Allocator) !struct { vmm: hv.Vmm, handle: hv.VmmHandle } {
     const vmm = createVmm(accel);
     const handle = try createHandle(config, accel, allocator);

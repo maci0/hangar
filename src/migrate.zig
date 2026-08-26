@@ -1,6 +1,6 @@
 //! Live-migration HTTP handlers (start / status / cancel) for the daemon. Each
 //! captures the VM name under vms_mutex, then issues the (fast) QMP command with
-//! the lock released — never holding the lock across socket I/O.
+//! the lock released, never holding the lock across socket I/O.
 
 const std = @import("std");
 const vm = @import("vm.zig");

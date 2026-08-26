@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Web API integration test — validates all HTTP endpoints.
+# Web API integration test: validates all HTTP endpoints.
 # Requires: curl, python3, and Zig.
 set -euo pipefail
 
@@ -83,7 +83,7 @@ expect_status() {
         echo "  PASS: $desc (HTTP $actual)"
         PASS=$((PASS + 1))
     else
-        echo "  FAIL: $desc — expected HTTP $expected, got $actual"
+        echo "  FAIL: $desc, expected HTTP $expected, got $actual"
         FAIL=$((FAIL + 1))
     fi
 }
@@ -103,7 +103,7 @@ expect_body() {
         fi
         sleep 0.1
     done
-    echo "  FAIL: $desc — body missing '$needle'"
+    echo "  FAIL: $desc, body missing '$needle'"
     FAIL=$((FAIL + 1))
 }
 
@@ -120,7 +120,7 @@ expect_post() {
         echo "  PASS: $desc"
         PASS=$((PASS + 1))
     else
-        echo "  FAIL: $desc — HTTP $actual body='$body' missing '$expected_body'"
+        echo "  FAIL: $desc, HTTP $actual body='$body' missing '$expected_body'"
         FAIL=$((FAIL + 1))
     fi
 }

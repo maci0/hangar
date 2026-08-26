@@ -66,7 +66,7 @@ pub fn urlDecode(buf: []u8, src: []const u8) []u8 {
 /// form value containing `&`, `=`, `%`, `+`, or a space survives transport
 /// intact instead of being split or mis-decoded server-side. Returns the
 /// encoded slice, or `error.NoSpaceLeft` when `buf` is too small (callers must
-/// not silently truncate an encoded value — that would corrupt it).
+/// not silently truncate an encoded value, that would corrupt it).
 pub fn percentEncode(buf: []u8, src: []const u8) ![]const u8 {
     const hex = "0123456789ABCDEF";
     var w: usize = 0;

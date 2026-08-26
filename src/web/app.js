@@ -5,7 +5,7 @@ var DEBUG=false;
 // Built-in default X-API-Key. The bundled UI is same-origin and only fully
 // functional under the daemon's default key (loopback). Setting KV_API_KEY to a
 // strong secret exposes the daemon on all interfaces for vmrun/remote use, and
-// browser write-actions then return 401 — that path is intentionally CLI-only.
+// browser write-actions then return 401, that path is intentionally CLI-only.
 var API_KEY='hangar';
 var logDebug=DEBUG?function(t,a){console.warn(t,a);}:function(){};
 (function(){
@@ -46,7 +46,7 @@ var vms=[]; var sel=null; var activeTab='summary'; var transitioningIdx=null; va
 // index-addressed request whose target was captured before an await, so a
 // concurrent reorder/delete can't make the request hit a different VM. -1 if gone.
 function idxByName(n){for(var i=0;i<vms.length;i++){if(vms[i].name===n)return i;}return -1;}
-// Resolve current index by stable id — survives rename (preferred for tracking a
+// Resolve current index by stable id, survives rename (preferred for tracking a
 // VM across the poll for destructive/long-running actions).
 function idxById(id){if(!id)return -1;for(var i=0;i<vms.length;i++){if(vms[i].id===id)return i;}return -1;}
 // The /api/vms response encodes config flags as JSON booleans (true/false), but
@@ -99,8 +99,8 @@ var loadBar=null;
 function initLoadBar(){loadBar=document.createElement('div');loadBar.id='loadbar';var mn=document.querySelector('main');if(mn)mn.appendChild(loadBar);else document.body.appendChild(loadBar);}
 function setLoadBar(on){if(!loadBar)initLoadBar();if(on)loadBar.classList.add('active');else{loadBar.classList.remove('active');}}
 var busy=false,busyGen=0; // guard against double-submit
-function setBusy(){if(busy)return false;busy=true;var gen=++busyGen;setTimeout(function(){if(busyGen===gen){busy=false;apiPostPending=0;setLoadBar(false);setStatus('');logDebug('busy guard auto-cleared after 300s — request may be hung');}},300000);return true;} // fallback auto-clear: only for a genuinely hung request. Set well above realistic op durations (a large qcow2 compact/resize can run minutes) so a slow-but-progressing op keeps the gate (no double-submit, no poll-vs-mutation swap) for its whole duration; apiPost itself clears busy on completion/error.
-async function apiPost(url,body){if(!setBusy()){showToast('Another operation is in progress — please wait.','warn');return null;}var sb=document.getElementById('statusmsg');var wasIdle=apiPostPending<=0;var prev=sb?sb.textContent:'Ready';if(wasIdle){setStatusLoading('Working...');setLoadBar(true);}apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':API_KEY}};var r=await fetch(url,opts);if(!r.ok){var msg=await r.text().catch(function(){return '';});try{var j=JSON.parse(msg);if(j.error)msg=j.error;}catch(e){}throw new Error(msg||'HTTP '+r.status);}apiPostPending--;if(apiPostPending<=0){setStatus(prev);setLoadBar(false);}busy=false;busyGen++;return r;}catch(e){apiPostPending--;if(apiPostPending<=0){setStatus('Error: '+e.message);setLoadBar(false);}busy=false;busyGen++;showToast(e.message||'Request failed','error');return null;}}
+function setBusy(){if(busy)return false;busy=true;var gen=++busyGen;setTimeout(function(){if(busyGen===gen){busy=false;apiPostPending=0;setLoadBar(false);setStatus('');logDebug('busy guard auto-cleared after 300s, request may be hung');}},300000);return true;} // fallback auto-clear: only for a genuinely hung request. Set well above realistic op durations (a large qcow2 compact/resize can run minutes) so a slow-but-progressing op keeps the gate (no double-submit, no poll-vs-mutation swap) for its whole duration; apiPost itself clears busy on completion/error.
+async function apiPost(url,body){if(!setBusy()){showToast('Another operation is in progress, please wait.','warn');return null;}var sb=document.getElementById('statusmsg');var wasIdle=apiPostPending<=0;var prev=sb?sb.textContent:'Ready';if(wasIdle){setStatusLoading('Working...');setLoadBar(true);}apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':API_KEY}};var r=await fetch(url,opts);if(!r.ok){var msg=await r.text().catch(function(){return '';});try{var j=JSON.parse(msg);if(j.error)msg=j.error;}catch(e){}throw new Error(msg||'HTTP '+r.status);}apiPostPending--;if(apiPostPending<=0){setStatus(prev);setLoadBar(false);}busy=false;busyGen++;return r;}catch(e){apiPostPending--;if(apiPostPending<=0){setStatus('Error: '+e.message);setLoadBar(false);}busy=false;busyGen++;showToast(e.message||'Request failed','error');return null;}}
 var sidebarOpen=false;
 function isMobileSidebar(){return window.matchMedia('(max-width:900px)').matches;}
 function syncSidebarButton(){const btn=document.querySelector('.hamburger');const aside=document.querySelector('aside');var expanded=isMobileSidebar()?sidebarOpen:!document.body.classList.contains('sidebar-collapsed');if(btn){btn.setAttribute('aria-expanded',expanded?'true':'false');btn.setAttribute('aria-label',expanded?'Collapse VM Library':'Expand VM Library');}if(aside){aside.toggleAttribute('inert',!expanded);aside.setAttribute('aria-hidden',expanded?'false':'true');}}
@@ -137,12 +137,12 @@ else{newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
 if(tab==='settings'&&sel!==null)editVm();}
 var serverDown=false;
 var saveInFlight=false;
-function setServerDown(s){serverDown=s;var b=document.getElementById('connbanner');if(b)b.style.display=s?'flex':'none';if(s)setStatus('Server unreachable — retrying...');}
+function setServerDown(s){serverDown=s;var b=document.getElementById('connbanner');if(b)b.style.display=s?'flex':'none';if(s)setStatus('Server unreachable, retrying...');}
 async function refresh(){if(document.hidden)return;if(refreshBusy)return;if(transitioningIdx!==null||saveInFlight||busy||apiPostPending>0)return;refreshBusy=true;try{const prevStatus=(sel!==null&&sel<vms.length)?vms[sel].status:null;const prevName=(sel!==null&&sel<vms.length)?vms[sel].name:null;const ctl=new AbortController();const t=setTimeout(function(){ctl.abort();},15000);try{const r=await fetch('/api/vms',{signal:ctl.signal});clearTimeout(t);if(!r.ok){if(r.status>=500){if(!serverDown){setServerDown(true);}}return;}
 setServerDown(false);vms=normVmBools(await r.json());publishVms();
 // Only act on a status transition if the selection still points at the SAME VM
 // we sampled before the await. If the user switched VMs mid-fetch, select()
-// already (re)started the console for the new VM — touching fb/serial here with
+// already (re)started the console for the new VM, touching fb/serial here with
 // the stale prevStatus would flap it. Compare by name (indices shift on
 // delete/reorder).
 if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);if(activeTab==='summary'&&embeddedDisplayCapable(vms[sel]))switchTab('console');}else{stopFb();stopSerial(true);if(activeTab==='console')switchTab('summary');}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();else if(sel===null)showEmptyState();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
@@ -185,7 +185,7 @@ e.innerHTML=h;
 updateBulkBar();
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+(cnt===1?' virtual machine':' virtual machines');if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
-if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+' — '+v.status;if(v.started&&v.started>0&&v.status==='running'){const elapsed=Math.floor(Date.now()/1000)-v.started;const days=Math.floor(elapsed/86400);const hrs=Math.floor((elapsed%86400)/3600);const mins=Math.floor((elapsed%3600)/60);const secs=elapsed%60;st+=' | Uptime: '+(days>0?days+'d ':'')+hrs+':'+String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');}st+='    |    '+parts;var sb=document.getElementById('statusmsg');if(sb)sb.textContent=st;}
+if(sel!==null&&sel<vms.length){const v=vms[sel];let st=v.name+': '+v.status;if(v.started&&v.started>0&&v.status==='running'){const elapsed=Math.floor(Date.now()/1000)-v.started;const days=Math.floor(elapsed/86400);const hrs=Math.floor((elapsed%86400)/3600);const mins=Math.floor((elapsed%3600)/60);const secs=elapsed%60;st+=' | Uptime: '+(days>0?days+'d ':'')+hrs+':'+String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');}st+='    |    '+parts;var sb=document.getElementById('statusmsg');if(sb)sb.textContent=st;}
 else{var sb2=document.getElementById('statusmsg');if(sb2)sb2.textContent=parts;}updateCommandState();}
 async function toggleFavorite(i){if(i>=vms.length)return;const fav=vms[i].favorite==='true'?'0':'1';
 const r=await apiPost('/api/vms/'+i,'favorite='+fav);if(r){if(i<vms.length){vms[i].favorite=fav==='1'?'true':'false';}renderList();if(sel===i)renderDetails();}}
@@ -201,12 +201,12 @@ async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await
 // ── Reactive host dashboard (VanJS) ──────────────────────────────────
 // vmsState/dashSortState drive the dashboard DOM in place: no innerHTML
 // rebuilds, so focus (e.g. a sort header) survives every refresh.
-// Hardware slot limits — served by GET /api/capabilities (vm.zig constants);
+// Hardware slot limits: served by GET /api/capabilities (vm.zig constants);
 // the defaults below only cover the window before that fetch resolves.
 var MAX_NICS=8,MAX_EXTRA_DISKS=4;
 (function(){try{fetch('/api/capabilities').then(function(r){return r.json();}).then(function(c){if(c.max_nics)MAX_NICS=c.max_nics;if(c.max_extra_disks)MAX_EXTRA_DISKS=c.max_extra_disks;}).catch(function(){});}catch(e){}})();
 // Settings rows for NIC 2..MAX_NICS and the extra-disk slots are generated,
-// never hand-enumerated — adding a slot in vm.zig must not require UI edits.
+// never hand-enumerated: adding a slot in vm.zig must not require UI edits.
 function nicRows(v){var r=[];for(var n=2;n<=MAX_NICS;n++){r.push(['NIC '+n,'e_nic'+n,'select',v['nic'+n+'_mode']||'none'],['NIC '+n+' MAC','e_nic'+n+'_mac','text',v['nic'+n+'_mac']||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC '+n+' VMnet','e_nic'+n+'_vnet','text',v['nic'+n+'_vnet']||'','placeholder="virtual network name (optional)"']);}return r;}
 function extraDiskRows(v){var r=[];for(var n=0;n<MAX_EXTRA_DISKS;n++){r.push(['Extra '+n+' Path','e_extra'+n+'_path','text',v['extra'+n+'_path']||''],['Extra '+n+' Size','e_extra'+n+'_size','number',v['extra'+n+'_size']||0,'min="0" max="65536" step="1"'],['Extra '+n+' Format','e_extra'+n+'_format','select',v['extra'+n+'_format']||0]);}return r;}
 
@@ -305,7 +305,7 @@ h+='<td class="muted">'+escHtml(v.folder||'')+'</td>';
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
 const c=document.getElementById('tabConsole');const nm=document.getElementById('vmname');const tb=document.getElementById('tabBar');
 if(!t||!s||!nm||!tb)return;
-nm.textContent=vms.length?'Overview':'Welcome to Hangar';document.title='Hangar — VM Manager';tb.style.display='none';
+nm.textContent=vms.length?'Overview':'Welcome to Hangar';document.title='Hangar, VM Manager';tb.style.display='none';
 t.style.display='block';s.style.display='none';if(c)c.style.display='none';activeTab='summary';
 t.setAttribute('aria-hidden','false');s.setAttribute('aria-hidden','true');if(c)c.setAttribute('aria-hidden','true');
 if(vms.length&&window.van){mountDashboard(t);publishVms();s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';var chv=document.getElementById('consoleHint');if(chv)chv.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';updateCommandState();return;}
@@ -322,7 +322,7 @@ tb.style.display='flex';
 const v=vms[sel];const sc=v.status==='running'?'running':v.status==='paused'?'paused':v.status==='suspended'?'suspended':'stopped';
 if(activeTab==='console'&&!(v.status==='running'&&embeddedDisplayCapable(v)))activeTab='summary';
 syncTabPanels();
-nm.textContent=v.name;document.title='Hangar — '+v.name;
+nm.textContent=v.name;document.title='Hangar: '+v.name;
 var emb=document.getElementById('vmemblem');if(emb){var br=osBrand(v.name,v.os);emb.textContent=br.m;emb.style.background=br.c;emb.hidden=false;}
 var info=displayInfo(v);
 var videoMeta=escHtml(info.embedLabel+' '+info.displayLabel)+' · '+escHtml(info.gpuLabel)+' · '+escHtml(info.accelLabel);
@@ -386,10 +386,10 @@ async function powerToggle(){const idx=sel;if(idx===null)return;const v=vms[idx]
 var btn=document.getElementById('powerbtn');if(btn){btn.disabled=true;btn.textContent='...';btn.setAttribute('aria-busy','true');}
 transitioningIdx=idx;renderList();
 try{const r=await apiPost('/api/vms/'+idx+'/power');transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);renderList();}finally{if(btn){updatePowerBtn();btn.disabled=false;}}}else{if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}catch(e){transitioningIdx=null;if(btn){updatePowerBtn();btn.disabled=false;}renderList();setStatus('Power toggle failed: '+e.message);}}
-async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Send ACPI shutdown to "'+v.name+'"?')))return;const r=await apiPost('/api/vms/'+sel+'/shutdown');if(r)setStatus('Shut down guest — ACPI power button sent.');}
-async function resetGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Reset guest "'+v.name+'"?\nUnsaved data in the guest may be lost.',{danger:true,okLabel:'Reset'})))return;const r=await apiPost('/api/vms/'+sel+'/reset');if(r)setStatus('Reset guest — system_reset sent.');}
-async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/pause');if(r){await refresh();setStatus('Paused guest — execution frozen.');}}
-async function resumeGuest(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/resume');if(r){await refresh();setStatus('Resumed guest — execution continued.');}}
+async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Send ACPI shutdown to "'+v.name+'"?')))return;const r=await apiPost('/api/vms/'+sel+'/shutdown');if(r)setStatus('Shut down guest, ACPI power button sent.');}
+async function resetGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Reset guest "'+v.name+'"?\nUnsaved data in the guest may be lost.',{danger:true,okLabel:'Reset'})))return;const r=await apiPost('/api/vms/'+sel+'/reset');if(r)setStatus('Reset guest, system_reset sent.');}
+async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/pause');if(r){await refresh();setStatus('Paused guest, execution frozen.');}}
+async function resumeGuest(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/resume');if(r){await refresh();setStatus('Resumed guest, execution continued.');}}
 async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=await showPromptDialog('Rename VM:',v.name);if(n===null)return;const trimmed=n.trim();if(!trimmed){showToast('Name cannot be empty or whitespace','error');return;}if(trimmed===v.name)return;const r=await apiPost('/api/vms/'+sel+'/rename','name='+encodeURIComponent(trimmed));if(r){await refresh();setStatus('VM renamed.');}}
 async function suspendGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Suspend VM "'+v.name+'" to disk?\nThe VM state will be saved and the VM will be paused.',{okLabel:'Suspend'})))return;const r=await apiPost('/api/vms/'+sel+'/suspend');if(r){await refresh();setStatus('Suspended VM to disk.');}}
 async function cloneGuest(){if(sel===null)return;var cn=document.getElementById('clone_name');var cd=document.getElementById('clonedlg');if(cn)cn.textContent=vms[sel].name;if(cd)cd.showModal();}
@@ -431,7 +431,7 @@ async function openSnapshots(){if(sel===null)return;var sd=document.getElementBy
 async function loadSnapshots(){if(sel===null)return;const el=document.getElementById('snaplist');if(!el)return;
 var v=selectedVm();var meta=document.getElementById('snapMeta');var running=v&&(v.status==='running'||v.status==='paused');if(meta)meta.innerHTML=v?'<strong>'+escHtml(v.name)+'</strong><span>'+escHtml(statusLabel(v.status))+'</span>'+(running?'<span class="warn-text">Revert and delete require the VM to be powered off.</span>':''):'';
 try{const r=await fetch('/api/vms/'+sel+'/snapshots');if(!r.ok){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';return;}const t=(await r.text()).trim();
-if(!t||t==='(none)'){el.innerHTML='<div class="snapshot-empty">No snapshots yet. Take one above to capture this VM\'s disk state — you can revert to or delete it here later.</div>';return;}
+if(!t||t==='(none)'){el.innerHTML='<div class="snapshot-empty">No snapshots yet. Take one above to capture this VM\'s disk state, you can revert to or delete it here later.</div>';return;}
 const lines=t.split('\n');let h='';for(const ln of lines){const parts=ln.split('\t');const tag=(parts[0]||'').trim();if(!tag)continue;const when=(parts[1]||'').trim();
 h+=`<div class="snapshot-row"><span class="snap-emblem" aria-hidden="true"><svg class="ico"><use href="#i-snapshot"/></svg></span><div class="snap-info"><strong>${escHtml(tag)}</strong><small title="${when?escHtml(relAge(when)):''}">${when?'Taken '+escHtml(when):'Saved state'}</small></div><div class="snapshot-actions"><button class="btn" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Revert to snapshot ${escHtml(tag)}"${running?' disabled title="Power off the VM before reverting"':''}>Revert</button><button class="btn danger" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Delete snapshot ${escHtml(tag)}">Delete</button></div></div>`;}
 el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
@@ -460,7 +460,7 @@ var fill=bar.firstElementChild;
 // A single dropped poll (timeout, busy daemon during transfer) must not abort
 // a migration that is still running server-side. Tolerate a few consecutive
 // failures before declaring the connection lost.
-if(!t){migPollFails++;if(migPollFails>=MIG_POLL_MAX_FAILS){info.textContent='Migration failed — connection lost';hideMigProgress();setStatus('Migration failed');return;}info.textContent='Migration in progress... (retrying)';migPollTimer=setTimeout(pollMigStatus,500);return;}
+if(!t){migPollFails++;if(migPollFails>=MIG_POLL_MAX_FAILS){info.textContent='Migration failed: connection lost';hideMigProgress();setStatus('Migration failed');return;}info.textContent='Migration in progress... (retrying)';migPollTimer=setTimeout(pollMigStatus,500);return;}
 migPollFails=0;
 try{
 var s=JSON.parse(t);
@@ -643,7 +643,7 @@ e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
 	 var ctrls=ts.querySelectorAll('.settings-form input,.settings-form select,.settings-form textarea');
 	 for(var ci=0;ci<ctrls.length;ci++){if(!soft[ctrls[ci].id]){ctrls[ci].disabled=true;ctrls[ci].title='Power off the VM to change virtual hardware';}}
 	 var shell=ts.querySelector('.settings-shell');
-	 if(shell){var ban=document.createElement('div');ban.className='settings-runlock';ban.setAttribute('role','note');ban.textContent='This VM is '+statusLabel(v.status).toLowerCase()+' — virtual hardware is locked. Name, notes, tags, folder and AutoProtect stay editable; CD/ISO can be changed live.';ts.insertBefore(ban,shell);}}}
+	 if(shell){var ban=document.createElement('div');ban.className='settings-runlock';ban.setAttribute('role','note');ban.textContent='This VM is '+statusLabel(v.status).toLowerCase()+': virtual hardware is locked. Name, notes, tags, folder and AutoProtect stay editable; CD/ISO can be changed live.';ts.insertBefore(ban,shell);}}}
 function setSettingsCategory(cat){settingsCategory=cat;var panels=document.querySelectorAll('.settings-panel');for(var i=0;i<panels.length;i++){var on=panels[i].getAttribute('data-settings-panel')===cat;panels[i].classList.toggle('active',on);panels[i].style.display=on?'block':'none';}
 var items=document.querySelectorAll('.settings-nav-item');for(var j=0;j<items.length;j++){var on=items[j].getAttribute('data-settings-category')===cat;items[j].classList.toggle('active',on);if(on)items[j].setAttribute('aria-current','page');else items[j].removeAttribute('aria-current');}}
 function setFieldError(id,msg,kind){var el=document.getElementById('err_'+id);var field=document.getElementById(id);if(el){el.textContent=msg||'';el.classList.toggle('warning',kind==='warn');}if(field){var bad=!!msg&&kind!=='warn';field.classList.toggle('invalid',bad);if(bad){field.setAttribute('aria-invalid','true');field.setAttribute('aria-describedby','err_'+id);}else{field.removeAttribute('aria-invalid');if(field.getAttribute('aria-describedby')==='err_'+id)field.removeAttribute('aria-describedby');}}}
@@ -671,7 +671,7 @@ const fieldIds=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format
 for(var bn=2;bn<=MAX_NICS;bn++)fieldIds.push('nic'+bn,'nic'+bn+'_mac','nic'+bn+'_vnet');
 for(var bk=0;bk<MAX_EXTRA_DISKS;bk++)fieldIds.push('extra'+bk+'_path','extra'+bk+'_size','extra'+bk+'_format');
 const body=fieldIds.map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
-try{const r=await apiPost('/api/vms/'+idx,body);if(r){settingsDirty=false;saveInFlight=false;/* refresh() no-ops while saveInFlight — clear it first or the summary renders stale data */await refresh();switchTab('summary');setStatus('Settings saved.');}
+try{const r=await apiPost('/api/vms/'+idx,body);if(r){settingsDirty=false;saveInFlight=false;/* refresh() no-ops while saveInFlight, clear it first or the summary renders stale data */await refresh();switchTab('summary');setStatus('Settings saved.');}
 else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}
 saveInFlight=false;
 for(let i=0;i<formEls.length;i++)formEls[i].disabled=false;}}
@@ -679,7 +679,7 @@ async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=docume
 if(!file)return;const fd=new FormData();fd.append('disk2',file);setStatus('Uploading Disk 2 for "'+vms[idx].name+'"...');try{const r=await fetch('/api/vms/'+idx+'/disk2',{method:'POST',body:fd,headers:{'X-API-Key':API_KEY}});if(!r.ok){var em=await r.text().catch(function(){return'';});try{var j=JSON.parse(em);if(j.error)em=j.error;}catch(e){}throw new Error(em||'HTTP '+r.status);}await refresh();setStatus('Disk 2 uploaded successfully.');if(sel===idx)editVm();}catch(e){setStatus('Upload failed: '+e.message);showToast('Disk 2 upload failed: '+e.message,'error');}};inp.click();}
 function downloadDisk2(){if(sel===null)return;const a=document.createElement('a');a.href='/api/vms/'+sel+'/disk2/download';a.download=vms[sel].name+'_disk2.qcow2';document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);},1000);}
 function fmtBytes(n){if(!Number.isFinite(n)||n<0)return'?';const u=['B','KiB','MiB','GiB','TiB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++;}return(i===0?x:x.toFixed(1))+' '+u[i];}
-async function loadGuestInfo(idx){const el=document.getElementById('guestIpVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/guestinfo',{headers:{'X-API-Key':API_KEY}});if(!r.ok)throw 0;const j=await r.json();if(sel===idx&&document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent=(j.ips&&j.ips.length)?j.ips:'unavailable — guest agent not running';}catch(e){if(document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent='unavailable';}}
+async function loadGuestInfo(idx){const el=document.getElementById('guestIpVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/guestinfo',{headers:{'X-API-Key':API_KEY}});if(!r.ok)throw 0;const j=await r.json();if(sel===idx&&document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent=(j.ips&&j.ips.length)?j.ips:'unavailable, guest agent not running';}catch(e){if(document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent='unavailable';}}
 async function loadDiskInfo(idx){const el=document.getElementById('diskUsageVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/diskinfo');if(!r.ok)throw 0;const j=await r.json();if(j.error)throw 0;if(sel===idx&&document.getElementById('diskUsageVal')){var pct=j.virtual_bytes>0?Math.min(100,Math.round(j.actual_bytes/j.virtual_bytes*100)):0;document.getElementById('diskUsageVal').innerHTML='<div class="ubar"><span style="width:'+pct+'%"></span></div><div class="ubar-txt">'+fmtBytes(j.actual_bytes)+' used / '+fmtBytes(j.virtual_bytes)+' ('+pct+'%)</div>';}}catch(e){if(document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent='unavailable';}}
 async function takeScreenshot(){if(sel===null)return;try{const r=await fetch('/api/vms/'+sel+'/screenshot',{headers:{'X-API-Key':API_KEY}});if(!r.ok){let t='';try{const j=await r.json();t=j.error||'';}catch(e){}showToast('Screenshot failed: '+(t||('HTTP '+r.status)),'error');return;}const b=await r.blob();const u=URL.createObjectURL(b);window.open(u,'_blank');setTimeout(function(){URL.revokeObjectURL(u);},10000);}catch(e){showToast('Screenshot failed','error');}}
 async function changeCd(){if(sel===null)return;const cur=(document.getElementById('e_iso_path')||{}).value||vms[sel].iso_path||'';const p=await showPromptDialog('Path to the CD/ISO image to mount:',cur);if(p===null||p==='')return;const r=await apiPost('/api/vms/'+sel+'/cdrom','path='+encodeURIComponent(p));if(r){await refresh();setStatus('CD/ISO changed.'+(vms[sel].status==='running'?'':' Mounts on next boot.'));}}
@@ -694,7 +694,7 @@ function vnetTypeMeta(t){t=(t||'').toLowerCase();
  if(t==='nat')return {c:'#3C6EB4',label:'NAT'};
  if(t==='bridged')return {c:'#10B981',label:'Bridged'};
  if(t==='host_only'||t==='host-only')return {c:'#D9892B',label:'Host-Only'};
- return {c:'var(--text-dim)',label:t||'—'};}
+ return {c:'var(--text-dim)',label:t||', '};}
 function renderVnetList(){const sel=document.getElementById('vnet_sel');if(!sel)return;if(!vnetsData.networks)vnetsData={networks:[]};
  if(vnetIdx<0&&vnetsData.networks.length)vnetIdx=0;
  let h='';
@@ -855,13 +855,13 @@ var paletteItems=[],paletteSel=0,palettePrevFocus=null;
 function paletteCommands(){
   var c=[{label:'New VM',icon:'i-plus',run:newVm},{label:'Import VM',icon:'i-import',run:importGuest},{label:'VM Catalog',icon:'i-grid',run:openCatalog},{label:'Virtual Network Editor',icon:'i-net',run:openVnets},{label:'Preferences',icon:'i-gear',run:openPrefs},{label:'Keyboard Shortcuts',icon:'i-keyboard',run:showShortcutsModal},{label:'Toggle Theme',icon:'i-theme',run:window.cycleTheme},{label:'Refresh Inventory',icon:'i-refresh',run:refresh}];
   if(sel!==null&&sel<vms.length){var v=vms[sel];var on=(v.status==='running'||v.status==='paused');
-    c.push({label:(on?'Power Off — ':'Power On — ')+v.name,run:powerToggle});
-    c.push({label:'Settings — '+v.name,run:editVm});
-    c.push({label:'Take Snapshot — '+v.name,run:takeSnapshot});
-    c.push({label:'Clone — '+v.name,run:cloneGuest});
-    c.push({label:'Rename — '+v.name,run:renameGuest});
-    c.push({label:'Move to Folder — '+v.name,run:moveToFolder});
-    c.push({label:'Delete — '+v.name,run:deleteVm});}
+    c.push({label:(on?'Power Off, ':'Power On, ')+v.name,run:powerToggle});
+    c.push({label:'Settings, '+v.name,run:editVm});
+    c.push({label:'Take Snapshot, '+v.name,run:takeSnapshot});
+    c.push({label:'Clone, '+v.name,run:cloneGuest});
+    c.push({label:'Rename, '+v.name,run:renameGuest});
+    c.push({label:'Move to Folder, '+v.name,run:moveToFolder});
+    c.push({label:'Delete, '+v.name,run:deleteVm});}
   for(var i=0;i<vms.length;i++)c.push({label:'Go to '+vms[i].name,vm:vms[i].name});
   return c;
 }
@@ -914,8 +914,8 @@ function topoSvg(res,meta){
  (res.children||[]).forEach(function(nd){var m=meta[nd.id]||{};var lab=m.label||nd.id;
   var col=m.color||'';var stroke=col?' style="stroke:'+col+'"':'';
   s+='<g class="topo-node '+(m.kind||'')+'" '+(m.act||'')+' transform="translate('+Math.round(nd.x)+','+Math.round(nd.y)+')" tabindex="0" role="button" aria-label="'+escHtml(lab)+'">';
-  s+='<rect width="'+nd.width+'" height="'+nd.height+'" rx="9"'+stroke+'/>';
-  if(col)s+='<rect width="4" height="'+nd.height+'" rx="2" fill="'+col+'" stroke="none"/>';
+  s+='<rect width="'+nd.width+'" height="'+nd.height+'" rx="3"'+stroke+'/>';
+  if(col)s+='<rect width="4" height="'+nd.height+'" rx="3" fill="'+col+'" stroke="none"/>';
   s+='<text x="'+(nd.width/2)+'" y="'+(nd.height/2+4)+'" text-anchor="middle">'+escHtml(lab)+'</text></g>';});
  return s+'</svg>';
 }
@@ -1013,7 +1013,7 @@ function enterDisplayOnly(){
   if(!rfb&&!spice){showToast('No embedded display is connected','warn');return;}
   document.body.classList.add('displayonly');
   document.documentElement.requestFullscreen().catch(function(){});
-  setStatus('Display-only — F11 or Esc to exit');
+  setStatus('Display-only, F11 or Esc to exit');
   // Briefly reveal the exit bar so first-time users can find their way out;
   // it otherwise stays hidden until hover, leaving keyboard-unaware users stuck.
   var bar=document.querySelector('.displayonly-bar');

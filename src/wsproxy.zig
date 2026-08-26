@@ -28,7 +28,7 @@ const SHUT_RDWR = netutil.SHUT_RDWR;
 /// Unix socket), and `wmtx`, which serializes writes to `ws_fd`: both the
 /// data-relay thread (writeFrame) and the control path (writePong) write to
 /// the same socket, and writeFrame emits the frame header and payload as two
-/// separate write() calls — without the lock a concurrent pong can interleave
+/// separate write() calls, without the lock a concurrent pong can interleave
 /// between them and corrupt the WebSocket frame stream.
 const RelayCtx = struct {
     ws_fd: c.fd_t,
@@ -69,7 +69,7 @@ fn spawnRelayThreads(ws_data: ws.Opcode, ctx: *RelayCtx) !RelayThreads {
                 if (hdr.opcode == .close) break;
                 if (hdr.opcode == .ping) {
                     // Drain the ping's payload (RFC 6455 allows ≤125 bytes) before
-                    // replying — leaving it on the wire would desync the next frame.
+                    // replying: leaving it on the wire would desync the next frame.
                     _ = ws.readFramePayload(ctx_ptr.ws_fd, &buf, hdr) orelse break;
                     ctx_ptr.wmtx.lock();
                     ws.writePong(ctx_ptr.ws_fd) catch {
@@ -126,7 +126,7 @@ pub fn vnc(conn: c.fd_t, req: []const u8) !void {
     try ws.writeUpgradeResponse(conn, accept_key, req);
 
     // Connect to the VM's VNC server. QEMU reports "running" the moment it
-    // forks, but its display listener comes up a beat later — a console that
+    // forks, but its display listener comes up a beat later, a console that
     // auto-connects on the first running poll would race it and get refused.
     // Retry briefly (4s budget, 40ms steps, fresh socket per attempt: a failed
     // connect leaves the fd unusable) before failing the upgrade.
@@ -188,7 +188,7 @@ pub fn spice(conn: c.fd_t, req: []const u8) !void {
     try ws.writeUpgradeResponse(conn, accept_key, req);
 
     // Connect to the VM's SPICE server. QEMU reports "running" the moment it
-    // forks, but its display listener comes up a beat later — a console that
+    // forks, but its display listener comes up a beat later, a console that
     // auto-connects on the first running poll would race it and get refused.
     // Retry briefly (4s budget, 40ms steps, fresh socket per attempt: a failed
     // connect leaves the fd unusable) before failing the upgrade.

@@ -70,17 +70,17 @@ fn formatStatusBarEmpty(out: []u8, count: usize) []const u8 {
 
 /// Format the status bar text for a selected (but not running) VM.
 fn formatStatusBarVm(out: []u8, name: []const u8, status_label: []const u8, count: usize) []const u8 {
-    return std.fmt.bufPrintZ(out, "{s} — {s}    |    {d} virtual machine(s)", .{ name, status_label, count }) catch "(fmt error)";
+    return std.fmt.bufPrintZ(out, "{s}, {s}    |    {d} virtual machine(s)", .{ name, status_label, count }) catch "(fmt error)";
 }
 
 /// Format the status bar text for a running VM with uptime.
 fn formatStatusBarRunning(out: []u8, name: []const u8, status_label: []const u8, hrs: u64, mins: u64, secs: u64, count: usize) []const u8 {
-    return std.fmt.bufPrintZ(out, "{s} — {s} | Uptime: {d}:{d:0>2}:{d:0>2} | {d} VM(s)", .{ name, status_label, hrs, mins, secs, count }) catch "(fmt error)";
+    return std.fmt.bufPrintZ(out, "{s}, {s} | Uptime: {d}:{d:0>2}:{d:0>2} | {d} VM(s)", .{ name, status_label, hrs, mins, secs, count }) catch "(fmt error)";
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
 
-test "delete: single VM — selected_idx becomes null, count zero" {
+test "delete: single VM, selected_idx becomes null, count zero" {
     var vms = [_]vm.VmConfig{.{}} ** MAX_VMS;
     var handles = [_]?usize{null} ** MAX_VMS;
     var started = [_]i64{0} ** MAX_VMS;
@@ -96,7 +96,7 @@ test "delete: single VM — selected_idx becomes null, count zero" {
     try testing.expectEqual(@as(i64, 0), started[0]);
 }
 
-test "delete: middle VM — selected stays at same index, count decremented" {
+test "delete: middle VM, selected stays at same index, count decremented" {
     var vms = [_]vm.VmConfig{.{}} ** MAX_VMS;
     var handles = [_]?usize{null} ** MAX_VMS;
     var started = [_]i64{0} ** MAX_VMS;
@@ -146,7 +146,7 @@ test "delete: middle VM — selected stays at same index, count decremented" {
     try testing.expectEqual(@as(i64, 0), started[4]);
 }
 
-test "delete: last VM — selected_idx shifts to previous, count decremented" {
+test "delete: last VM, selected_idx shifts to previous, count decremented" {
     var vms = [_]vm.VmConfig{.{}} ** MAX_VMS;
     var handles = [_]?usize{null} ** MAX_VMS;
     var started = [_]i64{0} ** MAX_VMS;
@@ -167,7 +167,7 @@ test "delete: last VM — selected_idx shifts to previous, count decremented" {
     try testing.expectEqualStrings("vm-2", vms[2].getNameSlice());
 }
 
-test "delete: first VM — index 0 stays 0, later VMs shift left" {
+test "delete: first VM, index 0 stays 0, later VMs shift left" {
     var vms = [_]vm.VmConfig{.{}} ** MAX_VMS;
     var handles = [_]?usize{null} ** MAX_VMS;
     var started = [_]i64{0} ** MAX_VMS;
@@ -245,7 +245,7 @@ test "undo: restore VM at original index, count incremented" {
     try testing.expectEqualStrings("vm-0", vms[0].getNameSlice());
     try testing.expectEqualStrings("vm-1", vms[1].getNameSlice());
     try testing.expectEqualStrings("vm-2", vms[2].getNameSlice());
-    // started restored: [111, 0, 333] — restored VM gets 0, others keep their values
+    // started restored: [111, 0, 333], restored VM gets 0, others keep their values
     try testing.expectEqual(@as(i64, 111), started[0]);
     try testing.expectEqual(@as(i64, 0), started[1]);
     try testing.expectEqual(@as(i64, 333), started[2]);
@@ -314,7 +314,7 @@ test "undo: delete-undo-delete cycle" {
     _ = simulateUndo(&vms, &vm_count, &handles, &started, saved_q, 1);
     try testing.expectEqual(@as(usize, 4), vm_count);
 
-    // Delete again — same index 1
+    // Delete again, same index 1
     saved_q = vms[1];
     _ = simulateDelete(&vms, &vm_count, &handles, &started, 1);
     try testing.expectEqual(@as(usize, 3), vm_count);
@@ -359,11 +359,11 @@ test "status bar: VM format updates count after delete" {
 
     // 5 VMs, show status for selected VM
     const before = formatStatusBarVm(&buf, "myvm", "Stopped", 5);
-    try testing.expectEqualStrings("myvm — Stopped    |    5 virtual machine(s)", before);
+    try testing.expectEqualStrings("myvm, Stopped    |    5 virtual machine(s)", before);
 
     // After delete, count is 4
     const after = formatStatusBarVm(&buf, "myvm", "Stopped", 4);
-    try testing.expectEqualStrings("myvm — Stopped    |    4 virtual machine(s)", after);
+    try testing.expectEqualStrings("myvm, Stopped    |    4 virtual machine(s)", after);
 }
 
 test "status bar: after undo, count returns to original" {
@@ -371,25 +371,25 @@ test "status bar: after undo, count returns to original" {
 
     // After delete: 4 VMs
     const deleted = formatStatusBarVm(&buf, "vm-x", "Stopped", 4);
-    try testing.expectEqualStrings("vm-x — Stopped    |    4 virtual machine(s)", deleted);
+    try testing.expectEqualStrings("vm-x, Stopped    |    4 virtual machine(s)", deleted);
 
     // After undo: back to 5 VMs
     const restored = formatStatusBarVm(&buf, "vm-x", "Stopped", 5);
-    try testing.expectEqualStrings("vm-x — Stopped    |    5 virtual machine(s)", restored);
+    try testing.expectEqualStrings("vm-x, Stopped    |    5 virtual machine(s)", restored);
 }
 
 test "status bar: running VM format with uptime" {
     var buf: [128]u8 = undefined;
 
     const result = formatStatusBarRunning(&buf, "webserver", "Running", 2, 15, 33, 3);
-    try testing.expectEqualStrings("webserver — Running | Uptime: 2:15:33 | 3 VM(s)", result);
+    try testing.expectEqualStrings("webserver, Running | Uptime: 2:15:33 | 3 VM(s)", result);
 }
 
 test "status bar: running VM format with zero uptime" {
     var buf: [128]u8 = undefined;
 
     const result = formatStatusBarRunning(&buf, "fresh", "Running", 0, 0, 0, 1);
-    try testing.expectEqualStrings("fresh — Running | Uptime: 0:00:00 | 1 VM(s)", result);
+    try testing.expectEqualStrings("fresh, Running | Uptime: 0:00:00 | 1 VM(s)", result);
 }
 
 test "status bar: running VM format with count after delete" {
@@ -397,11 +397,11 @@ test "status bar: running VM format with count after delete" {
 
     // Before delete: 3 VMs
     const before = formatStatusBarRunning(&buf, "db", "Running", 1, 30, 45, 3);
-    try testing.expectEqualStrings("db — Running | Uptime: 1:30:45 | 3 VM(s)", before);
+    try testing.expectEqualStrings("db, Running | Uptime: 1:30:45 | 3 VM(s)", before);
 
     // After delete: 2 VMs
     const after = formatStatusBarRunning(&buf, "db", "Running", 1, 30, 45, 2);
-    try testing.expectEqualStrings("db — Running | Uptime: 1:30:45 | 2 VM(s)", after);
+    try testing.expectEqualStrings("db, Running | Uptime: 1:30:45 | 2 VM(s)", after);
 }
 
 test "status bar: empty count matches vm_count after each operation" {

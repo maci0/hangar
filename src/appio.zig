@@ -46,7 +46,7 @@ pub fn sleepMs(ms: u64) void {
         .nsec = @intCast(ns % std.time.ns_per_s),
     };
     while (std.c.nanosleep(&req, &req) != 0) {
-        // Interrupted by a signal — resume with the remaining time.
+        // Interrupted by a signal: resume with the remaining time.
         if (std.c._errno().* != @intFromEnum(std.c.E.INTR)) break;
     }
 }
@@ -153,9 +153,17 @@ test "appio fuzz: sleepMs tolerates random small durations" {
     }
 }
 
+/// Project-local scratch dir for the tests below. `/tmp` is tmpfs on the
+/// developer machines this runs on, so test files stay in the gitignored
+/// `.scratch/` at the repo root instead.
+fn testScratchPath(buf: []u8, comptime name: []const u8) ![:0]u8 {
+    std.Io.Dir.cwd().createDirPath(io(), ".scratch") catch {};
+    return std.fmt.bufPrintZ(buf, ".scratch/" ++ name, .{std.c.getpid()});
+}
+
 test "appio: writeFileAtomic round-trips and overwrites" {
     var path_buf: [64]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-appio-atomic-{d}.txt", .{std.c.getpid()});
+    const path = try testScratchPath(&path_buf, "hangar-appio-atomic-{d}.txt");
     defer _ = std.Io.Dir.cwd().deleteFile(io(), path) catch {};
 
     try writeFileAtomic(path, "first");
@@ -172,7 +180,7 @@ test "appio: writeFileAtomic round-trips and overwrites" {
 
 test "appio: writeFileAtomic creates owner-only (0o600) files" {
     var path_buf: [64]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-appio-atomic-mode-{d}.txt", .{std.c.getpid()});
+    const path = try testScratchPath(&path_buf, "hangar-appio-atomic-mode-{d}.txt");
     defer _ = std.Io.Dir.cwd().deleteFile(io(), path) catch {};
 
     try writeFileAtomic(path, "secret-ish config");
@@ -188,7 +196,7 @@ test "appio fuzz: writeFileAtomic never panics on random byte payloads" {
     var prng = std.Random.DefaultPrng.init(0xA7010A72);
     const rnd = prng.random();
     var path_buf: [64]u8 = undefined;
-    const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-appio-atomic-fuzz-{d}.txt", .{std.c.getpid()});
+    const path = try testScratchPath(&path_buf, "hangar-appio-atomic-fuzz-{d}.txt");
     defer _ = std.Io.Dir.cwd().deleteFile(io(), path) catch {};
     var data: [256]u8 = undefined;
     var i: usize = 0;

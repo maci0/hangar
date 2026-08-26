@@ -324,7 +324,7 @@ test "ovf: dual disk descriptor includes file2 + vmdisk2 + Hard Disk 2" {
     try t.expect(std.mem.indexOf(u8, xml, "<rasd:InstanceID>6</rasd:InstanceID>") != null);
 }
 
-test "ovf: dual disk without network — InstanceID 5 is disk2, no Ethernet" {
+test "ovf: dual disk without network, InstanceID 5 is disk2, no Ethernet" {
     var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
         .name = "DualNoNet",

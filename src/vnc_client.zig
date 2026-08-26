@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! VNC client — thread-safe pure-Zig wrapper around libvncclient.
+//! VNC client: thread-safe pure-Zig wrapper around libvncclient.
 //!
 //! A background thread polls the VNC socket and updates a mutex-protected
 //! framebuffer.  The UI thread locks the framebuffer for rendering and
@@ -35,7 +35,7 @@ pub const VncClient = struct {
     ///
     /// Uses the C allocator (not Zig's page allocator) because
     /// libvncclient's `rfbClientCleanup` calls `free()` on the
-    /// framebuffer — mixing allocators would corrupt the heap.
+    /// framebuffer: mixing allocators would corrupt the heap.
     pub fn new() ?*VncClient {
         const self = alloc.create(VncClient) catch return null;
         self.* = .{};
@@ -79,7 +79,7 @@ pub const VncClient = struct {
         cl.*.serverHost = c.strdup(host);
         cl.*.serverPort = port;
 
-        // rfbInitClient frees `cl` on failure — do NOT cleanup after this.
+        // rfbInitClient frees `cl` on failure: do NOT cleanup after this.
         // It also frees the framebuffer that onMallocFb may have allocated,
         // so clear our dangling pointer.
         if (c.rfbInitClient(cl, null, null) == 0) {
@@ -111,7 +111,7 @@ pub const VncClient = struct {
     ///
     /// The `rfb` pointer is nulled inside the mutex so that `sendKey`
     /// and `sendPointer` (which re-check it under the mutex) see a
-    /// consistent value — preventing a TOCTOU use-after-free.
+    /// consistent value: preventing a TOCTOU use-after-free.
     pub fn disconnect(self: *VncClient) void {
         if (!@atomicLoad(bool, &self.connected, .seq_cst)) return;
 
@@ -124,7 +124,7 @@ pub const VncClient = struct {
         self.mutex.lock();
         const rfb_to_free = self.rfb;
         self.rfb = null;
-        // rfbClientCleanup already freed the framebuffer via free() —
+        // rfbClientCleanup already freed the framebuffer via free(),
         // just clear our pointer.
         self.framebuffer = null;
         self.width = 0;
@@ -210,7 +210,7 @@ pub const VncClient = struct {
 
     // ── Background polling thread ──────────────────────────────────
     //
-    // libvncclient is not event-driven — it requires the caller to
+    // libvncclient is not event-driven, it requires the caller to
     // poll with WaitForMessage + HandleRFBServerMessage in a loop.
     // We run this in a dedicated thread so the UI thread never blocks.
 
@@ -224,7 +224,7 @@ pub const VncClient = struct {
                 break;
             }
             if (result > 0) {
-                // Do NOT hold the mutex across HandleRFBServerMessage — its
+                // Do NOT hold the mutex across HandleRFBServerMessage, its
                 // callbacks (onMallocFb, etc.) acquire it, and SpinMutex is
                 // non-reentrant.  The callbacks lock internally when they touch
                 // the framebuffer / dirty flag.
@@ -295,7 +295,7 @@ pub const VncClient = struct {
 // ── Tests ────────────────────────────────────────────────────────────
 // The framebuffer-size math in onMallocFb (untrusted server width×height) now
 // routes through fbmath.fbFits, which is fuzzed over i32 extremes in fbmath.zig
-// — that is the bug-prone surface. Here we cover the C-callback null-guard
+//, that is the bug-prone surface. Here we cover the C-callback null-guard
 // branches and the public API on a fresh client without a live server (a real
 // rfbClient is only built by connect()).
 
@@ -343,7 +343,7 @@ test "vnc: onMallocFb size math rejects overflowing dimensions" {
 
 // ── Fuzz: VNC client against a minimal, fuzzable RFB server ──────────
 // Brings connect/pollThread/onMallocFb/onFbUpdate under test by speaking just
-// enough RFB 3.8 (None security) for libvncclient to connect — then varying the
+// enough RFB 3.8 (None security) for libvncclient to connect, then varying the
 // ServerInit width/height (incl. hostile 65535×65535, which must hit the
 // fbmath.fbFits guard in onMallocFb via the REAL path, not crash) and streaming
 // random bytes to fuzz the message loop. Same garbage-peer pattern as the QMP
@@ -398,7 +398,7 @@ fn rfbFuzzServer(listen_fd: cc.fd_t, w: u16, h: u16, seed: u64) void {
 
     // Send random bytes to fuzz the framebuffer-update message parser, then
     // close (defer). We do NOT block-read the client's SetPixelFormat/Encodings/
-    // FBUpdateRequest — those sit in the kernel buffer and are discarded on
+    // FBUpdateRequest, those sit in the kernel buffer and are discarded on
     // close. Blocking on a fixed-size read here would deadlock (client won't
     // send that many bytes), so just write + close → client sees blob then EOF.
     var prng = std.Random.DefaultPrng.init(seed);
@@ -441,7 +441,7 @@ test "fuzz: VNC client against a minimal/fuzzed RFB server (connect/poll/onMallo
         const client = VncClient.new() orelse continue;
         defer client.free();
         // connect may succeed (benign dims) or fail (hostile dims rejected by
-        // onMallocFb) — both are valid; the contract is "no crash/overflow".
+        // onMallocFb), both are valid; the contract is "no crash/overflow".
         _ = client.connect("127.0.0.1", port);
         var k: usize = 0;
         while (k < 5) : (k += 1) {

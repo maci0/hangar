@@ -1,5 +1,5 @@
 //! qemu-guest-agent query handler: report the guest's IPv4 addresses. Best-effort
-//! — empty result when the VM is stopped, the agent isn't running, or it doesn't
+//!: empty result when the VM is stopped, the agent isn't running, or it doesn't
 //! answer within the read timeout (never hangs the serving thread).
 
 const std = @import("std");

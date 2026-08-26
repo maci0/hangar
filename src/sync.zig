@@ -55,7 +55,7 @@ test "SpinMutex: mutual exclusion under contention keeps a counter exact" {
             var i: usize = 0;
             while (i < ITERS) : (i += 1) {
                 mx.lock();
-                // Non-atomic RMW — only correct if the lock truly serializes.
+                // Non-atomic RMW: only correct if the lock truly serializes.
                 c.* += 1;
                 mx.unlock();
             }
@@ -104,7 +104,7 @@ test "fuzz: SpinMutex deterministic PRNG lock/unlock sequence" {
         m.lock();
         if (hold) {
             counter += 1;
-            // Verify counter is at least 1 after first hold — a
+            // Verify counter is at least 1 after first hold, a
             // non-trivial invariant on the locked section.
             try std.testing.expect(counter >= 1);
         }

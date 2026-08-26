@@ -1,4 +1,4 @@
-/* spice-html5 (LGPL-3.0-or-later) — vendored 2026-06-02 from
+/* spice-html5 (LGPL-3.0-or-later): vendored 2026-06-02 from
    https://gitlab.freedesktop.org/spice/spice-html5 (esbuild bundle, window.SpiceHtml5).
    Upstream version not recorded at vendor time; do not hand-edit, re-vendor instead. */
 "use strict";

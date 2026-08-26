@@ -1,4 +1,4 @@
-//! Connection-streaming HTTP handlers — responses written directly to the
+//! Connection-streaming HTTP handlers: responses written directly to the
 //! socket fd rather than returned as a token: screenshot (QMP screendump →
 //! PNG), disk2 download/upload, and OVF export (`exportOva`).
 
@@ -27,7 +27,7 @@ const logOpErr = wlog.logOpErr;
 const logAudit = wlog.logAudit;
 const logErr = wlog.logErr;
 const logSaveErr = wlog.logSaveErr;
-const sanitizeLogName = wlog.sanitizeLogName;
+const sanitizeLogText = wlog.sanitizeLogText;
 const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
 const HTTP_OK = httpresp.HTTP_OK;
 const HTTP_BAD_REQUEST = httpresp.HTTP_BAD_REQUEST;
@@ -199,7 +199,7 @@ pub fn download(conn: c.fd_t, req: []const u8) !void {
     if (fd < 0) {
         var nb: [vm.MAX_NAME]u8 = undefined;
         var eb: [256]u8 = undefined;
-        logErr(std.fmt.bufPrint(&eb, "disk2 download: open failed vm=\"{s}\"", .{sanitizeLogName(&nb, name_buf[0..name_len])}) catch "disk2 download: open failed");
+        logErr(std.fmt.bufPrint(&eb, "disk2 download: open failed vm=\"{s}\"", .{sanitizeLogText(&nb, name_buf[0..name_len])}) catch "disk2 download: open failed");
         writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"disk2 open failed\"}");
         return;
     }
@@ -353,7 +353,7 @@ pub fn upload(conn: c.fd_t, initial: []const u8) void {
     }
 
     // Hold-back delimiter stream: write file bytes but never the closing boundary
-    // (`\r\n--<boundary>`), which may straddle two reads — retain the last
+    // (`\r\n--<boundary>`), which may straddle two reads, retain the last
     // (marker-1) bytes until the next read confirms they aren't the boundary.
     var marker_buf: [256]u8 = undefined;
     const marker = std.fmt.bufPrint(&marker_buf, "\r\n--{s}", .{boundary}) catch {

@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
-//! Hangar WebUI Desktop App — native WebView wrapper for the web frontend.
+//! Hangar WebUI Desktop App: native WebView wrapper for the web frontend.
 //!
 //! Spawns the hangar-web HTTP backend as a child process, then opens
 //! a zig-webui native window showing the web UI. The existing HTML/CSS/JS
 //! frontend communicates with the backend via fetch() to loopback on the
-//! resolved port (KV_PORT, default 9080 — see resolvePort) — no frontend
+//! resolved port (KV_PORT, default 9080, see resolvePort), no frontend
 //! changes needed.
 
 const std = @import("std");
 const webui = @import("webui");
 const appio = @import("appio.zig");
 const transport = @import("transport.zig");
+const wlog = @import("wlog.zig");
 
 extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
 extern "c" fn kill(pid: c_int, sig: c_int) c_int;
@@ -98,7 +99,7 @@ fn spawnBackend(port: u16) !void {
     if (pid < 0) return error.ForkFailed;
 
     if (pid == 0) {
-        // Child process — exec the hangar-web binary.
+        // Child process: exec the hangar-web binary.
         var bin_buf: [4096]u8 = undefined;
         const binary = findBackendBinary(&bin_buf) catch {
             std.c._exit(1);
@@ -114,7 +115,7 @@ fn spawnBackend(port: u16) !void {
         std.c._exit(1);
     }
 
-    // Parent — store child PID for cleanup.
+    // Parent: store child PID for cleanup.
     g_child_pid = pid;
 
     // Wait for the backend to become responsive.
@@ -182,7 +183,7 @@ fn stopBackend() void {
 }
 
 const usage =
-    \\hangar-webui — Hangar native desktop app (WebView wrapper)
+    \\hangar-webui: Hangar native desktop app (WebView wrapper)
     \\
     \\Usage: hangar-webui [--help] [--version]
     \\
@@ -236,8 +237,11 @@ pub fn main(init: std.process.Init) !void {
                 std.process.exit(0);
             },
             .unknown => {
+                // argv crosses a trust boundary: sanitize before echoing it.
+                var safe_buf: [64]u8 = undefined;
+                const safe = wlog.sanitizeLogText(&safe_buf, arg[0..@min(arg.len, safe_buf.len)]);
                 var buf: [160]u8 = undefined;
-                const msg = std.fmt.bufPrintZ(&buf, "Error: unknown option '{s}' (run with --help for usage)\n", .{arg}) catch "Error: unknown option\n";
+                const msg = std.fmt.bufPrintZ(&buf, "Error: unknown option '{s}' (run with --help for usage)\n", .{safe}) catch "Error: unknown option\n";
                 _ = std.c.write(2, msg.ptr, msg.len);
                 std.process.exit(2);
             },

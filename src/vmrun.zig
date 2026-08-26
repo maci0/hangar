@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! vmrun — CLI tool for managing Hangar VMs remotely.
+//! vmrun: CLI tool for managing Hangar VMs remotely.
 //!
 //! Connects to a Hangar web server via the transport abstraction layer and
 //! issues VM management commands (list, lifecycle, snapshots, import/export,
@@ -16,7 +16,7 @@ const transport = @import("transport.zig");
 const urlencode = @import("urlencode.zig");
 
 const usage =
-    \\vmrun — Hangar remote VM manager
+    \\vmrun: Hangar remote VM manager
     \\
     \\Usage: vmrun <server-url> <command> [args...]
     \\
@@ -152,7 +152,7 @@ fn run(init: std.process.Init) !void {
     // Collect the remaining positional arguments once so the command's
     // argument shape can be validated *before* opening a connection. A usage
     // mistake (unknown command, missing argument, bad subcommand) must fail
-    // fast with exit code 2 and never require a running daemon — this is what
+    // fast with exit code 2 and never require a running daemon, this is what
     // makes the tool predictable in scripts.
     var rest: [16][]const u8 = undefined;
     var rest_n: usize = 0;
@@ -330,7 +330,7 @@ fn argHint(command: []const u8) []const u8 {
 
 /// Validate the command name and positional-argument count before any network
 /// activity. On any problem this prints a one-line diagnostic to stderr and
-/// exits with EXIT_USAGE (2) — usage errors never require a running daemon.
+/// exits with EXIT_USAGE (2): usage errors never require a running daemon.
 fn validateArgs(command: []const u8, args: []const []const u8) void {
     if (std.mem.eql(u8, command, "snapshot")) {
         if (args.len == 0) {
@@ -366,7 +366,7 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
 
     const arity = commandArity(command) orelse {
         // A dash-prefixed token in the command slot is almost always a mistyped
-        // flag, so name it as such — matching hangar-web / hangar-webui, which
+        // flag, so name it as such, matching hangar-web / hangar-webui, which
         // both report "unknown option" for stray dash args.
         const kind = if (command.len > 0 and command[0] == '-') "option" else "command";
         var buf: [96]u8 = undefined;
@@ -386,7 +386,7 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
     }
     // Reject excess positional arguments. Without this an invocation like
     // `vmrun <url> start vm1 vm2` silently ignores `vm2`, so a mistyped
-    // command appears to succeed — bad for interactive use and worse in scripts.
+    // command appears to succeed: bad for interactive use and worse in scripts.
     if (args.len > arity) {
         var buf: [96]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: too many arguments for '{s}' (run with --help for usage)\n", .{command}) catch "Error: too many arguments\n";
@@ -396,7 +396,7 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
 
     // Validate argument *values* that can be checked without the daemon (numeric
     // fields, the `set` field name) here too, so a bad number or unknown field
-    // fails fast with exit 2 and never needs a running server — same contract as
+    // fails fast with exit 2 and never needs a running server, same contract as
     // the arity checks above. Doing this post-connect instead would force the
     // user to have a daemon up just to be told they typed a usage mistake.
     if (std.mem.eql(u8, command, "create")) {
@@ -451,7 +451,7 @@ fn sendRequest(allocator: std.mem.Allocator, conn: *transport.Connection, method
     // Match the server's /api/vms render cap (vm.MAX_VMS * 4096). A small fixed
     // buffer here silently truncated large fleets, so `list` stopped early and
     // name→index resolution failed for any VM past the cutoff. Allocate on the
-    // heap — a buffer this size cannot live on the stack.
+    // heap, a buffer this size cannot live on the stack.
     const cap = vm.MAX_VMS * 4096;
     const buf = try allocator.alloc(u8, cap);
     defer allocator.free(buf);
@@ -460,7 +460,7 @@ fn sendRequest(allocator: std.mem.Allocator, conn: *transport.Connection, method
     // The daemon normalizes every API failure (validation, not-found, auth, and
     // server-side errors) to a `{"error":"<msg>"}` JSON envelope. Without this
     // check vmrun printed that body to stdout as a fake success line and exited
-    // 0 — so a failed `start`/`delete`/`snapshot` looked successful in scripts.
+    // 0, so a failed `start`/`delete`/`snapshot` looked successful in scripts.
     // Map the envelope to a stderr diagnostic and exit 1 (the documented
     // runtime-error code) instead.
     if (errorEnvelopeMsg(buf[0..n])) |detail| {
@@ -476,7 +476,7 @@ fn sendRequest(allocator: std.mem.Allocator, conn: *transport.Connection, method
 /// the inner message (empty string when the envelope carries no detail);
 /// otherwise null. Every API error the daemon returns is normalized to this
 /// envelope (see web_server `jsonErr`), while success bodies are plain text
-/// ("ok"), a JSON array, or a health object — none begin with this prefix.
+/// ("ok"), a JSON array, or a health object, none begin with this prefix.
 fn errorEnvelopeMsg(resp: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, resp, "{\"error\":")) return null;
     return extractJsonString(resp, "error") orelse "";
@@ -579,7 +579,7 @@ fn cmdStatus(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.
 fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, action: []const u8, io: std.Io) !void {
     _ = io;
     // The daemon exposes idempotent /start and /stop routes (a no-op if already
-    // in the requested state), so the CLI verbs map straight through — no
+    // in the requested state), so the CLI verbs map straight through, no
     // read-then-toggle, which previously had a TOCTOU window that could invert
     // intent when two ops raced.
     var path_buf: [32]u8 = undefined;
@@ -814,7 +814,7 @@ fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     }
     defer _ = std.c.close(fd);
     const written = conn.requestToFd("POST", path, null, fd) catch |e| {
-        // Don't leave a 0-byte/partial vm-N.ova behind — a later consumer must
+        // Don't leave a 0-byte/partial vm-N.ova behind, a later consumer must
         // not mistake a failed export for a valid OVA.
         _ = std.c.unlink(fname.ptr);
         var ebuf: [160]u8 = undefined;
@@ -1194,7 +1194,7 @@ test "isSettableField: allowlist and help text cannot drift" {
     // SETTABLE_FIELDS (the gate) and SETTABLE_FIELDS_HELP (what the error message
     // tells the user is settable) are two hand-maintained lists. Every gated
     // field must be advertised, and the help must not promise a field the gate
-    // rejects — otherwise the diagnostic lies.
+    // rejects: otherwise the diagnostic lies.
     for (SETTABLE_FIELDS) |f| {
         try std.testing.expect(isSettableField(f)); // gate accepts every entry
         try std.testing.expect(std.mem.indexOf(u8, SETTABLE_FIELDS_HELP, f) != null);
@@ -1362,7 +1362,7 @@ test "fuzz: findVmIdxInJson never panics on random input" {
         rnd.bytes(buf[0..len]);
         for (names) |n| {
             if (findVmIdxInJson(buf[0..len], n)) |result| {
-                // Name was found — result must be a valid index
+                // Name was found: result must be a valid index
                 _ = result;
             }
         }

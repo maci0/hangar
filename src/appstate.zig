@@ -71,7 +71,7 @@ pub fn endTransition(id: []const u8) void {
 }
 
 /// Index of the VM whose stable id equals `id`, or null. Caller holds vms_mutex.
-/// Used to re-resolve a slot after releasing the lock for blocking I/O — the
+/// Used to re-resolve a slot after releasing the lock for blocking I/O, the
 /// array may have shifted (delete) or the VM may be gone.
 pub fn idxById(id: []const u8) ?usize {
     if (id.len == 0) return null;
@@ -106,7 +106,7 @@ pub var undo_available: bool = false;
 /// NOT thread-safe on its own: the `g_vmm_handles[idx]` check-then-create is a
 /// data race if two threads run it concurrently (double `createHandle`, leaked
 /// handle, torn slot read). The caller MUST hold `vms_mutex` for the duration of
-/// the call and any use of the returned handle. Do not add an internal lock —
+/// the call and any use of the returned handle. Do not add an internal lock:
 /// `vms_mutex` is a non-reentrant SpinMutex the callers already hold, so locking
 /// here would deadlock.
 pub fn getVmmHandle(idx: usize) ?hv_iface.VmmHandle {
@@ -121,7 +121,7 @@ pub fn getVmmHandle(idx: usize) ?hv_iface.VmmHandle {
 /// Requires g_vmm to be initialized (g_vmm_ready == true).
 /// Caller MUST hold `vms_mutex`: it mutates the shared `g_vmm_handles` slot,
 /// which is read/written concurrently by request handlers and the background
-/// tickers. (Non-reentrant — never call while already holding a different lock
+/// tickers. (Non-reentrant, never call while already holding a different lock
 /// that the freed backend might re-acquire.)
 pub fn destroyVmmHandle(idx: usize) void {
     std.debug.assert(g_vmm_ready);
@@ -281,7 +281,7 @@ test "appstate: destroyVmmHandle null handle no-ops" {
         g_vmm_ready = old_ready;
     }
     g_vmm_ready = true;
-    // g_vmm_handles[0] is null by default — should not crash.
+    // g_vmm_handles[0] is null by default: should not crash.
     destroyVmmHandle(0);
     // A no-op on a null slot must leave the slot null (no spurious handle).
     try std.testing.expectEqual(@as(?hv_iface.VmmHandle, null), g_vmm_handles[0]);

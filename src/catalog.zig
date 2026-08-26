@@ -1,6 +1,6 @@
 //! Built-in VM quickstart catalog: the template table plus the `/api/catalog`
 //! and `/api/capabilities` JSON renderers. Pure (depends only on `vm.zig` +
-//! std) — the quickstart handler in web_server.zig looks up a template here and
+//! std), the quickstart handler in web_server.zig looks up a template here and
 //! does the (stateful) VM creation itself.
 
 const std = @import("std");
@@ -26,16 +26,16 @@ const BIOS = @as(usize, 0);
 const UEFI = @as(usize, 1);
 
 pub const entries: [10]CatalogEntry = .{
-    .{ .id = "ubuntu2404", .name = "Ubuntu 24.04 LTS", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 40, .firmware = UEFI, .description = "Ubuntu 24.04 Noble Numbat — latest LTS" },
-    .{ .id = "debian12", .name = "Debian 12", .guest_os = LINUX, .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .firmware = UEFI, .description = "Debian 12 Bookworm — rock-stable" },
+    .{ .id = "ubuntu2404", .name = "Ubuntu 24.04 LTS", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 40, .firmware = UEFI, .description = "Ubuntu 24.04 Noble Numbat, latest LTS" },
+    .{ .id = "debian12", .name = "Debian 12", .guest_os = LINUX, .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .firmware = UEFI, .description = "Debian 12 Bookworm, rock-stable" },
     .{ .id = "fedora40", .name = "Fedora 40", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 30, .firmware = UEFI, .description = "Fedora 40 Workstation" },
-    .{ .id = "rocky9", .name = "Rocky Linux 9", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 40, .firmware = UEFI, .description = "Rocky Linux 9 — RHEL-compatible server" },
-    .{ .id = "archlinux", .name = "Arch Linux", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 30, .firmware = UEFI, .description = "Arch Linux — rolling release" },
-    .{ .id = "alpine320", .name = "Alpine 3.20", .guest_os = LINUX, .memory_mb = 1024, .cpu_cores = 2, .disk_size_gb = 8, .firmware = BIOS, .description = "Alpine Linux 3.20 — minimal, container-friendly" },
-    .{ .id = "win11", .name = "Windows 11", .guest_os = WINDOWS, .memory_mb = 8192, .cpu_cores = 4, .disk_size_gb = 80, .firmware = UEFI, .description = "Windows 11 — UEFI (enable TPM + Secure Boot in Settings)" },
-    .{ .id = "win2022", .name = "Windows Server 2022", .guest_os = WINDOWS, .memory_mb = 8192, .cpu_cores = 4, .disk_size_gb = 80, .firmware = UEFI, .description = "Windows Server 2022 — datacenter workloads" },
-    .{ .id = "freebsd14", .name = "FreeBSD 14", .guest_os = FREEBSD, .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .firmware = UEFI, .description = "FreeBSD 14 — BSD server/router" },
-    .{ .id = "openbsd75", .name = "OpenBSD 7.5", .guest_os = FREEBSD, .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .firmware = BIOS, .description = "OpenBSD 7.5 — security-focused BSD" },
+    .{ .id = "rocky9", .name = "Rocky Linux 9", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 40, .firmware = UEFI, .description = "Rocky Linux 9, RHEL-compatible server" },
+    .{ .id = "archlinux", .name = "Arch Linux", .guest_os = LINUX, .memory_mb = 4096, .cpu_cores = 4, .disk_size_gb = 30, .firmware = UEFI, .description = "Arch Linux, rolling release" },
+    .{ .id = "alpine320", .name = "Alpine 3.20", .guest_os = LINUX, .memory_mb = 1024, .cpu_cores = 2, .disk_size_gb = 8, .firmware = BIOS, .description = "Alpine Linux 3.20, minimal, container-friendly" },
+    .{ .id = "win11", .name = "Windows 11", .guest_os = WINDOWS, .memory_mb = 8192, .cpu_cores = 4, .disk_size_gb = 80, .firmware = UEFI, .description = "Windows 11, UEFI (enable TPM + Secure Boot in Settings)" },
+    .{ .id = "win2022", .name = "Windows Server 2022", .guest_os = WINDOWS, .memory_mb = 8192, .cpu_cores = 4, .disk_size_gb = 80, .firmware = UEFI, .description = "Windows Server 2022, datacenter workloads" },
+    .{ .id = "freebsd14", .name = "FreeBSD 14", .guest_os = FREEBSD, .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .firmware = UEFI, .description = "FreeBSD 14, BSD server/router" },
+    .{ .id = "openbsd75", .name = "OpenBSD 7.5", .guest_os = FREEBSD, .memory_mb = 2048, .cpu_cores = 2, .disk_size_gb = 20, .firmware = BIOS, .description = "OpenBSD 7.5, security-focused BSD" },
 };
 
 /// The catalog entry whose id equals `slug`, or null.

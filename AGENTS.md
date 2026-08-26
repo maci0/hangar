@@ -1,4 +1,4 @@
-# AGENTS.md — Hangar
+# AGENTS.md: Hangar
 
 Lightweight QEMU VM manager with web UI and optional native WebView wrapper.
 Zig 0.16.0. No libvirt.
@@ -9,7 +9,7 @@ Zig 0.16.0. No libvirt.
 zig build web          # Build + launch web backend (HTTP on :9080; also the remote daemon)
 zig build webui        # Build + launch native WebView desktop wrapper
 zig build test         # Run ALL unit + fuzz tests (hermetic; no network/browser)
-zig build web-e2e      # Web UI end-to-end tests (Playwright; needs npm install + chromium)
+zig build web-e2e      # Web UI end-to-end tests (Playwright; needs bun install + chromium)
 zig build test-api     # HTTP API integration test (spawns a real daemon)
 zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 ```
@@ -20,7 +20,7 @@ code and scratch trees are excluded):
 ```bash
 zig build fmt-check    # zig fmt --check over tracked *.zig/*.zon
 zig build lint-shell   # shellcheck over tracked *.sh
-zig build lint-js      # node --check over hand-written JS (vendored src/web bundles excluded)
+zig build lint-js      # bun build over hand-written JS (vendored src/web bundles excluded)
 ```
 
 All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`.
@@ -47,9 +47,9 @@ Tests and the three shipped executables must use `use_llvm = true, use_lld = tru
 ### Zig 0.16 `std.Io` migration
 Filesystem, process, networking, and threading go through `std.Io`. Never use the removed/emptied APIs:
 
-- FS: `std.Io.Dir.cwd().<op>(appio.io(), ...)` — never `std.fs.cwd()`.
-- Unix sockets: `usock.UnixStream` (libc-backed) — `std.net` is gone.
-- Mutex: `sync.SpinMutex` — `std.Thread.Mutex` is gone.
+- FS: `std.Io.Dir.cwd().<op>(appio.io(), ...)`, never `std.fs.cwd()`.
+- Unix sockets: `usock.UnixStream` (libc-backed), `std.net` is gone.
+- Mutex: `sync.SpinMutex`, `std.Thread.Mutex` is gone.
 - Env / sleep / clock: `appio.getenv`, `appio.sleepMs`, `std.c.clock_gettime`.
 - Process spawn for QEMU: `qemu.forkExec` / `qemu.runWait` (manual `fork` + `execvp`). These preserve the real environment (`DISPLAY`, `HOME`, `XDG_RUNTIME_DIR`, ...). Never `std.process.spawn`.
 
@@ -65,7 +65,7 @@ Zig 0.16's C importer rejects GLib headers (they emit file-scope `_Pragma`). No 
   - HTTP plumbing (leaf): `httpreq.zig` (request-line/header/route parsers), `httpresp.zig` (status codes + response writer + `isServerErrToken`/`sanitizeHeaderValue`), `wlog.zig` (structured logging), `netutil.zig` (socket constants + `setTcpNoDelay`), `auth.zig` (API-key check, exempt list, host/WS gates).
   - Handler groups: `snapshots.zig`, `migrate.zig`, `disk.zig` (info/compact/resize), `cdrom.zig`, `guestagent.zig`, `streams.zig` (conn-streaming: screenshot/download/upload/exportOva), `wsproxy.zig` (VNC/SPICE/serial relays), `catalog.zig`, `framebuffer.zig`.
   - The uniform `POST /api/vms/<id>/<action>` routes dispatch through a comptime `post_routes` table in `web_server.zig`; create/save form fields apply through `@field`-driven tables (`applyBoolField`/`applyEnumField`/`applyStrField`). Add a new uniform POST route or boolean/enum/string field by extending the table, not by copy-pasting an arm.
-- Hypervisor abstraction: the `g_vmm.*Fn` dispatch table (`hv/interface.zig` + `hv/qemu_backend.zig`) covers PROCESS lifecycle only — `start`, `forceStop`, `isAlive`, `reap`, `createLinkedClone`, `deinit`. Guest control (pause/resume/shutdown/reset/cdrom/migrate/screenshot) goes directly to QMP via `web_server.vmQmpByName` (fresh connection, lock released); offline disk/snapshot ops call `qemu.*`/`qemu-img` directly. Extend the dispatch interface only when a real second backend needs more.
+- Hypervisor abstraction: the `g_vmm.*Fn` dispatch table (`hv/interface.zig` + `hv/qemu_backend.zig`) covers PROCESS lifecycle only: `start`, `forceStop`, `isAlive`, `reap`, `createLinkedClone`, `deinit`. Guest control (pause/resume/shutdown/reset/cdrom/migrate/screenshot) goes directly to QMP via `web_server.vmQmpByName` (fresh connection, lock released); offline disk/snapshot ops call `qemu.*`/`qemu-img` directly. Extend the dispatch interface only when a real second backend needs more.
 
 ## Configuration (environment variables)
 
@@ -73,7 +73,7 @@ Runtime config is read once in `web_server.main`. All variables are optional.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `KV_API_KEY` | `hangar` (built-in) | X-API-Key secret. **Setting it also opts the daemon into binding all interfaces (`::`).** With no key set, the daemon binds **loopback only** (`::ffff:127.0.0.1`, the IPv4-mapped loopback on its dual-stack socket) so the weak default is never reachable off-host. Must be 1–64 printable-ASCII bytes (no spaces or control characters); an invalid value aborts startup. Setting it to the built-in default value (`hangar`) is treated as unset — the daemon stays loopback-only rather than exposing all interfaces behind the known default. |
+| `KV_API_KEY` | `hangar` (built-in) | X-API-Key secret. **Setting it also opts the daemon into binding all interfaces (`::`).** With no key set, the daemon binds **loopback only** (`::ffff:127.0.0.1`, the IPv4-mapped loopback on its dual-stack socket) so the weak default is never reachable off-host. Must be 1–64 printable-ASCII bytes (no spaces or control characters); an invalid value aborts startup. Setting it to the built-in default value (`hangar`) is treated as unset, the daemon stays loopback-only rather than exposing all interfaces behind the known default. |
 | `KV_PORT` | `9080` | TCP listen port. Must parse as a non-zero `u16`; otherwise startup aborts. |
 | `HANGAR_CONFIG_HOME` | `$HOME` | Base dir for `~/.config/hangar/*` state (see Persistence). |
 
@@ -91,10 +91,10 @@ Never commit a real `KV_API_KEY`. For any non-local deployment, set a strong `KV
 - Tests live at the bottom of each module's `.zig` (not in separate files), except for thin wrappers (`appstate_test.zig`, `hv_*_test.zig`).
 - Fuzz tests are deterministic PRNG harnesses (fixed seed) and are ordinary `zig build test` entries. They cover parsers, setters, arg builders, and pure helpers.
 - Every enum must have tests for: fromIndex round-trip, toIndex inverts fromIndex, toStr values, label values, out-of-range default.
-- `qemu.zig` arg-builder tests must use the `buildScriptStr` / `buildArgs` functions — never by spawning QEMU.
-- **Always confirm a change with `zig build` (the exe link), not only `zig test src/<mod>.zig`.** A single-module `zig test` may not instantiate code reachable solely through the exe (e.g. a handler called only via `std.Thread.spawn(serveHtml, …)`), so a generic/comptime error there can pass the module test yet fail the exe build. If `zig build` ever reports success but a known-new string is missing from `zig-out/bin/hangar-web` (`strings … | grep`), the install cache is stale — `rm -rf zig-out .zig-cache` and rebuild before trusting the binary.
-- The Playwright e2e suite (`tests/e2e/`, config `playwright.config.mjs`) is a **standalone** `zig build web-e2e` step — NOT in the umbrella `test` (which stays hermetic). Playwright launches the built binary on a dedicated port against a temp `$HOME`. Run `npm install` and `npm run e2e:install` (Chromium) once before the first run. The shell integration tests `zig build test-api` / `zig build test-vmrun` are likewise standalone (they spawn a real daemon).
-- **Every user-facing workflow must have an end-to-end Playwright test.** Any web-UI flow — VM create/clone/delete/rename, power on/off, snapshots, settings save, import/export, log viewer, console, vnet editor, preferences — needs a Playwright e2e test that drives the real built binary (temp port + temp `$HOME`, same as the smoke harness) and asserts the observable result. Add or extend the e2e test alongside the feature, never after. A new workflow without a Playwright e2e test is incomplete.
+- `qemu.zig` arg-builder tests must use the `buildScriptStr` / `buildArgs` functions, never by spawning QEMU.
+- **Always confirm a change with `zig build` (the exe link), not only `zig test src/<mod>.zig`.** A single-module `zig test` may not instantiate code reachable solely through the exe (e.g. a handler called only via `std.Thread.spawn(serveHtml, …)`), so a generic/comptime error there can pass the module test yet fail the exe build. If `zig build` ever reports success but a known-new string is missing from `zig-out/bin/hangar-web` (`strings … | grep`), the install cache is stale: `rm -rf zig-out .zig-cache` and rebuild before trusting the binary.
+- The Playwright e2e suite (`tests/e2e/`, config `playwright.config.mjs`) is a **standalone** `zig build web-e2e` step, NOT in the umbrella `test` (which stays hermetic). Playwright launches the built binary on a dedicated port against a temp `$HOME`. Run `bun install` and `bun run e2e:install` (Chromium) once before the first run. The shell integration tests `zig build test-api` / `zig build test-vmrun` are likewise standalone (they spawn a real daemon).
+- **Every user-facing workflow must have an end-to-end Playwright test.** Any web-UI flow (VM create/clone/delete/rename, power on/off, snapshots, settings save, import/export, log viewer, console, vnet editor, preferences) needs a Playwright e2e test that drives the real built binary (temp port + temp `$HOME`, same as the smoke harness) and asserts the observable result. Add or extend the e2e test alongside the feature, never after. A new workflow without a Playwright e2e test is incomplete.
 
 ## Code Style & Conventions
 
@@ -110,7 +110,7 @@ Never commit a real `KV_API_KEY`. For any non-local deployment, set a strong `KV
 
 ## Zig Idioms & Rules
 
-Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, `std.posix`, or `std.Thread` APIs — see the `std.Io` migration constraint above for the required replacements.
+Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, `std.posix`, or `std.Thread` APIs. See the `std.Io` migration constraint above for the required replacements.
 
 ### Builtins & comptime
 - Reach for builtins/comptime where natural: `@typeInfo`, `@TypeOf`, `@intCast`, `@enumFromInt`, `@intFromEnum`, `@memcpy`, `@memset`, `@atomicLoad`, `@atomicStore`.
@@ -149,7 +149,7 @@ Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, 
 - Do not hold locks during QEMU/QMP/filesystem/network I/O.
 
 ### build.zig
-- Keep link/backend choices explicit (`use_llvm`/`use_lld` — see constraint above).
+- Keep link/backend choices explicit (`use_llvm`/`use_lld`, see constraint above).
 - Avoid global-machine assumptions; prefer project-local cache/config for reproducible test runs.
 
 ## References
@@ -239,14 +239,14 @@ When the user requests a durable behavior change, record it here or in the relev
 
 ## Child DOX Index
 
-- [src/AGENTS.md](src/AGENTS.md) — Zig core: VM model, persistence, QEMU/QMP, HTTP server +
+- [src/AGENTS.md](src/AGENTS.md): Zig core: VM model, persistence, QEMU/QMP, HTTP server +
   remote daemon, leaf utils, the module map and source-local contracts. Children:
-  - [src/hv/AGENTS.md](src/hv/AGENTS.md) — hypervisor process-lifecycle dispatch table.
-  - [src/web/AGENTS.md](src/web/AGENTS.md) — embedded vanilla-JS web UI + vendored libs.
-- [tests/AGENTS.md](tests/AGENTS.md) — standalone integration/e2e suites (Playwright,
+  - [src/hv/AGENTS.md](src/hv/AGENTS.md): hypervisor process-lifecycle dispatch table.
+  - [src/web/AGENTS.md](src/web/AGENTS.md): embedded vanilla-JS web UI + vendored libs.
+- [tests/AGENTS.md](tests/AGENTS.md): standalone integration/e2e suites (Playwright,
   shell API/vmrun) that drive the built binary; distinct from the in-module unit/fuzz tests.
 
-Owned by the parent (no child doc): `docs/` (design notes — DESIGN/PRD/GAP-ANALYSIS/
+Owned by the parent (no child doc): `docs/` (design notes, DESIGN/PRD/GAP-ANALYSIS/
 TEST-COVERAGE/WEB-UI-CUJS/TODO/VIDEO-PIPELINE; reference material, not contracts), `reference/`
-(read-only external material: VMware WS7), `zig-pkg/` (vendored Zig deps — do not edit),
+(read-only external material: VMware WS7), `zig-pkg/` (vendored Zig deps, do not edit),
 and the root build files (`build.zig`, `build.zig.zon`, `package.json`, `playwright.config.mjs`).

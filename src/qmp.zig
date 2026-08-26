@@ -23,6 +23,7 @@
 const std = @import("std");
 const vm = @import("vm.zig");
 const usock = @import("usock.zig");
+const wlog = @import("wlog.zig");
 const appio = @import("appio.zig");
 
 /// Maximum line length for a QMP JSON message.
@@ -37,7 +38,7 @@ const QMP_IO_TIMEOUT_MS = 10_000;
 /// The VM name is used directly as a filesystem-path key, so it must be
 /// path-safe. The web input boundary enforces this (`vm.isValidVmName`), but
 /// names loaded from `vms.json` or supplied by the remote daemon do not pass
-/// through that check — enforce the invariant here so a name containing a path
+/// through that check: enforce the invariant here so a name containing a path
 /// separator or NUL can never escape the `/tmp` socket namespace.
 ///
 /// Returns `null` if the name is not path-safe or is too long to fit.
@@ -72,7 +73,7 @@ pub const QmpClient = struct {
     line_buf: [MAX_LINE]u8 = undefined,
 
     /// Socket read buffer. readLine pulls bytes from here, refilling with a
-    /// single read() per buffer rather than one syscall per byte — QMP
+    /// single read() per buffer rather than one syscall per byte, QMP
     /// responses (query-block, snapshot lists) run to many KB.
     rbuf: [MAX_LINE]u8 = undefined,
     rbuf_pos: usize = 0,
@@ -105,7 +106,7 @@ pub const QmpClient = struct {
             return error.HandshakeFailed;
         };
 
-        // Read response — skip any async events
+        // Read response: skip any async events
         const resp = self.readResponse() catch {
             self.closeStream();
             return error.HandshakeFailed;
@@ -119,7 +120,7 @@ pub const QmpClient = struct {
         self.connected = true;
     }
 
-    /// Raw socket fd — used by dbusdisplay to sendmsg(SCM_RIGHTS) a file
+    /// Raw socket fd: used by dbusdisplay to sendmsg(SCM_RIGHTS) a file
     /// descriptor alongside the QMP `getfd` command.
     pub fn rawFd(self: *QmpClient) ?std.c.fd_t {
         const s = self.stream orelse return null;
@@ -195,25 +196,26 @@ pub const QmpClient = struct {
             {
                 // QEMU replies to a failed command with
                 // {"error":{"class":"...","desc":"..."}}. Callers collapse this
-                // to a generic error.CommandFailed, discarding QEMU's reason —
+                // to a generic error.CommandFailed, discarding QEMU's reason,
                 // log the raw error reply here (the single response funnel) so an
                 // operator can tell *why* a power/snapshot/migrate op failed.
                 if (std.mem.indexOf(u8, line, "\"error\"") != null) logErrorReply(line);
                 return line;
             }
-            // Otherwise it's an async event — skip and read again.
+            // Otherwise it's an async event: skip and read again.
         }
         return error.CommandFailed;
     }
 
-    /// Best-effort: write a QMP error reply to stderr (truncated). Used to
-    /// preserve QEMU's failure reason that callers otherwise drop.
+    /// Best-effort: log a QMP error reply (truncated). Used to preserve QEMU's
+    /// failure reason that callers otherwise drop. The reply crosses a trust
+    /// boundary (QEMU echoes guest/config-derived text), so it is sanitized
+    /// before it reaches a log line.
     fn logErrorReply(line: []const u8) void {
-        var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "qmp: command failed: {s}\n", .{
-            line[0..@min(line.len, 400)],
-        }) catch "qmp: command failed\n";
-        _ = std.c.write(2, msg.ptr, msg.len);
+        var safe_buf: [400]u8 = undefined;
+        const safe = wlog.sanitizeLogText(&safe_buf, line[0..@min(line.len, safe_buf.len)]);
+        var buf: [448]u8 = undefined;
+        wlog.logErr(std.fmt.bufPrint(&buf, "qmp: command failed: {s}", .{safe}) catch "qmp: command failed");
     }
 
     /// Write all bytes to the socket, looping on partial writes.
@@ -270,7 +272,7 @@ pub const QmpClient = struct {
     /// Terminate the QEMU process cleanly.
     ///
     /// Unlike other commands, `quit` may close the socket before we
-    /// can read the response — this is expected, so we swallow errors
+    /// can read the response, this is expected, so we swallow errors
     /// and mark ourselves disconnected either way.
     pub fn quit(self: *QmpClient) !void {
         self.execSimple("quit") catch {
@@ -285,7 +287,7 @@ pub const QmpClient = struct {
     pub fn suspendToFile(self: *QmpClient, path: []const u8) !void {
         var hmp_buf: [vm.MAX_PATH + 128]u8 = undefined;
         // The `exec:` migration target is run through `/bin/sh -c`, so quote
-        // escaping alone is insufficient — backticks, `$()`, `;`, `|`, `&` and
+        // escaping alone is insufficient: backticks, `$()`, `;`, `|`, `&` and
         // friends would still be interpreted. Reject any path containing shell
         // metacharacters before it reaches the shell.
         if (!isShellSafePath(path)) return error.UnsafeStatePath;
@@ -557,7 +559,7 @@ fn parseUnicodeEscape(json: []const u8, i: *usize) !u21 {
 
     // Handle UTF-16 surrogate pairs: high surrogate followed by \u + low.
     // A lone surrogate (high without a valid low, or a bare low) is not a valid
-    // Unicode scalar and would encode to invalid UTF-8 (WTF-8) — reject it so we
+    // Unicode scalar and would encode to invalid UTF-8 (WTF-8), reject it so we
     // never emit a malformed byte sequence into status/error strings.
     if (cp >= 0xD800 and cp <= 0xDBFF) {
         if (i.* + 5 >= json.len or json[i.*] != '\\' or json[i.* + 1] != 'u')
@@ -591,7 +593,7 @@ pub fn extractJsonString(json: []const u8, key: []const u8, out: []u8) ![]const 
     const needle = std.fmt.bufPrint(&needle_buf, "\"{s}\"", .{key}) catch
         return error.BufferTooSmall;
 
-    // Find `"key"` used as an object key — an occurrence followed (after
+    // Find `"key"` used as an object key, an occurrence followed (after
     // optional whitespace) by ':'. A bare `indexOf` would also match the needle
     // inside a string *value* (e.g. an error reply whose "desc" mentions the
     // queried key), returning the wrong field or a spurious failure. Skip such
@@ -619,7 +621,7 @@ pub fn extractJsonString(json: []const u8, key: []const u8, out: []u8) ![]const 
         if (json[i] == '"') {
             return out[0..out_len];
         }
-        // Output buffer full but string continues — fail rather than truncate.
+        // Output buffer full but string continues, fail rather than truncate.
         if (out_len >= out.len) {
             return error.BufferTooSmall;
         }
@@ -769,7 +771,7 @@ test "extractJsonString: unknown escape passes through literal" {
 
 test "extractJsonString: lone surrogate rejected (no invalid UTF-8)" {
     var out: [64]u8 = undefined;
-    // Lone high surrogate — must fail rather than emit WTF-8 (ED A0 80).
+    // Lone high surrogate: must fail rather than emit WTF-8 (ED A0 80).
     try std.testing.expectError(error.CommandFailed, extractJsonString(
         \\{"msg": "\uD800"}
     , "msg", &out));
@@ -896,8 +898,8 @@ test "fuzz: extractJsonString never crashes or overflows" {
 // Structure-aware fuzz: the random-byte fuzzer above essentially never forms a
 // well-shaped `"k":"...\uXXXX..."` value, so the `\u` decoder (parseUnicodeEscape),
 // its UTF-16 surrogate-pair handling, and the multi-byte UTF-8 encoder (encodeUtf8)
-// stay unexercised. Build valid-shaped JSON carrying random `\uXXXX` escapes —
-// including high/low surrogate combinations, both valid and broken — and assert
+// stay unexercised. Build valid-shaped JSON carrying random `\uXXXX` escapes,
+// including high/low surrogate combinations, both valid and broken, and assert
 // the decoder never panics, never overflows `out`, and only ever emits valid UTF-8.
 test "fuzz: extractJsonString unicode-escape decoding stays valid and bounded" {
     var prng = std.Random.DefaultPrng.init(0xCAFE_F00D);
@@ -923,7 +925,7 @@ test "fuzz: extractJsonString unicode-escape decoding stays valid and bounded" {
                     const lo: u16 = 0xDC00 + rnd.uintLessThan(u16, 0x400);
                     n += (std.fmt.bufPrint(json[n..], "\\u{x:0>4}\\u{x:0>4}", .{ hi, lo }) catch break).len;
                 },
-                // A lone high surrogate (the decoder must reject — no broken UTF-8).
+                // A lone high surrogate (the decoder must reject, no broken UTF-8).
                 1 => {
                     const hi: u16 = 0xD800 + rnd.uintLessThan(u16, 0x400);
                     n += (std.fmt.bufPrint(json[n..], "\\u{x:0>4}", .{hi}) catch break).len;
@@ -948,7 +950,7 @@ test "fuzz: extractJsonString unicode-escape decoding stays valid and bounded" {
                 },
                 // A plain literal ASCII byte mixed in with the escapes. Kept to
                 // printable ASCII (minus quote/backslash) so the only non-ASCII
-                // bytes in a successful result come from the `\u` decoder — that
+                // bytes in a successful result come from the `\u` decoder, that
                 // lets us assert UTF-8 validity below (literal bytes are copied
                 // through verbatim and are not otherwise validated).
                 else => {
@@ -992,7 +994,7 @@ test "fuzz: socketPath never crashes" {
 
 // ── Fuzz: QMP client against a malformed/garbage server ──────────────
 // QmpClient I/O methods (connect/readLine/readResponse/execSimple/execHmp and
-// every command wrapper) can't run without a peer — so we bind a real AF_UNIX
+// every command wrapper) can't run without a peer, so we bind a real AF_UNIX
 // listener and a server thread that replies with random bytes (sometimes with
 // newlines / "return" / oversized no-newline lines). The client must never
 // crash, overflow line_buf, or hang. readLine is byte-bounded and readResponse
@@ -1010,7 +1012,7 @@ fn qmpFuzzServer(listen_fd: c_qmp.fd_t, seed: u64) void {
     var blob: [MAX_LINE]u8 = undefined;
 
     // Every reply is ONE newline-terminated line that always contains the
-    // "return"/"error" token readResponse scans for — otherwise readResponse
+    // "return"/"error" token readResponse scans for: otherwise readResponse
     // would call readLine again and block (the client and this single-blob
     // server would deadlock). The random bytes BETWEEN the markers are what
     // actually fuzzes extractJsonString / the per-method response parsing. The
@@ -1020,7 +1022,7 @@ fn qmpFuzzServer(listen_fd: c_qmp.fd_t, seed: u64) void {
         fn go(fd: c_qmp.fd_t, r: std.Random, b: []u8) void {
             const tok = if (r.boolean()) "{\"return\":" else "{\"error\":";
             @memcpy(b[0..tok.len], tok);
-            // Random middle (no newline byte — keep it on one line).
+            // Random middle (no newline byte, keep it on one line).
             const mid_max = b.len - tok.len - 2; // room for "}\n"
             const mid = r.uintLessThan(usize, mid_max);
             for (b[tok.len..][0..mid]) |*x| {
@@ -1115,7 +1117,7 @@ test "readLine: splits multiple lines delivered in a single read" {
     var client = QmpClient{ .stream = usock.UnixStream{ .fd = fds[1] }, .connected = true };
     defer client.disconnect();
 
-    // Three lines (one with a trailing \r) in a single write — the buffered
+    // Three lines (one with a trailing \r) in a single write, the buffered
     // reader must hand them back one at a time without extra syscalls.
     const blob = "first\r\nsecond\nthird\n";
     try std.testing.expectEqual(@as(isize, @intCast(blob.len)), c_qmp.write(fds[0], blob.ptr, blob.len));

@@ -6,11 +6,11 @@
 //! (preventing zombie accumulation), and create disk images via `qemu-img`.
 //!
 //! Process lifecycle:
-//!   1. `startVm`      — spawn QEMU, store PID, mark running
-//!   2. `stopVm`       — send SIGTERM (does NOT update state)
-//!   3. `forceStopVm`  — send SIGKILL (does NOT update state)
-//!   4. `isVmAlive`    — non-blocking `waitpid`; reaps zombie + updates state
-//!   5. `reapVm`       — blocking `waitpid`; for synchronous cleanup (e.g. delete)
+//!   1. `startVm`: spawn QEMU, store PID, mark running
+//!   2. `stopVm`: send SIGTERM (does NOT update state)
+//!   3. `forceStopVm`: send SIGKILL (does NOT update state)
+//!   4. `isVmAlive`: non-blocking `waitpid`; reaps zombie + updates state
+//!   5. `reapVm`: blocking `waitpid`; for synchronous cleanup (e.g. delete)
 //!
 //! All buffer-formatted arguments are kept in function-scoped storage so
 //! that their slices remain valid through the `forkExec` call.
@@ -24,7 +24,7 @@ const wlog = @import("wlog.zig");
 /// libc PATH-searching exec. `std.process` in 0.16 routes spawning through the
 /// `std.Io` interface, which would hand the child an empty environment unless
 /// we capture and forward the parent environ. A direct `fork`+`execvp` instead
-/// inherits the full parent environment (DISPLAY, XDG_RUNTIME_DIR, HOME — all
+/// inherits the full parent environment (DISPLAY, XDG_RUNTIME_DIR, HOME, all
 /// required by QEMU's GTK display) and resolves the binary via PATH for free.
 extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
 
@@ -91,7 +91,7 @@ pub fn parseJsonU64(text: []const u8, key: []const u8) ?u64 {
 /// Like parseJsonU64 but only matches the key at object-nesting depth 1 (the
 /// top level of the document). `qemu-img info --output=json` nests a
 /// "children" array whose file node carries its own "virtual-size" (the size
-/// of the qcow2 FILE, not the guest disk) BEFORE the top-level keys —
+/// of the qcow2 FILE, not the guest disk) BEFORE the top-level keys,
 /// first-match parsing read that and the summary showed a 20 GB disk as
 /// "192.5 KiB". Strings are skipped so braces inside values can't skew depth.
 pub fn parseTopLevelU64(text: []const u8, key: []const u8) ?u64 {
@@ -307,7 +307,7 @@ fn forkExec(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[
 /// locations, so we probe each at runtime. CRITICAL: every entry must be a
 /// monolithic CODE+VARS image. Split CODE-only images (e.g.
 /// /usr/share/OVMF/OVMF_CODE.fd, which on modern distros is a 4 MB pflash CODE
-/// half) make `-bios` fail with "could not load PC BIOS" — those belong only in
+/// half) make `-bios` fail with "could not load PC BIOS", those belong only in
 /// the split-pflash path, never here.
 const ovmf_search_paths = [_][]const u8{
     "/usr/share/edk2/x64/OVMF.fd",
@@ -366,7 +366,7 @@ fn findOvmfPath() ?[]const u8 {
 }
 
 /// Locate a Secure Boot-enforcing OVMF CODE image. Null if none installed (the
-/// caller then falls back to plain OVMF — SB won't enforce, but the VM boots).
+/// caller then falls back to plain OVMF, SB won't enforce, but the VM boots).
 fn findSecbootCode() ?[]const u8 {
     return findFirstExisting(&ovmf_secboot_code_paths);
 }
@@ -467,7 +467,7 @@ fn findVirtioWinIsoInto(dest: []u8) ?[]const u8 {
             return dest[0..len];
         } else |_| {}
     }
-    // Static buffer for the $HOME/Downloads path — guarded by SpinMutex
+    // Static buffer for the $HOME/Downloads path, guarded by SpinMutex
     // because buildArgs can be called from concurrent web_server handlers.
     {
         _ = virtio_mutex.lock();
@@ -603,14 +603,14 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     // The VM name is interpolated into the comma-separated chardev property lists
     // for -serial / -qmp / -chardev (and their socket paths). A name containing a
     // comma or slash would inject extra QEMU properties or escape the socket
-    // directory — and names loaded from vms.json or the remote daemon bypass the
+    // directory, and names loaded from vms.json or the remote daemon bypass the
     // web layer's isValidVmName check. Reject an unsafe name at the sink (same
     // posture as the disk-path guards below) so a hostile config cannot produce a
     // dangerous launch.
     if (config.hasName() and !vm.isValidVmName(config.getNameSlice())) return error.UnsafeVmName;
 
     // QEMU's `accel=` takes a concrete accelerator (kvm/tcg/hvf/whpx) or a
-    // colon-separated fallback list — NOT the literal "auto" (which QEMU rejects
+    // colon-separated fallback list, NOT the literal "auto" (which QEMU rejects
     // with "invalid accelerator auto", so the VM exits immediately on launch).
     // Map our stored `.auto` to "kvm:tcg" (use KVM if available, else TCG).
     const accel_cli: []const u8 = if (config.accel == .auto) "kvm:tcg" else std.mem.span(config.accel.toStr());
@@ -635,7 +635,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     const effective_sockets = std.math.clamp(config.cpu_sockets, 1, 1024);
     const effective_mem = if (config.memory_mb == 0) 64 else config.memory_mb;
 
-    // -smp total,sockets=S,cores=C — QEMU derives topology; total = S*C.
+    // -smp total,sockets=S,cores=C: QEMU derives topology; total = S*C.
     const smp_str = try std.fmt.bufPrint(&bufs.smp_buf, "{d},sockets={d},cores={d}", .{ effective_sockets * effective_cores, effective_sockets, effective_cores });
     try args.append(alloc, "-smp");
     try args.append(alloc, smp_str);
@@ -647,10 +647,10 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     if (config.hasDisk()) {
         // The disk path is interpolated into a comma-separated -drive property
         // list, so a comma (or NUL/newline) in it would inject extra drive
-        // options (argument injection, CWE-88) — reject such paths, matching the
+        // options (argument injection, CWE-88): reject such paths, matching the
         // floppy/ISO/shared-folder guards below.
         if (!isSafeQemuPropValue(config.getDiskPathSlice())) return error.UnsafeDiskPath;
-        // Throttle options are part of the SAME -drive that defines the disk —
+        // Throttle options are part of the SAME -drive that defines the disk,
         // a standalone `-drive throttling.*` with no file= makes QEMU reject
         // the command line ("Device needs media, but drive is empty").
         // With io_threads, use the split blockdev form so the disk can bind to
@@ -727,7 +727,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
 
     // cloud-init NoCloud seed: attach the generated CIDATA ISO read-only so a
     // cloud-init guest auto-configures on first boot. Only attach if the seed was
-    // actually built (startVm runs generateCloudInitSeed best-effort first) —
+    // actually built (startVm runs generateCloudInitSeed best-effort first),
     // referencing a missing file would make QEMU refuse to start.
     if (config.hasCloudInit() and config.hasName()) {
         var seed_buf: [vm.MAX_NAME + 32]u8 = undefined;
@@ -743,7 +743,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     // Use an explicit ide-cd device with a stable id ("ide2-cd0") so that
     // QMP `change ide2-cd0` can hot-swap the ISO without rebooting. As with the
     // floppy, an ISO path carrying a comma could inject `-drive` options (e.g.
-    // flipping `readonly=on`), so an unsafe path is treated as "no ISO" — the
+    // flipping `readonly=on`), so an unsafe path is treated as "no ISO", the
     // empty drive is still emitted so the ide-cd device has a backing slot.
     try args.append(alloc, "-device");
     try args.append(alloc, "ide-cd,drive=cdrom0,id=ide2-cd0");
@@ -784,13 +784,13 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     // rendered scanout and streams ordinary frames to the browser. Never pass
     // gl=on to -spice for this path: dmabuf GL is for LOCAL native clients
     // only, and remote spice GL requires video encoders (GStreamer) that
-    // distro spice-server builds often lack — qemu then dies at startup with
+    // distro spice-server builds often lack: qemu then dies at startup with
     // "invalid video codec".
     const embedded_gl = config.embed_display and wants_virgl;
     // Experimental scanout capture (docs/VIDEO-PIPELINE.md): the dbus display
     // replaces "none" for non-virgl embedded VMs and coexists with -vnc/-spice.
     // It cannot replace egl-headless yet: dbus,gl=on owns the GL context and
-    // is incompatible with -vnc (verified) — virgl capture is a later phase.
+    // is incompatible with -vnc (verified): virgl capture is a later phase.
     const embedded_dbus = config.embed_display and config.video_stream and !wants_virgl;
 
     if (config.embed_display) {
@@ -833,7 +833,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     }
 
     // GPU device selection. Multi-monitor is done with max_outputs=N on the
-    // SINGLE GPU device (so the guest sees one GPU with N scanouts) — not by
+    // SINGLE GPU device (so the guest sees one GPU with N scanouts), not by
     // adding N separate GPU devices, which presents N independent GPUs.
     const heads = std.math.clamp(config.num_displays, 1, vm.MAX_DISPLAYS);
     const gl_ok = wants_virgl and (embedded_gl or (!config.embed_display and (config.display == .gtk or config.display == .sdl or config.display == .spice)));
@@ -1079,7 +1079,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try args.append(alloc, cmd);
     }
 
-    // USB controller — configurable via usb_policy (none / EHCI / xHCI).
+    // USB controller: configurable via usb_policy (none / EHCI / xHCI).
     switch (config.usb_policy) {
         .none => {},
         .usb2 => {
@@ -1092,7 +1092,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         },
     }
     // USB tablet provides absolute pointing so the guest cursor matches
-    // the host cursor position — essential for embedded VNC/SPICE where
+    // the host cursor position: essential for embedded VNC/SPICE where
     // relative mouse input would desync. Only attach when a USB controller
     // is present.
     if (config.usb_policy != .none) {
@@ -1106,7 +1106,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     // vendor/product are interpolated into a comma-separated `-device` property
     // list, so each must be validated as plain hex. A value such as
     // "046d,hostbus=1" would otherwise inject extra QEMU device properties
-    // (argument injection, CWE-88) — selecting a different physical device than
+    // (argument injection, CWE-88): selecting a different physical device than
     // intended. The web boundary only strips "..", so enforce the format here at
     // the sink, where it also covers names loaded from vms.json / the daemon.
     if (config.hasUsbDevice()) {
@@ -1127,7 +1127,7 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     //
     // The path is interpolated into a comma-separated `-fsdev` property list. A
     // comma (QEMU's property delimiter) in the path would inject extra fsdev
-    // properties — e.g. downgrading `security_model` or adding `readonly=off`
+    // properties: e.g. downgrading `security_model` or adding `readonly=off`
     // (argument injection, CWE-88). QEMU itself cannot represent an un-escaped
     // comma in this position anyway, so a path containing one (or a NUL /
     // newline) is rejected outright rather than emitted.
@@ -1272,7 +1272,7 @@ pub fn isVmAlive(config: *vm.VmConfig) bool {
             config.status = .stopped;
             return false;
         }
-        // Other errors (EINTR etc.) — assume alive on transient error.
+        // Other errors (EINTR etc.): assume alive on transient error.
         return true;
     }
 
@@ -1370,7 +1370,7 @@ pub fn createDiskImage(path: []const u8, size_gb: u32, format: vm.DiskFormat, al
 }
 
 /// Grow an existing disk image to `new_size_gb` using `qemu-img resize`.
-/// Only supports growing — shrinking risks data loss and is rejected by the
+/// Only supports growing: shrinking risks data loss and is rejected by the
 /// UI before reaching here.
 pub fn resizeDiskImage(path: []const u8, new_size_gb: u32, allocator: std.mem.Allocator) !void {
     var size_buf: [32]u8 = undefined;
@@ -1433,7 +1433,7 @@ pub fn convertDiskImage(src_path: []const u8, src_format: vm.DiskFormat, dest_pa
 }
 
 /// Start a disk conversion in the background (fork + exec qemu-img convert).
-/// Returns the child PID.  Does NOT wait — the caller must eventually reap
+/// Returns the child PID.  Does NOT wait, the caller must eventually reap
 /// the child via `waitpid`.  This keeps the UI responsive during long
 /// conversions (e.g. OVF export).
 pub fn convertDiskImageNoWait(src_path: []const u8, src_format: vm.DiskFormat, dest_path: []const u8, dest_format: vm.DiskFormat, allocator: std.mem.Allocator) !std.c.pid_t {
@@ -1512,7 +1512,7 @@ fn isSafeShellPath(path: []const u8) bool {
     return true;
 }
 
-/// Returns true if `s` is a non-empty run of 1–4 hex digits — the only shape a
+/// Returns true if `s` is a non-empty run of 1–4 hex digits, the only shape a
 /// USB vendor/product id may take. Rejecting anything else stops a comma (or
 /// other QEMU `-device` property delimiter) from injecting extra device
 /// properties when the id is interpolated into a property list.
@@ -1760,8 +1760,8 @@ test "createLinkedClone: arg builder produces backing_file and backing_fmt" {
 //
 // `buildArgs`/`buildScriptStr` format a VmConfig into fixed-size stack buffers
 // (ArgBuffers) and parse the port-forward / USB strings. Feed thousands of
-// random configs — long paths, port-forward strings full of ':'/',', odd USB
-// specs, every enum index — and assert it never overflows a buffer, panics, or
+// random configs: long paths, port-forward strings full of ':'/',', odd USB
+// specs, every enum index, and assert it never overflows a buffer, panics, or
 // leaks. Reproducible via the fixed seed.
 
 test "fuzz: buildScriptStr never crashes on random configs" {
@@ -2118,7 +2118,7 @@ test "qemu: buildCArgv null-terminates and preserves entries" {
 }
 
 test "qemu: firmware/iso discovery probes never crash" {
-    // Filesystem probes — return null or a real path depending on host; the
+    // Filesystem probes: return null or a real path depending on host; the
     // contract under test is "never panics / returns a valid optional".
     _ = findOvmfPath();
     var buf: [vm.MAX_PATH]u8 = undefined;
@@ -2210,7 +2210,7 @@ test "fuzz: createDiskImage/resize/snapshot over temp qcow2 with random params" 
         };
         defer _ = std.Io.Dir.cwd().deleteFile(appio.io(), path) catch {};
 
-        // Random snapshot names (incl. odd characters) — qemu-img may accept or
+        // Random snapshot names (incl. odd characters): qemu-img may accept or
         // reject; either way must not crash our wrapper.
         for (0..3) |_| {
             for (name_buf[0..]) |*ch| ch.* = "snapTEST 0123-_."[rnd.uintLessThan(usize, 16)];
@@ -2228,7 +2228,7 @@ test "fuzz: createDiskImage/resize/snapshot over temp qcow2 with random params" 
         createLinkedClone(clone, path, fmt, alloc) catch {};
         _ = std.Io.Dir.cwd().deleteFile(appio.io(), clone) catch {};
 
-        // convert to VMDK (stream-optimized) — exercises convertDiskImage
+        // convert to VMDK (stream-optimized): exercises convertDiskImage
         var vmdk_buf: [96]u8 = undefined;
         const vmdk = std.fmt.bufPrintZ(&vmdk_buf, "/tmp/hangar-qconv-{d}-{d}.vmdk", .{ std.c.getpid(), i }) catch continue;
         convertDiskImage(path, fmt, vmdk, .vmdk, alloc) catch {};
@@ -2269,7 +2269,7 @@ test "fuzz: process-control quartet on our own short-lived children" {
 test "startVm: default accel (auto) yields a QEMU that doesn't immediately exit" {
     // Regression guard for `accel=auto`: QEMU rejects the literal "auto"
     // ("invalid accelerator auto") and exits instantly, so the VM never runs.
-    // Arg-string tests can't catch this — only spawning QEMU and checking it
+    // Arg-string tests can't catch this: only spawning QEMU and checking it
     // survives a moment does. Skip cleanly if qemu-system-x86_64 is unavailable.
     const alloc = std.heap.page_allocator;
     runWait(&.{ "qemu-system-x86_64", "--version" }, alloc, null) catch return;
@@ -2282,7 +2282,7 @@ test "startVm: default accel (auto) yields a QEMU that doesn't immediately exit"
     cfg.memory_mb = 64;
     cfg.cpu_cores = 1;
     cfg.cpu_sockets = 1;
-    // accel left at its default (.auto) — the exact config that failed.
+    // accel left at its default (.auto), the exact config that failed.
     startVm(&cfg, alloc) catch return;
     defer {
         forceStopVm(&cfg);
@@ -2309,7 +2309,7 @@ test "fuzz: startVm spawns real QEMU (headless/TCG) then stops + reaps" {
         var cfg = vm.VmConfig{};
         cfg.display = .none; // no window
         cfg.embed_display = false; // no VNC/SPICE server
-        cfg.accel = .tcg; // TCG — no /dev/kvm needed
+        cfg.accel = .tcg; // TCG, no /dev/kvm needed
         cfg.firmware = .bios;
         cfg.memory_mb = rnd.uintLessThan(u32, 256) + 16; // small + safe
         cfg.cpu_cores = rnd.uintLessThan(u32, 4) + 1;
@@ -2340,7 +2340,7 @@ test "qemu: buildScriptStr with audio.none omits audio args" {
 }
 
 test "qemu: audio uses a portable backend, never the rarely-built sdl" {
-    // Default (non-spice display): dummy `none` backend — always valid, never
+    // Default (non-spice display): dummy `none` backend, always valid, never
     // rejected, guest still gets the sound card.
     var cfg = vm.VmConfig{};
     cfg.audio = .hda;
@@ -2524,7 +2524,7 @@ test "qemu: parseTopLevelU64 ignores nested children sizes (qemu-img info)" {
     try expect(parseTopLevelU64(j, "\"virtual-size\"").? == 21474836480);
     try expect(parseTopLevelU64(j, "\"actual-size\"").? == 196608);
     try expect(parseTopLevelU64(j, "\"missing\"") == null);
-    // first-match would have returned the child's 197120 — the original bug
+    // first-match would have returned the child's 197120, the original bug
     try expect(parseJsonU64(j, "\"virtual-size\"").? == 197120);
 }
 
@@ -3034,7 +3034,7 @@ test "qemu: tryReapChild does not crash on pid 0 (process group, not a child)" {
 
 test "qemu: tryReapChild does not crash on pid -1 (reap any child)" {
     // waitpid(-1, WNOHANG) may find no exited children (null) or reap a
-    // background child (a bool) — both are valid and ordering-dependent, so we
+    // background child (a bool), both are valid and ordering-dependent, so we
     // only assert the call completes without crashing.
     const result = tryReapChild(-1);
     _ = result;

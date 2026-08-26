@@ -139,7 +139,7 @@ pub fn list(req: []const u8, raw_buf: []u8) []const u8 {
     if (nodes.count == 0) return "(none)";
 
     // Emit one snapshot per line into raw_buf (reused for output): the tag,
-    // then — when the table carried one — a tab and the creation timestamp.
+    // then: when the table carried one, a tab and the creation timestamp.
     var w: usize = 0;
     for (0..nodes.count) |i| {
         const name = nodes.nameSlice(i);

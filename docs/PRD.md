@@ -1,4 +1,4 @@
-# Hangar — Product Requirements Document
+# Hangar: Product Requirements Document
 
 ## Elevator Pitch
 Lightweight QEMU/KVM virtual machine manager with a web UI and an optional
@@ -10,10 +10,10 @@ native WebView desktop wrapper. Zero libvirt dependency. Single binary per role.
 - Homelab users managing QEMU VMs without libvirt complexity
 
 ## Architecture Principles
-1. **Pure modules shared** — `web_server.zig`, `webui_app.zig`, and `vmrun` reuse the same VM/QEMU logic
-2. **Single binary per role** — `hangar-web` (server + daemon), `hangar-webui` (native WebView wrapper), `vmrun` (CLI client)
-3. **No dependencies** — hand-rolled JSON parser, no libvirt, no systemd
-4. **Platform detection** — KVM on Linux, HVF on macOS, WHPX on Windows, TCG fallback
+1. **Pure modules shared**: `web_server.zig`, `webui_app.zig`, and `vmrun` reuse the same VM/QEMU logic
+2. **Single binary per role**: `hangar-web` (server + daemon), `hangar-webui` (native WebView wrapper), `vmrun` (CLI client)
+3. **No dependencies**: hand-rolled JSON parser, no libvirt, no systemd
+4. **Platform detection**: KVM on Linux, HVF on macOS, WHPX on Windows, TCG fallback
 
 ## Key Features (v1.0)
 - Create/edit/delete/clone VMs

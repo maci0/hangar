@@ -59,7 +59,7 @@ fn isLoopbackHost(host_port: []const u8) bool {
 
 /// Validate the request's `Host` header against the loopback allowlist. Only
 /// enforced in loopback mode (no custom key); closes a DNS-rebinding hole
-/// (CWE-350/1385). When a key is set, the secret — not the origin — is the
+/// (CWE-350/1385). When a key is set, the secret, not the origin, is the
 /// control, so the check is skipped.
 pub fn hostHeaderOk(req: []const u8) bool {
     if (token_len > 0) return true; // exposed mode: secret key gates access
@@ -83,7 +83,7 @@ pub fn checkAuth(req: []const u8) bool {
 /// screenshot, guestinfo, migrate status) are never exempt.
 pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (!method_get) return false; // only GET endpoints are exempt
-    // Static assets and non-sensitive status endpoints are ALWAYS exempt — the
+    // Static assets and non-sensitive status endpoints are ALWAYS exempt, the
     // UI must load (to prompt for the key) and liveness/capabilities carry no
     // secrets.
     if (std.mem.eql(u8, path, "/")) return true;
@@ -104,7 +104,7 @@ pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
     // Data-bearing reads (VM list/detail/log/snapshots, config incl. cloud-init
     // secrets, networks, catalog, the SSE stream) are exempt ONLY in loopback
     // mode. When a key is configured the daemon binds all interfaces, so these
-    // must require the key — otherwise any unauthenticated remote client could
+    // must require the key: otherwise any unauthenticated remote client could
     // read cloud-init user-data, MACs, disk paths, and serial/console state.
     if (isExposed()) return false;
     if (std.mem.eql(u8, path, "/api/vms")) return true;
@@ -138,7 +138,7 @@ pub fn wsOriginOk(req: []const u8) bool {
     const origin = std.mem.trim(u8, origin_raw, " \t");
     // Strip scheme.
     const after_scheme = if (std.mem.indexOf(u8, origin, "://")) |s| origin[s + 3 ..] else return false;
-    // Host[:port] — take up to the first '/' if any.
+    // Host[:port], take up to the first '/' if any.
     const host_port = if (std.mem.indexOfScalar(u8, after_scheme, '/')) |sl| after_scheme[0..sl] else after_scheme;
     return isLoopbackHost(host_port);
 }
@@ -189,7 +189,7 @@ test "auth: isLoopbackHost strips port and accepts all loopback spellings" {
     try std.testing.expect(isLoopbackHost("[::1]"));
     try std.testing.expect(isLoopbackHost("[::1]:9080"));
     // Bare (unbracketed) IPv6 is not a valid Host/Origin authority and has
-    // never been accepted by this gate — pinned here so it stays that way.
+    // never been accepted by this gate, pinned here so it stays that way.
     try std.testing.expect(!isLoopbackHost("::1"));
     try std.testing.expect(!isLoopbackHost("127.0.0.2"));
     try std.testing.expect(!isLoopbackHost("evil.example.com:80"));
@@ -236,7 +236,7 @@ test "auth: exposed mode removes data-read exemptions" {
     try std.testing.expect(isAuthExempt(true, "/api/health"));
 }
 
-test "auth: isAuthExempt — static + safe reads exempt, sensitive not" {
+test "auth: isAuthExempt, static + safe reads exempt, sensitive not" {
     try std.testing.expect(isAuthExempt(true, "/"));
     try std.testing.expect(isAuthExempt(true, "/api/vms"));
     try std.testing.expect(isAuthExempt(true, "/api/events"));
