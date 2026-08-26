@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! VM configuration persistence — JSON save/load to disk.
+//! VM configuration persistence: JSON save/load to disk.
 //!
 //! Saves VM configurations to `~/.config/hangar/vms.json` and loads
 //! them back at startup.  Runtime state (status, pid) is NOT persisted.
@@ -18,6 +18,7 @@ const std = @import("std");
 const appio = @import("appio.zig");
 const appstate = @import("appstate.zig");
 const vm = @import("vm.zig");
+const wlog = @import("wlog.zig");
 
 /// Maximum number of VMs (single source in vm.zig).
 const MAX_VMS = vm.MAX_VMS;
@@ -43,7 +44,7 @@ pub fn loadDegraded() bool {
 
 // ── JSON-friendly intermediate struct ───────────────────────────────
 
-/// Flat VM config — used as an intermediate representation for the
+/// Flat VM config: used as an intermediate representation for the
 /// `fromVmJson` conversion and for the round-trip test.
 const VmJson = struct {
     id: []const u8 = "",
@@ -115,7 +116,7 @@ const VmJson = struct {
     autoprotect_last_seq: u32 = 0,
     floppy_path: []const u8 = "",
     // Missing "display" in a config defaults to VNC (web-usable), matching
-    // VmConfig's default — never a host-native GTK window the browser can't show.
+    // VmConfig's default, never a host-native GTK window the browser can't show.
     display: []const u8 = "vnc",
     display_resolution: u32 = 0,
     network: []const u8 = "user",
@@ -599,7 +600,7 @@ fn emitVmJson(list: *List, alloc: std.mem.Allocator, cfg: *const vm.VmConfig) !v
 /// Does not persist runtime state (status, pid).
 pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
     // If load() could not read an existing vms.json, our in-memory list is
-    // not authoritative — overwriting now would destroy the on-disk config.
+    // not authoritative: overwriting now would destroy the on-disk config.
     if (@atomicLoad(bool, &load_read_failed, .seq_cst)) return error.LoadDegradedRefusingOverwrite;
 
     const alloc = std.heap.page_allocator;
@@ -608,9 +609,9 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
     var dir_buf: [512]u8 = undefined;
     if (appstate.configDir(&dir_buf)) |dir_path| {
         // Owner-only (0o700): the config dir holds VM inventory with paths and
-        // MAC addresses — keep it unreadable to other local users.
+        // MAC addresses: keep it unreadable to other local users.
         _ = std.Io.Dir.cwd().createDirPathStatus(appio.io(), dir_path, .fromMode(0o700)) catch {
-            _ = std.c.write(2, "persist: createDirPath failed\n", 30);
+            wlog.logErr("persist: createDirPath failed");
         };
     }
 
@@ -664,7 +665,7 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
 
 // ── Load ────────────────────────────────────────────────────────────
 
-/// Minimal JSON key/value parser — avoids std.json (which pulls in f128
+/// Minimal JSON key/value parser: avoids std.json (which pulls in f128
 /// float math that causes linker errors with system cc).
 ///
 /// Only handles the exact format we emit: flat objects with string, integer,
@@ -712,7 +713,7 @@ fn parseJsonString(s: []const u8, out_buf: []u8) ?struct { value: []const u8, re
                             cp21 = 0x10000 + (@as(u21, cp21) - 0xD800) * 0x400 + (@as(u21, lo) - 0xDC00);
                             i += 6;
                         } else {
-                            // Lone high surrogate — invalid JSON.
+                            // Lone high surrogate: invalid JSON.
                             return null;
                         }
                     } else {
@@ -720,7 +721,7 @@ fn parseJsonString(s: []const u8, out_buf: []u8) ?struct { value: []const u8, re
                         return null;
                     }
                 } else if (cp21 >= 0xDC00 and cp21 <= 0xDFFF) {
-                    // Lone low surrogate — invalid JSON.
+                    // Lone low surrogate: invalid JSON.
                     return null;
                 }
 
@@ -846,7 +847,7 @@ fn skipJsonValue(s: []const u8) []const u8 {
             return cur[cur.len..];
         },
         '{' => {
-            // Skip object — count braces
+            // Skip object: count braces
             var depth: usize = 1;
             var i: usize = 1;
             var in_str = false;
@@ -866,7 +867,7 @@ fn skipJsonValue(s: []const u8) []const u8 {
             return cur[@min(i, cur.len)..];
         },
         '[' => {
-            // Skip array — count brackets
+            // Skip array: count brackets
             var depth: usize = 1;
             var i: usize = 1;
             var in_str = false;
@@ -886,7 +887,7 @@ fn skipJsonValue(s: []const u8) []const u8 {
             return cur[@min(i, cur.len)..];
         },
         else => {
-            // number, bool, null — skip until delimiter
+            // number, bool, null: skip until delimiter
             var i: usize = 0;
             while (i < cur.len and cur[i] != ',' and cur[i] != '}' and cur[i] != ']' and cur[i] != '\n') : (i += 1) {}
             return cur[i..];
@@ -1085,7 +1086,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (key.len == 9 and std.mem.startsWith(u8, key, "nic") and std.mem.endsWith(u8, key, "_vnet") and key[3] >= '2' and key[3] <= '8') {
-            // "nicN_vnet" (N = 2..8) — per-NIC virtual-network binding.
+            // "nicN_vnet" (N = 2..8): per-NIC virtual-network binding.
             if (parseJsonString(cur, &str_buf)) |r| {
                 cfg.setNicVnetAny(@as(usize, key[3] - '1'), r.value);
                 cur = r.rest;
@@ -1393,7 +1394,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else {
-            // Unknown key — skip value
+            // Unknown key: skip value
             cur = skipJsonValue(cur);
         }
     }
@@ -1421,10 +1422,9 @@ fn parseVersion(content: []const u8) u32 {
         const vcur = skipWs(content[vidx + 9 ..]);
         if (vcur.len > 0 and vcur[0] == ':') {
             if (parseJsonInt(skipWs(vcur[1..]))) |r| {
-                if (r.value > CONFIG_VERSION and !@import("builtin").is_test) {
+                if (r.value > CONFIG_VERSION) {
                     var msg_buf: [128]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&msg_buf, "hangar: config file version newer than supported (max {d}); some settings may be ignored\n", .{CONFIG_VERSION}) catch "hangar: config file version newer than supported; some settings may be ignored\n";
-                    _ = std.c.write(2, msg.ptr, msg.len);
+                    wlog.logWarn(std.fmt.bufPrint(&msg_buf, "config file version newer than supported (max {d}); some settings may be ignored", .{CONFIG_VERSION}) catch "config file version newer than supported; some settings may be ignored");
                 }
                 return r.value;
             }
@@ -1548,15 +1548,14 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
     ) catch |e| {
         // FileNotFound is normal on first run. Any other failure (permission,
         // I/O error, oversize) means an existing config exists but could not be
-        // read — make it visible, because returning 0 here lets the next save()
+        // read: make it visible, because returning 0 here lets the next save()
         // overwrite vms.json with an empty list and destroy the user's VMs.
         if (e != error.FileNotFound) {
             // Include the error name so an operator can tell apart a permissions
             // problem (AccessDenied), an I/O error, and an oversize file from the
-            // log alone — saves are about to be refused, so the cause matters.
+            // log alone: saves are about to be refused, so the cause matters.
             var ebuf: [160]u8 = undefined;
-            const msg = std.fmt.bufPrint(&ebuf, "persist: load failed to read vms.json ({s}) — existing config not loaded, saves disabled until restart\n", .{@errorName(e)}) catch "persist: load failed to read vms.json (existing config not loaded)\n";
-            _ = std.c.write(2, msg.ptr, msg.len);
+            wlog.logErr(std.fmt.bufPrint(&ebuf, "persist: load failed to read vms.json ({s}), existing config not loaded, saves disabled until restart", .{@errorName(e)}) catch "persist: load failed to read vms.json (existing config not loaded)");
             // Block save() from overwriting the unreadable-but-present file
             // with our empty in-memory list and destroying the user's VMs.
             @atomicStore(bool, &load_read_failed, true, .seq_cst);
@@ -1588,7 +1587,7 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
     // A non-empty file that does not parse into a "vms" array is corrupt (a
     // truncated write, hand-edit, or unrelated file). Returning 0 VMs here and
     // then letting save() run would atomically overwrite the user's real
-    // configs with an empty list — so mark the load degraded, which save()
+    // configs with an empty list, so mark the load degraded, which save()
     // refuses to overwrite. Suppressed in test builds so round-trip tests of
     // intentionally-empty/odd buffers still exercise save().
     const mark_degraded = struct {
@@ -2368,7 +2367,7 @@ test "parseJsonString: handles \\uXXXX non-ASCII (UTF-8)" {
 test "loadFromSlice: vms key not confused by 'vms' inside string value" {
     var vms: [MAX_VMS]vm.VmConfig = undefined;
     var prefs: vm.Prefs = .{};
-    // "vms" appears inside a VM name value — should not confuse the parser.
+    // "vms" appears inside a VM name value, should not confuse the parser.
     const json =
         \\{"vms":[
         \\  {"name":"vms-server","cpu_cores":1,"memory_mb":256,"disk_size_gb":10}
@@ -2662,8 +2661,8 @@ test "fuzz: loadFromSlice on mutated valid documents never crashes" {
 test "fuzz: parsePrefs on mutated valid prefs objects never crashes" {
     // The whole-document fuzzers above feed random bytes (which almost never
     // contain a `"prefs"` token) or vms-only documents, so the prefs key-dispatch
-    // loop — the @memcpy into default_vm_dir_buf, the signed win_x/win_y parse,
-    // and the i32 cast guards on win_w/win_h — is barely exercised. This harness
+    // loop, the @memcpy into default_vm_dir_buf, the signed win_x/win_y parse,
+    // and the i32 cast guards on win_w/win_h, is barely exercised. This harness
     // builds a structurally valid prefs object covering every known key, then
     // mutates random bytes to fuzz the value parsers and forward-progress loop.
     var prng = std.Random.DefaultPrng.init(0x9_9EF5);
@@ -2991,7 +2990,7 @@ test "loadFromSlice: direct" {
         try std.testing.expectEqual(vm.Theme.light, prefs.theme);
     }
 
-    // Malformed JSON — no closing bracket.
+    // Malformed JSON, no closing bracket.
     {
         const json = "{\"vms\":[{\"name\":\"dangling\"}";
         const n = loadFromSlice(&vms, json, &prefs);
@@ -3030,7 +3029,7 @@ test "parseVersion: defaults to 1 when absent" {
 test "parseVersion: reads version from JSON" {
     try std.testing.expectEqual(@as(u32, 2), parseVersion("{\"version\":2}"));
     try std.testing.expectEqual(@as(u32, 1), parseVersion("{\"version\":1}"));
-    try std.testing.expectEqual(@as(u32, 7), parseVersion("{\"version\":7}")); // newer than supported — warns to stderr (suppressed in test)
+    try std.testing.expectEqual(@as(u32, 7), parseVersion("{\"version\":7}")); // newer than supported: warns (wlog drops it in test builds)
     try std.testing.expectEqual(@as(u32, 0), parseVersion("{\"version\":0}"));
 }
 
@@ -3281,7 +3280,7 @@ test "prefs: negative window coordinates survive round-trip" {
     var list: List = .empty;
     defer list.deinit(alloc);
 
-    // Window dragged onto a secondary monitor to the left/above primary —
+    // Window dragged onto a secondary monitor to the left/above primary,
     // negative coords are valid and must not be clamped to the -1 default.
     var prefs = vm.Prefs{};
     prefs.win_x = -1280;
