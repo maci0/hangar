@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hangar — VM Manager</title>
+<title>Hangar: VM Manager</title>
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/xterm.css">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -59,12 +59,12 @@
 </svg>
 
 <div id="connbanner" role="alert" aria-live="assertive" style="display:none">
-  <span><span aria-hidden="true">⚠ </span>Connection lost — retrying automatically</span>
+  <span><span aria-hidden="true">⚠ </span>Connection lost: retrying automatically</span>
   <button class="btn" data-action="dismissBanner">Dismiss</button>
 </div>
 
 <!-- ═══ Sidebar ═══ -->
-<aside id="sidebar" role="navigation" aria-label="VM Library">
+<aside id="sidebar" aria-label="VM Library">
   <div class="sidebar-header">
     <div class="logo" aria-hidden="true">H</div>
     <h2>Hangar</h2>
@@ -159,7 +159,7 @@
     <!-- Display panel (VNC/SPICE framebuffer) -->
     <!-- VM Header + Tabs -->
     <div class="vm-header">
-      <span id="vmemblem" class="vm-emblem" aria-hidden="true" hidden></span>
+      <span id="vmemblem" class="vm-emblem" hidden></span>
       <h1 id="vmname">Select a VM</h1>
       <div id="tabBar" class="tab-bar" role="tablist" aria-label="VM views" style="display:none">
         <button id="tab-btn-console" class="tab-btn" data-action="switchTab" data-tab="console" role="tab" aria-controls="tabConsole" aria-selected="false">Console</button>
@@ -172,7 +172,7 @@
     <div id="tabConsole" role="tabpanel" aria-labelledby="tab-btn-console" aria-hidden="true" style="display:none">
     <div id="display">
       <div class="display-badge" id="displayBadge" aria-hidden="true"></div>
-      <div class="display-toolbar" aria-label="Display controls">
+      <div class="display-toolbar" role="toolbar" aria-label="Display controls">
         <button class="display-tool" data-action="enterDisplayOnly" data-vm-action="display" title="Display only" aria-label="Display only"><svg class="ico" aria-hidden="true"><use href="#i-maximize"/></svg></button>
         <button class="display-tool" data-action="reconnectDisplay" data-vm-action="display" title="Reconnect display" aria-label="Reconnect display"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg></button>
         <button class="display-tool" data-action="sendCad" data-vm-action="cad" title="Send Ctrl+Alt+Del" aria-label="Send Ctrl+Alt+Del"><svg class="ico" aria-hidden="true"><use href="#i-keyboard"/></svg></button>
@@ -181,7 +181,7 @@
     </div>
     <!-- Serial console panel -->
     <div id="serialpanel">
-      <div id="serialterm" aria-label="Serial console terminal"></div>
+      <div id="serialterm" role="group" aria-label="Serial console terminal"></div>
       <div class="serial-resize-handle" id="serialResize" title="Drag to resize" aria-hidden="true"></div>
       <div class="serial-toolbar">
         <button class="btn" data-action="clearSerial">Clear</button>
@@ -197,7 +197,7 @@
     <div id="tabSummary" role="tabpanel" aria-labelledby="tab-btn-summary" aria-hidden="false">
       <div class="empty-state">
         <svg class="empty-icon" aria-hidden="true"><use href="#icon-monitor"/></svg>
-        <h3>No Virtual Machine Selected</h3>
+        <h2>No Virtual Machine Selected</h2>
         <p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p>
         <div class="empty-actions">
           <button class="btn primary" data-action="newVm">＋ New VM</button>
@@ -211,7 +211,7 @@
     <div id="tabSettings" role="tabpanel" aria-labelledby="tab-btn-settings" aria-hidden="true" style="display:none">
       <div class="empty-state">
         <svg class="empty-icon" aria-hidden="true"><use href="#icon-settings"/></svg>
-        <h3>No Virtual Machine Selected</h3>
+        <h2>No Virtual Machine Selected</h2>
         <p>Select a VM from the sidebar to edit its settings.</p>
       </div>
     </div>
@@ -245,7 +245,7 @@
     <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">New Virtual Machine</h3>
     <div style="padding:16px 20px">
       <label for="n_name">Name <span class="req" aria-hidden="true">*</span></label>
-      <input id="n_name" type="text" required aria-required="true" maxlength="80" style="width:100%;margin:4px 0 12px">
+      <input id="n_name" type="text" required maxlength="80" style="width:100%;margin:4px 0 12px">
       <div class="field-error" id="err_n_name" aria-live="polite"></div>
       <label for="n_mem">Memory (MB)</label>
       <input id="n_mem" type="number" value="2048" min="128" max="65536" step="1" style="width:100%;margin:4px 0 12px">
@@ -279,7 +279,7 @@
     <input id="imp_path" type="text" placeholder="/var/lib/images/guest.qcow2" style="width:100%;margin:4px 0 4px">
     <div class="field-error" id="err_imp_path" aria-live="polite"></div>
     <p class="muted" style="margin:2px 0 12px;font-size:11px">Supported: .qcow2, .qcow, .vmdk, .vdi, .vhdx, .raw, .img</p>
-    <label for="imp_name">VM Name <span class="muted">(optional — defaults to the file name)</span></label>
+    <label for="imp_name">VM Name <span class="muted">(optional, defaults to the file name)</span></label>
     <input id="imp_name" type="text" maxlength="80" style="width:100%;margin:4px 0 12px">
   </div>
   <div class="btn-row">
@@ -407,7 +407,7 @@
 
 <!-- QEMU Log Dialog -->
 <dialog id="logdlg" aria-label="QEMU Log">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">QEMU Log — <span id="log_vmname"></span></h3>
+  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">QEMU Log, <span id="log_vmname"></span></h3>
   <div style="padding:12px 24px">
     <pre id="logbody" style="margin:0;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono,monospace);font-size:12px;background:var(--bg-elev,#111);color:var(--text,#ddd);padding:12px;border-radius:var(--radius);border:1px solid var(--border)">Loading…</pre>
   </div>
@@ -423,10 +423,10 @@
   <div style="padding:16px 20px">
     <p style="margin-bottom:12px"><strong id="migrate_vmname"></strong></p>
     <label for="mig_host">Target Host <span class="req" aria-hidden="true">*</span></label>
-    <input id="mig_host" type="text" required aria-required="true" placeholder="hostname or IP" style="width:100%;margin:4px 0 12px">
+    <input id="mig_host" type="text" required placeholder="hostname or IP" style="width:100%;margin:4px 0 12px">
     <label for="mig_port">Target Port</label>
     <input id="mig_port" type="number" value="4444" min="1" max="65535" style="width:100%;margin:4px 0 12px">
-    <label for="mig_uri">Migration URI <span class="muted">(read-only — built from host and port above)</span></label>
+    <label for="mig_uri">Migration URI <span class="muted">(read-only, built from host and port above)</span></label>
     <input id="mig_uri" type="text" readonly placeholder="tcp:host:port" style="width:100%;margin:4px 0 12px;color:var(--text-dim)">
   </div>
   <div class="btn-row">
