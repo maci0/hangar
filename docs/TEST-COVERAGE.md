@@ -1,4 +1,4 @@
-# Hangar — Test Coverage
+# Hangar: Test Coverage
 
 ## Test Results
 
@@ -11,7 +11,7 @@ zig build test
 
 Each module carries its own unit + fuzz tests at the bottom of its `.zig`
 (thin wrappers `appstate_test.zig` / `hv_*_test.zig` re-export the rest).
-Exact per-module counts are intentionally omitted — they drift on every
+Exact per-module counts are intentionally omitted, they drift on every
 commit; run `zig build test` for the authoritative result.
 
 | Module | Coverage |
@@ -62,7 +62,7 @@ zig build test-vmrun   # vmrun CLI integration test (tests/test_vmrun.sh)
 ## Visual Tests
 
 ```bash
-node tests/visual/e2e_web_screenshots.mjs   # Playwright screenshots — web UI interaction flow
+bun tests/visual/screenshots.mjs   # Playwright screenshots of the web UI (images only)
 ```
 
 ## Running Tests
@@ -75,5 +75,5 @@ zig build webui        # Build native WebView desktop wrapper
 
 ## Known Issues
 
-- No known issues — all tests pass
+- No known issues, all tests pass
 

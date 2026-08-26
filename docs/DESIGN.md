@@ -1,4 +1,4 @@
-# Hangar — Design & Architecture
+# Hangar: Design & Architecture
 
 ## Architecture Overview
 
@@ -33,7 +33,7 @@
 
 `web_server.zig` is both the local web UI server and the remote daemon;
 `hangar-webui` and `vmrun` are clients of it. There is no native FLTK
-frontend and no `src/main.zig` — the FLTK GUI was removed.
+frontend and no `src/main.zig`, the FLTK GUI was removed.
 
 ### web_server.zig decomposition
 
@@ -59,7 +59,7 @@ Uniform `POST /api/vms/<id>/<action>` routes dispatch via a comptime
 
 Flat slate design system (dark default + light, token-driven; see
 `src/web/app.css`) with WS-style sidebar + toolbar + tabbed workspace
-(Console / Summary / Settings — the embedded display and xterm.js serial
+(Console / Summary / Settings, the embedded display and xterm.js serial
 terminal live inside the Console tab). Reactivity: `GET /api/events` (SSE)
 pushes change notifications; the 5-second `GET /api/vms` poll remains as
 fallback. The host dashboard is a VanJS component. Vendored, embedded
@@ -170,14 +170,16 @@ mode, or `KV_API_KEY` if set). A VM is addressed by name or list index.
 VM configs stored in `~/.config/hangar/vms.json`; virtual networks in
 `~/.config/hangar/networks.json` (owned by `vnet.zig`). Base dir is
 overridable via `HANGAR_CONFIG_HOME`.
-Hand-rolled JSON parser (no `std.json` — linker compatibility).
+Hand-rolled JSON parser (no `std.json`, linker compatibility).
 `GpuDevice` enum persisted for virtio-gpu / virtio-vga selection.
 
 ## Visual Verification
 
 ```bash
-node tests/visual/e2e_web_screenshots.mjs   # Playwright screenshots of the web UI
+bun tests/visual/screenshots.mjs   # Playwright screenshots of the web UI
 ```
 
-The Playwright flow drives a headless browser against a `hangar-web` instance
-on a temp port and captures the UI interaction flow.
+Drives a headless browser against a `hangar-web` instance on a temp port and a
+throwaway `$HOME`, seeds a few VMs, and writes `tests/visual/screenshots/*.png`
+(dashboard, VM summary, settings, topology). Images only, no assertions: the
+gate is `zig build web-e2e`.
