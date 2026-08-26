@@ -1,4 +1,4 @@
-/* vanjs-core 1.6.0 (MIT) — vendored; ESM export converted to window.van for the no-build script-tag setup. */
+/* vanjs-core 1.6.0 (MIT): vendored; ESM export converted to window.van for the no-build script-tag setup. */
 (function(){
 // This file consistently uses `let` keyword instead of `const` for reducing the bundle size.
 

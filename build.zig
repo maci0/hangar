@@ -82,7 +82,7 @@ pub fn build(b: *std.Build) !void {
         const run_tests = b.addRunArtifact(tests);
         test_step.dependOn(&run_tests.step);
     }
-    // HV interface tests — compiled via wrapper at src/ so that
+    // HV interface tests: compiled via wrapper at src/ so that
     // @import("../vm.zig") inside hv/interface.zig resolves within
     // the module root (src/).
     // Already covered by hv_interface_test in test_mods above.
@@ -91,13 +91,13 @@ pub fn build(b: *std.Build) !void {
     // Per AGENTS.md, every user-facing workflow has a Playwright e2e test in
     // tests/e2e. Playwright launches the built binary itself (see
     // playwright.config.mjs); we only need the binary installed first. Requires
-    // `npm install` and `npm run e2e:install` (Chromium) to have been run once.
-    // Standalone (not in the umbrella `test` step): Playwright needs `npm
+    // `bun install` and `bun run e2e:install` (Chromium) to have been run once.
+    // Standalone (not in the umbrella `test` step): Playwright needs `bun
     // install` + a downloaded Chromium, so depending on it would make the
     // canonical `zig build test` non-hermetic and fail on a clean checkout. Keep
     // `zig build test` to the hermetic unit + fuzz suite; run e2e explicitly.
     const web_e2e = b.step("web-e2e", "Web UI end-to-end tests (Playwright)");
-    const web_e2e_cmd = b.addSystemCommand(&.{ "npx", "playwright", "test" });
+    const web_e2e_cmd = b.addSystemCommand(&.{ "bunx", "playwright", "test" });
     web_e2e_cmd.step.dependOn(&install_web_exe.step);
     web_e2e.dependOn(&web_e2e_cmd.step);
 
@@ -135,12 +135,12 @@ pub fn build(b: *std.Build) !void {
     // Syntax gate over hand-written JS (app.js is @embedFile'd raw, so the exe
     // builds fine even when it does not parse). Excludes the vendored bundles
     // listed in src/web/AGENTS.md; any new non-vendored file is covered.
-    const lint_js = b.step("lint-js", "Syntax-check hand-written JS (node --check)");
+    const lint_js = b.step("lint-js", "Syntax-check hand-written JS (bun build)");
     const lint_js_cmd = b.addSystemCommand(&.{
         "bash", "-c",
         \\git ls-files '*.js' '*.mjs' |
         \\grep -vE '^src/web/(novnc|spice|elk|van|xterm(-fit|-webgl)?)\.js$' |
-        \\xargs -rn1 node --check
+        \\xargs -rn1 bun build --no-bundle >/dev/null
         \\
     });
     lint_js.dependOn(&lint_js_cmd.step);
