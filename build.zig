@@ -73,7 +73,7 @@ pub fn build(b: *std.Build) !void {
         const src_path = b.fmt("src/{s}.zig", .{mod});
         const tm = b.createModule(.{ .root_source_file = b.path(src_path), .target = target, .optimize = optimize });
         tm.link_libc = true;
-        if (std.mem.eql(u8, mod, "vnc_client") or std.mem.eql(u8, mod, "framebuffer")) {
+        if (std.mem.eql(u8, mod, "vnc_client") or std.mem.eql(u8, mod, "framebuffer") or std.mem.eql(u8, mod, "web_server")) {
             tm.linkSystemLibrary("libvncclient", .{});
         }
         if (std.mem.eql(u8, mod, "webui_app")) {

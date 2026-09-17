@@ -69,6 +69,11 @@ globals in `appstate.zig`.
   so a passing `zig build test` stays silent. Untrusted text (VM names, QEMU/QMP replies,
   argv) passes `wlog.sanitizeLogText` first. The four remaining direct fd-2 writes are
   CLI usage/startup messages in `web_server`/`webui_app`, not daemon log lines.
+- **Request correlation:** `serveHtml` begins `wlog` context after the first successful
+  read, before rejection gates, and clears it on return. `writeHttpResponse` emits
+  `X-Request-ID`; handler logs share that ID. Completion logs include status, elapsed
+  milliseconds and send success for POSTs, server errors and failed sends, without
+  logging successful GET polling.
 - **Never** touch `appstate.vms`/`vm_count` without `vms_mutex`; never hold a lock during
   QEMU/QMP/filesystem/network I/O (power-on's brief `portInUse` probe is the one
   bounded exception).
@@ -81,8 +86,8 @@ globals in `appstate.zig`.
 
 ## Verification
 Use the root build/test commands and non-destructive artifact checks. Single-module
-tests may need more than `-lc -fllvm -flld`: `vnc_client` and `framebuffer` also link
-`libvncclient`, and `webui_app` needs the `webui` module. Use `zig build test` for
+tests may need more than `-lc -fllvm -flld`: `vnc_client`, `framebuffer` and
+`web_server` also link `libvncclient`, and `webui_app` needs the `webui` module. Use `zig build test` for
 these modules so `build.zig` supplies their dependencies.
 
 ## Child DOX Index

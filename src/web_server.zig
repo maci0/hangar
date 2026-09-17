@@ -572,6 +572,8 @@ fn serveHtml(conn: c.fd_t) void {
     if (n <= 0) return;
     var req_len: usize = @intCast(n);
     var req = buf[0..req_len];
+    wlog.beginRequest(req);
+    defer wlog.endRequest();
 
     // ── Rate limiting: POST requests only ──
     if (std.mem.startsWith(u8, req, "POST ") and rateLimitCheck()) {
@@ -2577,6 +2579,55 @@ const TestConfigHome = struct {
         }
     }
 };
+
+test "serveHtml: rejected requests correlate response headers and logs" {
+    const saved_token_len = auth.token_len;
+    const saved_log_fd = wlog.log_fd;
+    defer auth.token_len = saved_token_len;
+    defer wlog.log_fd = saved_log_fd;
+    auth.token_len = 8;
+
+    var previous_id: u64 = 0;
+    for (0..2) |_| {
+        var logs: [2]c.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &logs));
+        defer _ = c.close(logs[0]);
+        defer _ = c.close(logs[1]);
+        wlog.log_fd = logs[0];
+
+        var fds: [2]c.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+        defer _ = c.close(fds[0]);
+        const req = "POST /api/vms/0/power HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n";
+        const sent = writeAll(fds[0], req.ptr, req.len);
+        _ = @atomicRmw(u32, &active_connections, .Add, 1, .seq_cst);
+        serveHtml(fds[1]);
+        try std.testing.expect(sent);
+        try std.testing.expectEqual(@as(u64, 0), wlog.requestId());
+
+        var response_buf: [2048]u8 = undefined;
+        const response_len = c.read(fds[0], &response_buf, response_buf.len);
+        try std.testing.expect(response_len > 0);
+        const response = response_buf[0..@intCast(response_len)];
+        try std.testing.expect(std.mem.startsWith(u8, response, "HTTP/1.1 401"));
+        const id_text = httpreq.findHeader(response, "X-Request-ID: ") orelse return error.MissingRequestId;
+        const id = try std.fmt.parseInt(u64, id_text, 10);
+        try std.testing.expect(id != 0 and id != previous_id);
+        previous_id = id;
+
+        _ = c.shutdown(logs[0], SHUT_RDWR);
+        var log_buf: [2048]u8 = undefined;
+        const log_len = c.read(logs[1], &log_buf, log_buf.len);
+        try std.testing.expect(log_len > 0);
+        const lines = log_buf[0..@intCast(log_len)];
+        var prefix_buf: [64]u8 = undefined;
+        const prefix = try std.fmt.bufPrint(&prefix_buf, "request_id={d} ", .{id});
+        try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, lines, prefix));
+        try std.testing.expect(std.mem.indexOf(u8, lines, "auth rejected:") != null);
+        try std.testing.expect(std.mem.indexOf(u8, lines, "http_response status=401 duration_ms=") != null);
+        try std.testing.expect(std.mem.indexOf(u8, lines, "sent=true request=[POST /api/vms/0/power HTTP/1.1]") != null);
+    }
+}
 
 test "nameTaken: detects duplicates and honors the skip index" {
     const saved_count = appstate.vm_count;
