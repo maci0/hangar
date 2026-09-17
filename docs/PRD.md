@@ -13,13 +13,16 @@ native WebView desktop wrapper. Zero libvirt dependency. Single binary per role.
 1. **Pure modules shared**: `web_server.zig`, `webui_app.zig`, and `vmrun` reuse the same VM/QEMU logic
 2. **Single binary per role**: `hangar-web` (server + daemon), `hangar-webui` (native WebView wrapper), `vmrun` (CLI client)
 3. **No dependencies**: hand-rolled JSON parser, no libvirt, no systemd
-4. **Platform detection**: KVM on Linux, HVF on macOS, WHPX on Windows, TCG fallback
+4. **Acceleration**: automatic mode requests KVM with TCG fallback (`kvm:tcg`),
+   as asserted by the default-accelerator test in [qemu.zig](../src/qemu.zig).
+   HVF and WHPX are explicit selections, not host-platform detection.
 
 ## Key Features (v1.0)
 - Create/edit/delete/clone VMs
 - Power on/off with QEMU process management
 - VNC/SPICE embedded display
-- Serial console with ring buffer
+- Live serial console over a WebSocket-to-Unix-socket relay
+  ([wsproxy.zig](../src/wsproxy.zig)); the legacy ring buffer was removed in `63eb519`.
 - Snapshot management via qemu-img
 - JSON persistence in ~/.config/hangar/
 - GPU acceleration (virtio-gpu/virtio-vga with virglrenderer)
