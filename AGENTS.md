@@ -23,6 +23,9 @@ zig build lint-shell   # shellcheck over tracked *.sh
 zig build lint-js      # bun build over hand-written JS (vendored src/web bundles excluded)
 ```
 
+`lint-shell` enables `check-extra-masked-returns`, `check-set-e-suppressed`, and
+`check-unassigned-uppercase` in addition to ShellCheck's default checks.
+
 All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`.
 
 CI runs on Ubuntu 24.04 and installs `libvncserver-dev`, `pkg-config`, and

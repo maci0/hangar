@@ -128,7 +128,7 @@ pub fn build(b: *std.Build) !void {
     // Same git-tracked scoping as fmt-check: a newly added .sh is covered
     // automatically instead of silently falling outside a hardcoded list.
     const lint_shell_cmd = b.addSystemCommand(&.{
-        "bash", "-c", "git ls-files '*.sh' | xargs shellcheck",
+        "bash", "-c", "git ls-files '*.sh' | xargs shellcheck --enable=check-extra-masked-returns,check-set-e-suppressed,check-unassigned-uppercase",
     });
     lint_shell.dependOn(&lint_shell_cmd.step);
 
