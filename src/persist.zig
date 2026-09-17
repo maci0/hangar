@@ -1477,9 +1477,6 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
             cur = skipWs(kr.rest);
             if (cur.len == 0 or cur[0] != ':') break;
             cur = skipWs(cur[1..]);
-            // A truncated value (e.g. `"win_x":` at end of input) leaves `cur`
-            // empty; the parse-failure branches below all do `cur[1..]`, which
-            // would slice past the end. Stop here instead.
             if (cur.len == 0) break;
             if (std.mem.eql(u8, key, "default_vm_dir")) {
                 if (parseJsonString(cur, &str_buf)) |r| {
@@ -1488,56 +1485,56 @@ fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
                     prefs_out.default_vm_dir_buf[n] = 0;
                     prefs_out.default_vm_dir_len = @intCast(n);
                     cur = r.rest;
-                } else cur = cur[1..];
+                } else cur = skipJsonValue(cur);
             } else if (std.mem.eql(u8, key, "default_memory_mb")) {
                 if (parseJsonInt(cur)) |r| {
                     prefs_out.default_memory_mb = r.value;
                     cur = r.rest;
-                } else cur = cur[1..];
+                } else cur = skipJsonValue(cur);
             } else if (std.mem.eql(u8, key, "default_cpu_cores")) {
                 if (parseJsonInt(cur)) |r| {
                     prefs_out.default_cpu_cores = r.value;
                     cur = r.rest;
-                } else cur = cur[1..];
+                } else cur = skipJsonValue(cur);
             } else if (std.mem.eql(u8, key, "autoprotect_enabled_default")) {
                 if (parseJsonBool(cur)) |r| {
                     prefs_out.autoprotect_enabled_default = r.value;
                     cur = r.rest;
-                } else cur = cur[1..];
+                } else cur = skipJsonValue(cur);
             } else if (std.mem.eql(u8, key, "autoprotect_interval_min_default")) {
                 if (parseJsonInt(cur)) |r| {
                     prefs_out.autoprotect_interval_min_default = r.value;
                     cur = r.rest;
-                } else cur = cur[1..];
+                } else cur = skipJsonValue(cur);
             } else if (std.mem.eql(u8, key, "autoprotect_max_default")) {
                 if (parseJsonInt(cur)) |r| {
                     prefs_out.autoprotect_max_default = r.value;
                     cur = r.rest;
-                } else cur = cur[1..];
+                } else cur = skipJsonValue(cur);
             } else if (std.mem.eql(u8, key, "win_x")) {
                 if (parseJsonIntSigned(cur)) |r| {
                     prefs_out.win_x = r.value;
                     cur = r.rest;
-                } else cur = cur[1..];
+                } else cur = skipJsonValue(cur);
             } else if (std.mem.eql(u8, key, "win_y")) {
                 if (parseJsonIntSigned(cur)) |r| {
                     prefs_out.win_y = r.value;
                     cur = r.rest;
-                } else cur = cur[1..];
+                } else cur = skipJsonValue(cur);
             } else if (std.mem.eql(u8, key, "win_w")) {
                 if (parseJsonInt(cur)) |r| {
                     if (std.math.cast(i32, r.value)) |v| {
                         prefs_out.win_w = v;
                         cur = r.rest;
-                    } else cur = cur[1..];
-                } else cur = cur[1..];
+                    } else cur = skipJsonValue(cur);
+                } else cur = skipJsonValue(cur);
             } else if (std.mem.eql(u8, key, "win_h")) {
                 if (parseJsonInt(cur)) |r| {
                     if (std.math.cast(i32, r.value)) |v| {
                         prefs_out.win_h = v;
                         cur = r.rest;
-                    } else cur = cur[1..];
-                } else cur = cur[1..];
+                    } else cur = skipJsonValue(cur);
+                } else cur = skipJsonValue(cur);
             } else {
                 cur = skipJsonValue(cur);
             }
@@ -1670,6 +1667,53 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "persist: malformed preference values cannot supply sibling fields" {
+    const invalid_values = [_][]const u8{
+        "{\"win_x\":777}",
+        "[{\"win_x\":777}]",
+        "null",
+        "\"unexpected\"",
+        "4294967296",
+    };
+    const keys = [_][]const u8{
+        "default_vm_dir",              "default_memory_mb",                "default_cpu_cores",
+        "autoprotect_enabled_default", "autoprotect_interval_min_default", "autoprotect_max_default",
+        "win_x",                       "win_y",                            "win_w",
+        "win_h",
+    };
+    var buf: [512]u8 = undefined;
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    for (keys) |key| {
+        for (invalid_values) |value| {
+            const json = try std.fmt.bufPrint(&buf, "{{\"prefs\":{{\"{s}\":{s},\"win_y\":-55}},\"vms\":[]}}", .{ key, value });
+            var prefs = vm.Prefs{};
+            try std.testing.expectEqual(@as(usize, 0), loadFromSlice(&vms, json, &prefs));
+            try std.testing.expectEqual((vm.Prefs{}).win_x, prefs.win_x);
+            try std.testing.expectEqual(@as(i32, -55), prefs.win_y);
+        }
+    }
+}
+
+test "persist fuzz: malformed preference containers preserve sibling values" {
+    var prng = std.Random.DefaultPrng.init(0xDBDA_7A11);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    for (0..256) |_| {
+        const nested = rnd.intRangeAtMost(i32, 0, 1000);
+        const expected = rnd.intRangeAtMost(i32, -1000, -1);
+        const json = try std.fmt.bufPrint(
+            &buf,
+            "{{\"prefs\":{{\"win_x\":{d},\"default_vm_dir\":[{{\"win_x\":{d}" ++ "}}],\"win_y\":{d}" ++ "}}}}",
+            .{ expected, nested, expected },
+        );
+        var prefs = vm.Prefs{};
+        parsePrefs(json, &prefs);
+        try std.testing.expectEqual(expected, prefs.win_x);
+        try std.testing.expectEqual(expected, prefs.win_y);
+        try std.testing.expectEqual(@as(u16, 0), prefs.default_vm_dir_len);
+    }
+}
 
 test "persist: full inventory with escaped fields fits the file read limit" {
     const alloc = std.testing.allocator;

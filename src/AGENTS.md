@@ -56,6 +56,8 @@ globals in `appstate.zig`.
   control bytes, as well as Unicode escapes and UTF-16 surrogate pairs.
 - **VM config metadata:** `persist` reads `version`, `theme`, `prefs`, and `vms`
   only from the root object; nested fields and string values cannot select them.
+  Invalid preference values are skipped whole, so nested members cannot replace
+  sibling preferences or prevent later valid preferences from loading.
 - **VM config file size:** `persist` reads up to 32 MiB. The read cap must accommodate
   `MAX_VMS` configurations with maximum-length JSON-escaped string fields.
 - **Network JSON scope:** `vnet` reads `version` and `networks` only from the root
