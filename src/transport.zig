@@ -725,6 +725,7 @@ test "Connection.request redials for a second request (Connection: close)" {
     addr.port = 0;
     if (c.bind(lfd, @ptrCast(&addr), @sizeOf(c.sockaddr.in)) != 0) return error.SkipZigTest;
     if (c.listen(lfd, 4) != 0) return error.SkipZigTest;
+    setFdTimeout(lfd, CLIENT_IO_TIMEOUT_MS);
     var addrlen: c.socklen_t = @sizeOf(c.sockaddr.in);
     _ = c.getsockname(lfd, @ptrCast(&addr), &addrlen);
     const port = std.mem.bigToNative(u16, addr.port);
@@ -733,19 +734,33 @@ test "Connection.request redials for a second request (Connection: close)" {
         lfd: c.fd_t,
         fn run(ctx: @This()) void {
             // Serve exactly two one-shot HTTP responses, then stop.
+            const bodies = [_][]const u8{ "{\"first\":1}", "{\"second\":2}" };
+            const request_lines = [_][]const u8{ "GET /api/vms HTTP/1.0\r\n", "GET /api/vms/0 HTTP/1.0\r\n" };
             var i: usize = 0;
             while (i < 2) : (i += 1) {
                 const cfd = c.accept(ctx.lfd, null, null);
                 if (cfd < 0) return;
+                defer _ = c.close(cfd);
+                setFdTimeout(cfd, CLIENT_IO_TIMEOUT_MS);
                 var dump: [512]u8 = undefined;
-                _ = c.read(cfd, &dump, dump.len);
-                const resp = "HTTP/1.0 200 OK\r\n\r\n{\"ok\":true}";
-                _ = c.write(cfd, resp, resp.len);
-                _ = c.close(cfd);
+                var used: usize = 0;
+                while (std.mem.indexOf(u8, dump[0..used], "\r\n\r\n") == null) {
+                    if (used == dump.len) return;
+                    const n = c.read(cfd, dump[used..].ptr, dump.len - used);
+                    if (n <= 0) return;
+                    used += @intCast(n);
+                }
+                if (!std.mem.startsWith(u8, dump[0..used], request_lines[i])) return;
+                const resp = std.fmt.bufPrint(&dump, "HTTP/1.0 200 OK\r\nConnection: close\r\nContent-Length: {d}\r\n\r\n{s}", .{ bodies[i].len, bodies[i] }) catch return;
+                writeAll(cfd, resp) catch return;
             }
         }
     };
     const th = try std.Thread.spawn(std.Thread.SpawnConfig{}, ServerCtx.run, .{ServerCtx{ .lfd = lfd }});
+    defer {
+        _ = c.shutdown(lfd, 2);
+        th.join();
+    }
 
     var host_buf: [32]u8 = undefined;
     const host = try std.fmt.bufPrint(&host_buf, "http://127.0.0.1:{d}", .{port});
@@ -755,12 +770,10 @@ test "Connection.request redials for a second request (Connection: close)" {
 
     var resp: [256]u8 = undefined;
     const n1 = conn.request("GET", "/api/vms", null, &resp);
-    try std.testing.expect(n1 > 0 and std.mem.indexOf(u8, resp[0..n1], "{\"ok\":true}") != null);
+    try std.testing.expectEqualStrings("{\"first\":1}", resp[0..n1]);
     // Second request on the same Connection must succeed by redialing.
     const n2 = conn.request("GET", "/api/vms/0", null, &resp);
-    try std.testing.expect(n2 > 0 and std.mem.indexOf(u8, resp[0..n2], "{\"ok\":true}") != null);
-
-    th.join();
+    try std.testing.expectEqualStrings("{\"second\":2}", resp[0..n2]);
 }
 
 test "Connection.request over Unix sends valid HTTP (regression: no //api framing)" {
