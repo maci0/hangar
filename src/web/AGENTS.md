@@ -36,6 +36,9 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 - **Navigation**: Tools stays available without a selected VM; only VM-specific
   entries are disabled. Responsive toolbar hiding applies to direct toolbar buttons,
   not the buttons inside More. Context-menu actions stop when selection is cancelled.
+- **Power actions**: toolbar, batch and multi-select requests use `/start` or `/stop`,
+  never `/power`, so duplicate delivery cannot reverse the requested state. Capture
+  the toolbar's intended state before confirmation and re-resolve its VM afterward.
 - **Library search**: list redraws preserve the search input's current query.
 - **Network saving**: Save All validates and includes the selected network's current
   form values without requiring Save Selected first. Invalid values leave the editor

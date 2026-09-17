@@ -382,10 +382,11 @@ updateCommandState();}
 async function loadLogInto(idx){var body=document.getElementById('logbody');if(!body)return;body.textContent='Loading…';try{var r=await fetch('/api/vms/'+idx+'/log',{headers:{'X-API-Key':API_KEY}});if(r.status===404){body.textContent='No log output yet from this VM.';return;}if(!r.ok){var msg=await r.text().catch(function(){return '';});try{var j=JSON.parse(msg);if(j.error)msg=j.error;}catch(e){}body.textContent='Failed to load log: '+(msg||('HTTP '+r.status));return;}var txt=await r.text();body.textContent=txt&&txt.length?txt:'(log is empty)';body.scrollTop=body.scrollHeight;}catch(ex){body.textContent='Failed to load log: '+(ex&&ex.message?ex.message:'request failed');}}
 function viewLog(){if(sel===null||sel>=vms.length)return;var nm=document.getElementById('log_vmname');if(nm)nm.textContent=vms[sel].name;var dlg=document.getElementById('logdlg');if(dlg)dlg.showModal();loadLogInto(sel);}
 function refreshLog(){if(sel===null)return;loadLogInto(sel);}
-async function powerToggle(){const idx=sel;if(idx===null)return;const v=vms[idx];if(v&&(v.status==='running'||v.status==='paused')){if(!(await showConfirmDialog('Power off VM "'+v.name+'"?\nUnsaved data may be lost.',{danger:true,okLabel:'Power Off'})))return;}
+async function powerToggle(){let idx=sel;if(idx===null)return;const v=vms[idx];if(!v)return;const stop=v.status==='running'||v.status==='paused';if(stop){if(!(await showConfirmDialog('Power off VM "'+v.name+'"?\nUnsaved data may be lost.',{danger:true,okLabel:'Power Off'})))return;}
+idx=v.id?idxById(v.id):idxByName(v.name);if(idx<0)return;
 var btn=document.getElementById('powerbtn');if(btn){btn.disabled=true;btn.textContent='...';btn.setAttribute('aria-busy','true');}
 transitioningIdx=idx;renderList();
-try{const r=await apiPost('/api/vms/'+idx+'/power');transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);renderList();}finally{if(btn){updatePowerBtn();btn.disabled=false;}}}else{if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}catch(e){transitioningIdx=null;if(btn){updatePowerBtn();btn.disabled=false;}renderList();setStatus('Power toggle failed: '+e.message);}}
+try{const r=await apiPost('/api/vms/'+idx+(stop?'/stop':'/start'));transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);renderList();}finally{if(btn){updatePowerBtn();btn.disabled=false;}}}else{if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}catch(e){transitioningIdx=null;if(btn){updatePowerBtn();btn.disabled=false;}renderList();setStatus('Power toggle failed: '+e.message);}}
 async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Send ACPI shutdown to "'+v.name+'"?')))return;const r=await apiPost('/api/vms/'+sel+'/shutdown');if(r)setStatus('Shut down guest, ACPI power button sent.');}
 async function resetGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Reset guest "'+v.name+'"?\nUnsaved data in the guest may be lost.',{danger:true,okLabel:'Reset'})))return;const r=await apiPost('/api/vms/'+sel+'/reset');if(r)setStatus('Reset guest, system_reset sent.');}
 async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/pause');if(r){await refresh();setStatus('Paused guest, execution frozen.');}}
@@ -413,13 +414,13 @@ if(added>=0)await select(added);
 setStatus('VM imported.');}
 async function batchStart(){var btns=document.querySelectorAll('[data-action="batchStart"]');for(var b=0;b<btns.length;b++){btns[b].setAttribute('data-prev-label',btns[b].textContent);btns[b].disabled=true;btns[b].textContent='...';}
 var started=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped')total++;}
-for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){setStatus('Batch start: VM '+(started+failed+1)+' of '+total+'...');const r=await apiPost('/api/vms/'+i+'/power');if(r){started++;}else{failed++;setStatus('Batch start: VM '+(started+failed)+' of '+total+' failed, continuing...');}}}
+for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){setStatus('Batch start: VM '+(started+failed+1)+' of '+total+'...');const r=await apiPost('/api/vms/'+i+'/start');if(r){started++;}else{failed++;setStatus('Batch start: VM '+(started+failed)+' of '+total+' failed, continuing...');}}}
 await refresh();setStatus('Batch start complete: '+started+' started'+(failed>0?', '+failed+' failed':''));
 for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent=btns[b2].getAttribute('data-prev-label')||'Power On All Stopped';btns[b2].removeAttribute('data-prev-label');}}
 async function batchStop(){if(!(await showConfirmDialog('Power off ALL running VMs?\nUnsaved data may be lost.',{danger:true,okLabel:'Power Off All'})))return;
 var btns=document.querySelectorAll('[data-action="batchStop"]');for(var b=0;b<btns.length;b++){btns[b].setAttribute('data-prev-label',btns[b].textContent);btns[b].disabled=true;btns[b].textContent='...';}
 var stopped=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status==='running'||vms[i].status==='paused')total++;}
-for(let i=vms.length-1;i>=0;i--){if(vms[i].status==='running'||vms[i].status==='paused'){setStatus('Batch stop: VM '+(stopped+failed+1)+' of '+total+'...');const r=await apiPost('/api/vms/'+i+'/power');if(r){stopped++;}else{failed++;setStatus('Batch stop: VM '+(stopped+failed)+' of '+total+' failed, continuing...');}}}
+for(let i=vms.length-1;i>=0;i--){if(vms[i].status==='running'||vms[i].status==='paused'){setStatus('Batch stop: VM '+(stopped+failed+1)+' of '+total+'...');const r=await apiPost('/api/vms/'+i+'/stop');if(r){stopped++;}else{failed++;setStatus('Batch stop: VM '+(stopped+failed)+' of '+total+' failed, continuing...');}}}
 await refresh();setStatus('Batch stop complete: '+stopped+' stopped'+(failed>0?', '+failed+' failed':''));
 for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent=btns[b2].getAttribute('data-prev-label')||'Power Off All Running';btns[b2].removeAttribute('data-prev-label');}}
 async function takeSnapshot(){if(sel===null)return;await openSnapshots();var t=document.getElementById('s_tag');if(t){t.focus();t.select();}}
@@ -983,7 +984,7 @@ async function doBulkPower(on){
   if(!checkedIds.size){showToast('No VMs selected','warn');return;}
   var verb=on?'Power on':'Power off';
   if(!(await showConfirmDialog(verb+' '+checkedIds.size+' selected VM(s)?',on?{okLabel:'Power On'}:{danger:true,okLabel:'Power Off'})))return;
-  await bulkRun(verb,function(idx){var v=vms[idx];var running=(v.status==='running'||v.status==='paused');if((on&&running)||(!on&&!running))return Promise.resolve(true);return apiPost('/api/vms/'+idx+'/power');});
+  await bulkRun(verb,function(idx){var v=vms[idx];var running=(v.status==='running'||v.status==='paused');if((on&&running)||(!on&&!running))return Promise.resolve(true);return apiPost('/api/vms/'+idx+(on?'/start':'/stop'));});
 }
 async function doBulkSnapshot(){
   if(!checkedIds.size){showToast('No VMs selected','warn');return;}

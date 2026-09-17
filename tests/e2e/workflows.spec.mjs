@@ -46,6 +46,63 @@ test.beforeEach(async ({ page }) => {
     await expect(page.locator('#vmlist')).toBeVisible();
 });
 
+for (const control of ['toolbar', 'batch', 'bulk']) {
+    test(`${control} power actions survive duplicate delivery`, async ({ page }) => {
+        const name = `wf-repeat-${control}`;
+        const created = await api(page, 'POST', '/api/vms', `name=${name}&mem=128&cpu=1&disk=1&display=vnc&firmware=bios&accel=tcg`);
+        expect(created.ok).toBe(true);
+        const idx = await indexOf(page, name);
+        const deliveries = [];
+        const powerRoute = new RegExp(`/api/vms/${idx}/(power|start|stop)$`);
+        await page.route(powerRoute, async (route) => {
+            const states = [];
+            const statuses = [];
+            for (let attempt = 0; attempt < 2; attempt++) {
+                const response = await route.fetch();
+                statuses.push(response.status());
+                const inventory = await page.request.get('/api/vms');
+                const vm = (await inventory.json()).find((v) => v.name === name);
+                states.push({ status: vm.status, started: vm.started });
+                if (attempt === 1) {
+                    deliveries.push({ path: new URL(route.request().url()).pathname, statuses, states });
+                    await route.fulfill({ response });
+                }
+            }
+        });
+        try {
+            await page.reload();
+            await page.locator('.vm-item', { hasText: name }).click();
+            if (control === 'bulk') {
+                await page.click('#selectToggle');
+                await page.locator('.vm-item', { hasText: name }).locator('.vm-check').check();
+            }
+            for (const on of [true, false]) {
+                if (control === 'toolbar') {
+                    await page.click('#powerbtn');
+                } else if (control === 'batch') {
+                    await page.locator('[data-menu="dangerMenu"]:visible').click();
+                    await page.locator(`[data-action="${on ? 'batchStart' : 'batchStop'}"]`).click();
+                } else {
+                    await page.locator(`[data-action="bulkPower"][data-on="${on ? '1' : '0'}"]`).click();
+                }
+                if (!on || control === 'bulk') await page.locator('#confirmOkBtn').click();
+                await expect.poll(() => deliveries.length).toBe(on ? 1 : 2);
+                const delivery = deliveries.at(-1);
+                expect(delivery.statuses).toEqual([200, 200]);
+                expect(delivery.states[0].status).toBe(on ? 'running' : 'stopped');
+                expect(delivery.states[1]).toEqual(delivery.states[0]);
+                expect(delivery.path).toBe(`/api/vms/${idx}/${on ? 'start' : 'stop'}`);
+                await expect.poll(async () => (await list(page)).find((v) => v.name === name).status).toBe(on ? 'running' : 'stopped');
+                await expect(page.locator('#powerbtn')).toHaveText(on ? 'Power Off' : 'Power On');
+            }
+        } finally {
+            await page.unroute(powerRoute);
+            await api(page, 'POST', `/api/vms/${idx}/stop`, '');
+            await api(page, 'POST', `/api/vms/${idx}/delete`, '');
+        }
+    });
+}
+
 for (const width of [1280, 390]) {
     test(`global Tools remain usable from Home at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
