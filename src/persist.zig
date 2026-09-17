@@ -2108,6 +2108,14 @@ test "emit→parse JSON text round-trip preserves all fields" {
     // Build a fully-populated VmConfig.
     var original = vm.VmConfig{};
     original.setName("RoundTrip");
+    original.setId("deadbeefcafe0001");
+    original.setTags("prod,web");
+    original.setFolder("Servers");
+    original.setVnet("VMnet8");
+    original.setCloudInit("#cloud-config\npackages:\n  - htop\n");
+    original.rtc = .localtime;
+    original.video_stream = true;
+    original.video_bitrate_kbps = 6500;
     original.cpu_cores = 8;
     original.cpu_sockets = 2;
     original.cpu_model = .Skylake_Server;
@@ -2200,6 +2208,14 @@ test "emit→parse JSON text round-trip preserves all fields" {
 
     // Verify every field survived the round-trip.
     try std.testing.expectEqualStrings("RoundTrip", restored.getNameSlice());
+    try std.testing.expectEqualStrings("deadbeefcafe0001", restored.getIdSlice());
+    try std.testing.expectEqualStrings("prod,web", restored.getTagsSlice());
+    try std.testing.expectEqualStrings("Servers", restored.getFolderSlice());
+    try std.testing.expectEqualStrings("VMnet8", restored.getVnetSlice());
+    try std.testing.expectEqualStrings("#cloud-config\npackages:\n  - htop\n", restored.getCloudInitSlice());
+    try std.testing.expectEqual(vm.RtcBase.localtime, restored.rtc);
+    try std.testing.expect(restored.video_stream);
+    try std.testing.expectEqual(@as(u32, 6500), restored.video_bitrate_kbps);
     try std.testing.expectEqual(@as(u32, 8), restored.cpu_cores);
     try std.testing.expectEqual(@as(u32, 2), restored.cpu_sockets);
     try std.testing.expectEqual(vm.CpuModel.Skylake_Server, restored.cpu_model);
