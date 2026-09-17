@@ -215,14 +215,14 @@ function publishVms(){if(window.van){if(!vmsState){vmsState=van.state(vms.slice(
 function fetchHost(){if(!window.van)return;if(!hostState)hostState=van.state({cpu_cores:0,ram_mb:0});try{fetch('/api/host').then(function(r){return r.json();}).then(function(h){hostState.val={cpu_cores:h.cpu_cores||0,ram_mb:h.ram_mb||0};}).catch(function(){});}catch(e){}}
 function dashStats(list){var st={running:0,stopped:0,paused:0,suspended:0},vcpu=0,ram=0,disk=0,att=[];
  for(var i=0;i<list.length;i++){var v=list[i];st[v.status]=(st[v.status]||0)+1;vcpu+=Number(v.cpu)||0;ram+=Number(v.mem)||0;disk+=Number(v.disk)||0;if(summaryWarnings(v)!=='')att.push(v.name);}
- return {st:st,vcpu:vcpu,ramGB:Math.round(ram/102.4)/10,disk:disk,att:att,count:list.length};}
+ return {st:st,vcpu:vcpu,ramMB:ram,ramGB:Math.round(ram/102.4)/10,disk:disk,att:att,count:list.length};}
 var DASH_COLS=[['name','Name'],['status','State'],['os','Guest OS'],['cpu','vCPU'],['mem','RAM'],['disk','Disk'],['folder','Folder'],['tags','Tags']];
 function DashView(){
  var t=van.tags;
  if(!dashSortState)dashSortState=van.state({col:dashSort.col,dir:dashSort.dir});
  function card(get,label,cls){return t.div({class:'dash-card'},t.div({class:'dash-num '+(cls||'')},get),t.div({class:'dash-lbl'},label));}
  function physCpu(){return (hostState&&hostState.val.cpu_cores)||0;}
- function physRamGb(){var m=(hostState&&hostState.val.ram_mb)||0;return Math.round(m/1024);}
+ function physRamMb(){return (hostState&&hostState.val.ram_mb)||0;}
  function gauge(label,getCommitted,getPhysical,unit){
   return t.div({class:'cap-row'},
    t.span({class:'cap-label'},label),
@@ -232,10 +232,10 @@ function DashView(){
  }
  return t.div({class:'dash'},
   t.div({class:'dash-head'},t.h2('Inventory'),t.span({class:'muted'},function(){var c=vmsState.val.length;return c+' virtual machine'+(c===1?'':'s');})),
-  t.div({class:'cap-panel',style:function(){return (physCpu()||physRamGb())?'':'display:none';}},
-   t.div({class:'cap-panel-head'},t.h3('Host Capacity'),t.span({class:'muted'},function(){return physCpu()+' cores · '+physRamGb()+' GB RAM';})),
+  t.div({class:'cap-panel',style:function(){return (physCpu()||physRamMb())?'':'display:none';}},
+   t.div({class:'cap-panel-head'},t.h3('Host Capacity'),t.span({class:'muted'},function(){return physCpu()+' cores · '+(Math.round(physRamMb()/102.4)/10)+' GiB RAM';})),
    gauge('vCPU committed',function(){return dashStats(vmsState.val).vcpu;},physCpu,'vCPU'),
-   gauge('RAM committed',function(){return Math.round(dashStats(vmsState.val).ramGB);},physRamGb,'GB')),
+   gauge('RAM committed',function(){return dashStats(vmsState.val).ramMB;},physRamMb,'MiB')),
   t.div({class:'dash-cards'},
    card(function(){return String(dashStats(vmsState.val).st.running||0);},'Running','running'),
    card(function(){return String(dashStats(vmsState.val).st.stopped||0);},'Stopped',''),

@@ -39,6 +39,8 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 - **Power actions**: toolbar, batch and multi-select requests use `/start` or `/stop`,
   never `/power`, so duplicate delivery cannot reverse the requested state. Capture
   the toolbar's intended state before confirmation and re-resolve its VM afterward.
+- **RAM capacity**: compare committed and physical memory in exact MiB; round only
+  display labels, never the quantities used for overcommit or gauge ratios.
 - **Library search**: list redraws preserve the search input's current query.
 - **Network saving**: Save All validates and includes the selected network's current
   form values without requiring Save Selected first. Invalid values leave the editor

@@ -557,6 +557,26 @@ test('dashboard shows host capacity (committed vs physical)', async ({ page }) =
     expect(txt).toMatch(/RAM committed/);
 });
 
+test('RAM capacity compares exact MiB at the overcommit boundary', async ({ page }) => {
+    const created = await api(page, 'POST', '/api/vms', 'name=cap-boundary&mem=512&cpu=1&disk=1');
+    expect(created.ok).toBe(true);
+    const committed = (await list(page)).reduce((sum, v) => sum + v.mem, 0);
+    let physical = committed - 1;
+    await page.route('**/api/host', route => route.fulfill({ json: { cpu_cores: 4, ram_mb: physical } }));
+    for (const capacity of [committed - 1, committed, committed + 1, 0]) {
+        physical = capacity;
+        await page.reload();
+        const ram = page.locator('.cap-row').filter({ hasText: 'RAM committed' });
+        await expect(ram.locator('.cap-val')).toHaveText(capacity > 0
+            ? `${committed} / ${capacity} MiB` : `${committed} MiB`);
+        const overcommitted = capacity > 0 && committed > capacity;
+        await expect(ram.locator('.cap-over')).toHaveText(overcommitted
+            ? `${Math.round(committed / capacity * 100) / 100}× overcommit` : '');
+        await expect(ram.locator('.cap-fill')).toHaveAttribute('style', new RegExp(overcommitted
+            ? 'var\\(--danger\\)' : 'var\\(--accent\\)'));
+    }
+});
+
 test('SSE: a VM created via the API appears in the UI within 3s, no reload', async ({ page }) => {
     const t0 = Date.now();
     await api(page, 'POST', '/api/vms', 'name=wf-sse&mem=1024&cpu=1&disk=1');
