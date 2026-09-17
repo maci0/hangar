@@ -189,6 +189,7 @@ pub const QmpClient = struct {
     /// command response; the 100-iteration cap prevents infinite loops
     /// if the server floods events.
     fn readResponse(self: *QmpClient) ![]const u8 {
+        errdefer self.disconnect();
         var attempts: usize = 0;
         while (attempts < 100) : (attempts += 1) {
             const line = try self.readLine();
@@ -1108,6 +1109,47 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
     }
     try std.testing.expect(connected_sessions > 0);
     try std.testing.expectEqual(connected_sessions, command_batches);
+}
+
+test "readResponse: exhausted event budget disconnects and discards pending replies" {
+    var fds: [2]c_qmp.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c_qmp.socketpair(c_qmp.AF.UNIX, c_qmp.SOCK.STREAM, 0, &fds));
+    defer _ = c_qmp.close(fds[1]);
+    var client = QmpClient{ .stream = .{ .fd = fds[0] }, .connected = true };
+    defer client.disconnect();
+    const replies = "{\"event\":\"STOP\"}\n" ** 100 ++ "{\"return\":{}}\n";
+    @memcpy(client.rbuf[0..replies.len], replies);
+    client.rbuf_len = replies.len;
+
+    try std.testing.expectError(error.CommandFailed, client.expectReturn());
+    try std.testing.expect(!client.connected);
+    try std.testing.expect(client.stream == null);
+    try std.testing.expectEqual(@as(usize, 0), client.rbuf_pos);
+    try std.testing.expectEqual(@as(usize, 0), client.rbuf_len);
+    try std.testing.expectError(error.ConnectionFailed, client.pause());
+}
+
+test "readResponse: final allowed reply preserves the connection" {
+    for ([_][]const u8{ "{\"return\":{}}\n", "{\"error\":{}}\n" }) |reply| {
+        var fds: [2]c_qmp.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c_qmp.socketpair(c_qmp.AF.UNIX, c_qmp.SOCK.STREAM, 0, &fds));
+        defer _ = c_qmp.close(fds[1]);
+        var client = QmpClient{ .stream = .{ .fd = fds[0] }, .connected = true };
+        defer client.disconnect();
+        const events = "{\"event\":\"STOP\"}\n" ** 99;
+        @memcpy(client.rbuf[0..events.len], events);
+        @memcpy(client.rbuf[events.len..][0..reply.len], reply);
+        client.rbuf_len = events.len + reply.len;
+
+        if (std.mem.indexOf(u8, reply, "\"return\"") != null) {
+            try client.expectReturn();
+        } else {
+            try std.testing.expectError(error.CommandFailed, client.expectReturn());
+        }
+        try std.testing.expect(client.connected);
+        try std.testing.expect(client.stream != null);
+        try std.testing.expectEqual(client.rbuf_len, client.rbuf_pos);
+    }
 }
 
 test "readResponse: EOF disconnects and clears partial replies" {
