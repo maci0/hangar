@@ -22,6 +22,7 @@ const wlog = @import("wlog.zig");
 
 /// Maximum number of VMs (single source in vm.zig).
 const MAX_VMS = vm.MAX_VMS;
+const MAX_CONFIG_BYTES = 32 * 1024 * 1024;
 
 /// Current on-disk config schema version. Single source of truth: bumped
 /// whenever the persisted format changes in a way readers must notice.
@@ -1560,7 +1561,7 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
         appio.io(),
         file_path,
         allocator,
-        .limited(10 * 1024 * 1024),
+        .limited(MAX_CONFIG_BYTES),
     ) catch |e| {
         // FileNotFound is normal on first run. Any other failure (permission,
         // I/O error, oversize) means an existing config exists but could not be
@@ -1669,6 +1670,45 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "persist: full inventory with escaped fields fits the file read limit" {
+    const alloc = std.testing.allocator;
+    var cfg = vm.VmConfig{};
+    cfg.setId("full-inventory");
+    const path = [_]u8{0x01} ** vm.MAX_PATH;
+    const cloud_init = [_]u8{0x01} ** vm.MAX_CLOUD_INIT;
+    cfg.setDiskPath(&path);
+    cfg.setIsoPath(&path);
+    cfg.setSavedStatePath(&path);
+    cfg.setSharedFolder(&path);
+    cfg.setDisk2Path(&path);
+    cfg.setFloppyPath(&path);
+    for (0..vm.MAX_EXTRA_DISKS) |i| cfg.setExtraDiskPath(i, &path);
+    cfg.setNotes(&path);
+    cfg.setCloudInit(&cloud_init);
+
+    var list: List = .empty;
+    defer list.deinit(alloc);
+    try emit(&list, alloc, "{\"vms\":[");
+    for (0..MAX_VMS) |i| {
+        if (i > 0) try emit(&list, alloc, ",");
+        try emitVmJson(&list, alloc, &cfg);
+    }
+    try emit(&list, alloc, "]}");
+    try std.testing.expect(list.items.len <= MAX_CONFIG_BYTES);
+
+    const loaded = try alloc.create([MAX_VMS]vm.VmConfig);
+    defer alloc.destroy(loaded);
+    var prefs = vm.Prefs{};
+    try std.testing.expectEqual(MAX_VMS, loadFromSlice(loaded, list.items, &prefs));
+    for (loaded) |*item| {
+        try std.testing.expectEqualStrings(cfg.getDiskPathSlice(), item.getDiskPathSlice());
+        try std.testing.expectEqualStrings(cfg.getCloudInitSlice(), item.getCloudInitSlice());
+        for (cfg.extra_disks, item.extra_disks) |expected, actual| {
+            try std.testing.expectEqualStrings(expected.path_buf[0..expected.path_len], actual.path_buf[0..actual.path_len]);
+        }
+    }
+}
 
 test "persist: secondary NIC modes preserve valid values and default to none" {
     const cases = [_]struct { value: []const u8, expected: vm.NetworkMode }{

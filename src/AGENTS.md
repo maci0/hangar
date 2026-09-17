@@ -56,6 +56,8 @@ globals in `appstate.zig`.
   control bytes, as well as Unicode escapes and UTF-16 surrogate pairs.
 - **VM config metadata:** `persist` reads `version`, `theme`, `prefs`, and `vms`
   only from the root object; nested fields and string values cannot select them.
+- **VM config file size:** `persist` reads up to 32 MiB. The read cap must accommodate
+  `MAX_VMS` configurations with maximum-length JSON-escaped string fields.
 - **Add a `VmConfig` field →** update `VmJson` + `emitVmJson` + `parseVmObject` +
   `fromVmJson` in `persist.zig`, add a round-trip parser test, and emit it in **both**
   `vmrender.zig` renders. Large string fields also need the `parseVmObject` `str_buf`,
