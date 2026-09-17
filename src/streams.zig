@@ -684,14 +684,36 @@ test "streams: parseUploadFilename handles quoted + unquoted" {
 }
 
 test "streams: uploadErr maps server vs client tokens (pipe fd)" {
-    var fds: [2]c.fd_t = undefined;
-    if (c.pipe(&fds) != 0) return;
-    defer _ = c.close(fds[0]);
-    defer _ = c.close(fds[1]);
-    uploadErr(fds[1], "write err"); // server token -> 500
-    var buf: [256]u8 = undefined;
-    const n = c.read(fds[0], &buf, buf.len);
-    try std.testing.expect(n > 0 and std.mem.indexOf(u8, buf[0..@intCast(n)], "500") != null);
+    const cases = .{
+        .{ "write err", "HTTP/1.1 500 Internal Server Error\r\n", "{\"error\":\"write err\"}" },
+        .{ "save failed", "HTTP/1.1 500 Internal Server Error\r\n", "{\"error\":\"save failed\"}" },
+        .{ "bad filename", "HTTP/1.1 400 Bad Request\r\n", "{\"error\":\"bad filename\"}" },
+        .{ "no content-length", "HTTP/1.1 400 Bad Request\r\n", "{\"error\":\"no content-length\"}" },
+    };
+    inline for (cases) |case| {
+        var fds: [2]c.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds));
+        defer _ = c.close(fds[0]);
+        {
+            defer _ = c.close(fds[1]);
+            uploadErr(fds[1], case[0]);
+        }
+        var buf: [2048]u8 = undefined;
+        var len: usize = 0;
+        while (true) {
+            try std.testing.expect(len < buf.len);
+            const n = c.read(fds[0], buf[len..].ptr, buf.len - len);
+            try std.testing.expect(n >= 0);
+            if (n == 0) break;
+            len += @intCast(n);
+        }
+        const response = buf[0..len];
+        try std.testing.expect(std.mem.startsWith(u8, response, case[1]));
+        try std.testing.expectEqualStrings("application/json; charset=utf-8", findHeader(response, "content-type: ").?);
+        const body = httpreq.getBody(response).?;
+        try std.testing.expectEqualStrings(case[2], body);
+        try std.testing.expectEqual(@as(?usize, body.len), parseContentLength(response));
+    }
 }
 
 test "streams: screenshot rejects a non-matching request (writes to a pipe)" {

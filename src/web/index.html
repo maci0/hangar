@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hangar: VM Manager</title>
 <link rel="stylesheet" href="/app.css">
-<link rel="stylesheet" href="/xterm.css">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -181,6 +180,7 @@
     </div>
     <!-- Serial console panel -->
     <div id="serialpanel">
+      <div id="serialStatus" role="status" aria-live="polite"></div>
       <div id="serialterm" role="group" aria-label="Serial console terminal"></div>
       <div class="serial-resize-handle" id="serialResize" title="Drag to resize" aria-hidden="true"></div>
       <div class="serial-toolbar">
@@ -506,12 +506,9 @@
   </div>
 </dialog>
 
-<script src="/novnc.js"></script>
-<script src="/spice.js"></script>
-<script src="/van.js"></script>
-<script src="/xterm.js"></script>
-<script src="/xterm-fit.js"></script>
-<script src="/xterm-webgl.js"></script>
+<script src="/novnc.js" defer></script>
+<script src="/spice.js" defer></script>
+<script src="/van.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>
