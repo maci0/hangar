@@ -57,48 +57,86 @@ pub fn render(idx: usize, out: []u8) []const u8 {
         fb_vm_idx = idx;
         fb_vnc_port = @intCast(vnc_port);
     }
-    if (vc.lockFb()) |pixels| {
-        defer vc.unlockFb();
-        var fw: c_int = 0;
-        var fh: c_int = 0;
-        if (vc.getSize(&fw, &fh) and fw > 0 and fh > 0) {
-            const pixel_size: usize = @intCast(@as(u64, @intCast(fw)) * @as(u64, @intCast(fh)) * 4);
-            if (out.len < 54) return "no fb";
-            const copy_size = @min(pixel_size, out.len - 54);
-            if (pixel_size > out.len - 54) {
-                var wb: [128]u8 = undefined;
-                warn(std.fmt.bufPrint(&wb, "VNC framebuffer {d}x{d} ({d} bytes) truncated to {d} bytes", .{ fw, fh, pixel_size, out.len - 54 }) catch "VNC framebuffer truncated");
-            }
-            const file_size: u32 = @intCast(54 + copy_size);
-
-            // ── BITMAPFILEHEADER (14 bytes) ──────────────────────
-            out[0] = 'B';
-            out[1] = 'M';
-            std.mem.writeInt(u32, out[2..6], file_size, .little); // bfSize
-            std.mem.writeInt(u32, out[6..10], 0, .little); // bfReserved
-            std.mem.writeInt(u32, out[10..14], 54, .little); // bfOffBits
-
-            // ── BITMAPINFOHEADER (40 bytes) ──────────────────────
-            @memset(out[14..54], 0); // zero-fill then set fields
-            std.mem.writeInt(u32, out[14..18], 40, .little); // biSize
-            std.mem.writeInt(i32, out[18..22], fw, .little); // biWidth
-            std.mem.writeInt(i32, out[22..26], -fh, .little); // biHeight (negative = top-down)
-            std.mem.writeInt(u16, out[26..28], 1, .little); // biPlanes
-            std.mem.writeInt(u16, out[28..30], 32, .little); // biBitCount
-            // biCompression = 0 (BI_RGB), biSizeImage = 0 (OK for BI_RGB)
-            // biXPelsPerMeter = biYPelsPerMeter = 2835 (~72 DPI)
-            std.mem.writeInt(u32, out[38..42], 2835, .little);
-            std.mem.writeInt(u32, out[42..46], 2835, .little);
-
-            // ── Pixel data ───────────────────────────────────────
-            @memcpy(out[54..][0..copy_size], @as([*]const u8, @ptrCast(pixels))[0..copy_size]);
-            return out[0 .. 54 + copy_size];
+    const framebuffer = vc.lockFb();
+    defer vc.unlockFb();
+    const pixels = framebuffer orelse return "no fb";
+    var fw: c_int = 0;
+    var fh: c_int = 0;
+    if (vc.getSize(&fw, &fh) and fw > 0 and fh > 0) {
+        const pixel_size: usize = @intCast(@as(u64, @intCast(fw)) * @as(u64, @intCast(fh)) * 4);
+        if (out.len < 54) return "no fb";
+        const copy_size = @min(pixel_size, out.len - 54);
+        if (pixel_size > out.len - 54) {
+            var wb: [128]u8 = undefined;
+            warn(std.fmt.bufPrint(&wb, "VNC framebuffer {d}x{d} ({d} bytes) truncated to {d} bytes", .{ fw, fh, pixel_size, out.len - 54 }) catch "VNC framebuffer truncated");
         }
+        const file_size: u32 = @intCast(54 + copy_size);
+
+        // ── BITMAPFILEHEADER (14 bytes) ──────────────────────
+        out[0] = 'B';
+        out[1] = 'M';
+        std.mem.writeInt(u32, out[2..6], file_size, .little); // bfSize
+        std.mem.writeInt(u32, out[6..10], 0, .little); // bfReserved
+        std.mem.writeInt(u32, out[10..14], 54, .little); // bfOffBits
+
+        // ── BITMAPINFOHEADER (40 bytes) ──────────────────────
+        @memset(out[14..54], 0); // zero-fill then set fields
+        std.mem.writeInt(u32, out[14..18], 40, .little); // biSize
+        std.mem.writeInt(i32, out[18..22], fw, .little); // biWidth
+        std.mem.writeInt(i32, out[22..26], -fh, .little); // biHeight (negative = top-down)
+        std.mem.writeInt(u16, out[26..28], 1, .little); // biPlanes
+        std.mem.writeInt(u16, out[28..30], 32, .little); // biBitCount
+        // biCompression = 0 (BI_RGB), biSizeImage = 0 (OK for BI_RGB)
+        // biXPelsPerMeter = biYPelsPerMeter = 2835 (~72 DPI)
+        std.mem.writeInt(u32, out[38..42], 2835, .little);
+        std.mem.writeInt(u32, out[42..46], 2835, .little);
+
+        // ── Pixel data ───────────────────────────────────────
+        @memcpy(out[54..][0..copy_size], @as([*]const u8, @ptrCast(pixels))[0..copy_size]);
+        return out[0 .. 54 + copy_size];
     }
     return "no fb";
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "framebuffer: missing pixels releases the framebuffer lock" {
+    const saved_client = fb_client;
+    const saved_idx = fb_vm_idx;
+    const saved_port = fb_vnc_port;
+    var client = vnc.VncClient{};
+    @atomicStore(bool, &client.connected, true, .seq_cst);
+    fb_client = &client;
+    fb_vm_idx = 0;
+    fb_vnc_port = 5900;
+    defer {
+        fb_client = saved_client;
+        fb_vm_idx = saved_idx;
+        fb_vnc_port = saved_port;
+    }
+
+    appstate.vms_mutex.lock();
+    const saved_count = appstate.vm_count;
+    const saved_vm = appstate.vms[0];
+    appstate.vm_count = 1;
+    appstate.vms[0] = .{ .status = .running, .vnc_port = 5900 };
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = saved_count;
+        appstate.vms[0] = saved_vm;
+        appstate.vms_mutex.unlock();
+    }
+
+    try std.testing.expectEqualStrings("no fb", render(0, &.{}));
+    const released = client.mutex.inner.tryLock();
+    client.mutex.unlock();
+    try std.testing.expect(released);
+    try std.testing.expectEqualStrings("no fb", render(0, &.{}));
+    const released_again = client.mutex.inner.tryLock();
+    client.mutex.unlock();
+    try std.testing.expect(released_again);
+}
 
 test "framebuffer: out-of-range idx returns 'no vm'" {
     // vm_count is 0 in a fresh test binary, so any index is out of range.
