@@ -792,6 +792,9 @@ fn parseJsonIntGeneric(comptime T: type, s: []const u8) ?struct { value: T, rest
     if (s.len > 0 and s[0] == '-') return null;
     while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
     if (i == 0) return null;
+    if (i > 1 and s[0] == '0') return null;
+    const rest = skipWs(s[i..]);
+    if (rest.len > 0 and std.mem.indexOfScalar(u8, ",}]", rest[0]) == null) return null;
     const val = std.fmt.parseInt(T, s[0..i], 10) catch return null;
     return .{ .value = val, .rest = s[i..] };
 }
@@ -803,6 +806,10 @@ fn parseJsonIntSignedGeneric(comptime T: type, s: []const u8) ?struct { value: T
     if (s.len > 0 and s[0] == '-') i += 1;
     while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
     if (i == 0 or (i == 1 and s[0] == '-')) return null;
+    const start: usize = if (s[0] == '-') 1 else 0;
+    if (i - start > 1 and s[start] == '0') return null;
+    const rest = skipWs(s[i..]);
+    if (rest.len > 0 and std.mem.indexOfScalar(u8, ",}]", rest[0]) == null) return null;
     const val = std.fmt.parseInt(T, s[0..i], 10) catch return null;
     return .{ .value = val, .rest = s[i..] };
 }
@@ -2823,6 +2830,34 @@ test "parseJsonInt: value too large for u32 returns null" {
     try std.testing.expect(parseJsonInt("99999999999") == null);
 }
 
+test "parseJsonInt: non-integer JSON numbers rejected, not truncated" {
+    try std.testing.expect(parseJsonInt("1e3,") == null);
+    try std.testing.expect(parseJsonInt("1E3}") == null);
+    try std.testing.expect(parseJsonInt("1.9,") == null);
+    try std.testing.expect(parseJsonInt("5 0,") == null);
+    try std.testing.expect(parseJsonInt64("2e5,") == null);
+    try std.testing.expect(parseJsonInt64("3.14}") == null);
+    try std.testing.expect(parseJsonIntSigned("1e2,") == null);
+    try std.testing.expect(parseJsonIntSigned("1.5}") == null);
+    try std.testing.expect(parseJsonIntSigned("-1e3,") == null);
+    try std.testing.expect(parseJsonIntSigned64("1e9,") == null);
+    try std.testing.expect(parseJsonIntSigned64("-1.5}") == null);
+    for ([_][]const u8{ "01,", "00}", "0x10,", "42abc,", "1_000,", "1+2,", "1-2," }) |input| {
+        try std.testing.expect(parseJsonInt(input) == null);
+        try std.testing.expect(parseJsonInt64(input) == null);
+        try std.testing.expect(parseJsonIntSigned(input) == null);
+        try std.testing.expect(parseJsonIntSigned64(input) == null);
+    }
+    try std.testing.expect(parseJsonIntSigned("-01,") == null);
+    try std.testing.expect(parseJsonIntSigned64("-00}") == null);
+    try std.testing.expectEqual(@as(i32, 0), parseJsonIntSigned("-0}").?.value);
+    const spaced = parseJsonInt("42 \r\n\t}").?;
+    try std.testing.expectEqual(@as(u32, 42), spaced.value);
+    try std.testing.expectEqualStrings(" \r\n\t}", spaced.rest);
+    try std.testing.expectEqual(@as(u32, 1), parseJsonInt("1,\"a e. b\":2}").?.value);
+    try std.testing.expectEqual(@as(i32, -1), parseJsonIntSigned("-1,\"a\":2}").?.value);
+}
+
 test "parseJsonInt64: decimal parse" {
     const r = parseJsonInt64("42,").?;
     try std.testing.expectEqual(@as(u64, 42), r.value);
@@ -3077,6 +3112,22 @@ test "loadFromSlice: version key parsed but does not affect VM loading" {
         try std.testing.expectEqual(@as(usize, 1), n);
         try std.testing.expectEqualStrings("v1", std.mem.span(vms[0].getName()));
     }
+}
+
+test "loadFromSlice: non-integer quantities retain defaults and preserve following fields" {
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs: vm.Prefs = .{};
+    const json =
+        \\{"version":2,"prefs":{"win_x":-1.5,"win_y":-80},"vms":[{"name":"numeric","memory_mb":1e3,"disk_bps_throttle":2.5,"autoprotect_last_epoch":-1e3,"cpu_cores":4}]}
+    ;
+    try std.testing.expectEqual(@as(usize, 1), loadFromSlice(&vms, json, &prefs));
+    const defaults = vm.VmConfig{};
+    try std.testing.expectEqual(defaults.memory_mb, vms[0].memory_mb);
+    try std.testing.expectEqual(defaults.disk_bps_throttle, vms[0].disk_bps_throttle);
+    try std.testing.expectEqual(defaults.autoprotect_last_epoch, vms[0].autoprotect_last_epoch);
+    try std.testing.expectEqual(@as(u32, 4), vms[0].cpu_cores);
+    try std.testing.expectEqual((vm.Prefs{}).win_x, prefs.win_x);
+    try std.testing.expectEqual(@as(i32, -80), prefs.win_y);
 }
 
 test "loadFromSlice: out-of-range sizing is clamped at the load boundary" {
