@@ -96,6 +96,50 @@ Not built: TLS termination (front the daemon with a reverse proxy), multi-user
 accounts, and any hypervisor backend other than QEMU, though the process
 lifecycle already goes through a dispatch table (`src/hv/`).
 
+## Release notes and upgrades
+
+`v0.1.0` is the first and latest tagged release. The changes below are unreleased;
+`build.zig.zon` and the private frontend-test `package.json` still declare
+`0.1.0`. With only one release tag and no stated compatibility or deprecation
+policy, version history does not establish a compatibility guarantee.
+
+### Unreleased
+
+#### Changed: API key validation
+
+`v0.1.0` accepted non-ASCII bytes in `KV_API_KEY`, despite documenting an
+ASCII-only value. The daemon now rejects those keys and exits with an error;
+`vmrun` and the native wrapper instead send the built-in default when their
+configured key is invalid, so they cannot authenticate to a daemon using the old
+non-ASCII key.
+
+Before upgrading either the daemon or its clients, replace any non-ASCII key
+with a strong, unique secret of 1–64 printable ASCII bytes, excluding spaces
+(`!` through `~`). Set the same replacement in the daemon and every client's
+`KV_API_KEY` environment, then restart them. The replacement also works with
+`v0.1.0`, so rotate it there first if upgrading clients and daemon separately.
+Do not unset the key or use `hangar` as a workaround: those values leave the
+daemon loopback-only. Existing valid ASCII keys need no change.
+
+#### Fixed
+
+- Framebuffer polling no longer leaves the framebuffer lock held when no pixels
+  are available, preventing subsequent polls and updates from deadlocking.
+- Enabling Hyper-V Enlightenments now preserves the selected CPU Model instead
+  of silently forcing `host`. For an existing VM with enlightenments enabled
+  and a non-Host selection, the next QEMU start exposes that selected CPU model
+  to the guest. To retain the CPU behavior from `v0.1.0`, set CPU Model to Host
+  in Settings and save before the next start. Running QEMU processes are not
+  changed by this fix; no VM or network configuration format migration is needed.
+
+### v0.1.0 (2026-08-26)
+
+First tagged release: the Zig HTTP daemon, embedded web UI, `vmrun` CLI and
+optional native WebView wrapper. Includes VM lifecycle and guest control,
+snapshots, disk operations, virtual networks, live migration, browser consoles
+and optional H.264 guest video. Requires Zig 0.16.0 and QEMU. The daemon defaults
+to loopback-only access; a strong custom API key is required for remote access.
+
 ## Configuration
 
 All optional, read once at daemon startup:

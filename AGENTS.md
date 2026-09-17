@@ -159,6 +159,7 @@ Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, 
 
 - `CLAUDE.md` is a symlink to this file.
 - Longer design notes (if needed) are in `docs/`.
+- Consumer release notes and upgrade steps are in `README.md` under "Release notes and upgrades".
 
 # DOX framework
 
