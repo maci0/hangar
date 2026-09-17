@@ -141,8 +141,6 @@ pub const Url = struct {
     }
 };
 
-/// Shared-memory channel layout (mmap'd region).
-/// A bidirectional transport connection to the daemon.
 /// Parse the Content-Length header value from an HTTP header block (bytes
 /// before the body). Case-insensitive header name. Null if absent/unparseable.
 fn parseContentLength(headers: []const u8) ?usize {

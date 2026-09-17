@@ -148,10 +148,10 @@ policy, version history does not establish a compatibility guarantee.
 #### Changed: API key validation
 
 `v0.1.0` accepted non-ASCII bytes in `KV_API_KEY`, despite documenting an
-ASCII-only value. The daemon now rejects those keys and exits with an error;
-`vmrun` and the native wrapper instead send the built-in default when their
-configured key is invalid, so they cannot authenticate to a daemon using the old
-non-ASCII key.
+ASCII-only value. The daemon now rejects those keys and exits with an error.
+The native wrapper also rejects invalid keys before spawning the daemon;
+`vmrun` instead sends the built-in default, so it cannot authenticate to a
+daemon using the old non-ASCII key.
 
 Before upgrading either the daemon or its clients, replace any non-ASCII key
 with a strong, unique secret of 1–64 printable ASCII bytes, excluding spaces
@@ -188,7 +188,7 @@ the daemon. An empty value is invalid for either variable.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `KV_API_KEY` | built-in `hangar` (loopback-only) | X-API-Key secret. **Setting it also binds all interfaces (`::`).** With no key, the daemon binds loopback only so the weak default is never reachable off-host. 1–64 printable-ASCII bytes; invalid values abort startup. In exposed mode, data-bearing API reads require the key. |
+| `KV_API_KEY` | built-in `hangar` (loopback-only) | X-API-Key secret. **Setting a non-default key also binds all interfaces (`::`).** Unset or `hangar` keeps the daemon loopback-only so the weak default is never reachable off-host. 1–64 printable-ASCII bytes, excluding spaces; invalid values abort startup. In exposed mode, data-bearing API reads require the key. |
 | `KV_PORT` | `9080` | TCP listen port (non-zero u16). |
 | `HANGAR_CONFIG_HOME` | `$HOME` | Base dir for `~/.config/hangar/*` state. |
 

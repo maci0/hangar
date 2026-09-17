@@ -145,7 +145,8 @@ pub fn wsOriginOk(req: []const u8) bool {
 
 /// Auth-gate a WebSocket route. Rejects a foreign Origin first (cross-site WS
 /// hijacking defense, both modes), then in exposed mode requires the API key.
-/// On failure logs the rejected `route`, writes a 401, and returns false.
+/// On failure logs the rejected `route`, writes 403 for a rejected Origin or
+/// 401 for failed authentication, and returns false.
 pub fn wsAuthOk(conn: c.fd_t, req: []const u8, route: []const u8) bool {
     if (!wsOriginOk(req)) {
         var ob: [64]u8 = undefined;

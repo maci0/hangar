@@ -665,12 +665,11 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
 
 // ── Load ────────────────────────────────────────────────────────────
 
-/// Minimal JSON key/value parser: avoids std.json (which pulls in f128
-/// float math that causes linker errors with system cc).
-///
-/// Only handles the exact format we emit: flat objects with string, integer,
-/// and boolean values.  Skips unknown keys.  No nesting beyond the top-level
-/// `"vms": [...]` array.
+// The JSON parser avoids std.json, whose f128 float math causes linker errors
+// with system cc. It reads known fields in the root object, nested "prefs"
+// object, and "vms" array of flat VM objects. Unknown values, including nested
+// objects and arrays, are skipped.
+
 /// Skip whitespace, return remaining slice.
 fn skipWs(s: []const u8) []const u8 {
     var i: usize = 0;

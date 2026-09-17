@@ -7,7 +7,8 @@
                    │ vm.zig  appstate.zig    │
                    │ qemu.zig qmp.zig        │
                    │ persist.zig vnet.zig    │  (persist/vnet use
-                   │ vnc_client.zig          │   appstate path helpers)
+                   │ path_helpers.zig        │   path_helpers directly)
+                   │ vnc_client.zig          │
                    │ fbmath.zig              │
                    │ snapparse.zig ovf.zig   │
                    │ autoprotect.zig         │

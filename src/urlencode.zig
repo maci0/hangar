@@ -90,8 +90,8 @@ pub fn percentEncode(buf: []u8, src: []const u8) ![]const u8 {
     return buf[0..w];
 }
 
-/// Build a `key=value&...` body string from a slice of (key, value) pairs.
-/// Returns a suffix slice of `buf` containing the encoded body.
+/// Build a `key=value&...` body from pairs without percent-encoding them.
+/// Returns the populated prefix of `buf`; callers must pre-encode as needed.
 pub fn buildBody(buf: []u8, pairs: []const [2][]const u8) ![]const u8 {
     var pos: usize = 0;
     for (pairs) |pair| {

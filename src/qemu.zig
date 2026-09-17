@@ -139,9 +139,6 @@ pub fn diskInfo(path: []const u8, allocator: std.mem.Allocator) ?struct { virtua
     return .{ .virtual_bytes = v, .actual_bytes = a };
 }
 
-/// Run `argv`, capturing its stdout into `out`. Returns the number of bytes
-/// written (truncated to `out.len`). Returns an error unless it exits 0.
-/// stdin/stderr are sent to /dev/null.
 /// Spawned pipeline child for long-running streaming helpers (the video
 /// encoder). stdin and stdout are pipes returned to the caller; stderr goes to
 /// /dev/null. Caller owns both fds and must reap the pid (tryReapChild).
@@ -187,6 +184,9 @@ pub fn forkExecPiped(argv: []const []const u8, allocator: std.mem.Allocator) !Pi
     return .{ .pid = pid, .stdin_fd = in_fds[1], .stdout_fd = out_fds[0] };
 }
 
+/// Run `argv`, capturing its stdout into `out`. Returns the number of bytes
+/// written (truncated to `out.len`). Returns an error unless it exits 0.
+/// stdin/stderr are sent to /dev/null.
 pub fn runCapture(argv: []const []const u8, out: []u8, allocator: std.mem.Allocator) !usize {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
