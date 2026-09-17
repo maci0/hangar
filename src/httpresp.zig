@@ -226,7 +226,7 @@ fn write304Response(conn: c.fd_t, tag: []const u8) void {
         "";
     const head = std.fmt.bufPrint(
         &hbuf,
-        "HTTP/1.1 304 Not Modified\r\n{s}ETag: {s}\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 304 Not Modified\r\n{s}ETag: {s}\r\nCache-Control: public, no-cache\r\nConnection: close\r\n\r\n",
         .{ id_header, tag },
     ) catch "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n";
     wlog.logResponse(304, writeAll(conn, head.ptr, head.len));
@@ -310,7 +310,7 @@ pub fn writeHttpResponseTagged(conn: c.fd_t, status: u16, ct: []const u8, body: 
     append(&hbuf, &hlen, ct);
     append(&hbuf, &hlen, "\r\nServer: hangar");
     if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null or std.mem.indexOf(u8, ct, "image/svg+xml") != null) {
-        append(&hbuf, &hlen, "\r\nCache-Control: public, max-age=86400");
+        append(&hbuf, &hlen, "\r\nCache-Control: public, no-cache");
     } else {
         // Dynamic responses (API JSON, errors) carry auth-gated VM state, disk
         // paths, MACs, notes. Forbid browser/proxy caching so they are never
@@ -444,6 +444,7 @@ test "httpresp: writeHttpAssetResponse serves 200 with ETag, then 304 on If-None
     const hdr_tag = std.mem.indexOf(u8, resp1, "ETag: ") orelse return error.MissingEtag;
     try std.testing.expect(std.mem.startsWith(u8, resp1[hdr_tag + 6 ..], tag));
     try std.testing.expect(std.mem.endsWith(u8, resp1, body));
+    try std.testing.expect(std.mem.indexOf(u8, resp1, "Cache-Control: public, no-cache\r\n") != null);
 
     // Second request holding the same tag: header-only 304, no body bytes.
     var fds2: [2]c.fd_t = undefined;
@@ -461,6 +462,7 @@ test "httpresp: writeHttpAssetResponse serves 200 with ETag, then 304 on If-None
     try std.testing.expect(std.mem.startsWith(u8, resp2, "HTTP/1.1 304 Not Modified\r\n"));
     try std.testing.expect(std.mem.indexOf(u8, resp2, id_header) != null);
     try std.testing.expect(std.mem.indexOf(u8, resp2, body) == null);
+    try std.testing.expect(std.mem.indexOf(u8, resp2, "Cache-Control: public, no-cache\r\n") != null);
 
     // Stale or malformed validators must fall through to the full response.
     var fds3: [2]c.fd_t = undefined;

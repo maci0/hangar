@@ -92,6 +92,9 @@ globals in `appstate.zig`.
   release cached resources even after peer failure clears `connected`; framebuffer
   polling calls it before reconnecting.
 - **New static asset / GET route →** add to `auth.isAuthExempt` only if non-sensitive.
+- **Browser asset caching:** unversioned asset URLs use `public, no-cache` on both
+  200 and 304 responses. Cache storage and ETag revalidation remain enabled; a
+  fresh document must not reuse yesterday's scripts or styles after an upgrade.
 - **HTTP header lookup:** `httpreq.findHeader` and `parseContentLength` stop at the
   CRLFCRLF boundary; body bytes must never supply header values.
 - **Logging goes through `wlog`**, never a bare `std.c.write(2, ...)`: one timestamped,

@@ -903,7 +903,7 @@ The web server serves everything from `@embedFile` index.html. For a more polish
 | Change | Status |
 |--------|--------|
 | Split CSS/JS from index.html | ✅ `app_css`/`app_js` from `src/web/`, `@embedFile`, served at `/app.css`/`/app.js` |
-| Add `Cache-Control` headers | ✅ `Cache-Control: public, max-age=86400` for CSS/JS in `writeHttpResponse`/`writeStreamHeaders` |
+| Add `Cache-Control` headers | ✅ `Cache-Control: public, no-cache` for CSS/JS in `writeHttpResponse`/`writeHttpAssetResponse` |
 
 ---
 
