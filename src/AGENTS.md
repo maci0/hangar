@@ -51,6 +51,8 @@ globals in `appstate.zig`.
   clusters are not the unit of storage.
 - **Persistence JSON strings:** `persist` and `vnet` decode `\b` and `\f` to their
   control bytes, as well as Unicode escapes and UTF-16 surrogate pairs.
+- **VM config metadata:** `persist` reads `version`, `theme`, `prefs`, and `vms`
+  only from the root object; nested fields and string values cannot select them.
 - **Add a `VmConfig` field →** update `VmJson` + `emitVmJson` + `parseVmObject` +
   `fromVmJson` in `persist.zig`, add a round-trip parser test, and emit it in **both**
   `vmrender.zig` renders. Large string fields also need the `parseVmObject` `str_buf`,

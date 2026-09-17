@@ -1410,45 +1410,53 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
     return cur;
 }
 
+fn topLevelValue(content: []const u8, key: []const u8) ?[]const u8 {
+    var cur = skipWs(content);
+    if (cur.len == 0 or cur[0] != '{') return null;
+    cur = skipWs(cur[1..]);
+    while (cur.len > 0 and cur[0] == '"') {
+        var key_buf: [32]u8 = undefined;
+        const parsed = parseJsonString(cur, &key_buf);
+        const rest = skipWs(skipJsonValue(cur));
+        if (rest.len == 0 or rest[0] != ':') return null;
+        cur = skipWs(rest[1..]);
+        if (parsed) |r| {
+            if (std.mem.eql(u8, r.value, key)) return cur;
+        }
+        cur = skipWs(skipJsonValue(cur));
+        if (cur.len == 0 or cur[0] != ',') return null;
+        cur = skipWs(cur[1..]);
+    }
+    return null;
+}
+
 /// Extract the top-level `"theme"` value from raw config bytes. Defaults to
 /// `.light` when absent or malformed. Pure (no I/O) so it can be fuzzed.
 fn parseThemeKey(content: []const u8) vm.Theme {
-    if (std.mem.indexOf(u8, content, "\"theme\"")) |tidx| {
-        const tcur = skipWs(content[tidx + 7 ..]);
-        if (tcur.len > 0 and tcur[0] == ':') {
-            var tbuf: [32]u8 = undefined;
-            if (parseJsonString(skipWs(tcur[1..]), &tbuf)) |r| return vm.Theme.fromStr(r.value);
-        }
-    }
-    return .light;
+    const value = topLevelValue(content, "theme") orelse return .light;
+    var tbuf: [32]u8 = undefined;
+    const r = parseJsonString(value, &tbuf) orelse return .light;
+    return vm.Theme.fromStr(r.value);
 }
 
 /// Extract the top-level `"version"` value from raw config bytes. Defaults to
 /// 1 when absent. If the version is higher than the current format (2), writes
 /// a warning to stderr so the user knows the config was saved by a newer Hangar.
 fn parseVersion(content: []const u8) u32 {
-    if (std.mem.indexOf(u8, content, "\"version\"")) |vidx| {
-        const vcur = skipWs(content[vidx + 9 ..]);
-        if (vcur.len > 0 and vcur[0] == ':') {
-            if (parseJsonInt(skipWs(vcur[1..]))) |r| {
-                if (r.value > CONFIG_VERSION) {
-                    var msg_buf: [128]u8 = undefined;
-                    wlog.logWarn(std.fmt.bufPrint(&msg_buf, "config file version newer than supported (max {d}); some settings may be ignored", .{CONFIG_VERSION}) catch "config file version newer than supported; some settings may be ignored");
-                }
-                return r.value;
-            }
-        }
+    const value = topLevelValue(content, "version") orelse return 1;
+    const r = parseJsonInt(value) orelse return 1;
+    if (r.value > CONFIG_VERSION) {
+        var msg_buf: [128]u8 = undefined;
+        wlog.logWarn(std.fmt.bufPrint(&msg_buf, "config file version newer than supported (max {d}); some settings may be ignored", .{CONFIG_VERSION}) catch "config file version newer than supported; some settings may be ignored");
     }
-    return 1;
+    return r.value;
 }
 
 /// Parse the top-level "prefs" object from config bytes into `prefs_out`.
 fn parsePrefs(content: []const u8, prefs_out: *vm.Prefs) void {
     prefs_out.* = .{};
-    if (std.mem.indexOf(u8, content, "\"prefs\"")) |pidx| {
-        var cur = skipWs(content[pidx + 7 ..]);
-        if (cur.len == 0 or cur[0] != ':') return;
-        cur = skipWs(cur[1..]);
+    if (topLevelValue(content, "prefs")) |value| {
+        var cur = value;
         if (cur.len == 0 or cur[0] != '{') return;
         cur = cur[1..];
         var key_buf: [40]u8 = undefined;
@@ -1611,33 +1619,10 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
     parsePrefs(content, prefs_out);
     prefs_out.theme = loaded_theme;
 
-    // Find the "vms" array in the top-level object.
-    var cur: []const u8 = content;
-
-    // Skip to the "vms" key.  Two guards prevent false matches inside string
-    // values: (1) the byte before `"vms"` must be a JSON key-position
-    // character (start-of-input, `{`, `,`, or whitespace), and (2) the
-    // character after the closing quote must be `:`.
-    while (cur.len > 0) {
-        if (std.mem.indexOf(u8, cur, "\"vms\"")) |idx| {
-            // Guard 1: the byte before the match must be at a key position.
-            const before = if (idx == 0) 0 else cur[idx - 1];
-            if (idx > 0 and before != '{' and before != ',' and before != ' ' and before != '\t' and before != '\n' and before != '\r') {
-                cur = cur[idx + 1 ..]; // skip one byte for forward progress
-                continue;
-            }
-            cur = cur[idx + 5 ..]; // skip past "vms"
-            cur = skipWs(cur);
-            // Guard 2: the key must be followed by `:`.
-            if (cur.len > 0 and cur[0] == ':') {
-                cur = skipWs(cur[1..]);
-                break;
-            }
-        } else {
-            mark_degraded(); // non-empty content with no "vms" key: corrupt file
-            return 0;
-        }
-    }
+    var cur = topLevelValue(content, "vms") orelse {
+        mark_degraded();
+        return 0;
+    };
 
     // Expect '['
     if (cur.len == 0 or cur[0] != '[') {
@@ -3133,6 +3118,67 @@ test "loadFromSlice: direct" {
         const n = loadFromSlice(&vms, json, &prefs);
         try std.testing.expectEqual(@as(usize, 0), n);
         try std.testing.expectEqual(vm.Theme.light, prefs.theme);
+    }
+}
+
+test "loadFromSlice: nested keys cannot replace top-level configuration" {
+    const json =
+        \\{"extension":{"version":99,"theme":"light","prefs":{"default_memory_mb":512},"vms":[{"name":"nested"}]},
+        \\"version":2,"theme":"dark","prefs":{"default_memory_mb":4096},"vms":[{"name":"real"}]}
+    ;
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs = vm.Prefs{};
+    try std.testing.expectEqual(CONFIG_VERSION, parseVersion(json));
+    try std.testing.expectEqual(@as(usize, 1), loadFromSlice(&vms, json, &prefs));
+    try std.testing.expectEqualStrings("real", vms[0].getNameSlice());
+    try std.testing.expectEqual(vm.Theme.dark, prefs.theme);
+    try std.testing.expectEqual(@as(u32, 4096), prefs.default_memory_mb);
+}
+
+test "loadFromSlice: key names used as values do not hide configuration" {
+    const json =
+        \\{"extension":["version","theme","prefs","vms"],"version":2,"theme":"dark",
+        \\"prefs":{"default_memory_mb":4096},"vms":[{"name":"real"}]}
+    ;
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs = vm.Prefs{};
+    try std.testing.expectEqual(CONFIG_VERSION, parseVersion(json));
+    try std.testing.expectEqual(@as(usize, 1), loadFromSlice(&vms, json, &prefs));
+    try std.testing.expectEqualStrings("real", vms[0].getNameSlice());
+    try std.testing.expectEqual(vm.Theme.dark, prefs.theme);
+    try std.testing.expectEqual(@as(u32, 4096), prefs.default_memory_mb);
+}
+
+test "topLevelValue: skips unknown fields and decodes key escapes" {
+    const json =
+        \\{"unknown_field_longer_than_the_key_buffer_capacity":{"items":[{"version":99}]},
+        \\"ver\u0073ion":2,"vms":[]}
+    ;
+    try std.testing.expectEqual(CONFIG_VERSION, parseVersion(json));
+    try std.testing.expectEqualStrings("[]}", topLevelValue(json, "vms").?);
+    try std.testing.expect(topLevelValue(json, "missing") == null);
+    try std.testing.expect(topLevelValue("{\"extension\":{\"vms\":[]}}", "vms") == null);
+    try std.testing.expect(topLevelValue("[ {\"vms\":[]} ]", "vms") == null);
+}
+
+test "fuzz: topLevelValue ignores arbitrary nested string values" {
+    const alloc = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x4D82_197C);
+    const rnd = prng.random();
+    var bytes: [128]u8 = undefined;
+    var list: List = .empty;
+    defer list.deinit(alloc);
+    for (0..1000) |_| {
+        const len = rnd.uintLessThan(usize, bytes.len + 1);
+        rnd.bytes(bytes[0..len]);
+        list.clearRetainingCapacity();
+        try emit(&list, alloc, "{\"extension\":{\"version\":99,\"vms\":[{\"name\":");
+        try emitJsonStr(&list, alloc, bytes[0..len]);
+        try emit(&list, alloc, "}]},\"version\":2,\"vms\":[]}");
+        try std.testing.expectEqual(CONFIG_VERSION, parseVersion(list.items));
+        try std.testing.expectEqualStrings("[]}", topLevelValue(list.items, "vms").?);
+        try std.testing.expect(topLevelValue(list.items, "name") == null);
+        _ = topLevelValue(list.items[0..rnd.uintLessThan(usize, list.items.len + 1)], "vms");
     }
 }
 
