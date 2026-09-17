@@ -372,29 +372,22 @@ fn readString(s: []const u8, out: []u8) ?struct { value: []const u8, rest: []con
         if (c == '\\' and i + 1 < s.len) {
             if (s[i + 1] == 'u' and i + 5 < s.len) {
                 const hex = s[i + 2 .. i + 6];
-                const codepoint = std.fmt.parseInt(u16, hex, 16) catch return null;
-                // Reject UTF-16 surrogate-range escapes: encoding one on its own
-                // yields WTF-8 (e.g. \uD800 -> ED A0 80) that strict UTF-8 JSON
-                // readers reject, so it would round-trip an invalid networks.json
-                // back out. Mirrors the QMP parser's surrogate handling.
-                if (codepoint >= 0xD800 and codepoint <= 0xDFFF) return null;
-                if (codepoint < 0x80) {
-                    if (out_len >= out.len) return null;
-                    out[out_len] = @intCast(codepoint);
-                    out_len += 1;
-                } else if (codepoint < 0x800) {
-                    if (out_len + 1 >= out.len) return null;
-                    out[out_len] = @intCast(0xC0 | (codepoint >> 6));
-                    out[out_len + 1] = @intCast(0x80 | (codepoint & 0x3F));
-                    out_len += 2;
-                } else {
-                    if (out_len + 2 >= out.len) return null;
-                    out[out_len] = @intCast(0xE0 | (codepoint >> 12));
-                    out[out_len + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
-                    out[out_len + 2] = @intCast(0x80 | (codepoint & 0x3F));
-                    out_len += 3;
-                }
+                var codepoint: u21 = std.fmt.parseInt(u16, hex, 16) catch return null;
                 i += 6;
+                if (codepoint >= 0xD800 and codepoint <= 0xDBFF) {
+                    if (s.len - i < 6 or s[i] != '\\' or s[i + 1] != 'u') return null;
+                    const low = std.fmt.parseInt(u16, s[i + 2 .. i + 6], 16) catch return null;
+                    if (low < 0xDC00 or low > 0xDFFF) return null;
+                    codepoint = 0x10000 + (codepoint - 0xD800) * 0x400 + (@as(u21, low) - 0xDC00);
+                    i += 6;
+                } else if (codepoint >= 0xDC00 and codepoint <= 0xDFFF) {
+                    return null;
+                }
+                var encoded: [4]u8 = undefined;
+                const len = std.unicode.utf8Encode(codepoint, &encoded) catch return null;
+                if (len > out.len - out_len) return null;
+                @memcpy(out[out_len..][0..len], encoded[0..len]);
+                out_len += len;
                 continue;
             }
             const esc: u8 = switch (s[i + 1]) {
@@ -878,6 +871,40 @@ test "vnet: readString \\u escape decodes UTF-8" {
     // \u20AC = € (3-byte UTF-8: E2 82 AC)
     const r = readString("\"\\u20AC100\"", &out).?;
     try testing.expectEqualStrings("€100", r.value);
+}
+
+test "vnet: surrogate pair escapes preserve network names" {
+    const set = fromJson("{\"networks\":[{\"name\":\"net-\\ud83d\\ude00\"}]}");
+    try testing.expectEqual(@as(usize, 1), set.count);
+    try testing.expectEqualStrings("net-\u{1f600}", set.nets[0].getNameSlice());
+    const json = try toJson(&set, testing.allocator);
+    defer testing.allocator.free(json);
+    const restored = fromJson(json);
+    try testing.expectEqualStrings("net-\u{1f600}", restored.nets[0].getNameSlice());
+
+    var out: [4]u8 = undefined;
+    const r = readString("\"\\ud83d\\ude00\",", &out) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("\u{1f600}", r.value);
+    try testing.expectEqualStrings(",", r.rest);
+    try testing.expect(readString("\"\\ud83d\\ude00\"", out[0..3]) == null);
+    try testing.expect(readString("\"\\ud83d\\u0041\"", &out) == null);
+}
+
+test "vnet fuzz: supplementary scalars decode from surrogate pairs" {
+    var prng = std.Random.DefaultPrng.init(0x51ca1a);
+    const random = prng.random();
+    for (0..1000) |_| {
+        const cp = random.intRangeAtMost(u21, 0x10000, 0x10ffff);
+        const high = 0xd800 + ((cp - 0x10000) >> 10);
+        const low = 0xdc00 + ((cp - 0x10000) & 0x3ff);
+        var input: [14]u8 = undefined;
+        const json = try std.fmt.bufPrint(&input, "\"\\u{x:0>4}\\u{x:0>4}\"", .{ high, low });
+        var out: [4]u8 = undefined;
+        const r = readString(json, &out) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(cp, try std.unicode.utf8Decode(r.value));
+        try testing.expectEqual(@as(usize, 0), r.rest.len);
+        try testing.expect(readString(json, out[0..3]) == null);
+    }
 }
 
 test "vnet: readString invalid \\u hex returns null" {
