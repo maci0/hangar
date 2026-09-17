@@ -27,8 +27,9 @@ zig build lint-shell   # shellcheck over tracked *.sh
 zig build lint-js      # bun build over hand-written JS (vendored src/web bundles excluded)
 ```
 
-`lint-shell` enables `check-extra-masked-returns`, `check-set-e-suppressed`, and
-`check-unassigned-uppercase` in addition to ShellCheck's default checks.
+`lint-shell` enables `add-default-case`, `check-extra-masked-returns`,
+`check-set-e-suppressed`, and `check-unassigned-uppercase` in addition to
+ShellCheck's default checks.
 Static-analysis pipelines propagate file-enumeration failures and preserve filenames
 with whitespace. `fmt-check` uses the Zig executable running the build.
 
