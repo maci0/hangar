@@ -67,20 +67,12 @@ pub const LogLevel = enum {
 };
 
 /// Render one log line into `buf`: `[<epoch_seconds>] hangar <level>: <msg>\n`.
-/// A message too long for `buf` falls back to a `[?]`-stamped clipped line, so
-/// the level is always present. Returns the slice of `buf` to write.
 fn formatLine(buf: *[LINE_MAX]u8, level: LogLevel, epoch: i64, msg: []const u8) []const u8 {
-    const lvl = level.tag();
-    return std.fmt.bufPrint(buf, "[{d}] hangar {s}: {s}\n", .{ epoch, lvl, msg }) catch blk: {
-        var head_buf: [32]u8 = undefined;
-        const head = std.fmt.bufPrint(&head_buf, "[?] hangar {s}: ", .{lvl}) catch "[?] hangar log: ";
-        const room = buf.len - head.len - 1;
-        const clipped = if (msg.len > room) msg[0..room] else msg;
-        @memcpy(buf[0..head.len], head);
-        @memcpy(buf[head.len .. head.len + clipped.len], clipped);
-        buf[head.len + clipped.len] = '\n';
-        break :blk buf[0 .. head.len + clipped.len + 1];
-    };
+    const head = std.fmt.bufPrint(buf, "[{d}] hangar {s}: ", .{ epoch, level.tag() }) catch unreachable;
+    const len = @min(msg.len, buf.len - head.len - 1);
+    @memcpy(buf[head.len .. head.len + len], msg[0..len]);
+    buf[head.len + len] = '\n';
+    return buf[0 .. head.len + len + 1];
 }
 
 /// Log a message as a single timestamped, leveled line on `log_fd`. One write
@@ -181,16 +173,37 @@ test "wlog: formatLine renders a timestamped, leveled line per level" {
     );
 }
 
-test "wlog: formatLine clips an oversize message to a leveled [?] line" {
+test "wlog: formatLine preserves timestamp and severity when clipping" {
     var buf: [LINE_MAX]u8 = undefined;
     var big: [2000]u8 = undefined;
     @memset(&big, 'x');
     const line = formatLine(&buf, .err, 1700000000, &big);
-    try std.testing.expect(line.len <= buf.len);
-    try std.testing.expect(std.mem.startsWith(u8, line, "[?] hangar error: x"));
+    const prefix = "[1700000000] hangar error: ";
+    try std.testing.expectEqual(buf.len, line.len);
+    try std.testing.expect(std.mem.startsWith(u8, line, prefix));
     try std.testing.expectEqual(@as(u8, '\n'), line[line.len - 1]);
-    // Every byte between the head and the newline came from the message.
-    try std.testing.expect(std.mem.count(u8, line, "x") == line.len - "[?] hangar error: ".len - 1);
+    try std.testing.expectEqual(line.len - prefix.len - 1, std.mem.count(u8, line, "x"));
+}
+
+test "wlog fuzz: formatLine preserves headers across lengths and epochs" {
+    var prng = std.Random.DefaultPrng.init(0x10_61_1E);
+    const random = prng.random();
+    var msg: [LINE_MAX * 4]u8 = undefined;
+    @memset(&msg, 'x');
+    for (0..1000) |_| {
+        const epoch = random.int(i64);
+        const len = random.uintLessThan(usize, msg.len + 1);
+        inline for (.{ LogLevel.info, LogLevel.warn, LogLevel.err }) |level| {
+            var buf: [LINE_MAX]u8 = undefined;
+            const line = formatLine(&buf, level, epoch, msg[0..len]);
+            var prefix_buf: [64]u8 = undefined;
+            const prefix = try std.fmt.bufPrint(&prefix_buf, "[{d}] hangar {s}: ", .{ epoch, level.tag() });
+            try std.testing.expect(std.mem.startsWith(u8, line, prefix));
+            try std.testing.expectEqual(@min(LINE_MAX, prefix.len + len + 1), line.len);
+            try std.testing.expectEqual(@as(u8, '\n'), line[line.len - 1]);
+            try std.testing.expectEqual(line.len - prefix.len - 1, std.mem.count(u8, line, "x"));
+        }
+    }
 }
 
 test "wlog: log calls drop when log_fd is negative and restore it after" {
