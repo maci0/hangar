@@ -544,19 +544,48 @@ fn countVmNameMatches(json: []const u8, name: []const u8) usize {
     return n;
 }
 
+fn nextJsonObject(rest: *[]const u8) ?[]const u8 {
+    const start = std.mem.indexOfScalar(u8, rest.*, '{') orelse return null;
+    var depth: usize = 0;
+    var in_string = false;
+    var escaped = false;
+    for (rest.*[start..], start..) |ch, i| {
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        switch (ch) {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if (depth == 0) {
+                    const obj = rest.*[start .. i + 1];
+                    rest.* = rest.*[i + 1 ..];
+                    return obj;
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
 fn cmdList(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.Io) !void {
     _ = io;
     const json = try sendRequest(allocator, conn, "GET", "/api/vms", null);
     defer allocator.free(json);
 
     // Parse and display VM names from JSON array.
-    var rest = json;
+    var rest: []const u8 = json;
     var idx: usize = 0;
-    while (std.mem.indexOfScalar(u8, rest, '{')) |obj_start| {
-        rest = rest[obj_start..];
-        const obj_end = std.mem.indexOfScalar(u8, rest, '}') orelse break;
-        const obj = rest[0 .. obj_end + 1];
-        rest = rest[obj_end + 1 ..];
+    while (nextJsonObject(&rest)) |obj| {
 
         // Extract name and status
         const name = extractJsonString(obj, "name") orelse "?";
@@ -943,6 +972,51 @@ fn extractJsonInt(obj: []const u8, key: []const u8) ?usize {
 const vm = @import("vm.zig");
 
 // ── Tests ──────────────────────────────────────────────────────────
+
+test "nextJsonObject preserves braces and escaped quotes inside VM fields" {
+    const first =
+        \\{"idx":0,"name":"guest} {one","status":"stopped","mem":2048,"cpu":2,"notes":"say \"hi\" \\ {nested}"}
+    ;
+    const second =
+        \\{"idx":1,"name":"second","status":"running","mem":4096,"cpu":4}
+    ;
+    var rest: []const u8 = "[" ++ first ++ "," ++ second ++ "]";
+    const obj = nextJsonObject(&rest).?;
+    try std.testing.expectEqualStrings(first, obj);
+    try std.testing.expectEqualStrings("guest} {one", extractJsonString(obj, "name").?);
+    try std.testing.expectEqual(@as(?usize, 2048), extractJsonInt(obj, "mem"));
+    try std.testing.expectEqualStrings(second, nextJsonObject(&rest).?);
+    try std.testing.expect(nextJsonObject(&rest) == null);
+}
+
+test "nextJsonObject handles nesting and incomplete objects" {
+    const obj = "{\"nested\":{\"value\":1},\"idx\":7}";
+    var rest: []const u8 = "[" ++ obj ++ "]";
+    try std.testing.expectEqualStrings(obj, nextJsonObject(&rest).?);
+    for ([_][]const u8{ "", "[]", "{", "{\"name\":\"unfinished}", "{\"nested\":{}" }) |input| {
+        rest = input;
+        try std.testing.expect(nextJsonObject(&rest) == null);
+    }
+}
+
+test "fuzz: nextJsonObject always advances within the input" {
+    var prng = std.Random.DefaultPrng.init(0xA12B_0B1E);
+    const rnd = prng.random();
+    var buf: [512]u8 = undefined;
+    for (0..4000) |_| {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        var rest: []const u8 = buf[0..len];
+        var previous_len = rest.len;
+        while (nextJsonObject(&rest)) |obj| {
+            try std.testing.expect(rest.len < previous_len);
+            try std.testing.expect(obj.len >= 2);
+            try std.testing.expectEqual(@as(u8, '{'), obj[0]);
+            try std.testing.expectEqual(@as(u8, '}'), obj[obj.len - 1]);
+            previous_len = rest.len;
+        }
+    }
+}
 
 test "extractJsonString: extracts quoted value" {
     const obj = "{\"name\":\"myvm\",\"status\":\"running\"}";
