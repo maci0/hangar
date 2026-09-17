@@ -10,6 +10,9 @@ under `zig build test`).
   `hangar-web` on a dedicated port against a temp `$HOME` (config: `../playwright.config.mjs`,
   fresh `mkdtemp` HOME per run, created under the repo's gitignored `.scratch/`, never
   `os.tmpdir()`, which is tmpfs).
+- `e2e/config.spec.mjs`: checks Playwright daemon environment isolation. The
+  daemon pins `HANGAR_CONFIG_HOME` to its test HOME and `KV_API_KEY` to `hangar`,
+  overriding operator settings while preserving the `KV_PORT` selector.
 - `test_web_api.sh`: HTTP API integration (spawns a real daemon). Its
   `--startup-only` mode checks invalid runtime settings in both executables before
   VM configuration reads or backend spawning, without starting a listener.
