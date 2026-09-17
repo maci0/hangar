@@ -38,6 +38,12 @@ globals in `appstate.zig`.
   these helpers without importing application state.
 
 ## Local Contracts
+- **VM string capacities are byte limits.** `VmConfig` setters truncate valid UTF-8
+  only at scalar boundaries; they do not normalize or case-fold. Non-UTF-8 byte
+  strings retain byte-prefix behavior for filesystem compatibility. Grapheme
+  clusters are not the unit of storage.
+- **Persistence JSON strings:** `persist` and `vnet` decode `\b` and `\f` to their
+  control bytes, as well as Unicode escapes and UTF-16 surrogate pairs.
 - **Add a `VmConfig` field →** update `VmJson` + `emitVmJson` + `parseVmObject` +
   `fromVmJson` in `persist.zig`, add a round-trip parser test, and emit it in **both**
   `vmrender.zig` renders. Large string fields also need the `parseVmObject` `str_buf`,

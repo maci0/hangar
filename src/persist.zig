@@ -757,6 +757,8 @@ fn parseJsonString(s: []const u8, out_buf: []u8) ?struct { value: []const u8, re
                 'n' => '\n',
                 'r' => '\r',
                 't' => '\t',
+                'b' => 0x08,
+                'f' => 0x0c,
                 else => s[i + 1],
             };
             if (out_len >= out_buf.len) return null;
@@ -2346,6 +2348,23 @@ test "emitJsonStr: control characters become \\uXXXX" {
 
     // Should produce: "\u0001"
     try std.testing.expectEqualStrings("\"\\u0001\"", list.items);
+}
+
+test "parseJsonString: short escapes preserve Unicode text and control bytes" {
+    var out: [64]u8 = undefined;
+    const parsed = parseJsonString("\"caf\\u00e9\\b\\f\\/\\ud83d\\ude80\",rest", &out) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("café\x08\x0c/\u{1f680}", parsed.value);
+    try std.testing.expectEqualStrings(",rest", parsed.rest);
+
+    var cfg = vm.VmConfig{};
+    _ = parseVmObject("{\"name\":\"test\",\"notes\":\"caf\\u00e9\\b\\f\"}", &cfg);
+    try std.testing.expectEqualStrings("café\x08\x0c", cfg.getNotesSlice());
+    var list: List = .empty;
+    defer list.deinit(std.testing.allocator);
+    try emitVmJson(&list, std.testing.allocator, &cfg);
+    var restored = vm.VmConfig{};
+    _ = parseVmObject(list.items, &restored);
+    try std.testing.expectEqualStrings(cfg.getNotesSlice(), restored.getNotesSlice());
 }
 
 test "parseJsonString: handles \\uXXXX for control chars" {

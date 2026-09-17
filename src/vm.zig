@@ -27,6 +27,14 @@ pub const MAX_PATH: usize = 4095;
 /// JSON-escaped in the detail render (×6), see persist.zig / web_server.zig.
 pub const MAX_CLOUD_INIT: usize = 8192;
 
+fn utf8PrefixLen(s: []const u8, byte_limit: usize) usize {
+    if (s.len <= byte_limit) return s.len;
+    if (!std.unicode.utf8ValidateSlice(s)) return byte_limit;
+    var len = byte_limit;
+    while (len > 0 and s[len] & 0xc0 == 0x80) : (len -= 1) {}
+    return len;
+}
+
 // ── Disk Format ──────────────────────────────────────────────────────
 
 /// Supported virtual disk image formats.
@@ -1281,7 +1289,7 @@ pub const VmConfig = struct {
 
     /// Sets the VM name, truncating to `MAX_NAME` if necessary.
     pub fn setName(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, MAX_NAME));
+        const len: u16 = @intCast(utf8PrefixLen(s, MAX_NAME));
         @memcpy(self.name_buf[0..len], s[0..len]);
         self.name_buf[len] = 0;
         self.name_len = len;
@@ -1307,7 +1315,7 @@ pub const VmConfig = struct {
 
     /// Sets the disk image path, truncating to `MAX_PATH` if necessary.
     pub fn setDiskPath(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, MAX_PATH));
+        const len: u16 = @intCast(utf8PrefixLen(s, MAX_PATH));
         @memcpy(self.disk_path_buf[0..len], s[0..len]);
         self.disk_path_buf[len] = 0;
         self.disk_path_len = len;
@@ -1333,7 +1341,7 @@ pub const VmConfig = struct {
 
     /// Sets the ISO / CD-ROM path, truncating to `MAX_PATH` if necessary.
     pub fn setIsoPath(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, MAX_PATH));
+        const len: u16 = @intCast(utf8PrefixLen(s, MAX_PATH));
         @memcpy(self.iso_path_buf[0..len], s[0..len]);
         self.iso_path_buf[len] = 0;
         self.iso_path_len = len;
@@ -1354,7 +1362,7 @@ pub const VmConfig = struct {
 
     /// Sets the MAC address of NIC 0.
     pub fn setMacAddress(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, self.nics[0].mac_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.nics[0].mac_buf.len - 1));
         @memcpy(self.nics[0].mac_buf[0..len], s[0..len]);
         self.nics[0].mac_buf[len] = 0;
         self.nics[0].mac_len = len;
@@ -1367,7 +1375,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setNotes(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, self.notes_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.notes_buf.len - 1));
         @memcpy(self.notes_buf[0..len], s[0..len]);
         self.notes_buf[len] = 0;
         self.notes_len = len;
@@ -1378,7 +1386,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setTags(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, self.tags_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.tags_buf.len - 1));
         @memcpy(self.tags_buf[0..len], s[0..len]);
         self.tags_buf[len] = 0;
         self.tags_len = len;
@@ -1389,7 +1397,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setId(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, self.id_buf.len));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.id_buf.len));
         @memcpy(self.id_buf[0..len], s[0..len]);
         self.id_len = len;
     }
@@ -1408,7 +1416,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setFolder(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, self.folder_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.folder_buf.len - 1));
         @memcpy(self.folder_buf[0..len], s[0..len]);
         self.folder_buf[len] = 0;
         self.folder_len = len;
@@ -1419,7 +1427,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setVnet(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, self.vnet_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.vnet_buf.len - 1));
         @memcpy(self.vnet_buf[0..len], s[0..len]);
         self.vnet_buf[len] = 0;
         self.vnet_len = len;
@@ -1430,7 +1438,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setCloudInit(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, self.cloud_init_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.cloud_init_buf.len - 1));
         @memcpy(self.cloud_init_buf[0..len], s[0..len]);
         self.cloud_init_buf[len] = 0;
         self.cloud_init_len = len;
@@ -1451,7 +1459,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setPortForwards(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, self.port_fwd_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.port_fwd_buf.len - 1));
         @memcpy(self.port_fwd_buf[0..len], s[0..len]);
         self.port_fwd_buf[len] = 0;
         self.port_fwd_len = len;
@@ -1469,7 +1477,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setSavedStatePath(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, MAX_PATH));
+        const len: u16 = @intCast(utf8PrefixLen(s, MAX_PATH));
         @memcpy(self.saved_state_path_buf[0..len], s[0..len]);
         self.saved_state_path_buf[len] = 0;
         self.saved_state_path_len = len;
@@ -1491,7 +1499,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setSharedFolder(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, MAX_PATH));
+        const len: u16 = @intCast(utf8PrefixLen(s, MAX_PATH));
         @memcpy(self.shared_folder_buf[0..len], s[0..len]);
         self.shared_folder_buf[len] = 0;
         self.shared_folder_len = len;
@@ -1512,7 +1520,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setDisk2Path(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, MAX_PATH));
+        const len: u16 = @intCast(utf8PrefixLen(s, MAX_PATH));
         @memcpy(self.disk2_path_buf[0..len], s[0..len]);
         self.disk2_path_buf[len] = 0;
         self.disk2_path_len = len;
@@ -1533,7 +1541,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setExtraDiskPath(self: *VmConfig, i: usize, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, MAX_PATH));
+        const len: u16 = @intCast(utf8PrefixLen(s, MAX_PATH));
         @memcpy(self.extra_disks[i].path_buf[0..len], s[0..len]);
         self.extra_disks[i].path_buf[len] = 0;
         self.extra_disks[i].path_len = len;
@@ -1559,7 +1567,7 @@ pub const VmConfig = struct {
     }
 
     pub fn setUsbDevice(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, self.usb_device_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.usb_device_buf.len - 1));
         @memcpy(self.usb_device_buf[0..len], s[0..len]);
         self.usb_device_buf[len] = 0;
         self.usb_device_len = len;
@@ -1591,7 +1599,7 @@ pub const VmConfig = struct {
     }
     pub fn setNicMacAny(self: *VmConfig, idx: usize, s: []const u8) void {
         if (idx >= MAX_NICS) return;
-        const len: u16 = @intCast(@min(s.len, self.nics[idx].mac_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.nics[idx].mac_buf.len - 1));
         @memcpy(self.nics[idx].mac_buf[0..len], s[0..len]);
         self.nics[idx].mac_buf[len] = 0;
         self.nics[idx].mac_len = len;
@@ -1599,7 +1607,7 @@ pub const VmConfig = struct {
 
     pub fn setNicVnetAny(self: *VmConfig, idx: usize, s: []const u8) void {
         if (idx >= MAX_NICS) return;
-        const len: u16 = @intCast(@min(s.len, self.nics[idx].vnet_buf.len - 1));
+        const len: u16 = @intCast(utf8PrefixLen(s, self.nics[idx].vnet_buf.len - 1));
         @memcpy(self.nics[idx].vnet_buf[0..len], s[0..len]);
         self.nics[idx].vnet_buf[len] = 0;
         self.nics[idx].vnet_len = len;
@@ -1619,7 +1627,7 @@ pub const VmConfig = struct {
         return self.floppy_path_buf[0..self.floppy_path_len];
     }
     pub fn setFloppyPath(self: *VmConfig, s: []const u8) void {
-        const len: u16 = @intCast(@min(s.len, MAX_PATH));
+        const len: u16 = @intCast(utf8PrefixLen(s, MAX_PATH));
         @memcpy(self.floppy_path_buf[0..len], s[0..len]);
         self.floppy_path_buf[len] = 0;
         self.floppy_path_len = len;
@@ -1868,6 +1876,69 @@ test "VmConfig: setName and getName round-trip" {
     // Null-terminated C pointer should also match.
     const c_str = cfg.getName();
     try std.testing.expectEqualStrings("TestVM", std.mem.span(c_str));
+}
+
+test "utf8PrefixLen: byte limits preserve scalars without normalizing or replacing bytes" {
+    const text = "ée\u{301}€\u{1f680}";
+    const boundaries = [_]usize{ 0, 0, 2, 3, 3, 5, 5, 5, 8, 8, 8, 8, 12 };
+    for (boundaries, 0..) |expected, cap| {
+        try std.testing.expectEqual(expected, utf8PrefixLen(text, cap));
+    }
+    try std.testing.expectEqual(text.len, utf8PrefixLen(text, text.len + 1));
+    try std.testing.expectEqual(@as(usize, 0), utf8PrefixLen("", 0));
+    try std.testing.expectEqual(@as(usize, 2), utf8PrefixLen("a\xffb", 2));
+}
+
+test "fuzz: utf8PrefixLen returns the longest complete UTF-8 prefix" {
+    var prng = std.Random.DefaultPrng.init(0xC0DE_8016);
+    const rnd = prng.random();
+    var input: [256]u8 = undefined;
+    for (0..2000) |_| {
+        var len: usize = 0;
+        var boundaries = [_]bool{false} ** 257;
+        boundaries[0] = true;
+        while (len + 4 <= input.len) {
+            const cp = rnd.uintLessThan(u21, 0x110000);
+            if (cp >= 0xd800 and cp <= 0xdfff) continue;
+            var encoded: [4]u8 = undefined;
+            const n = try std.unicode.utf8Encode(cp, &encoded);
+            @memcpy(input[len..][0..n], encoded[0..n]);
+            len += n;
+            boundaries[len] = true;
+        }
+        const cap = rnd.uintLessThan(usize, input.len + 1);
+        const n = utf8PrefixLen(input[0..len], cap);
+        try std.testing.expect(n <= cap and n <= len);
+        try std.testing.expect(boundaries[n]);
+        try std.testing.expect(std.unicode.utf8ValidateSlice(input[0..n]));
+        for (n + 1..@min(cap, len) + 1) |i| {
+            try std.testing.expect(!boundaries[i]);
+        }
+    }
+}
+
+test "VmConfig: text setters truncate at UTF-8 boundaries" {
+    var cfg = VmConfig{};
+    const name = "a" ** (MAX_NAME - 1) ++ "é";
+    cfg.setName(name);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(cfg.getNameSlice()));
+    try std.testing.expectEqualStrings(name[0 .. MAX_NAME - 1], cfg.getNameSlice());
+    cfg.setTags("a" ** 254 ++ "é");
+    try std.testing.expect(std.unicode.utf8ValidateSlice(cfg.getTagsSlice()));
+    try std.testing.expectEqual(@as(usize, 254), cfg.getTagsSlice().len);
+    cfg.setPortForwards("a" ** 510 ++ "é");
+    try std.testing.expect(std.unicode.utf8ValidateSlice(cfg.getPortForwardsSlice()));
+    try std.testing.expectEqual(@as(usize, 510), cfg.getPortForwardsSlice().len);
+    cfg.setNotes("a" ** 4094 ++ "€");
+    try std.testing.expectEqualStrings("a" ** 4094, cfg.getNotesSlice());
+    cfg.setFolder("a" ** 126 ++ "e\u{301}");
+    try std.testing.expectEqualStrings("a" ** 126 ++ "e", cfg.getFolderSlice());
+    cfg.setCloudInit("a" ** (MAX_CLOUD_INIT - 3) ++ "\u{1f680}");
+    try std.testing.expectEqualStrings("a" ** (MAX_CLOUD_INIT - 3), cfg.getCloudInitSlice());
+    cfg.setDiskPath("a" ** (MAX_PATH - 2) ++ "\u{1f680}");
+    try std.testing.expectEqualStrings("a" ** (MAX_PATH - 2), cfg.getDiskPathSlice());
+    cfg.setDiskPath("a\xffb");
+    try std.testing.expectEqualStrings("a\xffb", cfg.getDiskPathSlice());
 }
 
 test "VmConfig: setName truncates at MAX_NAME" {

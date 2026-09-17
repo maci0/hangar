@@ -394,6 +394,8 @@ fn readString(s: []const u8, out: []u8) ?struct { value: []const u8, rest: []con
                 'n' => '\n',
                 'r' => '\r',
                 't' => '\t',
+                'b' => 0x08,
+                'f' => 0x0c,
                 else => s[i + 1],
             };
             if (out_len >= out.len) return null;
@@ -864,6 +866,13 @@ test "vnet: readString unterminated returns null" {
 test "vnet: readString escape at end returns null" {
     var out: [64]u8 = undefined;
     try testing.expect(readString("\"trailing\\", &out) == null);
+}
+
+test "vnet: readString short escapes preserve Unicode text and control bytes" {
+    var out: [64]u8 = undefined;
+    const parsed = readString("\"caf\\u00e9\\b\\f\\/\\ud83d\\ude80\",rest", &out) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("café\x08\x0c/\u{1f680}", parsed.value);
+    try std.testing.expectEqualStrings(",rest", parsed.rest);
 }
 
 test "vnet: readString \\u escape decodes UTF-8" {
