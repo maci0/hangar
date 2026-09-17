@@ -622,14 +622,19 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
         try std.fmt.bufPrint(&bufs.mach_buf, "type=q35,accel={s}", .{accel_cli});
     try args.append(alloc, mach_str);
     try args.append(alloc, "-cpu");
+    const cpu_model: vm.CpuModel = if ((config.accel == .auto or config.accel == .tcg) and
+        (config.cpu_model == .host or config.cpu_model == .host_passthrough))
+        .max
+    else
+        config.cpu_model;
     if (config.hyperv_enlightenments) {
         try args.append(alloc, try std.fmt.bufPrint(
             &bufs.cpu_buf,
             "{s},hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time,hv_vpindex,hv_runtime,hv_synic,hv_stimer,hv_reset,hv_frequencies,hv_tlbflush,hv_reenlightenment,hv_ipi",
-            .{std.mem.span(config.cpu_model.toStr())},
+            .{std.mem.span(cpu_model.toStr())},
         ));
     } else {
-        const cpu_str = config.cpu_model.toStr();
+        const cpu_str = cpu_model.toStr();
         try args.append(alloc, std.mem.span(cpu_str));
     }
 
@@ -2500,6 +2505,41 @@ test "qemu: default accel maps to kvm:tcg, never the invalid literal auto" {
     try expect(!has(s, "accel=auto")); // QEMU rejects "auto"
 }
 
+test "qemu: software fallback uses max for host CPU models" {
+    for ([_]vm.VmAccel{ .auto, .tcg, .kvm, .hvf, .whpx }) |accel| {
+        for ([_]vm.CpuModel{ .host, .host_passthrough, .max, .qemu64, .EPYC }) |model| {
+            for ([_]bool{ false, true }) |hyperv| {
+                const cfg = vm.VmConfig{
+                    .accel = accel,
+                    .cpu_model = model,
+                    .hyperv_enlightenments = hyperv,
+                };
+                var args: std.ArrayList([]const u8) = .empty;
+                defer args.deinit(talloc);
+                var bufs: ArgBuffers = .{};
+                try buildArgs(&cfg, &args, talloc, &bufs);
+                var cpu_count: usize = 0;
+                for (args.items, 0..) |arg, i| {
+                    if (!std.mem.eql(u8, arg, "-cpu")) continue;
+                    cpu_count += 1;
+                    const cpu = args.items[i + 1];
+                    const end = std.mem.indexOfScalar(u8, cpu, ',') orelse cpu.len;
+                    const expected = if ((accel == .auto or accel == .tcg) and
+                        (model == .host or model == .host_passthrough))
+                        "max"
+                    else
+                        std.mem.span(model.toStr());
+                    try std.testing.expectEqualStrings(expected, cpu[0..end]);
+                    try std.testing.expectEqual(hyperv, has(cpu, ",hv_relaxed"));
+                }
+                try std.testing.expectEqual(@as(usize, 1), cpu_count);
+                try std.testing.expectEqual(model, cfg.cpu_model);
+                try std.testing.expectEqual(accel, cfg.accel);
+            }
+        }
+    }
+}
+
 test "qemu: buildScriptStr with all NICs disabled" {
     var cfg = vm.VmConfig{};
     cfg.nics[0].mode = .none;
@@ -2791,6 +2831,7 @@ test "qemu: Hyper-V enlightenments preserve the selected CPU model" {
         for ([_]bool{ false, true }) |enabled| {
             var cfg = vm.VmConfig{};
             cfg.cpu_model = vm.CpuModel.fromIndex(i);
+            cfg.accel = .kvm;
             cfg.hyperv_enlightenments = enabled;
             var args: std.ArrayList([]const u8) = .empty;
             defer args.deinit(talloc);

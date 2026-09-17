@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const c = std.c;
+const wlog = @import("wlog.zig");
 
 pub const HTTP_OK: u16 = 200;
 pub const HTTP_CREATED: u16 = 201;
@@ -208,6 +209,10 @@ pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []cons
     }.add;
 
     append(&hbuf, &hlen, status_line);
+    if (wlog.requestId() != 0) {
+        var id_buf: [48]u8 = undefined;
+        append(&hbuf, &hlen, std.fmt.bufPrint(&id_buf, "X-Request-ID: {d}\r\n", .{wlog.requestId()}) catch unreachable);
+    }
     append(&hbuf, &hlen, "X-Content-Type-Options: nosniff\r\n");
     append(&hbuf, &hlen, "X-Frame-Options: DENY\r\n");
     append(&hbuf, &hlen, "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'\r\n");
@@ -236,8 +241,9 @@ pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []cons
     append(&hbuf, &hlen, std.fmt.bufPrint(&len_buf, "{d}", .{body.len}) catch "0");
     append(&hbuf, &hlen, "\r\nConnection: close\r\n\r\n");
 
-    if (!writeAll(conn, hbuf[0..hlen].ptr, hlen)) return;
-    _ = writeAll(conn, body.ptr, body.len); // best effort for body
+    const sent = writeAll(conn, hbuf[0..hlen].ptr, hlen) and writeAll(conn, body.ptr, body.len);
+    const wire_status = std.fmt.parseInt(u16, status_line[9..12], 10) catch unreachable;
+    wlog.logResponse(wire_status, sent);
 }
 
 // ── Tests ───────────────────────────────────────────────────────────

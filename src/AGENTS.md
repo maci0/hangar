@@ -54,8 +54,10 @@ globals in `appstate.zig`.
 - **Uniform `POST /api/vms/<id>/<action>` →** extend the comptime `post_routes` table
   in `web_server.zig`. **Create/save fields →** extend the `@field` setter tables
   (`applyBoolField`/`applyEnumField`/`applyStrField`), never copy-paste an arm.
-- **QEMU CPU selection:** `hyperv_enlightenments` appends `hv_*` properties to the
-  selected `cpu_model`; it must not replace the model with `host`.
+- **QEMU CPU selection:** with `.auto` or `.tcg` acceleration, `host` CPU models
+  emit `max` so TCG can start; QEMU's `max` uses host features under KVM. Explicit
+  hardware acceleration preserves `host`. Stored CPU selections stay unchanged.
+  `hyperv_enlightenments` appends `hv_*` properties to the effective model.
 - **VNC connection cache:** `VncClient.disconnect` must join the polling thread and
   release cached resources even after peer failure clears `connected`; framebuffer
   polling calls it before reconnecting.

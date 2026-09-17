@@ -7,6 +7,42 @@ const std = @import("std");
 const builtin = @import("builtin");
 const vm = @import("vm.zig");
 const httpreq = @import("httpreq.zig");
+const appio = @import("appio.zig");
+
+var next_request_id: u64 = 0;
+threadlocal var request_id: u64 = 0;
+threadlocal var request_started: i96 = 0;
+threadlocal var request_is_post: bool = false;
+threadlocal var request_route: [128]u8 = undefined;
+threadlocal var request_route_len: usize = 0;
+
+pub fn beginRequest(req: []const u8) void {
+    request_id = @atomicRmw(u64, &next_request_id, .Add, 1, .monotonic) +% 1;
+    request_started = std.Io.Clock.awake.now(appio.io()).nanoseconds;
+    request_is_post = std.mem.startsWith(u8, req, "POST ");
+    const end = std.mem.indexOfAny(u8, req, "?\r\n") orelse req.len;
+    request_route_len = httpreq.requestLine(req[0..end], &request_route).len;
+}
+
+pub fn endRequest() void {
+    request_id = 0;
+    request_route_len = 0;
+    request_is_post = false;
+}
+
+pub fn requestId() u64 {
+    return request_id;
+}
+
+pub fn logResponse(status: u16, sent: bool) void {
+    if (request_id == 0 or (!request_is_post and status < 500 and sent)) return;
+    const elapsed = @max(0, std.Io.Clock.awake.now(appio.io()).nanoseconds - request_started);
+    var buf: [320]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "http_response status={d} duration_ms={d} sent={} request=[{s}]", .{
+        status, @divTrunc(elapsed, std.time.ns_per_ms), sent, request_route[0..request_route_len],
+    }) catch "http_response";
+    logAt(if (status >= 500) .err else if (!sent or status >= 400) .warn else .info, msg);
+}
 
 /// Destination fd for every log line. Defaults to stderr; a negative value
 /// drops the line. Test builds default to dropped so a passing `zig build test`
@@ -55,7 +91,12 @@ pub fn logAt(level: LogLevel, msg: []const u8) void {
     var ts: std.c.timespec = undefined;
     _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
     var buf: [LINE_MAX]u8 = undefined;
-    const line = formatLine(&buf, level, @intCast(ts.sec), msg);
+    var correlated: [448]u8 = undefined;
+    const text = if (request_id != 0)
+        std.fmt.bufPrint(&correlated, "request_id={d} {s}", .{ request_id, msg[0..@min(msg.len, 400)] }) catch msg
+    else
+        msg;
+    const line = formatLine(&buf, level, @intCast(ts.sec), text);
     _ = std.c.write(log_fd, line.ptr, line.len);
 }
 
