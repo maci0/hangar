@@ -25,6 +25,9 @@ zig build lint-js      # bun build over hand-written JS (vendored src/web bundle
 
 All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`.
 
+CI runs on Ubuntu 24.04 and installs `libvncserver-dev`, `pkg-config`, and
+`shellcheck` before building and running the existing lint and unit/fuzz gates.
+
 ### Running a single test module
 
 Each test module is explicitly registered in `build.zig`. To run only one:

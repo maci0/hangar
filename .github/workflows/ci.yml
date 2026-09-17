@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +37,10 @@ jobs:
             zig-cache-${{ runner.os }}-${{ hashFiles('build.zig.zon', 'build.zig') }}-
             zig-cache-${{ runner.os }}-
       - name: Build
-        run: zig build
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libvncserver-dev pkg-config shellcheck
+          zig build
       - name: Static analysis (zig fmt + shellcheck + bun js syntax)
         run: |
           zig build fmt-check
