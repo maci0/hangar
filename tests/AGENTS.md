@@ -30,11 +30,14 @@ Commands (from repo root):
 - `zig build web-e2e`: Playwright suite.
 - `KV_PORT=<p> bash tests/test_web_api.sh`: API plus startup validation.
 - `bash tests/test_web_api.sh --startup-only`: 10 startup validation checks.
-- `bash tests/test_vmrun.sh`: vmrun (expect 25 passed).
-Run real daemons on a non-default `KV_PORT`; never blanket-`pkill hangar-web` (kills a
-user's running daemon): scope cleanup to the test port/PID. Killing a test daemon
-orphans its QEMU children, which keep holding VNC ports; clean those by guest name.
+- `bash tests/test_vmrun.sh`: vmrun integration.
+Run real daemons on a non-default `KV_PORT`; never blanket-`pkill hangar-web`.
+Scope cleanup to PIDs owned by this run. QEMU children can outlive a killed daemon
+and hold VNC ports; track them before stopping the daemon, never kill by guest name
+alone (another session may use the same name).
 
 ## Verification
-Green = `zig build test` RC 0 (and silent: `wlog` drops log output in test builds) ·
-API and vmrun report zero failures · Playwright 49 passed / 0 failed · tree clean.
+Require exit code 0 and zero failures from each requested suite. Check Playwright's
+skipped tests too: the video-stream test skips without ffmpeg. Pass counts change
+as tests are added; a historical count is not an acceptance criterion.
+Inspect `git status` for unintended artifacts; do not discard pre-existing changes.

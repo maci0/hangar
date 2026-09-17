@@ -14,10 +14,11 @@ zig build test-api     # HTTP API integration test (spawns a real daemon)
 zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 ```
 
-`zig build check` runs the CI gate locally: all executables, formatting,
-shell/JS lint, the hermetic unit/fuzz suite, and `zig build test-cli` (help/version
-output and stdout-failure exit codes for all three binaries, without a daemon).
-Integration and browser tests remain standalone.
+`zig build check` runs all executables, formatting, shell/JS lint, the hermetic
+unit/fuzz suite, and `zig build test-cli` (help/version and stdout-failure exit
+codes for all three binaries, without a daemon). CI runs the build, lint and
+unit/fuzz steps; `test-cli` is an additional local check. Integration and browser
+tests remain standalone. Fix failing code, never weaken gates or assertions to pass.
 
 Static analysis (blocking CI steps, all scoped to git-tracked files so vendored
 code and scratch trees are excluded):

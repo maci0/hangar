@@ -96,10 +96,10 @@ globals in `appstate.zig`.
 - `qemu.zig` arg tests use `buildScriptStr`/`buildArgs`, never spawn QEMU.
 
 ## Verification
-Use the root build/test commands and non-destructive artifact checks. Single-module
-tests may need more than `-lc -fllvm -flld`: `vnc_client`, `framebuffer` and
-`web_server` also link `libvncclient`, and `webui_app` needs the `webui` module. Use `zig build test` for
-these modules so `build.zig` supplies their dependencies.
+Use `zig build test-unit-<module>` for a module registered in `build.zig`
+(e.g. `zig build test-unit-vnc_client`). These steps supply the same linker flags,
+libraries and imports as `zig build test`, including `libvncclient` and `webui`.
+Run the full suite and executable link as required by the root testing rules.
 
 ## Child DOX Index
 - [hv/AGENTS.md](hv/AGENTS.md): hypervisor process-lifecycle dispatch table (start/stop/reap/clone).

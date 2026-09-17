@@ -7,7 +7,7 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 
 ## Ownership
 - `index.html`: markup, dialogs, the inline SVG icon sprite (`#i-*`), script tags.
-- `app.js` (~1750 lines), all behavior: refresh poll, render, action dispatch, dialogs,
+- `app.js`: refresh poll, render, action dispatch, dialogs,
   console/serial viewers, command palette, folders, topology.
 - `app.css`: flat slate theme (`:root` dark default + `:root.light`) + components.
   Logo and empty-state emblems use the shared accent and radius tokens, without
@@ -67,25 +67,25 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 - **Every user-facing workflow needs a Playwright e2e** in `../../tests/e2e/workflows.spec.mjs`,
   added alongside the feature. A new flow without one is incomplete.
 - Editing `app.js`/`app.css`/`index.html` requires a `zig build` (they are embedded) and a
-  binary check if anything looks stale (see src/AGENTS.md cache note).
+  binary check if anything looks stale (see root AGENTS.md, Testing).
 
 ## Verification
 `zig build web-e2e` (Playwright; standalone, not in the hermetic `test`). Check the
 trailing **failed** count, not just `N passed`. `bun tests/visual/screenshots.mjs`
 captures key views to confirm look.
 
-Markup and stylesheet validation (no CI gate: it needs a JVM, run it before shipping
-a change to these files):
+Validate hand-written HTML/CSS before shipping (requires Java and an existing VNU
+JAR; not a CI step). Set `VNU_JAR` to its path; do not install global packages or
+assume a machine-specific location. Missing prerequisites mean validation is blocked,
+not passed. Require zero errors and warnings:
 
 ```bash
-bun add -g vnu-jar   # once
-java -jar ~/.bun/install/global/node_modules/vnu-jar/build/dist/vnu.jar --format text src/web/index.html
-java -jar ~/.bun/install/global/node_modules/vnu-jar/build/dist/vnu.jar --css --format text src/web/app.css
+java -jar "${VNU_JAR:?Set VNU_JAR to an existing vnu.jar}" --format text src/web/index.html
+java -jar "${VNU_JAR:?Set VNU_JAR to an existing vnu.jar}" --css --format text src/web/app.css
 ```
 
-`index.html` and `app.css` are clean. Do **not** run it over `xterm.css`: vnu's CSS
-profile is CSS 2.1 and rejects the valid Level 3 `text-decoration` shorthand
-(`overline underline`) the vendored bundle uses; the bundle is not ours to edit.
+Exclude vendored `xterm.css`: the validator rejects its valid `text-decoration`
+shorthand (`overline underline`); do not edit the bundle to satisfy validation.
 
 ## Notes
 Headless Chromium completes WebSockets to the daemon fine, if a WS sticks in
