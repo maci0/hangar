@@ -858,6 +858,47 @@ test "vnet: fromJson caps at MAX_VNETS" {
     try testing.expectEqual(MAX_VNETS, s.count);
 }
 
+test "vnet: backspace and form feed escapes preserve network names" {
+    const set = fromJson("{\"networks\":[{\"name\":\"a\\bb\\fc\"}]}");
+    try testing.expectEqual(@as(usize, 1), set.count);
+    try testing.expectEqualStrings("a\x08b\x0cc", set.nets[0].getNameSlice());
+    const json = try toJson(&set, testing.allocator);
+    defer testing.allocator.free(json);
+    const restored = fromJson(json);
+    try testing.expectEqualStrings(set.nets[0].getNameSlice(), restored.nets[0].getNameSlice());
+    var out: [2]u8 = undefined;
+    const parsed = readString("\"\\b\\f\",", &out).?;
+    try testing.expectEqualStrings("\x08\x0c", parsed.value);
+    try testing.expectEqualStrings(",", parsed.rest);
+    try testing.expect(readString("\"\\b\\f\"", out[0..1]) == null);
+}
+
+test "vnet fuzz: short control escapes match unicode escapes" {
+    var prng = std.Random.DefaultPrng.init(0xbac5face);
+    const random = prng.random();
+    for (0..1000) |_| {
+        var input: [130]u8 = undefined;
+        var expected: [64]u8 = undefined;
+        const len = random.uintLessThan(usize, expected.len + 1);
+        input[0] = '"';
+        for (expected[0..len], 0..) |*byte, i| {
+            const backspace = random.boolean();
+            byte.* = if (backspace) 0x08 else 0x0c;
+            input[1 + i * 2] = '\\';
+            input[2 + i * 2] = if (backspace) 'b' else 'f';
+        }
+        input[1 + len * 2] = '"';
+        var output: [64]u8 = undefined;
+        const parsed = readString(input[0 .. 2 + len * 2], output[0..len]).?;
+        try testing.expectEqualSlices(u8, expected[0..len], parsed.value);
+        var json: List = .empty;
+        defer json.deinit(testing.allocator);
+        try emitStr(&json, testing.allocator, parsed.value);
+        const restored = readString(json.items, &output).?;
+        try testing.expectEqualSlices(u8, expected[0..len], restored.value);
+    }
+}
+
 test "vnet: readString unterminated returns null" {
     var out: [64]u8 = undefined;
     try testing.expect(readString("\"no close", &out) == null);

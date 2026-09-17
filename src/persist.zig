@@ -2801,6 +2801,52 @@ test "emitJsonStr: all JSON-special characters escaped" {
     try std.testing.expectEqualStrings("\"a\\\"b\\\\c\\nd\\re\\tf\"", list.items);
 }
 
+test "parseJsonString: backspace and form feed escapes preserve bytes" {
+    var buf: [16]u8 = undefined;
+    const parsed = parseJsonString("\"a\\bb\\fc\",", &buf).?;
+    try std.testing.expectEqualStrings("a\x08b\x0cc", parsed.value);
+    try std.testing.expectEqualStrings(",", parsed.rest);
+    try std.testing.expect(parseJsonString("\"\\b\\f\"", buf[0..1]) == null);
+
+    var vms: [vm.MAX_VMS]vm.VmConfig = undefined;
+    var prefs = vm.Prefs{};
+    const count = loadFromSlice(&vms, "{\"vms\":[{\"notes\":\"a\\bb\\fc\"}]}", &prefs);
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqualStrings("a\x08b\x0cc", vms[0].getNotesSlice());
+    var json: List = .empty;
+    defer json.deinit(std.testing.allocator);
+    try emitVmJson(&json, std.testing.allocator, &vms[0]);
+    var restored = vm.VmConfig{};
+    _ = parseVmObject(json.items, &restored);
+    try std.testing.expectEqualStrings(vms[0].getNotesSlice(), restored.getNotesSlice());
+}
+
+test "persist fuzz: short control escapes match unicode escapes" {
+    var prng = std.Random.DefaultPrng.init(0xbac5face);
+    const random = prng.random();
+    for (0..1000) |_| {
+        var input: [130]u8 = undefined;
+        var expected: [64]u8 = undefined;
+        const len = random.uintLessThan(usize, expected.len + 1);
+        input[0] = '"';
+        for (expected[0..len], 0..) |*byte, i| {
+            const backspace = random.boolean();
+            byte.* = if (backspace) 0x08 else 0x0c;
+            input[1 + i * 2] = '\\';
+            input[2 + i * 2] = if (backspace) 'b' else 'f';
+        }
+        input[1 + len * 2] = '"';
+        var output: [64]u8 = undefined;
+        const parsed = parseJsonString(input[0 .. 2 + len * 2], output[0..len]).?;
+        try std.testing.expectEqualSlices(u8, expected[0..len], parsed.value);
+        var json: List = .empty;
+        defer json.deinit(std.testing.allocator);
+        try emitJsonStr(&json, std.testing.allocator, parsed.value);
+        const restored = parseJsonString(json.items, &output).?;
+        try std.testing.expectEqualSlices(u8, expected[0..len], restored.value);
+    }
+}
+
 test "parseJsonString: empty string" {
     var out: [64]u8 = undefined;
     const r = parseJsonString("\"\"", &out).?;
