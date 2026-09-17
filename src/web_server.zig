@@ -113,8 +113,6 @@ const c = std.c;
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
-// POSIX networking constants (not in std.c in Zig 0.16)
-
 /// Cap on concurrent client connections. Each accepted connection spends a
 /// thread plus a 64 KB request buffer (and a WebSocket relay spends two more
 /// threads), so without a bound a flood of connections, including ones that
@@ -3739,8 +3737,6 @@ test "writeAll: detects closed fd" {
     try std.testing.expect(!writeAll(fds[1], "x".ptr, 1));
 }
 
-// handleCatalog/handleCapabilities moved to catalog.zig (tested there).
-
 test "handleQuickstart: missing space after slug returns 'invalid'" {
     const result = try handleQuickstart("POST /api/vms/quickstart/ubuntu2404");
     try std.testing.expectEqualStrings("invalid", result);
@@ -4540,8 +4536,6 @@ test "handleNewVm: empty name returns error" {
     const result = try handleNewVm("POST /api/vms\r\n\r\nname=");
     try std.testing.expectEqualStrings("invalid name", result);
 }
-
-// handleCapabilities moved to catalog.zig (tested there).
 
 test "handleDelete: missing prefix returns 'invalid'" {
     const result = try handleDelete("GET /api/other HTTP/1.1");
