@@ -25,6 +25,8 @@ zig build lint-js      # bun build over hand-written JS (vendored src/web bundle
 
 `lint-shell` enables `check-extra-masked-returns`, `check-set-e-suppressed`, and
 `check-unassigned-uppercase` in addition to ShellCheck's default checks.
+Static-analysis pipelines propagate file-enumeration failures and preserve filenames
+with whitespace. `fmt-check` uses the Zig executable running the build.
 
 All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`.
 

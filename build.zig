@@ -120,7 +120,7 @@ pub fn build(b: *std.Build) !void {
     // src/web bundles) and scratch trees are never formatted or flagged.
     const fmt_check = b.step("fmt-check", "Check formatting of tracked Zig sources (zig fmt)");
     const fmt_cmd = b.addSystemCommand(&.{
-        "bash", "-c", "zig fmt --check $(git ls-files '*.zig' '*.zon')",
+        "bash", "-euo", "pipefail", "-c", "git ls-files -z '*.zig' '*.zon' | xargs -0 \"$1\" fmt --check", "fmt-check", b.graph.zig_exe,
     });
     fmt_check.dependOn(&fmt_cmd.step);
 
@@ -128,7 +128,7 @@ pub fn build(b: *std.Build) !void {
     // Same git-tracked scoping as fmt-check: a newly added .sh is covered
     // automatically instead of silently falling outside a hardcoded list.
     const lint_shell_cmd = b.addSystemCommand(&.{
-        "bash", "-c", "git ls-files '*.sh' | xargs shellcheck --enable=check-extra-masked-returns,check-set-e-suppressed,check-unassigned-uppercase",
+        "bash", "-euo", "pipefail", "-c", "git ls-files -z '*.sh' | xargs -0 shellcheck --enable=check-extra-masked-returns,check-set-e-suppressed,check-unassigned-uppercase",
     });
     lint_shell.dependOn(&lint_shell_cmd.step);
 
@@ -137,10 +137,10 @@ pub fn build(b: *std.Build) !void {
     // listed in src/web/AGENTS.md; any new non-vendored file is covered.
     const lint_js = b.step("lint-js", "Syntax-check hand-written JS (bun build)");
     const lint_js_cmd = b.addSystemCommand(&.{
-        "bash", "-c",
-        \\git ls-files '*.js' '*.mjs' |
-        \\grep -vE '^src/web/(novnc|spice|elk|van|xterm(-fit|-webgl)?)\.js$' |
-        \\xargs -rn1 bun build --no-bundle >/dev/null
+        "bash", "-euo", "pipefail", "-c",
+        \\git ls-files -z '*.js' '*.mjs' |
+        \\grep -zvE '^src/web/(novnc|spice|elk|van|xterm(-fit|-webgl)?)\.js$' |
+        \\xargs -0rn1 bun build --no-bundle >/dev/null
         \\
     });
     lint_js.dependOn(&lint_js_cmd.step);
