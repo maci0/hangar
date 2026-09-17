@@ -150,8 +150,8 @@ policy, version history does not establish a compatibility guarantee.
 `v0.1.0` accepted non-ASCII bytes in `KV_API_KEY`, despite documenting an
 ASCII-only value. The daemon now rejects those keys and exits with an error.
 The native wrapper also rejects invalid keys before spawning the daemon;
-`vmrun` instead sends the built-in default, so it cannot authenticate to a
-daemon using the old non-ASCII key.
+`vmrun` rejects them before connecting, with an error naming `KV_API_KEY`.
+Only an unset variable selects the client's built-in default.
 
 Before upgrading either the daemon or its clients, replace any non-ASCII key
 with a strong, unique secret of 1–64 printable ASCII bytes, excluding spaces
@@ -184,7 +184,8 @@ to loopback-only access; a strong custom API key is required for remote access.
 
 All optional. The daemon validates `KV_API_KEY` and `KV_PORT` before loading VM
 state or autostarting guests; the desktop wrapper validates both before spawning
-the daemon. An empty value is invalid for either variable.
+the daemon. `vmrun` validates `KV_API_KEY` before connecting. An empty value is
+invalid for either variable.
 
 | Variable | Default | Effect |
 | --- | --- | --- |

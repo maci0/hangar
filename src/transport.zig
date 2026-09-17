@@ -229,7 +229,7 @@ pub const Connection = struct {
         var req_buf: [512]u8 = undefined;
         const body_len = if (body) |b| b.len else 0;
         const host = if (self.proto == .unix) "localhost" else self.host[0..self.host_len];
-        const req = buildHttpRequest(&req_buf, method, path, host, apiKey(), body_len) orelse return error.BuildFailed;
+        const req = buildHttpRequest(&req_buf, method, path, host, try apiKey(), body_len) orelse return error.BuildFailed;
         try writeAll(self.fd, req.ptr[0..req.len]);
         if (body) |b| try writeAll(self.fd, b);
 
@@ -398,18 +398,10 @@ pub fn validApiKey(key: []const u8) bool {
     return true;
 }
 
-/// Resolve the `X-API-Key` value the HTTP client sends. Uses the daemon's
-/// `validApiKey`: an operator-supplied `KV_API_KEY` takes effect, otherwise the
-/// built-in default the daemon falls back to when no custom key is set. A value
-/// the daemon would reject (empty, over-long, or containing a space/control
-/// byte: e.g. the trailing newline from `export KV_API_KEY=$(cat keyfile)`) is
-/// invalid: the daemon refuses to start with one, so we send the default rather
-/// than splice a stray byte into the `X-API-Key:` header and corrupt request
-/// framing.
-fn apiKey() []const u8 {
-    const v = std.c.getenv("KV_API_KEY") orelse return DEFAULT_API_KEY;
-    const span = std.mem.span(v);
-    return if (validApiKey(span)) span else DEFAULT_API_KEY;
+pub fn apiKey() error{InvalidApiKey}![]const u8 {
+    const span = @import("appio.zig").getenv("KV_API_KEY") orelse return DEFAULT_API_KEY;
+    if (!validApiKey(span)) return error.InvalidApiKey;
+    return span;
 }
 
 /// Build the HTTP/1.0 request line and headers (no body) into `buf`. Split out
@@ -426,7 +418,8 @@ fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u
     // Send the X-API-Key on every request. The daemon enforces auth on all
     // state-changing endpoints (start/stop/delete/snapshot/...), so without
     // this header every write command from vmrun/remote got a 401 over TCP.
-    const req = buildHttpRequest(&req_buf, method, path, host, apiKey(), body_len) orelse return 0;
+    const key = apiKey() catch return 0;
+    const req = buildHttpRequest(&req_buf, method, path, host, key, body_len) orelse return 0;
     writeAll(fd, req.ptr[0..req.len]) catch return 0;
     if (body) |b| {
         writeAll(fd, b) catch return 0;
@@ -615,30 +608,74 @@ test "apiKey: default when unset, honors custom, rejects invalid" {
     }
 
     _ = unsetenv("KV_API_KEY");
-    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+    try std.testing.expectEqualStrings(DEFAULT_API_KEY, try apiKey());
 
     _ = setenv("KV_API_KEY", "custom-secret", 1);
-    try std.testing.expectEqualStrings("custom-secret", apiKey());
+    try std.testing.expectEqualStrings("custom-secret", try apiKey());
 
-    _ = setenv("KV_API_KEY", "", 1); // empty is invalid → default
-    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+    _ = setenv("KV_API_KEY", "", 1);
+    try std.testing.expectError(error.InvalidApiKey, apiKey());
 
     var long: [80]u8 = undefined;
     @memset(&long, 'x');
     long[79] = 0;
-    _ = setenv("KV_API_KEY", @ptrCast(&long), 1); // > 64 bytes → default
-    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+    _ = setenv("KV_API_KEY", @ptrCast(&long), 1);
+    try std.testing.expectError(error.InvalidApiKey, apiKey());
 
-    // Trailing newline (the `$(cat keyfile)` footgun) and embedded spaces are
-    // control/space bytes the daemon rejects, the client must too, else the
-    // byte corrupts the X-API-Key header. Falls back to the default.
-    _ = setenv("KV_API_KEY", "secret\n", 1);
-    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
-    _ = setenv("KV_API_KEY", "two words", 1);
-    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+    for ([_][*:0]const u8{ "secret\n", "two words", "sécret" }) |value| {
+        _ = setenv("KV_API_KEY", value, 1);
+        try std.testing.expectError(error.InvalidApiKey, apiKey());
+    }
+    _ = unsetenv("KV_API_KEY");
+}
 
-    _ = setenv("KV_API_KEY", "sécret", 1);
-    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+test "invalid API key sends no request through either response path" {
+    const saved = std.c.getenv("KV_API_KEY");
+    defer {
+        if (saved) |v| _ = setenv("KV_API_KEY", v, 1) else _ = unsetenv("KV_API_KEY");
+    }
+    try std.testing.expectEqual(@as(c_int, 0), setenv("KV_API_KEY", "", 1));
+
+    for ([_]bool{ false, true }) |streaming| {
+        var fds: [2]c.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+        defer _ = c.close(fds[1]);
+        var conn = Connection{ .proto = .unix, .fd = fds[0] };
+        defer conn.close();
+        setFdTimeout(conn.fd, CLIENT_IO_TIMEOUT_MS);
+        setFdTimeout(fds[1], CLIENT_IO_TIMEOUT_MS);
+        const response = "HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n";
+        try writeAll(fds[1], response);
+        var buf: [128]u8 = undefined;
+        if (streaming) {
+            try std.testing.expectError(error.InvalidApiKey, conn.requestToFd("POST", "/api/vms/0/export", null, -1));
+        } else {
+            try std.testing.expectEqual(@as(usize, 0), conn.request("POST", "/api/vms/0/start", null, &buf));
+        }
+        try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
+        try std.testing.expect(c.read(fds[1], &buf, buf.len) <= 0);
+    }
+}
+
+test "fuzz: apiKey never substitutes the default for invalid values" {
+    const saved = std.c.getenv("KV_API_KEY");
+    defer {
+        if (saved) |v| _ = setenv("KV_API_KEY", v, 1) else _ = unsetenv("KV_API_KEY");
+    }
+    var prng = std.Random.DefaultPrng.init(0xA91CE7);
+    const rnd = prng.random();
+    var buf: [81]u8 = undefined;
+    for (0..1000) |_| {
+        const len = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..len]) |*byte| byte.* = rnd.intRangeAtMost(u8, 1, 255);
+        buf[len] = 0;
+        try std.testing.expectEqual(@as(c_int, 0), setenv("KV_API_KEY", buf[0..len :0].ptr, 1));
+        if (validApiKey(buf[0..len])) {
+            try std.testing.expectEqualStrings(buf[0..len], try apiKey());
+        } else {
+            try std.testing.expectError(error.InvalidApiKey, apiKey());
+        }
+    }
 }
 
 test "fuzz: buildHttpRequest never panics on random inputs" {

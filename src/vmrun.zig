@@ -68,6 +68,8 @@ const usage =
     \\Environment:
     \\  KV_API_KEY           X-API-Key sent with every request (default: built-in
     \\                       key). Must match the daemon's KV_API_KEY.
+    \\                       Must be 1-64 printable ASCII bytes, without spaces;
+    \\                       invalid values fail before connecting.
     \\
     \\Exit codes: 0 success, 1 runtime error, 2 usage error.
     \\
@@ -182,6 +184,11 @@ fn run(init: std.process.Init) !void {
     }
 
     validateArgs(command, args);
+
+    _ = transport.apiKey() catch {
+        fdWrite(c.STDERR_FILENO, "Error: KV_API_KEY must be 1-64 bytes of printable ASCII (no spaces or control characters)\n");
+        std.process.exit(1);
+    };
 
     const url = transport.Url.parse(server_url) orelse {
         var buf: [256]u8 = undefined;

@@ -42,6 +42,9 @@ globals in `appstate.zig`.
   only unset uses 9080; empty, invalid, zero, and overflowing values fail.
   Both daemon and desktop wrapper validate `KV_PORT` and `KV_API_KEY` before
   loading VM state, spawning a backend, or opening a window.
+  `vmrun` validates `KV_API_KEY` before connecting. `transport.apiKey` returns
+  an error for invalid values; only an unset variable uses the built-in default.
+  Neither buffered nor streaming requests send a fallback key for invalid input.
 - **CLI stdout:** all three entrypoints use `appio.writeStdout`, which writes the
   complete slice and exits 1 with a stderr diagnostic on failure.
 - **VM and virtual-network string capacities are byte limits.** `VmConfig` and

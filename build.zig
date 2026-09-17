@@ -174,6 +174,23 @@ pub fn build(b: *std.Build) !void {
         cli_test.dependOn(&cli_cmd.step);
     }
 
+    const client_config_test = b.addSystemCommand(&.{
+        "bash",            "-euo", "pipefail", "-c",
+        \\for key in '' 'two words' $'key\n' $'key\r' $'key\t' 'sécret' "$(printf '%065d' 0)"; do
+        \\  export KV_API_KEY="$key"
+        \\  rc=0
+        \\  output=$(timeout 3 "$1" unix:///dev/null list 2>&1) || rc=$?
+        \\  test "$rc" -eq 1
+        \\  [[ "$output" == 'Error: KV_API_KEY must be 1-64 bytes of printable ASCII (no spaces or control characters)' ]]
+        \\  output=$("$1" --help)
+        \\  test -n "$output"
+        \\done
+        ,
+        "test-cli-config",
+    });
+    client_config_test.addArtifactArg(vmrun_exe);
+    cli_test.dependOn(&client_config_test.step);
+
     const check = b.step("check", "Run CI checks (build, format, lint, unit + fuzz tests)");
     check.dependOn(cli_test);
     check.dependOn(b.getInstallStep());
