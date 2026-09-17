@@ -38,26 +38,21 @@ pub fn getenv(name: [*:0]const u8) ?[]const u8 {
 }
 
 /// Sleep for `ms` milliseconds. Replaces `std.Thread.sleep`, which 0.16
-/// moved behind the `Io` interface.
+/// moved behind the `Io` interface. Backed by the shared `Io`'s clock
+/// (`Clock.awake` = CLOCK_MONOTONIC), so the timing behavior is injectable
+/// through the `Io` vtable: a test `Io` implementation can simulate time.
 pub fn sleepMs(ms: u64) void {
-    const ns = ms * std.time.ns_per_ms;
-    var req: std.c.timespec = .{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    while (std.c.nanosleep(&req, &req) != 0) {
-        // Interrupted by a signal: resume with the remaining time.
-        if (std.c._errno().* != @intFromEnum(std.c.E.INTR)) break;
-    }
+    io().sleep(.fromMilliseconds(@intCast(ms)), .awake) catch {};
 }
 
 /// Seconds since an arbitrary fixed point, from CLOCK.MONOTONIC. Immune to
 /// wall-clock steps (NTP corrections, manual changes): use for elapsed-time
-/// measurement and uptime; never compare across processes or machines.
+/// measurement and uptime; never compare across processes or machines. Reads
+/// the clock through the shared `Io` vtable, so a test `Io` implementation can
+/// provide a deterministic value.
 pub fn monoSecs() u64 {
-    var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
-    return @intCast(@max(0, ts.sec));
+    const now = std.Io.Clock.awake.now(io());
+    return @intCast(@max(0, @divFloor(now.nanoseconds, std.time.ns_per_s)));
 }
 
 /// Write `data` to `file_path` atomically: stage into a temp file, fsync, then
