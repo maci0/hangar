@@ -24,8 +24,9 @@ globals in `appstate.zig`.
   subset attaches on power-on of a `video_stream` VM; assembles scanouts into a
   framebuffer, encodes via an ffmpeg child (qemu.forkExecPiped), serves H.264 access
   units on `/ws/video/<idx>` to the WebCodecs client (docs/VIDEO-PIPELINE.md).
-- **Events:** `GET /api/events` (SSE), `appstate.state_version` bumps on every accepted
-  POST mutation and unexpected VM exit; `handleEvents` streams change events.
+- **Events:** `GET /api/events` (SSE); `handleEvents` streams changes to
+  `appstate.state_version`. Successful POSTs reaching the generic response path and
+  unexpected VM exits bump it; streaming disk uploads bypass that path.
 - **HTTP leaf utils:** `httpreq` `httpresp` `ws` `wlog` `netutil` `auth` `urlencode` `form_parsers`.
 - **Handler groups:** `snapshots` `migrate` `disk` `cdrom` `guestagent` `streams`
   `wsproxy` `framebuffer` `vmrender`.

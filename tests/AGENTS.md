@@ -35,10 +35,13 @@ Commands (from repo root):
 - `KV_PORT=<p> bash tests/test_web_api.sh`: API plus startup validation.
 - `bash tests/test_web_api.sh --startup-only`: 10 startup validation checks.
 - `bash tests/test_vmrun.sh`: vmrun integration.
-Run real daemons on a non-default `KV_PORT`; never blanket-`pkill hangar-web`.
-Scope cleanup to PIDs owned by this run. QEMU children can outlive a killed daemon
-and hold VNC ports; track them before stopping the daemon, never kill by guest name
-alone (another session may use the same name).
+Before daemon-backed commands, satisfy the root Safety rules: a non-default port
+alone does not isolate `/tmp/hangar-daemon.sock`. The shell and screenshot harnesses
+do not all override inherited configuration; supply temporary `HOME` and
+`HANGAR_CONFIG_HOME` with `KV_API_KEY=hangar`.
+Never blanket-`pkill hangar-web`. Scope cleanup to this run's PIDs. QEMU children can
+outlive the daemon and hold VNC ports; track them before stopping it, never kill by
+guest name alone.
 
 ## Verification
 Require exit code 0 and zero failures from each requested suite. Check Playwright's

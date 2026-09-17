@@ -3,6 +3,17 @@
 Lightweight QEMU VM manager with web UI and optional native WebView wrapper.
 Zig 0.16.0. No libvirt.
 
+## Safety
+
+- Fix failing code, never weaken gates, assertions, or rules to pass.
+- Daemon runs share `/tmp/hangar-daemon.sock` and unlink it at startup. A different
+  `KV_PORT` or temporary HOME does not isolate that socket. Run daemon-backed tests
+  only in an isolated filesystem namespace or after confirming no other daemon
+  owns the socket. Never delete another session's socket or kill its processes.
+- Test daemons need temporary `HOME` and `HANGAR_CONFIG_HOME` plus
+  `KV_API_KEY=hangar`; inherited settings can expose the listener or load real VMs.
+  Never commit a real API key.
+
 ## Build / Run / Test Commands
 
 ```bash
@@ -19,7 +30,7 @@ unit/fuzz suite, and `zig build test-cli` (help/version and stdout-failure exit
 codes for all three binaries, plus invalid client API-key checks without a daemon).
 CI runs the build, lint and
 unit/fuzz steps; `test-cli` is an additional local check. Integration and browser
-tests remain standalone. Fix failing code, never weaken gates or assertions to pass.
+tests remain standalone.
 
 Static analysis (blocking CI steps, all scoped to git-tracked files so vendored
 code and scratch trees are excluded):
