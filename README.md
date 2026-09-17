@@ -151,7 +151,9 @@ policy, version history does not establish a compatibility guarantee.
 ASCII-only value. The daemon now rejects those keys and exits with an error.
 The native wrapper also rejects invalid keys before spawning the daemon;
 `vmrun` rejects them before connecting, with an error naming `KV_API_KEY`.
-Only an unset variable selects the client's built-in default.
+Only an unset variable selects the client's built-in default. In `v0.1.0`,
+`vmrun` silently substituted that default for empty, overlong, or
+whitespace-containing keys; those client configurations now fail with exit code 1.
 
 Before upgrading either the daemon or its clients, replace any non-ASCII key
 with a strong, unique secret of 1–64 printable ASCII bytes, excluding spaces
@@ -161,16 +163,58 @@ with a strong, unique secret of 1–64 printable ASCII bytes, excluding spaces
 Do not unset the key or use `hangar` as a workaround: those values leave the
 daemon loopback-only. Existing valid ASCII keys need no change.
 
+#### Changed: effective guest CPU model
+
+In `v0.1.0`, Hyper-V Enlightenments forced QEMU's `host` CPU regardless of the
+saved CPU Model. The next QEMU start now uses the selected model with the
+Hyper-V properties appended, subject to the fallback below.
+
+With Auto or TCG acceleration, Host and Host Passthrough selections now emit
+QEMU's `max` model instead of `host`, whether or not enlightenments are enabled.
+The substitution applies to Auto even when KVM is available; it permits TCG
+fallback, where `host` cannot start. The saved CPU selection is not rewritten.
+Explicit hardware acceleration still preserves Host selections.
+
+To retain the previous `host` launch configuration on a Linux KVM host, set
+CPU Model to **Host (default)** and acceleration to **KVM (Linux)** in Settings
+and save before the next start. Selecting Host alone with Auto no longer emits
+`host`. Explicit KVM requires working KVM access and does not fall back to TCG.
+If using software emulation, retain Auto or TCG and validate the guest with the
+new effective CPU model. Running QEMU processes are unchanged. Shut down affected
+guests before upgrading rather than carrying suspended CPU state across a model
+change; use matching CPU and accelerator settings at both live-migration endpoints.
+
+#### Changed: startup and saved configuration validation
+
+- The native wrapper now exits with an error for invalid `KV_PORT` instead of
+  probing port 9080. Unset it to use 9080, or set an integer from 1 to 65535.
+  The daemon already rejected invalid ports in `v0.1.0`, but now validates its
+  port and key before loading configuration or autostarting any guests.
+- Integer fields in `vms.json` no longer accept the integer prefix of fractions,
+  exponent notation, or malformed numbers. Rejected fields retain their defaults;
+  the remaining VM fields still load. Before starting the upgraded daemon, fix
+  any hand-written or externally generated values: for example, write
+  `"memory_mb":1000`, not `"memory_mb":1e3`, and
+  `"disk_bps_throttle":2500`, not `"disk_bps_throttle":2.5e3`.
+  Hangar's own integer serialization needs no conversion. Check resource and
+  throttle settings before powering on guests, since a default may differ from
+  the intended value.
+
+#### Upgrade and rollback precautions
+
+Back up `vms.json` and `networks.json` under `~/.config/hangar/` (or the
+`HANGAR_CONFIG_HOME` base) while the daemon is stopped, and keep the previous
+binaries. Back up guest disks separately; configuration backups do not contain
+guest data. The `vms.json` read limit is now 32 MiB rather than 10 MiB. Before
+rolling back to `v0.1.0`, stop guests and the daemon and check the inventory size:
+that release cannot load files over 10 MiB. Preserve the newer configuration
+before restoring a pre-upgrade backup; restoring it discards later configuration
+changes. Review the CPU settings above before restarting guests on either version.
+
 #### Fixed
 
 - Framebuffer polling no longer leaves the framebuffer lock held when no pixels
   are available, preventing subsequent polls and updates from deadlocking.
-- Enabling Hyper-V Enlightenments now preserves the selected CPU Model instead
-  of silently forcing `host`. For an existing VM with enlightenments enabled
-  and a non-Host selection, the next QEMU start exposes that selected CPU model
-  to the guest. To retain the CPU behavior from `v0.1.0`, set CPU Model to Host
-  in Settings and save before the next start. Running QEMU processes are not
-  changed by this fix; no VM or network configuration format migration is needed.
 
 ### v0.1.0 (2026-08-26)
 
