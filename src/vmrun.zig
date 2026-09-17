@@ -51,11 +51,16 @@ const usage =
     \\  snapshot revert  <name|idx> <tag>  Revert to snapshot
     \\  snapshot delete  <name|idx> <tag>  Delete a snapshot
     \\  import      <disk-path>  Import a VM from disk image
-    \\  export      <name|idx>   Export VM as OVF+VMDK
+    \\  export      <name|idx>   Save OVF+VMDK archive as local vm-<idx>.ova
     \\  log         <name|idx>   Show the VM's QEMU stderr log
     \\  info        <name|idx>   Show VM details
     \\  migrate     <name|idx> <host> <port>  Live-migrate to another host
     \\  status                  Show server health
+    \\
+    \\Paths and output:
+    \\  import and cd paths refer to files on the daemon's host, not the client.
+    \\  export writes vm-<idx>.ova in the client's current directory, replacing
+    \\  any existing file. Stdout contains a status line, not the archive.
     \\
     \\Server URL formats:
     \\  http://host:port   HTTP over TCP (port defaults to 9080)

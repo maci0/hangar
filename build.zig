@@ -174,6 +174,28 @@ pub fn build(b: *std.Build) !void {
         cli_test.dependOn(&cli_cmd.step);
     }
 
+    const client_help_test = b.addSystemCommand(&.{
+        "bash",          "-euo", "pipefail", "-c",
+        \\help=$("$1" --help 2>/dev/null)
+        \\[[ "$help" == *'local vm-<idx>.ova'* ]]
+        \\[[ "$help" == *"daemon's host, not the client"* ]]
+        \\[[ "$help" == *'Stdout contains a status line, not the archive.'* ]]
+        \\for command in list create start stop restart clone linked-clone delete suspend pause resume shutdown reset rename resize cd eject compact diskinfo guestinfo quickstart set cad import export log info migrate status; do
+        \\  output=$(timeout 3 "$1" unix:///dev/null "$command" --help 2>/dev/null)
+        \\  [[ "$output" == "$help" ]]
+        \\done
+        \\for subcommand in list take revert delete; do
+        \\  output=$(timeout 3 "$1" unix:///dev/null snapshot "$subcommand" --help 2>/dev/null)
+        \\  [[ "$output" == "$help" ]]
+        \\done
+        ,
+        "test-cli-help",
+    });
+    client_help_test.addArtifactArg(vmrun_exe);
+    client_help_test.setEnvironmentVariable("NO_COLOR", "1");
+    client_help_test.setEnvironmentVariable("TERM", "dumb");
+    cli_test.dependOn(&client_help_test.step);
+
     const client_config_test = b.addSystemCommand(&.{
         "bash",            "-euo", "pipefail", "-c",
         \\for key in '' 'two words' $'key\n' $'key\r' $'key\t' 'sécret' "$(printf '%065d' 0)"; do
