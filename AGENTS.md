@@ -36,7 +36,7 @@ Static analysis (blocking CI steps, all scoped to git-tracked files so vendored
 code and scratch trees are excluded):
 
 ```bash
-zig build fmt-check    # zig fmt --check over tracked *.zig/*.zon
+zig build fmt-check    # zig fmt --check --ast-check over tracked *.zig/*.zon
 zig build lint-shell   # shellcheck over tracked *.sh
 zig build lint-js      # bun build over hand-written JS (vendored src/web bundles excluded)
 ```

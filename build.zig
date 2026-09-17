@@ -121,9 +121,9 @@ pub fn build(b: *std.Build) !void {
     // ── Static analysis (also enforced as blocking CI steps) ──
     // fmt-check / lint-* scope to git-tracked files so vendored code (zig-pkg/,
     // src/web bundles) and scratch trees are never formatted or flagged.
-    const fmt_check = b.step("fmt-check", "Check formatting of tracked Zig sources (zig fmt)");
+    const fmt_check = b.step("fmt-check", "Check formatting and AST validity of tracked Zig sources (zig fmt)");
     const fmt_cmd = b.addSystemCommand(&.{
-        "bash", "-euo", "pipefail", "-c", "git ls-files -z '*.zig' '*.zon' | xargs -0 \"$1\" fmt --check", "fmt-check", b.graph.zig_exe,
+        "bash", "-euo", "pipefail", "-c", "git ls-files -z '*.zig' '*.zon' | xargs -0 \"$1\" fmt --check --ast-check", "fmt-check", b.graph.zig_exe,
     });
     fmt_check.dependOn(&fmt_cmd.step);
 
