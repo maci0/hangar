@@ -256,7 +256,7 @@ pub const Connection = struct {
 
         // The bytes already read past the header are the start of the body.
         var written: usize = 0;
-        const first = hbuf[he..hlen];
+        const first = hbuf[he..][0..@min(hlen - he, clen)];
         if (first.len > 0) {
             try writeAll(out_fd, first);
             written += first.len;
@@ -481,6 +481,42 @@ test "Connection.requestToFd propagates output write failure and closes connecti
 
     try std.testing.expectError(error.WriteFailed, conn.requestToFd("POST", "/api/vms/0/export", null, out_fd));
     try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
+}
+
+test "Connection.requestToFd limits buffered body bytes to Content-Length" {
+    for ([_]usize{ 0, 3, 7 }) |body_len| {
+        var fds: [2]c.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+        defer _ = c.close(fds[1]);
+        var conn = Connection{ .proto = .unix, .fd = fds[0] };
+        defer conn.close();
+        setFdTimeout(conn.fd, CLIENT_IO_TIMEOUT_MS);
+
+        var response_buf: [128]u8 = undefined;
+        const response = try std.fmt.bufPrint(&response_buf, "HTTP/1.0 200 OK\r\nContent-Length: {d}\r\n\r\narchive", .{body_len});
+        try writeAll(fds[1], response);
+        try std.testing.expectEqual(@as(c_int, 0), c.shutdown(fds[1], 1));
+
+        var output: [2]c.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &output));
+        defer _ = c.close(output[0]);
+        defer _ = c.close(output[1]);
+        setFdTimeout(output[1], CLIENT_IO_TIMEOUT_MS);
+
+        const written = try conn.requestToFd("POST", "/api/vms/0/export", null, output[0]);
+        try std.testing.expectEqual(body_len, written);
+        try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
+        try std.testing.expectEqual(@as(c_int, 0), c.shutdown(output[0], 1));
+        var received: [16]u8 = undefined;
+        var received_len: usize = 0;
+        while (received_len < received.len) {
+            const n = c.read(output[1], received[received_len..].ptr, received.len - received_len);
+            try std.testing.expect(n >= 0);
+            if (n == 0) break;
+            received_len += @intCast(n);
+        }
+        try std.testing.expectEqualStrings("archive"[0..body_len], received[0..received_len]);
+    }
 }
 
 test "transport: parseContentLength is case-insensitive and bounded" {
