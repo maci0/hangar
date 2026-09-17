@@ -70,6 +70,9 @@ globals in `appstate.zig`.
   emit `max` so TCG can start; QEMU's `max` uses host features under KVM. Explicit
   hardware acceleration preserves `host`. Stored CPU selections stay unchanged.
   `hyperv_enlightenments` appends `hv_*` properties to the effective model.
+- **QEMU port forwards:** user networking accepts `host:guest` and
+  `host:guestIPv4:guest` entries; explicit guest IPv4 addresses survive argument
+  generation. Both ports must be nonzero `u16` values; malformed entries are skipped.
 - **OVF CPU quantity:** `ovf.Spec` receives cores per socket and socket count;
   the descriptor emits their product with the same 1–1024 per-field bounds as QEMU.
 - **AutoProtect persistence:** the ticker saves only after advancing snapshot scheduling

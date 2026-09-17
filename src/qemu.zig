@@ -980,12 +980,16 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
                     if (trimmed.len == 0) continue;
                     var parts = std.mem.splitScalar(u8, trimmed, ':');
                     const host = parts.next() orelse continue;
-                    const guest = parts.next() orelse continue;
-                    // Only emit forwards whose host and guest are bare port
-                    // numbers; anything else is dropped rather than passed into
-                    // the netdev property list (see isDecimalPort).
+                    const second = parts.next() orelse continue;
+                    const third = parts.next();
+                    if (parts.next() != null) continue;
+                    const guest = third orelse second;
+                    const guest_ip = if (third != null) second else "";
+                    if (third != null) {
+                        _ = std.Io.net.Ip4Address.parse(guest_ip, 0) catch continue;
+                    }
                     if (!isDecimalPort(host) or !isDecimalPort(guest)) continue;
-                    const chunk = std.fmt.bufPrint(fwd_str[offset..], ",hostfwd=tcp::{s}-:{s}", .{ host, guest }) catch break;
+                    const chunk = std.fmt.bufPrint(fwd_str[offset..], ",hostfwd=tcp::{s}-{s}:{s}", .{ host, guest_ip, guest }) catch break;
                     offset += chunk.len;
                 }
                 try args.append(alloc, fwd_str[0..offset]);
@@ -2029,6 +2033,17 @@ test "qemu: port forwards appear as hostfwd" {
     const s = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s);
     try expect(has(s, "hostfwd=tcp::2222-:22"));
+}
+
+test "qemu: port forwards preserve explicit guest IPv4 addresses" {
+    var cfg = vm.VmConfig{};
+    cfg.nics[0].mode = .user;
+    cfg.setPortForwards("2222:10.0.2.15:22,8080:80,8443:10.0.2.16:443");
+    const s = try buildScriptStr(&cfg, talloc);
+    defer talloc.free(s);
+    try expect(has(s, "hostfwd=tcp::2222-10.0.2.15:22"));
+    try expect(has(s, "hostfwd=tcp::8080-:80"));
+    try expect(has(s, "hostfwd=tcp::8443-10.0.2.16:443"));
 }
 
 test "qemu: many port forwards are not silently truncated" {
