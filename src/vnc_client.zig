@@ -113,8 +113,6 @@ pub const VncClient = struct {
     /// and `sendPointer` (which re-check it under the mutex) see a
     /// consistent value: preventing a TOCTOU use-after-free.
     pub fn disconnect(self: *VncClient) void {
-        if (!@atomicLoad(bool, &self.connected, .seq_cst)) return;
-
         @atomicStore(bool, &self.running, false, .seq_cst);
         @atomicStore(bool, &self.connected, false, .seq_cst);
 
@@ -317,6 +315,40 @@ test "vnc: fresh client public API is safe (unconnected)" {
     cl.sendPointer(10, 20, 1);
     _ = cl.lockFb();
     cl.unlockFb();
+}
+
+test "vnc: disconnect releases cached resources after the peer drops" {
+    var prng = std.Random.DefaultPrng.init(0xCA_C4E);
+    const rnd = prng.random();
+    var client = VncClient{};
+    defer client.disconnect();
+
+    for (0..16) |_| {
+        const rfb = c.rfbGetClient(8, 3, 4);
+        try std.testing.expect(rfb != null);
+        client.rfb = rfb;
+        c.rfbClientSetClientData(rfb, null, &client);
+        rfb.*.width = rnd.intRangeAtMost(c_int, 1, 64);
+        rfb.*.height = rnd.intRangeAtMost(c_int, 1, 64);
+        try std.testing.expectEqual(@as(c.rfbBool, 1), VncClient.onMallocFb(rfb));
+        @atomicStore(bool, &client.running, true, .seq_cst);
+        client.thread = try std.Thread.spawn(.{}, VncClient.pollThread, .{&client});
+
+        client.disconnect();
+        try std.testing.expect(client.rfb == null);
+        try std.testing.expect(client.thread == null);
+        {
+            const pixels = client.lockFb();
+            defer client.unlockFb();
+            try std.testing.expect(pixels == null);
+        }
+        try std.testing.expectEqual(@as(c_int, 0), client.width);
+        try std.testing.expectEqual(@as(c_int, 0), client.height);
+        try std.testing.expect(!@atomicLoad(bool, &client.running, .seq_cst));
+        try std.testing.expect(!client.isConnected());
+        try std.testing.expect(!client.checkDirty());
+        client.disconnect();
+    }
 }
 
 test "vnc: checkDirty atomically tests-and-clears the flag" {

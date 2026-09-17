@@ -47,6 +47,9 @@ globals in `appstate.zig`.
   (`applyBoolField`/`applyEnumField`/`applyStrField`), never copy-paste an arm.
 - **QEMU CPU selection:** `hyperv_enlightenments` appends `hv_*` properties to the
   selected `cpu_model`; it must not replace the model with `host`.
+- **VNC connection cache:** `VncClient.disconnect` must join the polling thread and
+  release cached resources even after peer failure clears `connected`; framebuffer
+  polling calls it before reconnecting.
 - **New static asset / GET route →** add to `auth.isAuthExempt` only if non-sensitive.
 - **Logging goes through `wlog`**, never a bare `std.c.write(2, ...)`: one timestamped,
   leveled line per call on `wlog.log_fd`, which defaults to -1 (dropped) in test builds
