@@ -75,6 +75,8 @@ globals in `appstate.zig`.
   generation. Both ports must be nonzero `u16` values; malformed entries are skipped.
 - **OVF CPU quantity:** `ovf.Spec` receives cores per socket and socket count;
   the descriptor emits their product with the same 1–1024 per-field bounds as QEMU.
+- **Liveness persistence:** `checkVmLiveness` updates runtime state, releases exited
+  VM handles, and notifies SSE clients without rewriting `vms.json`.
 - **AutoProtect persistence:** the ticker saves only after advancing snapshot scheduling
   metadata or to retry its failed save; idle ticks do not rewrite `vms.json`.
 - **VNC connection cache:** `VncClient.disconnect` must join the polling thread and

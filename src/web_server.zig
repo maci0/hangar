@@ -2395,37 +2395,34 @@ fn livenessTicker() void {
     while (true) {
         appio.sleepMs(2000);
 
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
+        checkVmLiveness();
+    }
+}
 
-        var changed = false;
-        for (0..appstate.vm_count) |i| {
-            const v = &appstate.vms[i];
-            if (v.status == .running or v.status == .paused) {
-                const alive: bool = if (appstate.getVmmHandle(i)) |h|
-                    appstate.g_vmm.isAliveFn(h)
-                else
-                    qemu.isVmAlive(v);
-                if (!alive) {
-                    // A VM that was running/paused is now gone, an unexpected
-                    // exit (guest shutdown, QEMU crash, OOM-kill). Record it: a
-                    // VM that silently flips to stopped is a 3 AM blind spot with
-                    // no timestamp of when or which VM died.
-                    var name_buf: [vm.MAX_NAME]u8 = undefined;
-                    const safe = sanitizeLogText(&name_buf, v.getNameSlice());
-                    var msg: [320]u8 = undefined;
-                    logWarn(std.fmt.bufPrint(&msg, "vm exited unexpectedly: vm=\"{s}\" prev={s}", .{ safe, v.status.toStr() }) catch "vm exited unexpectedly");
-                    appstate.bumpStateVersion();
-                    v.status = .stopped;
-                    appstate.destroyVmmHandle(i);
-                    changed = true;
-                }
+fn checkVmLiveness() void {
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+
+    for (0..appstate.vm_count) |i| {
+        const v = &appstate.vms[i];
+        if (v.status == .running or v.status == .paused) {
+            const alive: bool = if (appstate.getVmmHandle(i)) |h|
+                appstate.g_vmm.isAliveFn(h)
+            else
+                qemu.isVmAlive(v);
+            if (!alive) {
+                // A VM that was running/paused is now gone, an unexpected
+                // exit (guest shutdown, QEMU crash, OOM-kill). Record it: a
+                // VM that silently flips to stopped is a 3 AM blind spot with
+                // no timestamp of when or which VM died.
+                var name_buf: [vm.MAX_NAME]u8 = undefined;
+                const safe = sanitizeLogText(&name_buf, v.getNameSlice());
+                var msg: [320]u8 = undefined;
+                logWarn(std.fmt.bufPrint(&msg, "vm exited unexpectedly: vm=\"{s}\" prev={s}", .{ safe, v.status.toStr() }) catch "vm exited unexpectedly");
+                appstate.bumpStateVersion();
+                v.status = .stopped;
+                appstate.destroyVmmHandle(i);
             }
-        }
-        if (changed) {
-            persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
-                logSaveErr("liveness: ", e);
-            };
         }
     }
 }
@@ -2555,6 +2552,74 @@ fn saveAutoprotectProgress(save_pending: *bool) !void {
     defer appstate.vms_mutex.unlock();
     try persist.save(&appstate.vms, appstate.vm_count, appstate.prefs);
     save_pending.* = false;
+}
+
+test "checkVmLiveness: exits notify once without rewriting configuration" {
+    var cfg_home = try TestConfigHome.init("liveness-no-save");
+    defer cfg_home.deinit();
+
+    appstate.vms_mutex.lock();
+    const saved_count = appstate.vm_count;
+    const saved_vms = appstate.vms[0..4].*;
+    const saved_handles = appstate.g_vmm_handles[0..4].*;
+    const saved_ready = appstate.g_vmm_ready;
+    const saved_vmm = if (saved_ready) appstate.g_vmm else null;
+    const saved_version = appstate.getStateVersion();
+    appstate.vm_count = 4;
+    appstate.g_vmm = hv_backend.createVmm(.tcg);
+    appstate.g_vmm_ready = true;
+    @memset(appstate.g_vmm_handles[0..4], null);
+    for (appstate.vms[0..4]) |*v| v.* = .{ .accel = .tcg };
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        for (0..4) |i| appstate.destroyVmmHandle(i);
+        @memcpy(appstate.vms[0..4], &saved_vms);
+        @memcpy(appstate.g_vmm_handles[0..4], &saved_handles);
+        appstate.vm_count = saved_count;
+        if (saved_vmm) |vmm| appstate.g_vmm = vmm;
+        appstate.g_vmm_ready = saved_ready;
+        @atomicStore(u64, &appstate.state_version, saved_version, .seq_cst);
+    }
+
+    var pending = true;
+    try saveAutoprotectProgress(&pending);
+    var path_buf: [512]u8 = undefined;
+    const path = path_helpers.vmsPath(&path_buf).?;
+    const original = try std.Io.Dir.cwd().statFile(appio.io(), path, .{});
+    var prng = std.Random.DefaultPrng.init(0x11FE_5A7E);
+    const rnd = prng.random();
+    for (0..32) |iteration| {
+        var expected: [4]vm.VmStatus = undefined;
+        var exits: u64 = 0;
+        appstate.vms_mutex.lock();
+        for (appstate.vms[0..4], 0..) |*v, i| {
+            v.status = vm.VmStatus.fromIndex(if (iteration == 0) i else rnd.uintLessThan(usize, vm.VmStatus.count));
+            const active = v.status == .running or v.status == .paused;
+            expected[i] = if (active) .stopped else v.status;
+            if (active) exits += 1;
+        }
+        appstate.vms_mutex.unlock();
+        const version = appstate.getStateVersion();
+        checkVmLiveness();
+        try std.testing.expectEqual(version + exits, appstate.getStateVersion());
+        {
+            appstate.vms_mutex.lock();
+            defer appstate.vms_mutex.unlock();
+            for (appstate.vms[0..4], expected, appstate.g_vmm_handles[0..4]) |v, status, handle| {
+                try std.testing.expectEqual(status, v.status);
+                try std.testing.expect(v.pid == null);
+                try std.testing.expect(handle == null);
+            }
+        }
+        checkVmLiveness();
+        try std.testing.expectEqual(version + exits, appstate.getStateVersion());
+        const current = try std.Io.Dir.cwd().statFile(appio.io(), path, .{});
+        try std.testing.expectEqual(original.inode, current.inode);
+        try std.testing.expectEqual(original.mtime, current.mtime);
+        try std.testing.expectEqual(original.size, current.size);
+    }
 }
 
 test "saveAutoprotectProgress: saves once while pending, stops after success" {
