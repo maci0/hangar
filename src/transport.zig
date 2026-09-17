@@ -225,8 +225,8 @@ pub const Connection = struct {
         const body_len = if (body) |b| b.len else 0;
         const host = if (self.proto == .unix) "localhost" else self.host[0..self.host_len];
         const req = buildHttpRequest(&req_buf, method, path, host, apiKey(), body_len) orelse return error.BuildFailed;
-        writeAll(self.fd, req.ptr[0..req.len]);
-        if (body) |b| writeAll(self.fd, b);
+        try writeAll(self.fd, req.ptr[0..req.len]);
+        if (body) |b| try writeAll(self.fd, b);
 
         // Read until we have the full header block (ends with CRLFCRLF).
         var hbuf: [8192]u8 = undefined;
@@ -253,7 +253,7 @@ pub const Connection = struct {
         var written: usize = 0;
         const first = hbuf[he..hlen];
         if (first.len > 0) {
-            writeAll(out_fd, first);
+            try writeAll(out_fd, first);
             written += first.len;
         }
         var rbuf: [64 * 1024]u8 = undefined;
@@ -261,7 +261,7 @@ pub const Connection = struct {
             const want = @min(rbuf.len, clen - written);
             const n = c.read(self.fd, &rbuf, want);
             if (n <= 0) break;
-            writeAll(out_fd, rbuf[0..@intCast(n)]);
+            try writeAll(out_fd, rbuf[0..@intCast(n)]);
             written += @intCast(n);
         }
         if (written < clen) return error.Truncated;
@@ -364,11 +364,12 @@ fn connectResolved(ai: *c.addrinfo, port: u16) c.fd_t {
 }
 
 /// Write all bytes, looping until complete or error.
-fn writeAll(fd: c.fd_t, data: []const u8) void {
+fn writeAll(fd: c.fd_t, data: []const u8) !void {
     var off: usize = 0;
     while (off < data.len) {
         const n = c.write(fd, data[off..].ptr, data.len - off);
-        if (n <= 0) return;
+        if (n < 0 and c._errno().* == @intFromEnum(c.E.INTR)) continue;
+        if (n <= 0) return error.WriteFailed;
         off += @intCast(n);
     }
 }
@@ -421,9 +422,9 @@ fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u
     // state-changing endpoints (start/stop/delete/snapshot/...), so without
     // this header every write command from vmrun/remote got a 401 over TCP.
     const req = buildHttpRequest(&req_buf, method, path, host, apiKey(), body_len) orelse return 0;
-    writeAll(fd, req.ptr[0..req.len]);
+    writeAll(fd, req.ptr[0..req.len]) catch return 0;
     if (body) |b| {
-        writeAll(fd, b);
+        writeAll(fd, b) catch return 0;
     }
 
     var total: usize = 0;
@@ -442,6 +443,23 @@ fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+test "Connection.requestToFd propagates output write failure and closes connection" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer _ = c.close(fds[1]);
+    var conn = Connection{ .proto = .unix, .fd = fds[0] };
+    defer conn.close();
+    setFdTimeout(conn.fd, CLIENT_IO_TIMEOUT_MS);
+    const response = "HTTP/1.0 200 OK\r\nContent-Length: 7\r\n\r\narchive";
+    try std.testing.expectEqual(@as(isize, response.len), c.write(fds[1], response.ptr, response.len));
+    const out_fd = c.open("/dev/full", .{ .ACCMODE = .WRONLY });
+    try std.testing.expect(out_fd >= 0);
+    defer _ = c.close(out_fd);
+
+    try std.testing.expectError(error.WriteFailed, conn.requestToFd("POST", "/api/vms/0/export", null, out_fd));
+    try std.testing.expectEqual(@as(c.fd_t, -1), conn.fd);
+}
+
 test "transport: parseContentLength is case-insensitive and bounded" {
     try std.testing.expectEqual(@as(?usize, 1234), parseContentLength("HTTP/1.0 200 OK\r\nContent-Length: 1234\r\n\r\n"));
     try std.testing.expectEqual(@as(?usize, 1234), parseContentLength("HTTP/1.0 200 OK\r\ncontent-length:1234\r\n\r\n")); // no space, lowercase
@@ -744,8 +762,17 @@ test "Connection.request over Unix sends valid HTTP (regression: no //api framin
             const cfd = c.accept(ctx.lfd, null, null);
             if (cfd < 0) return;
             defer _ = c.close(cfd);
-            const m = c.read(cfd, ctx.req, 512);
-            if (m > 0) ctx.req_len.* = @intCast(m);
+            setFdTimeout(cfd, CLIENT_IO_TIMEOUT_MS);
+            while (ctx.req_len.* < ctx.req.len) {
+                const m = c.read(cfd, ctx.req[ctx.req_len.*..].ptr, ctx.req.len - ctx.req_len.*);
+                if (m <= 0) return;
+                ctx.req_len.* += @intCast(m);
+                const request = ctx.req[0..ctx.req_len.*];
+                if (std.mem.indexOf(u8, request, "\r\n\r\n")) |end| {
+                    const body_len = parseContentLength(request[0 .. end + 4]) orelse return;
+                    if (request.len - end - 4 >= body_len) break;
+                }
+            }
             const resp = "HTTP/1.0 200 OK\r\n\r\n{\"ok\":true}";
             _ = c.write(cfd, resp, resp.len);
         }
