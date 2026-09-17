@@ -78,6 +78,9 @@ globals in `appstate.zig`.
   emit `max` so TCG can start; QEMU's `max` uses host features under KVM. Explicit
   hardware acceleration preserves `host`. Stored CPU selections stay unchanged.
   `hyperv_enlightenments` appends `hv_*` properties to the effective model.
+- **Cloud-init input files:** `qemu.writeFile0600` creates user-data and meta-data
+  exclusively with owner-only permissions. Existing entries cause failure without
+  truncation or following symlinks.
 - **QEMU port forwards:** user networking accepts `host:guest` and
   `host:guestIPv4:guest` entries; explicit guest IPv4 addresses survive argument
   generation. Both ports must be nonzero `u16` values; malformed entries are skipped.

@@ -1352,10 +1352,10 @@ pub fn generateCloudInitSeed(config: *const vm.VmConfig, allocator: std.mem.Allo
     _ = std.c.chmod(seed, @as(std.c.mode_t, 0o600));
 }
 
-/// Write `data` to `path`, creating/truncating it with owner-only (0o600) perms.
+/// Create `path` exclusively with owner-only (0o600) permissions and write `data`.
 /// Used for cloud-init temp files in shared /tmp that carry credentials.
 fn writeFile0600(path: [*:0]const u8, data: []const u8) !void {
-    const fd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
+    const fd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .NOFOLLOW = true }, @as(std.c.mode_t, 0o600));
     if (fd < 0) return error.WriteFailed;
     defer _ = std.c.close(fd);
     var off: usize = 0;
@@ -1915,6 +1915,23 @@ test "qemu: disk path with comma is rejected (arg injection guard)" {
     cfg.setDiskPath("/tmp/disk.qcow2,readonly=on,if=none");
     cfg.nics[0].mode = .user;
     try std.testing.expectError(error.UnsafeDiskPath, buildScriptStr(&cfg, talloc));
+}
+
+test "qemu: cloud-init input files are private and never overwrite existing entries" {
+    var path_buf: [128]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, ".scratch/cloud-init-input-{d}", .{std.c.getpid()});
+    try std.Io.Dir.cwd().createDirPath(appio.io(), ".scratch");
+    defer std.Io.Dir.cwd().deleteFile(appio.io(), path) catch {};
+
+    try writeFile0600(path, "original");
+    try std.testing.expectError(error.WriteFailed, writeFile0600(path, "replacement"));
+    const contents = try std.Io.Dir.cwd().readFileAlloc(appio.io(), path, talloc, .limited(64));
+    defer talloc.free(contents);
+    try std.testing.expectEqualStrings("original", contents);
+    const file = try std.Io.Dir.cwd().openFile(appio.io(), path, .{});
+    defer file.close(appio.io());
+    const stat = try file.stat(appio.io());
+    try std.testing.expectEqual(@as(std.c.mode_t, 0), stat.permissions.toMode() & 0o077);
 }
 
 test "qemu: generateCloudInitSeed builds a seed ISO from user-data" {

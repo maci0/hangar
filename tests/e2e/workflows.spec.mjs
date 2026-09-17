@@ -413,6 +413,12 @@ test('VM vnet binding round-trips and links the VM to that network in the topolo
     await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
     // The bound virtual network appears as a node the VM connects to.
     await expect(page.locator('.topo-node.vnet').filter({ hasText: 'VMnet8' })).toHaveCount(1);
+    // Node accents come from theme tokens, never hard-coded hex.
+    const strokeColors = await page.evaluate(() =>
+        [...document.querySelectorAll('.topo-node')].map((n) => getComputedStyle(n.querySelector('rect')).stroke),
+    );
+    expect(strokeColors.length).toBeGreaterThan(0);
+    for (const c of strokeColors) expect(c).not.toMatch(/rgb\(16,\s*185,\s*129\)|#10B981/i);
 });
 
 test('network topology renders VMs/networks/host via elkjs and a VM node selects', async ({ page }) => {

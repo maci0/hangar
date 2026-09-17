@@ -691,19 +691,25 @@ async function resizeDisk(){if(sel===null)return;const v=vms[sel];if(v.status!==
 let vnetsData=[],vnetIdx=-1;
 async function openVnets(){await loadVnets();var vd=document.getElementById('vnetdlg');if(vd)vd.showModal();}
 async function loadVnets(){try{const r=await fetch('/api/networks');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};logDebug('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};logDebug('Failed to load VNets:',e);}renderVnetList();}
-function vnetTypeMeta(t){t=(t||'').toLowerCase();
- if(t==='nat')return {c:'#3C6EB4',label:'NAT'};
- if(t==='bridged')return {c:'#10B981',label:'Bridged'};
- if(t==='host_only'||t==='host-only')return {c:'#D9892B',label:'Host-Only'};
- return {c:'var(--text-dim)',label:t||', '};}
+function netAccent(type){t=(type||'').toLowerCase();
+ if(t==='nat')return 'var(--network-nat)';
+ if(t==='bridged')return 'var(--network-bridged)';
+ if(t==='host_only'||t==='host-only')return 'var(--network-host-only)';
+ return 'var(--text-dim)';}
+function vnetTypeMeta(t){return {c:netAccent(t),label:vnetTypeLabel(t)};}
+function vnetTypeLabel(t){t=(t||'').toLowerCase();
+ if(t==='nat')return 'NAT';
+ if(t==='bridged')return 'Bridged';
+ if(t==='host_only'||t==='host-only')return 'Host-Only';
+ return t||', ';}
 function renderVnetList(){const sel=document.getElementById('vnet_sel');if(!sel)return;if(!vnetsData.networks)vnetsData={networks:[]};
  if(vnetIdx<0&&vnetsData.networks.length)vnetIdx=0;
  let h='';
  for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const tm=vnetTypeMeta(n.type);const on=i===vnetIdx;
-  h+='<button type="button" class="vnet-item'+(on?' active':'')+'" role="option" aria-selected="'+(on?'true':'false')+'" data-action="onVnetSelect" data-vnet-idx="'+i+'">'
+  h+='<button type="button" class="vnet-item'+(on?' active':'')+'" role="option" aria-selected="'+(on?'true':'false')+'" data-action="onVnetSelect" data-vnet-idx="'+i+'" data-vnet-type="'+escHtml((n.type||'').toLowerCase())+'">'
    +'<span class="vnet-dot" style="background:'+tm.c+'" aria-hidden="true"></span>'
    +'<span class="vnet-item-name">'+escHtml(n.name)+'</span>'
-   +'<span class="vnet-type-badge" style="color:'+tm.c+';border-color:'+tm.c+'">'+escHtml(tm.label)+'</span>'
+   +'<span class="vnet-type-badge" data-net-type="'+escHtml((n.type||'').toLowerCase())+'" style="color:'+tm.c+';border-color:'+tm.c+'">'+escHtml(tm.label)+'</span>'
    +'</button>';}
  if(!vnetsData.networks.length)h='<div class="vnet-empty">No virtual networks. Add one below.</div>';
  sel.innerHTML=h;
@@ -893,7 +899,7 @@ function runPalette(i){var it=paletteItems[i];if(!it)return;closePalette();if(it
 
 // ── Visual network topology (elkjs auto-layout → SVG) ──
 function modeLabel(m){return m==='user'?'NAT (user)':m==='gvproxy'?'gvproxy':m==='bridge'?'Bridged':m==='none'?'Isolated':m;}
-function modeColor(m){return m==='bridge'?'#10B981':(m==='user'||m==='gvproxy')?'#3C6EB4':m==='none'?'var(--text-dim)':'var(--accent)';}
+function modeColor(m){return m==='bridge'?'var(--network-bridged)':(m==='user'||m==='gvproxy')?'var(--network-nat)':m==='none'?'var(--text-dim)':'var(--accent)';}
 function vnetColorByName(name){if(vnetsData&&vnetsData.networks)for(var i=0;i<vnetsData.networks.length;i++){if(vnetsData.networks[i].name===name)return vnetTypeMeta(vnetsData.networks[i].type).c;}return 'var(--accent)';}
 function vmModes(v){var m=[v.net||'user'];for(var i=2;i<=8;i++){var nm=v['nic'+i+'_mode'];if(nm&&nm!=='none')m.push(nm);}return m.filter(Boolean);}
 function buildTopologyGraph(){

@@ -23,6 +23,9 @@
   --accent-3:#b0894e;
   --accent-hover:#4a7dad;
   --accent-soft:rgba(77,130,184,.16);
+  --network-nat:#85aecd;
+  --network-bridged:#7eafa5;
+  --network-host-only:#c3a272;
   --success:#54a564;
   --pause:#c08e3e;
   --warn:#c2a23e;
@@ -69,6 +72,9 @@
   --accent-3:#a3741f;
   --accent-hover:#347ab4;
   --accent-soft:rgba(42,100,150,.1);
+  --network-nat:#4a7dad;
+  --network-bridged:#3d8a7b;
+  --network-host-only:#a5701e;
   --success:#22823f;
   --pause:#a5701e;
   --warn:#967415;
