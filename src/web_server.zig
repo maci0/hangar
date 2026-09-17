@@ -3033,6 +3033,8 @@ test "validApiKey: bounds and character class" {
     try std.testing.expect(!validApiKey("two words"));
     try std.testing.expect(!validApiKey("\tsecret"));
     try std.testing.expect(!validApiKey("bad\x7fkey"));
+    try std.testing.expect(!validApiKey("café"));
+    try std.testing.expect(!validApiKey("\xc3\xa9"));
 }
 
 test "fuzz: validApiKey never panics and only accepts printable in-range keys" {
@@ -3047,7 +3049,7 @@ test "fuzz: validApiKey never panics and only accepts printable in-range keys" {
         if (ok) {
             // Every accepted key must satisfy the documented contract.
             try std.testing.expect(len >= 1 and len <= 64);
-            for (buf[0..len]) |ch| try std.testing.expect(ch > 0x20 and ch != 0x7f);
+            for (buf[0..len]) |ch| try std.testing.expect(ch > 0x20 and ch < 0x7f);
         }
     }
 }

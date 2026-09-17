@@ -387,7 +387,7 @@ pub const DEFAULT_API_KEY = "hangar";
 pub fn validApiKey(key: []const u8) bool {
     if (key.len == 0 or key.len > 64) return false;
     for (key) |ch| {
-        if (ch <= 0x20 or ch == 0x7f) return false;
+        if (ch <= 0x20 or ch >= 0x7f) return false;
     }
     return true;
 }
@@ -587,6 +587,9 @@ test "apiKey: default when unset, honors custom, rejects invalid" {
     _ = setenv("KV_API_KEY", "secret\n", 1);
     try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
     _ = setenv("KV_API_KEY", "two words", 1);
+    try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
+
+    _ = setenv("KV_API_KEY", "sécret", 1);
     try std.testing.expectEqualStrings(DEFAULT_API_KEY, apiKey());
 }
 

@@ -172,6 +172,7 @@ test "auth: validApiKey bounds + character class" {
     try std.testing.expect(!validApiKey("x" ** 65));
     try std.testing.expect(!validApiKey("secret\n"));
     try std.testing.expect(!validApiKey("two words"));
+    try std.testing.expect(!validApiKey("café"));
 }
 
 test "auth: secretEql is length-checked equality" {
