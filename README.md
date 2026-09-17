@@ -74,11 +74,16 @@ zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 ```
 
 Use `zig build --help` to list build steps. For a shorter edit/test loop, run a
-single module (including its imported tests):
+single module (including its imported tests) with the suite's linker flags,
+libraries, and module imports:
 
 ```bash
-zig test src/persist.zig -lc -fllvm -flld
+zig build test-unit-persist
+zig build test-unit-vnc_client
 ```
+
+Every registered module has a `test-unit-<module>` step. `test-unit-vmrun` runs
+the CLI unit tests; `test-vmrun` runs the standalone daemon integration suite.
 
 Tests live at the bottom of each Zig module; register new test modules in
 `build.zig`. Before opening a pull request, run `zig build check` to also catch

@@ -41,14 +41,17 @@ CI runs on Ubuntu 24.04 and installs `libvncserver-dev`, `pkg-config`, and
 
 ### Running a single test module
 
-Each test module is explicitly registered in `build.zig`. To run only one:
+Each test module registered in `build.zig` has a `test-unit-<module>` step,
+which reuses the full suite's linker flags, libraries, and module imports:
 
 ```bash
-zig test src/persist.zig -lc -fllvm -flld
-zig test src/qmp.zig     -lc -fllvm -flld
+zig build test-unit-persist
+zig build test-unit-qmp
+zig build test-unit-vnc_client
 ```
 
-`-lc` is required (many modules reach `std.c`). `-fllvm -flld` is required because the self-hosted backend/linker cannot relocate `.sframe` entries in GCC's crt1.o.
+Imported tests run too. `test-unit-vmrun` is the unit module; `test-vmrun` remains
+the standalone daemon integration suite. `zig build --help` lists all steps.
 
 ## Critical Constraints
 

@@ -81,6 +81,8 @@ pub fn build(b: *std.Build) !void {
         }
         const tests = b.addTest(.{ .root_module = tm, .use_llvm = true, .use_lld = true });
         const run_tests = b.addRunArtifact(tests);
+        const module_test = b.step(b.fmt("test-unit-{s}", .{mod}), b.fmt("Run {s} module tests (including imported tests)", .{mod}));
+        module_test.dependOn(&run_tests.step);
         test_step.dependOn(&run_tests.step);
     }
     // HV interface tests: compiled via wrapper at src/ so that
