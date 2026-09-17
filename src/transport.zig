@@ -290,7 +290,10 @@ fn connectUnixFd(url: *const Url) c.fd_t {
     // sun_path is 108 bytes; url.path can be longer. Reject rather than overflow
     // the fixed sockaddr field (the usock wrapper has this guard; this path
     // drifted from it). +1 for the NUL terminator.
-    if (path_bytes.len + 1 > addr.path.len) return -1;
+    if (path_bytes.len + 1 > addr.path.len) {
+        _ = c.close(sock);
+        return -1;
+    }
     @memcpy(addr.path[0..path_bytes.len], path_bytes);
     addr.path[path_bytes.len] = 0;
     const addrlen = @offsetOf(c.sockaddr.un, "path") + path_bytes.len + 1;
@@ -594,6 +597,27 @@ test "Url parse: IPv6 with brackets, default port, trailing slash" {
     try std.testing.expectEqual(Proto.tcp, u.proto);
     try std.testing.expectEqualStrings("::1", u.host[0..u.host_len]);
     try std.testing.expectEqual(@as(u16, 8080), u.port);
+}
+
+test "Connection.connect: oversized Unix paths do not retain sockets" {
+    for ([_]usize{ 108, 109, 256 }) |len| {
+        const path = "unix://" ++ ("x" ** 256);
+        const url = Url.parse(path[0 .. "unix://".len + len]).?;
+        for (0..8) |_| {
+            const before = c.socket(c.AF.UNIX, c.SOCK.STREAM, 0);
+            try std.testing.expect(before >= 0);
+            _ = c.close(before);
+
+            var conn = Connection.connect(&url);
+            defer if (conn) |*value| value.close();
+            try std.testing.expect(conn == null);
+
+            const after = c.socket(c.AF.UNIX, c.SOCK.STREAM, 0);
+            try std.testing.expect(after >= 0);
+            defer _ = c.close(after);
+            try std.testing.expectEqual(before, after);
+        }
+    }
 }
 
 test "Connection.close: clears fd and sets to -1" {
