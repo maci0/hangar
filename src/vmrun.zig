@@ -14,6 +14,7 @@ const std = @import("std");
 const c = std.c;
 const transport = @import("transport.zig");
 const urlencode = @import("urlencode.zig");
+const httpresp = @import("httpresp.zig");
 
 const usage =
     \\vmrun: Hangar remote VM manager
@@ -485,8 +486,11 @@ fn errorEnvelopeMsg(resp: []const u8) ?[]const u8 {
 /// Pure helper: given VM-list JSON and a VM name, find its "idx" field value.
 /// Scans for `"name":"target"` then looks backwards for the nearest `"idx":N`.
 fn findVmIdxInJson(json: []const u8, target: []const u8) ?usize {
-    var search_buf: [128]u8 = undefined;
-    const pat = std.fmt.bufPrint(&search_buf, "\"name\":\"{s}\"", .{target}) catch return null;
+    var escaped_buf: [vm.MAX_NAME * 6]u8 = undefined;
+    const escaped = httpresp.jsonEscape(&escaped_buf, target);
+    if (escaped.truncated) return null;
+    var search_buf: [vm.MAX_NAME * 6 + 9]u8 = undefined;
+    const pat = std.fmt.bufPrint(&search_buf, "\"name\":\"{s}\"", .{escaped.escaped}) catch return null;
     const name_pos = std.mem.indexOf(u8, json, pat) orelse return null;
     const idx_pat = "\"idx\":";
     const before = json[0..name_pos];
@@ -526,8 +530,11 @@ fn resolveVm(allocator: std.mem.Allocator, conn: *transport.Connection, target: 
 /// the same quoted `"name":"<name>"` pattern as findVmIdxInJson, so it matches
 /// whole names only ("vm1" does not match "vm10").
 fn countVmNameMatches(json: []const u8, name: []const u8) usize {
-    var search_buf: [128]u8 = undefined;
-    const pat = std.fmt.bufPrint(&search_buf, "\"name\":\"{s}\"", .{name}) catch return 0;
+    var escaped_buf: [vm.MAX_NAME * 6]u8 = undefined;
+    const escaped = httpresp.jsonEscape(&escaped_buf, name);
+    if (escaped.truncated) return 0;
+    var search_buf: [vm.MAX_NAME * 6 + 9]u8 = undefined;
+    const pat = std.fmt.bufPrint(&search_buf, "\"name\":\"{s}\"", .{escaped.escaped}) catch return 0;
     var n: usize = 0;
     var rest = json;
     while (std.mem.indexOf(u8, rest, pat)) |p| {
@@ -1031,6 +1038,19 @@ test "fuzz: countVmNameMatches never panics on random input" {
         const len = rnd.uintLessThan(usize, buf.len + 1);
         rnd.bytes(buf[0..len]);
         _ = countVmNameMatches(buf[0..len], "web");
+    }
+}
+
+test "VM name lookup matches escaped and maximum-length names" {
+    const names = [_][]const u8{ "Test\"VM", "folder\\guest", "guest\tname", "a" ** vm.MAX_NAME, "\\" ** vm.MAX_NAME };
+    for (names) |name| {
+        var escaped_buf: [vm.MAX_NAME * 6]u8 = undefined;
+        const escaped = @import("httpresp.zig").jsonEscape(&escaped_buf, name);
+        try std.testing.expect(!escaped.truncated);
+        var json_buf: [vm.MAX_NAME * 12 + 128]u8 = undefined;
+        const json = try std.fmt.bufPrint(&json_buf, "[{{\"idx\":7,\"name\":\"{s}\"}},{{\"idx\":9,\"name\":\"{s}\"}}]", .{ escaped.escaped, escaped.escaped });
+        try std.testing.expectEqual(@as(?usize, 7), findVmIdxInJson(json, name));
+        try std.testing.expectEqual(@as(usize, 2), countVmNameMatches(json, name));
     }
 }
 
