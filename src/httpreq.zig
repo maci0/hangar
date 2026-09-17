@@ -18,8 +18,10 @@ pub fn routeExact(req: []const u8, prefix: []const u8) bool {
 /// Parse the integer immediately after `prefix` in `req`, terminated by space,
 /// `/`, or `?`. Returns null if the prefix is absent or no terminator follows.
 pub fn parseIdx(req: []const u8, prefix: []const u8) ?usize {
-    const start = std.mem.indexOf(u8, req, prefix) orelse return null;
-    const rest = req[start + prefix.len ..];
+    if (!std.mem.startsWith(u8, req, prefix)) return null;
+    const line = req[0 .. std.mem.indexOfAny(u8, req, "\r\n") orelse req.len];
+    if (line.len < prefix.len) return null;
+    const rest = line[prefix.len..];
     var end: usize = rest.len;
     var found = false;
     for ([_]u8{ ' ', '/', '?' }) |term| {
@@ -37,18 +39,15 @@ pub fn parseIdx(req: []const u8, prefix: []const u8) ?usize {
 /// `GET /api/vms/0/disk2/download`. Returns null on mismatch: safer than a
 /// substring search which might match ambiguous segments.
 pub fn parseVmIdxSuffix(req: []const u8, prefix: []const u8, suffix: []const u8) ?usize {
-    const start = std.mem.indexOf(u8, req, prefix) orelse return null;
-    const rest = req[start + prefix.len ..];
-    const digit_end = std.mem.indexOfScalar(u8, rest, '/') orelse std.mem.indexOfScalar(u8, rest, ' ') orelse return null;
-    const path_end = std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len;
-    const idx = std.fmt.parseInt(usize, rest[0..digit_end], 10) catch return null;
-    const tail = rest[digit_end..path_end];
-    if (!std.mem.startsWith(u8, tail, suffix)) return null;
-    // Reject partial segment matches: "/disk2" must not match "/disk2-download".
-    if (tail.len > suffix.len) {
-        const next = tail[suffix.len];
-        if (next != '?' and next != '/' and next != ' ') return null;
-    }
+    if (!std.mem.startsWith(u8, req, prefix)) return null;
+    const line = req[0 .. std.mem.indexOfAny(u8, req, "\r\n") orelse req.len];
+    if (line.len < prefix.len) return null;
+    const rest = line[prefix.len..];
+    const path_end = std.mem.indexOfAny(u8, rest, " ?") orelse rest.len;
+    const path = rest[0..path_end];
+    const digit_end = std.mem.indexOfScalar(u8, path, '/') orelse path.len;
+    const idx = std.fmt.parseInt(usize, path[0..digit_end], 10) catch return null;
+    if (!std.mem.eql(u8, path[digit_end..], suffix)) return null;
     return idx;
 }
 
@@ -58,8 +57,10 @@ pub fn parseVmIdxSuffix(req: []const u8, prefix: []const u8, suffix: []const u8)
 /// `parseVmIdxSuffix`. Returns the index only when the char after the digits is
 /// a space, `?`, or end of input.
 pub fn parseVmIdxExact(req: []const u8, prefix: []const u8) ?usize {
-    const start = std.mem.indexOf(u8, req, prefix) orelse return null;
-    const rest = req[start + prefix.len ..];
+    if (!std.mem.startsWith(u8, req, prefix)) return null;
+    const line = req[0 .. std.mem.indexOfAny(u8, req, "\r\n") orelse req.len];
+    if (line.len < prefix.len) return null;
+    const rest = line[prefix.len..];
     var end: usize = rest.len;
     for ([_]u8{ ' ', '/', '?' }) |term| {
         if (std.mem.indexOfScalar(u8, rest, term)) |i| {

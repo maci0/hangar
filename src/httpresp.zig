@@ -31,10 +31,21 @@ pub fn writeAll(conn: c.fd_t, buf: [*]const u8, len: usize) bool {
     return true;
 }
 
-/// Format an error message as a JSON object: {"error":"<msg>"}. Returns a slice
-/// of `buf` (needs msg.len + 12 bytes); falls back to a static string on overflow.
+/// Format an error message as a JSON object: {"error":"<msg>"}. The message is
+/// JSON-escaped (quotes, backslash, control bytes) so a status token carrying
+/// one can never produce an invalid response body. The envelope wraps the
+/// escape scratch in `buf`; a message that cannot fit (or a buffer too small
+/// for the envelope itself) falls back to the static `{"error":"internal"}`.
 pub fn jsonErr(buf: []u8, msg: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "{{\"error\":\"{s}\"}}", .{msg}) catch "{\"error\":\"internal\"}";
+    const prefix = "{\"error\":\"";
+    const suffix = "\"}";
+    if (buf.len < prefix.len + suffix.len) return "{\"error\":\"internal\"}";
+    const esc = jsonEscape(buf[prefix.len .. buf.len - suffix.len], msg);
+    if (esc.truncated) return "{\"error\":\"internal\"}";
+    const end = prefix.len + esc.escaped.len;
+    @memcpy(buf[0..prefix.len], prefix);
+    @memcpy(buf[end..][0..suffix.len], suffix);
+    return buf[0 .. end + suffix.len];
 }
 
 /// Result of `jsonEscape`: the escaped slice + whether output was truncated to
@@ -253,6 +264,11 @@ test "httpresp: jsonErr wraps the message" {
     try std.testing.expectEqualStrings("{\"error\":\"nope\"}", jsonErr(&buf, "nope"));
 }
 
+test "httpresp: jsonErr escapes message characters" {
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("{\"error\":\"quote \\\" slash \\\\ newline \\n control \\u0001\"}", jsonErr(&buf, "quote \" slash \\ newline \n control \x01"));
+}
+
 test "httpresp: jsonEscape escapes quotes/backslash/control, flags truncation" {
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("a\\\"b", jsonEscape(&buf, "a\"b").escaped);
@@ -280,6 +296,27 @@ test "fuzz: sanitizeHeaderValue never leaks CR/LF/quote and stays within buf" {
         try std.testing.expect(out.len <= out_cap);
         for (out) |ch| {
             try std.testing.expect(ch != '\r' and ch != '\n' and ch != '"');
+        }
+    }
+}
+
+test "fuzz: jsonErr output is always valid JSON for arbitrary tokens" {
+    // Error messages can carry untrusted detail (QEMU log text, paths). The
+    // envelope must stay parseable JSON no matter what bytes flow through it.
+    var prng = std.Random.DefaultPrng.init(0x4A50_E12);
+    const rnd = prng.random();
+    var buf: [256]u8 = undefined;
+    var i: usize = 0;
+    while (i < 4000) : (i += 1) {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        for (buf[0..len]) |*b| b.* = rnd.int(u8);
+        const out = jsonErr(buf[0..len], buf[0..len]);
+        try std.testing.expect(std.mem.startsWith(u8, out, "{\"error\":\""));
+        try std.testing.expect(std.mem.endsWith(u8, out, "\"}"));
+        for (out, 0..) |ch, j| {
+            if (j < 10 or j + 2 >= out.len) continue; // envelope quotes checked above
+            try std.testing.expect(ch != '"');
+            try std.testing.expect(ch >= 0x20);
         }
     }
 }
