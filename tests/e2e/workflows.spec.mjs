@@ -7,6 +7,7 @@
 // booted guest / a second host and would be flaky here.
 import { test, expect } from '@playwright/test';
 import { execFileSync, execSync } from 'child_process';
+import { readFileSync } from 'fs';
 let hasFfmpeg = false;
 try { execSync('ffmpeg -version', { stdio: 'ignore' }); hasFfmpeg = true; } catch (e) {}
 
@@ -102,6 +103,43 @@ for (const control of ['toolbar', 'batch', 'bulk']) {
         }
     });
 }
+
+test('uptime uses daemon elapsed seconds across browser clock changes', async ({ page }) => {
+    const asset = await page.request.get('/app.js');
+    expect(await asset.text()).toBe(readFileSync(new URL('../../src/web/app.js', import.meta.url), 'utf8'));
+    const name = 'wf-uptime-clock';
+    const idx = await createVm(page, name);
+    let elapsed = 90061;
+    let started = 1789680000;
+    await page.route('**/api/vms', async (route) => {
+        const response = await route.fetch();
+        const inventory = await response.json();
+        const vm = inventory.find((v) => v.name === name);
+        Object.assign(vm, { status: 'running', started, uptime_sec: elapsed });
+        await route.fulfill({ response, json: inventory });
+    });
+    try {
+        await page.reload();
+        await page.locator('.vm-item', { hasText: name }).click();
+        for (const instant of ['2024-03-10T06:59:59Z', '2024-11-03T06:00:00Z', '2100-01-01T00:00:00Z']) {
+            await page.clock.setFixedTime(new Date(instant));
+            await page.evaluate(() => renderList());
+            await expect(page.locator('#statusmsg')).toContainText('Uptime: 1d 1:01:01');
+        }
+        elapsed = 0;
+        started = 0;
+        await page.evaluate(() => refresh());
+        await expect(page.locator('#statusmsg')).toContainText('Uptime: 0:00:00');
+        for (const invalid of [null, -1, 'not-a-duration']) {
+            elapsed = invalid;
+            await page.evaluate(() => refresh());
+            await expect(page.locator('#statusmsg')).not.toContainText('Uptime:');
+        }
+    } finally {
+        await page.unroute('**/api/vms');
+        await api(page, 'POST', `/api/vms/${idx}/delete`, '');
+    }
+});
 
 for (const width of [1280, 390]) {
     test(`global Tools remain usable from Home at ${width}px`, async ({ page }) => {

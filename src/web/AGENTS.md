@@ -42,6 +42,8 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 - **RAM capacity**: compare committed and physical memory in exact MiB; round only
   display labels, never the quantities used for overcommit or gauge ratios.
 - **Library search**: list redraws preserve the search input's current query.
+- **VM uptime**: display the daemon's monotonic `uptime_sec`, including zero.
+  Never subtract `started` from the browser clock; omit unavailable durations.
 - **Network saving**: Save All validates and includes the selected network's current
   form values without requiring Save Selected first. Invalid values leave the editor
   open and do not send a save request.
