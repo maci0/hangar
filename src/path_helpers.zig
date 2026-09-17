@@ -22,8 +22,8 @@ pub fn basenameWithoutExt(path: []const u8, buf: []u8) []const u8 {
 /// Build a clone disk path by stripping the source extension and appending a suffix.
 /// E.g. cloneDiskPath(buf, "/vms/vm.qcow2", "_clone.qcow2") → "/vms/vm_clone.qcow2"
 pub fn cloneDiskPath(buf: []u8, src_disk: []const u8, suffix: []const u8) ![]const u8 {
-    const dot = std.mem.lastIndexOfScalar(u8, src_disk, '.');
-    const base = if (dot) |d| src_disk[0..d] else src_disk;
+    const ext = std.fs.path.extension(src_disk);
+    const base = src_disk[0 .. src_disk.len - ext.len];
     return std.fmt.bufPrint(buf, "{s}{s}", .{ base, suffix });
 }
 
@@ -31,8 +31,8 @@ pub fn cloneDiskPath(buf: []u8, src_disk: []const u8, suffix: []const u8) ![]con
 /// Strips the extension from save_path and appends "-disk1.vmdk".
 /// E.g. deriveVmdkHref(buf, "/tmp/myvm.ovf") → "/tmp/myvm-disk1.vmdk"
 pub fn deriveVmdkHref(save_path: []const u8, buf: []u8) ![]const u8 {
-    const dot = std.mem.lastIndexOfScalar(u8, save_path, '.');
-    const base = if (dot) |d| save_path[0..d] else save_path;
+    const ext = std.fs.path.extension(save_path);
+    const base = save_path[0 .. save_path.len - ext.len];
     return std.fmt.bufPrint(buf, "{s}-disk1.vmdk", .{base});
 }
 
@@ -95,6 +95,15 @@ test "deriveVmdkHref: path with multiple dots" {
     var buf: [256]u8 = undefined;
     const result = try deriveVmdkHref("/tmp/my.vm.ovf", &buf);
     try std.testing.expectEqualStrings("/tmp/my.vm-disk1.vmdk", result);
+}
+
+test "derived disk paths preserve dots in parent directories" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("/vms/release.1/disk_clone.qcow2", try cloneDiskPath(&buf, "/vms/release.1/disk", "_clone.qcow2"));
+    try std.testing.expectEqualStrings("/vms/release.1/disk_clone.qcow2", try cloneDiskPath(&buf, "/vms/release.1/disk.raw", "_clone.qcow2"));
+    try std.testing.expectEqualStrings("./export-disk1.vmdk", try deriveVmdkHref("./export", &buf));
+    try std.testing.expectEqualStrings("/vms/release.1/export-disk1.vmdk", try deriveVmdkHref("/vms/release.1/export", &buf));
+    try std.testing.expectEqualStrings("/vms/release.1/export-disk1.vmdk", try deriveVmdkHref("/vms/release.1/export.ovf", &buf));
 }
 
 test "fuzz: basenameWithoutExt never panics" {
