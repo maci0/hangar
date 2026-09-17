@@ -437,6 +437,35 @@ test('vnet editor lists networks as clickable typed cards; selecting one fills t
     await page.evaluate(() => document.getElementById('vnetdlg').close());
 });
 
+test('vnet Save All validates and persists the selected form without Save Selected', async ({ page }) => {
+    const original = await api(page, 'GET', '/api/networks', null);
+    expect(original.ok).toBe(true);
+    try {
+        await page.locator('[data-menu="toolsMenu"]').click();
+        await page.locator('#toolsMenu [data-action="openVnets"]').click();
+        await expect(page.locator('#vnetdlg')).toBeVisible();
+        await page.locator('[data-action="vnetAdd"]').click();
+        await page.locator('#vn_name').fill('wf-save-net');
+        await page.locator('#vn_subnet').fill('invalid');
+        await page.locator('[data-action="vnetSaveAll"]').click();
+        await expect(page.locator('.toast.error')).toContainText('Invalid subnet format');
+        await expect(page.locator('#vnetdlg')).toBeVisible();
+        await expect(page.locator('#vn_name')).toHaveValue('wf-save-net');
+        expect((await api(page, 'GET', '/api/networks', null)).text).toBe(original.text);
+        await page.locator('#vn_subnet').fill('192.168.100.0');
+        await page.locator('[data-action="vnetSaveAll"]').click();
+        await expect(page.locator('#vnetdlg')).toBeHidden();
+        await page.locator('[data-menu="toolsMenu"]').click();
+        await page.locator('#toolsMenu [data-action="openVnets"]').click();
+        await page.locator('.vnet-item', { hasText: 'wf-save-net' }).click();
+        await expect(page.locator('#vn_name')).toHaveValue('wf-save-net');
+        await expect(page.locator('#vn_subnet')).toHaveValue('192.168.100.0');
+    } finally {
+        const restored = await api(page, 'POST', '/api/networks', original.text);
+        expect(restored.ok).toBe(true);
+    }
+});
+
 test('catalog quickstart creates a VM with the template OS and firmware', async ({ page }) => {
     const cat = await api(page, 'GET', '/api/catalog', null);
     const entries = JSON.parse(cat.text);

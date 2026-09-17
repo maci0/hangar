@@ -720,9 +720,9 @@ var vde=document.getElementById('vn_dend');if(vde)vde.value=n.dhcp_end||'';
 var vi=document.getElementById('vn_iface');if(vi)vi.value=n.host_iface||'';
 var vg=document.getElementById('vn_gw');if(vg)vg.value=n.gateway||'';
 var vp=document.getElementById('vn_pf');if(vp)vp.value=n.port_forwards||'';}
-function vnetSaveCurrent(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;const n=vnetsData.networks[vnetIdx];
-var vn=document.getElementById('vn_name');if(!vn)return;
-const name=vn.value.trim();if(!name){showToast('Network name is required','error');return;}
+function readVnetForm(n){
+var vn=document.getElementById('vn_name');if(!vn)return false;
+const name=vn.value.trim();if(!name){showToast('Network name is required','error');return false;}
 var vt=document.getElementById('vn_type');var vs=document.getElementById('vn_subnet');
 var vm=document.getElementById('vn_mask');var vd=document.getElementById('vn_dhcp');
 var vds=document.getElementById('vn_dstart');var vde=document.getElementById('vn_dend');
@@ -731,23 +731,26 @@ var vp=document.getElementById('vn_pf');
 const subnet=(vs?vs.value:'').trim();const mask=(vm?vm.value:'').trim();
 const dstart=(vds?vds.value:'').trim();const dend=(vde?vde.value:'').trim();
 const gw=(vg?vg.value:'').trim();const iface=(vi?vi.value:'').trim();
-if(subnet&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(subnet)){showToast('Invalid subnet format','error');return;}
-if(mask&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(mask)){showToast('Invalid mask format','error');return;}
-if(dstart&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(dstart)){showToast('Invalid DHCP start IP format','error');return;}
-if(dend&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(dend)){showToast('Invalid DHCP end IP format','error');return;}
-if(gw&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(gw)){showToast('Invalid gateway IP format','error');return;}
+if(subnet&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(subnet)){showToast('Invalid subnet format','error');return false;}
+if(mask&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(mask)){showToast('Invalid mask format','error');return false;}
+if(dstart&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(dstart)){showToast('Invalid DHCP start IP format','error');return false;}
+if(dend&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(dend)){showToast('Invalid DHCP end IP format','error');return false;}
+if(gw&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(gw)){showToast('Invalid gateway IP format','error');return false;}
 // strip control characters from name/iface
 n.name=name.replace(/[\x00-\x1f\x7f]/g,'');n.type=vt?vt.value:'nat';
 n.subnet=subnet;n.mask=mask;
 n.dhcp=vd?vd.value==='1':false;n.dhcp_start=dstart;
 n.dhcp_end=dend;n.host_iface=iface.replace(/[\x00-\x1f\x7f]/g,'');
-n.gateway=gw;n.port_forwards=(vp?vp.value||'':'').replace(/[\x00-\x1f\x7f]/g,'');renderVnetList();}
+n.gateway=gw;n.port_forwards=(vp?vp.value||'':'').replace(/[\x00-\x1f\x7f]/g,'');return true;}
+function vnetSaveCurrent(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;if(!readVnetForm(vnetsData.networks[vnetIdx]))return;renderVnetList();}
 function vnetAdd(){if(vnetsData.networks.length>=20)return;const n={name:'VMnet'+vnetsData.networks.length,type:'host_only',subnet:'192.168.100.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.100.128',dhcp_end:'192.168.100.254',host_iface:'',gateway:'',port_forwards:''};
 vnetsData.networks.push(n);vnetIdx=vnetsData.networks.length-1;renderVnetList();}
 function vnetRemove(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;vnetsData.networks.splice(vnetIdx,1);if(vnetIdx>=vnetsData.networks.length)vnetIdx=vnetsData.networks.length-1;renderVnetList();}
 function vnetDefaults(){const def=[{name:'VMnet0',type:'bridged',subnet:'',mask:'',dhcp:false,dhcp_start:'',dhcp_end:'',host_iface:'auto',gateway:'',port_forwards:''},{name:'VMnet1',type:'host_only',subnet:'192.168.118.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.118.128',dhcp_end:'192.168.118.254',host_iface:'',gateway:'',port_forwards:''},{name:'VMnet8',type:'nat',subnet:'192.168.140.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.140.128',dhcp_end:'192.168.140.254',host_iface:'',gateway:'192.168.140.2',port_forwards:'2222:192.168.140.128:22'}];
 vnetsData={networks:def};vnetIdx=0;renderVnetList();}
-async function vnetSaveAll(){const r=await apiPost('/api/networks',JSON.stringify(vnetsData));if(r){var vd=document.getElementById('vnetdlg');if(vd)vd.close();setStatus('VNet settings saved.');}}
+async function vnetSaveAll(){
+if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length&&!readVnetForm(vnetsData.networks[vnetIdx]))return;
+const r=await apiPost('/api/networks',JSON.stringify(vnetsData));if(r){var vd=document.getElementById('vnetdlg');if(vd)vd.close();setStatus('VNet settings saved.');}}
 // ── Preferences ──
 var pendingTheme=null;
 var prefsOrigTheme=null;

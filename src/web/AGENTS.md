@@ -37,6 +37,9 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   entries are disabled. Responsive toolbar hiding applies to direct toolbar buttons,
   not the buttons inside More. Context-menu actions stop when selection is cancelled.
 - **Library search**: list redraws preserve the search input's current query.
+- **Network saving**: Save All validates and includes the selected network's current
+  form values without requiring Save Selected first. Invalid values leave the editor
+  open and do not send a save request.
 - **Topology loading**: `/elk.js` loads only when the topology opens, never from
   `index.html`. Concurrent opens share the pending load. Loading is visible; failed,
   invalid, or timed-out loads expose Retry and clear the pending promise.
