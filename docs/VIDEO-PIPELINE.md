@@ -1,6 +1,6 @@
 # Accelerated Video Pipeline: Design
 
-Status: **phases 1-3 shipped**, end-to-end encoded video verified live: dbus capture → ffmpeg h264_vaapi on the host GPU → /ws/video → WebCodecs decode → overlay canvas painting the guest boot screen. Phase 4 (polish) partial: frame pacing + bitrate setting + e2e shipped; cursor channel, multi-client fan-out, AV1, and virgl/dmabuf capture remain.
+Status: **phases 1-3 shipped**, end-to-end encoded video verified live: dbus capture → ffmpeg h264_vaapi on the host GPU → /ws/video → WebCodecs decode → overlay canvas painting the guest boot screen. Phase 4 (polish) partial: frame pacing + bitrate setting + multi-client fan-out + e2e shipped; cursor channel, AV1, and virgl/dmabuf capture remain.
 Goal: stream the guest's GPU-rendered display to the browser as **encoded
 video** (H.264/AV1) decoded by **WebCodecs** and presented on the **WebGPU**
 canvas: Moonlight/Parsec-class console latency and quality, replacing
@@ -65,13 +65,24 @@ Alternatives rejected:
   Threading mirrors the WS relay pattern (thread per session, SpinMutex on
   writes). Budget: 1080p60 H.264 on RDNA3 VCN ≈ negligible GPU, ~0 CPU.
 
-### Wire protocol (`/ws/video/<idx>`, binary frames)
+### Shipped wire protocol (`/ws/video/<idx>`, binary frames)
+
+Each payload starts with the marker byte below; layouts describe the remaining bytes.
+
 | frame | layout |
 | --- | --- |
-| `0x01` config | u16 width, u16 height, u8 codec (0=h264,1=av1), codec extradata |
-| `0x02` chunk | u8 flags (bit0 = key), u64 pts_us, payload (Annex-B AU) |
-| `0x03` cursor | x,y,hot_x,hot_y,w,h + RGBA (optional phase 2) |
+| `0x01` config | u16le width, u16le height, u8 codec (0=h264); six bytes total |
+| `0x02` delta | Annex-B access unit |
+| `0x03` key | Annex-B access unit containing an IDR |
+
+There is no separate flags byte, timestamp, codec extradata field, or cursor
+frame. SPS/PPS travel in-band with keyframes. The browser waits for a keyframe
+and assigns timestamps in 33,333 µs increments. AV1 and cursor transport remain
+unimplemented; `0x03` is already the keyframe marker.
 Auth/handshake identical to the other WS routes (subprotocol echoed).
+
+Source: `serveVideoClient` / `emitAu` in [dbusdisplay.zig](../src/dbusdisplay.zig)
+and `startVideoStream` in [app.js](../src/web/app.js); introduced in `b2005c7`.
 
 ### Browser side (app.js, no framework needed)
 - `VideoDecoder` with `{codec:'avc1.42E01E', optimizeForLatency:true,
@@ -136,8 +147,14 @@ Auth/handshake identical to the other WS routes (subprotocol echoed).
    serveVideoClient waits up to 8s for the session (a client connecting right
    at the running flip beat the attach), and the browser retries an
    early-closed stream while the VM runs. e2e: video test asserts decoded
-   pixel content on the overlay. Remaining: cursor channel, multi-client
-   fan-out, AV1, virgl/dmabuf zero-copy capture.
+    pixel content on the overlay. Multi-client fan-out shipped in `4a24ce6`:
+    `serveVideoClient` / `emitAu` share one encoder across up to
+    `MAX_VIDEO_CLIENTS` (8) viewers per VM; a ninth viewer is closed, and the
+    encoder stops after the last viewer detaches. The video test in
+    [workflows.spec.mjs](../tests/e2e/workflows.spec.mjs) also checks a second
+    viewer's configured overlay and that the first socket stays open after
+    the second viewer leaves. Remaining: cursor channel, AV1, virgl/dmabuf
+    zero-copy capture.
 
 ## Risks
 - D-Bus protocol hand-rolling is the long pole; sd-bus extern fallback noted.
@@ -145,5 +162,5 @@ Auth/handshake identical to the other WS routes (subprotocol echoed).
   host: world-rw; document the `render` group requirement).
 - WebCodecs H.264 absent on some Linux Chromium builds without proprietary
   codecs → capability gate above covers it; AV1 fallback helps long-term.
-- Multi-client: phase 2 serves the encoded stream to N clients (one encoder,
-  fan-out writes); per-client bitrate adaptation is out of scope.
+- Multi-client fan-out is shipped (see [phase 4](#phases)); per-client bitrate
+  adaptation is out of scope.
