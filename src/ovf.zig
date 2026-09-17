@@ -15,6 +15,7 @@ pub const max_descriptor_len = 4096;
 pub const Spec = struct {
     name: []const u8,
     cpu_cores: u32,
+    cpu_sockets: u32 = 1,
     memory_mb: u32,
     /// Virtual disk capacity in bytes.
     disk_capacity_bytes: u64,
@@ -86,11 +87,12 @@ pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
     try esc(&list, a, spec.name);
     try w(&list, a, "</Name>\n    <VirtualHardwareSection>\n      <Info>Virtual hardware</Info>\n");
 
+    const cpu_count = std.math.clamp(spec.cpu_cores, 1, 1024) * std.math.clamp(spec.cpu_sockets, 1, 1024);
     // CPU item
     try list.print(a, "      <Item><rasd:Description>Number of Virtual CPUs</rasd:Description>" ++
         "<rasd:ElementName>{d} virtual CPU(s)</rasd:ElementName>" ++
         "<rasd:InstanceID>1</rasd:InstanceID><rasd:ResourceType>3</rasd:ResourceType>" ++
-        "<rasd:VirtualQuantity>{d}</rasd:VirtualQuantity></Item>\n", .{ spec.cpu_cores, spec.cpu_cores });
+        "<rasd:VirtualQuantity>{d}</rasd:VirtualQuantity></Item>\n", .{ cpu_count, cpu_count });
 
     // Memory item (MB)
     try list.print(a, "      <Item><rasd:AllocationUnits>byte * 2^20</rasd:AllocationUnits>" ++
@@ -163,6 +165,34 @@ test "ovf: descriptor contains required envelope elements" {
     try t.expect(std.mem.indexOf(u8, xml, "E1000") != null);
 }
 
+test "ovf: CPU quantity includes every socket and matches QEMU limits" {
+    const cases = [_]struct { cores: u32, sockets: u32, total: u32 }{
+        .{ .cores = 4, .sockets = 1, .total = 4 },
+        .{ .cores = 4, .sockets = 2, .total = 8 },
+        .{ .cores = 256, .sockets = 64, .total = 16384 },
+        .{ .cores = 0, .sockets = 0, .total = 1 },
+        .{ .cores = std.math.maxInt(u32), .sockets = std.math.maxInt(u32), .total = 1048576 },
+    };
+    for (cases) |case| {
+        var buf: [max_descriptor_len]u8 = undefined;
+        const xml = try buildDescriptor(.{
+            .name = "Topology",
+            .cpu_cores = case.cores,
+            .cpu_sockets = case.sockets,
+            .memory_mb = 512,
+            .disk_capacity_bytes = 1024,
+            .vmdk_href = "d.vmdk",
+            .vmdk_size_bytes = 10,
+            .has_network = false,
+        }, &buf);
+        var expected_buf: [160]u8 = undefined;
+        const quantity = try std.fmt.bufPrint(&expected_buf, "<rasd:ResourceType>3</rasd:ResourceType><rasd:VirtualQuantity>{d}</rasd:VirtualQuantity>", .{case.total});
+        try t.expect(std.mem.indexOf(u8, xml, quantity) != null);
+        const label = try std.fmt.bufPrint(&expected_buf, "<rasd:ElementName>{d} virtual CPU(s)</rasd:ElementName>", .{case.total});
+        try t.expect(std.mem.indexOf(u8, xml, label) != null);
+    }
+}
+
 test "ovf: no network omits the Ethernet item + NetworkSection" {
     var buf: [max_descriptor_len]u8 = undefined;
     const spec = Spec{
@@ -210,6 +240,7 @@ test "fuzz: buildDescriptor never crashes on random specs" {
         const spec = Spec{
             .name = namebuf[0..n],
             .cpu_cores = rnd.int(u32),
+            .cpu_sockets = rnd.int(u32),
             .memory_mb = rnd.int(u32),
             .disk_capacity_bytes = rnd.int(u64),
             .vmdk_href = "d.vmdk",

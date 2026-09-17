@@ -67,6 +67,8 @@ globals in `appstate.zig`.
   emit `max` so TCG can start; QEMU's `max` uses host features under KVM. Explicit
   hardware acceleration preserves `host`. Stored CPU selections stay unchanged.
   `hyperv_enlightenments` appends `hv_*` properties to the effective model.
+- **OVF CPU quantity:** `ovf.Spec` receives cores per socket and socket count;
+  the descriptor emits their product with the same 1–1024 per-field bounds as QEMU.
 - **VNC connection cache:** `VncClient.disconnect` must join the polling thread and
   release cached resources even after peer failure clears `connected`; framebuffer
   polling calls it before reconnecting.

@@ -6,7 +6,7 @@
 // OVF export. Power-on/migration are intentionally excluded, they need a real
 // booted guest / a second host and would be flaky here.
 import { test, expect } from '@playwright/test';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 let hasFfmpeg = false;
 try { execSync('ffmpeg -version', { stdio: 'ignore' }); hasFfmpeg = true; } catch (e) {}
 
@@ -178,15 +178,22 @@ test('secondary disk upload then download round-trips', async ({ page }) => {
     expect(down.text).toContain('HANGAR_E2E_DISK2_PAYLOAD');
 });
 
-test('OVF export streams a non-empty tarball', async ({ page }) => {
+test('OVF export preserves the total CPU count across sockets', async ({ page }) => {
     const idx = await createVm(page, 'wf-export');
+    const saved = await api(page, 'POST', `/api/vms/${idx}`, 'cpu=4&cpu_sockets=2');
+    expect(saved.ok, `save topology: ${saved.status} ${saved.text}`).toBe(true);
     const exp = await page.evaluate(async (i) => {
         const r = await fetch(`/api/vms/${i}/export`, { method: 'POST', headers: { 'X-API-Key': 'hangar' } });
         const buf = await r.arrayBuffer();
-        return { status: r.status, len: buf.byteLength };
+        return { status: r.status, bytes: Array.from(new Uint8Array(buf)) };
     }, idx);
     expect(exp.status, 'export status').toBe(200);
-    expect(exp.len, 'export tarball should be non-empty').toBeGreaterThan(0);
+    expect(exp.bytes.length, 'export tarball should be non-empty').toBeGreaterThan(0);
+    const xml = execFileSync('tar', ['-xzOf', '-', './wf-export.ovf'], {
+        input: Buffer.from(exp.bytes), encoding: 'utf8', timeout: 10000,
+    });
+    expect(xml).toContain('<rasd:ElementName>8 virtual CPU(s)</rasd:ElementName>');
+    expect(xml).toContain('<rasd:ResourceType>3</rasd:ResourceType><rasd:VirtualQuantity>8</rasd:VirtualQuantity>');
 });
 
 test('tags save, persist in the list JSON, and drive the sidebar filter', async ({ page }) => {

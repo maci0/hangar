@@ -461,6 +461,7 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
     var has_disk2: bool = false;
     var has_network: bool = false;
     var cpu_cores: u32 = 0;
+    var cpu_sockets: u32 = 1;
     var memory_mb: u32 = 0;
     var idx: usize = 0;
     {
@@ -532,6 +533,7 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
         disk2_size_gb = v.disk2_size_gb;
         has_network = v.nics[0].mode != .none;
         cpu_cores = v.cpu_cores;
+        cpu_sockets = v.cpu_sockets;
         memory_mb = v.memory_mb;
     }
 
@@ -593,6 +595,7 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
     const spec = ovf.Spec{
         .name = export_name,
         .cpu_cores = cpu_cores,
+        .cpu_sockets = cpu_sockets,
         .memory_mb = memory_mb,
         .disk_capacity_bytes = disk_cap,
         .vmdk_href = vmdk_name,
