@@ -32,12 +32,35 @@ and a browser is the whole install.
 ## Prerequisites
 
 - **Zig 0.16.0** (the build pins backend/linker flags for this version).
+- **libvncclient development headers and library**, including `rfb/rfbclient.h`,
+  plus **pkg-config** and the platform C development toolchain.
+- **Bun 1.4.0** and **ShellCheck** for the CI lint checks. Bun is also used for e2e tests.
 - **QEMU** (`qemu-system-x86_64`, `qemu-img`); `cloud-localds` for cloud-init,
   `swtpm` for TPM, OVMF for UEFI, all optional per feature.
 - For the encoded-video pipeline: `ffmpeg` (uses `h264_vaapi` when a
   `/dev/dri/renderD*` node is available, else `libx264`).
-- For the e2e tests only: Bun, `bun install`, and Chromium
-  (`bun run e2e:install`).
+- For e2e tests: `bun install --frozen-lockfile` and Chromium
+  (`bun run e2e:install`). The shell integration tests also need Python 3 and curl.
+
+### Contributor setup (Ubuntu 24.04)
+
+With Zig 0.16.0 and Bun 1.4.0 on `PATH`, install the build/check dependencies
+(the VNC package provides both the client headers and library):
+
+```bash
+sudo apt-get update
+sudo apt-get install --no-install-recommends -y build-essential libvncserver-dev pkg-config shellcheck
+```
+
+From the clone's root, run the same build, format, lint, and unit/fuzz gates as CI:
+
+```bash
+zig build check
+```
+
+These checks do not require `bun install` or Chromium. The first Zig build fetches
+its pinned dependencies. Build output goes to `zig-out/bin/`; no global install
+is needed. Install QEMU separately before creating or powering on VMs.
 
 ## Build / Run / Test
 
@@ -49,6 +72,18 @@ zig build web-e2e      # Playwright web UI e2e (standalone; needs bun + chromium
 zig build test-api     # HTTP API integration test (spawns a real daemon)
 zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 ```
+
+Use `zig build --help` to list build steps. For a shorter edit/test loop, run a
+single module (including its imported tests):
+
+```bash
+zig test src/persist.zig -lc -fllvm -flld
+```
+
+Tests live at the bottom of each Zig module; register new test modules in
+`build.zig`. Before opening a pull request, run `zig build check` to also catch
+errors reachable only through the executables. Web workflow changes additionally
+need a Playwright test under `tests/e2e/` and a `zig build web-e2e` run.
 
 Open http://127.0.0.1:9080 after `zig build web`. A daemon started without
 `KV_API_KEY` binds the IPv4 loopback, so address it as `127.0.0.1`, not

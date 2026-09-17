@@ -144,4 +144,11 @@ pub fn build(b: *std.Build) !void {
         \\
     });
     lint_js.dependOn(&lint_js_cmd.step);
+
+    const check = b.step("check", "Run CI checks (build, format, lint, unit + fuzz tests)");
+    check.dependOn(b.getInstallStep());
+    check.dependOn(fmt_check);
+    check.dependOn(lint_shell);
+    check.dependOn(lint_js);
+    check.dependOn(test_step);
 }
