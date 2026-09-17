@@ -197,51 +197,51 @@ fn run(init: std.process.Init) !void {
     // Argument shape was validated by validateArgs() before we connected, so
     // the positional accesses below are known to be in range.
     if (std.mem.eql(u8, command, "list")) {
-        return cmdList(allocator, &conn, init.io);
+        return cmdList(allocator, &conn);
     } else if (std.mem.eql(u8, command, "status")) {
-        return cmdStatus(allocator, &conn, init.io);
+        return cmdStatus(allocator, &conn);
     } else if (std.mem.eql(u8, command, "import")) {
-        return cmdImport(allocator, &conn, args[0], init.io);
+        return cmdImport(allocator, &conn, args[0]);
     } else if (std.mem.eql(u8, command, "create")) {
-        return cmdCreate(allocator, &conn, args[0], args[1], args[2], args[3], init.io);
+        return cmdCreate(allocator, &conn, args[0], args[1], args[2], args[3]);
     } else if (std.mem.eql(u8, command, "quickstart")) {
-        return cmdQuickstart(allocator, &conn, args[0], init.io);
+        return cmdQuickstart(allocator, &conn, args[0]);
     } else if (std.mem.eql(u8, command, "snapshot")) {
         const sub = args[0];
         const target = args[1];
         const idx = resolveVm(allocator, &conn, target) orelse return notFound(target);
         if (std.mem.eql(u8, sub, "list")) {
-            return cmdSnapshotList(allocator, &conn, idx, init.io);
+            return cmdSnapshotList(allocator, &conn, idx);
         } else if (std.mem.eql(u8, sub, "take")) {
-            return cmdSnapshotOp(allocator, &conn, idx, args[2], "take", init.io);
+            return cmdSnapshotOp(allocator, &conn, idx, args[2], "take");
         } else if (std.mem.eql(u8, sub, "revert")) {
-            return cmdSnapshotOp(allocator, &conn, idx, args[2], "revert", init.io);
+            return cmdSnapshotOp(allocator, &conn, idx, args[2], "revert");
         } else {
-            return cmdSnapshotOp(allocator, &conn, idx, args[2], "delete", init.io);
+            return cmdSnapshotOp(allocator, &conn, idx, args[2], "delete");
         }
     } else if (std.mem.eql(u8, command, "rename")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
-        return cmdRename(allocator, &conn, idx, args[1], init.io);
+        return cmdRename(allocator, &conn, idx, args[1]);
     } else if (std.mem.eql(u8, command, "resize")) {
         // new-gb was validated client-side in validateArgs (fail-fast, exit 2).
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
-        return cmdResize(allocator, &conn, idx, args[1], init.io);
+        return cmdResize(allocator, &conn, idx, args[1]);
     } else if (std.mem.eql(u8, command, "cd")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
-        return cmdCdrom(allocator, &conn, idx, args[1], init.io);
+        return cmdCdrom(allocator, &conn, idx, args[1]);
     } else if (std.mem.eql(u8, command, "eject")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
-        return cmdCdrom(allocator, &conn, idx, null, init.io);
+        return cmdCdrom(allocator, &conn, idx, null);
     } else if (std.mem.eql(u8, command, "compact")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
-        return cmdSimplePost(allocator, &conn, idx, "/disk/compact", "compact", init.io);
+        return cmdSimplePost(allocator, &conn, idx, "/disk/compact", "compact");
     } else if (std.mem.eql(u8, command, "migrate")) {
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
-        return cmdMigrate(allocator, &conn, idx, args[1], args[2], init.io);
+        return cmdMigrate(allocator, &conn, idx, args[1], args[2]);
     } else if (std.mem.eql(u8, command, "set")) {
         // The field name was allowlisted client-side in validateArgs (exit 2).
         const idx = resolveVm(allocator, &conn, args[0]) orelse return notFound(args[0]);
-        return cmdSet(allocator, &conn, idx, args[1], args[2], init.io);
+        return cmdSet(allocator, &conn, idx, args[1], args[2]);
     } else {
         // Single-target VM operations: start/stop/restart/clone/linked-clone/
         // delete/suspend/pause/resume/shutdown/reset/cad/export.
@@ -249,40 +249,40 @@ fn run(init: std.process.Init) !void {
         const idx = resolveVm(allocator, &conn, target) orelse return notFound(target);
 
         if (std.mem.eql(u8, command, "start") or std.mem.eql(u8, command, "stop")) {
-            return cmdPower(allocator, &conn, idx, command, init.io);
+            return cmdPower(allocator, &conn, idx, command);
         } else if (std.mem.eql(u8, command, "restart")) {
-            try cmdPower(allocator, &conn, idx, "stop", init.io);
+            try cmdPower(allocator, &conn, idx, "stop");
             const ts: c.timespec = .{ .sec = 1, .nsec = 0 };
             _ = c.nanosleep(&ts, null);
-            return cmdPower(allocator, &conn, idx, "start", init.io);
+            return cmdPower(allocator, &conn, idx, "start");
         } else if (std.mem.eql(u8, command, "clone")) {
-            return cmdClone(allocator, &conn, idx, init.io);
+            return cmdClone(allocator, &conn, idx);
         } else if (std.mem.eql(u8, command, "linked-clone")) {
-            return cmdLinkedClone(allocator, &conn, idx, init.io);
+            return cmdLinkedClone(allocator, &conn, idx);
         } else if (std.mem.eql(u8, command, "delete")) {
-            return cmdDelete(allocator, &conn, idx, init.io);
+            return cmdDelete(allocator, &conn, idx);
         } else if (std.mem.eql(u8, command, "suspend")) {
-            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/suspend", "suspend", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/suspend", "suspend");
         } else if (std.mem.eql(u8, command, "pause")) {
-            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/pause", "pause", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/pause", "pause");
         } else if (std.mem.eql(u8, command, "resume")) {
-            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/resume", "resume", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/resume", "resume");
         } else if (std.mem.eql(u8, command, "shutdown")) {
-            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/shutdown", "shutdown", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/shutdown", "shutdown");
         } else if (std.mem.eql(u8, command, "reset")) {
-            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/reset", "reset", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/reset", "reset");
         } else if (std.mem.eql(u8, command, "cad")) {
-            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/cad", "cad", init.io);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/cad", "cad");
         } else if (std.mem.eql(u8, command, "log")) {
-            return cmdLog(allocator, &conn, idx, init.io);
+            return cmdLog(allocator, &conn, idx);
         } else if (std.mem.eql(u8, command, "info")) {
-            return cmdInfo(allocator, &conn, idx, init.io);
+            return cmdInfo(allocator, &conn, idx);
         } else if (std.mem.eql(u8, command, "guestinfo")) {
-            return cmdSimpleGet(allocator, &conn, idx, "/api/vms/{d}/guestinfo", "guest", init.io);
+            return cmdSimpleGet(allocator, &conn, idx, "/api/vms/{d}/guestinfo", "guest");
         } else if (std.mem.eql(u8, command, "diskinfo")) {
-            return cmdSimpleGet(allocator, &conn, idx, "/api/vms/{d}/diskinfo", "disk", init.io);
+            return cmdSimpleGet(allocator, &conn, idx, "/api/vms/{d}/diskinfo", "disk");
         } else {
-            return cmdExport(allocator, &conn, idx, init.io);
+            return cmdExport(&conn, idx);
         }
     }
 }
@@ -577,8 +577,7 @@ fn nextJsonObject(rest: *[]const u8) ?[]const u8 {
     return null;
 }
 
-fn cmdList(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.Io) !void {
-    _ = io;
+fn cmdList(allocator: std.mem.Allocator, conn: *transport.Connection) !void {
     const json = try sendRequest(allocator, conn, "GET", "/api/vms", null);
     defer allocator.free(json);
 
@@ -604,16 +603,14 @@ fn cmdList(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.Io
     }
 }
 
-fn cmdStatus(allocator: std.mem.Allocator, conn: *transport.Connection, io: std.Io) !void {
-    _ = io;
+fn cmdStatus(allocator: std.mem.Allocator, conn: *transport.Connection) !void {
     const resp = try sendRequest(allocator, conn, "GET", "/api/health", null);
     defer allocator.free(resp);
     fdWrite(c.STDOUT_FILENO, resp);
     fdWrite(c.STDOUT_FILENO, "\n");
 }
 
-fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, action: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, action: []const u8) !void {
     // The daemon exposes idempotent /start and /stop routes (a no-op if already
     // in the requested state), so the CLI verbs map straight through, no
     // read-then-toggle, which previously had a TOCTOU window that could invert
@@ -637,12 +634,11 @@ fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usiz
     fdWrite(c.STDOUT_FILENO, line);
 }
 
-fn cmdClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    return cmdSimple(allocator, conn, idx, "/api/vms/{d}/clone", "clone", io);
+fn cmdClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize) !void {
+    return cmdSimple(allocator, conn, idx, "/api/vms/{d}/clone", "clone");
 }
 
-fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    _ = io;
+fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize) !void {
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/clone", .{idx});
     const resp = try sendRequest(allocator, conn, "POST", path, "linked=1");
@@ -652,13 +648,12 @@ fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx
     fdWrite(c.STDOUT_FILENO, line);
 }
 
-fn cmdDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    return cmdSimple(allocator, conn, idx, "/api/vms/{d}/delete", "delete", io);
+fn cmdDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize) !void {
+    return cmdSimple(allocator, conn, idx, "/api/vms/{d}/delete", "delete");
 }
 
 /// Grow a VM's primary disk to `new_gb` GiB (POST /api/vms/<id>/disk/resize).
-fn cmdResize(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, new_gb: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdResize(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, new_gb: []const u8) !void {
     var path_buf: [40]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/disk/resize", .{idx});
     var body_buf: [32]u8 = undefined;
@@ -671,8 +666,7 @@ fn cmdResize(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
 }
 
 /// GET /api/vms/<idx><suffix-fmt> and print "<label> VM [idx]: <resp>".
-fn cmdSimpleGet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, label: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdSimpleGet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, label: []const u8) !void {
     var path_buf: [48]u8 = undefined;
     const url = try std.fmt.bufPrint(&path_buf, path_fmt, .{idx});
     const resp = try sendRequest(allocator, conn, "GET", url, null);
@@ -682,8 +676,7 @@ fn cmdSimpleGet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: 
 }
 
 /// Create a VM from a catalog template slug (POST /api/vms/quickstart/<slug>).
-fn cmdQuickstart(allocator: std.mem.Allocator, conn: *transport.Connection, slug: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdQuickstart(allocator: std.mem.Allocator, conn: *transport.Connection, slug: []const u8) !void {
     var path_buf: [96]u8 = undefined;
     var enc_buf: [128]u8 = undefined;
     const enc = try urlencode.percentEncode(&enc_buf, slug);
@@ -695,8 +688,7 @@ fn cmdQuickstart(allocator: std.mem.Allocator, conn: *transport.Connection, slug
 }
 
 /// POST to /api/vms/<idx><suffix> with no body and print "<label> VM [idx]: <resp>".
-fn cmdSimplePost(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, suffix: []const u8, label: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdSimplePost(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, suffix: []const u8, label: []const u8) !void {
     var path_buf: [48]u8 = undefined;
     const url = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}{s}", .{ idx, suffix });
     const resp = try sendRequest(allocator, conn, "POST", url, "");
@@ -706,8 +698,7 @@ fn cmdSimplePost(allocator: std.mem.Allocator, conn: *transport.Connection, idx:
 }
 
 /// Change (path != null) or eject (path == null) the VM's CD/ISO.
-fn cmdCdrom(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, path: ?[]const u8, io: std.Io) !void {
-    _ = io;
+fn cmdCdrom(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, path: ?[]const u8) !void {
     var path_buf: [40]u8 = undefined;
     if (path) |p| {
         const url = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/cdrom", .{idx});
@@ -728,8 +719,7 @@ fn cmdCdrom(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usiz
     }
 }
 
-fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, new_name: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdRename(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, new_name: []const u8) !void {
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/rename", .{idx});
     // Percent-encode the name so values containing &, =, %, +, or spaces reach
@@ -764,8 +754,7 @@ fn isSettableField(field: []const u8) bool {
 /// Update one config field of VM `idx` via a partial save (POST /api/vms/<id>).
 /// handleSave applies only the keys present in the body, so a single field is
 /// changed and the rest are untouched. The field is allowlisted by the caller.
-fn cmdSet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, field: []const u8, value: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdSet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, field: []const u8, value: []const u8) !void {
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}", .{idx});
     var val_enc_buf: [768]u8 = undefined;
@@ -782,8 +771,7 @@ fn cmdSet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize,
 /// Start a live migration of VM `idx` to `host`:`port`. Mirrors the web UI,
 /// which posts `dest=tcp:<host>:<port>`. The daemon kicks off the migration and
 /// replies `{"status":"started"}`; poll `info`/the web UI for progress.
-fn cmdMigrate(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, host: []const u8, port: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdMigrate(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, host: []const u8, port: []const u8) !void {
     // port was validated as 1-65535 client-side in validateArgs (fail-fast, exit 2).
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/migrate", .{idx});
@@ -803,8 +791,7 @@ fn cmdMigrate(allocator: std.mem.Allocator, conn: *transport.Connection, idx: us
 
 /// Create a VM: POST /api/vms with name/mem/cpu/disk. Advanced fields take the
 /// daemon's defaults; edit them afterwards via the web UI or a future setter.
-fn cmdCreate(allocator: std.mem.Allocator, conn: *transport.Connection, name: []const u8, mem: []const u8, cpu: []const u8, disk: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdCreate(allocator: std.mem.Allocator, conn: *transport.Connection, name: []const u8, mem: []const u8, cpu: []const u8, disk: []const u8) !void {
     // mem/cpu/disk were validated client-side in validateArgs (fail-fast, exit
     // 2) so a typo never reaches the daemon to be silently clamped to a default.
     var name_enc_buf: [vm.MAX_NAME * 3]u8 = undefined;
@@ -818,8 +805,7 @@ fn cmdCreate(allocator: std.mem.Allocator, conn: *transport.Connection, name: []
     fdWrite(c.STDOUT_FILENO, line);
 }
 
-fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_path: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_path: []const u8) !void {
     // Percent-encode the path so values with spaces or reserved characters
     // round-trip through the daemon's URL-decode (matching the web UI).
     var path_enc_buf: [vm.MAX_PATH * 3]u8 = undefined;
@@ -833,9 +819,7 @@ fn cmdImport(allocator: std.mem.Allocator, conn: *transport.Connection, disk_pat
     fdWrite(c.STDOUT_FILENO, line);
 }
 
-fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    _ = io;
-    _ = allocator;
+fn cmdExport(conn: *transport.Connection, idx: usize) !void {
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/export", .{idx});
     // The response body is the OVA tarball (binary, far larger than any
@@ -863,8 +847,7 @@ fn cmdExport(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     fdWrite(c.STDOUT_FILENO, line);
 }
 
-fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    _ = io;
+fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize) !void {
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/snapshots", .{idx});
     const resp = try sendRequest(allocator, conn, "GET", path, null);
@@ -878,8 +861,7 @@ fn cmdSnapshotList(allocator: std.mem.Allocator, conn: *transport.Connection, id
 }
 
 /// GET a VM's detail object and print a readable summary.
-fn cmdInfo(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    _ = io;
+fn cmdInfo(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize) !void {
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}", .{idx});
     const obj = try sendRequest(allocator, conn, "GET", path, null);
@@ -898,8 +880,7 @@ fn cmdInfo(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize
 
 /// GET the tail of a VM's QEMU stderr log and print it. Useful for diagnosing a
 /// "start err" from the CLI without opening the web UI.
-fn cmdLog(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, io: std.Io) !void {
-    _ = io;
+fn cmdLog(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize) !void {
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/log", .{idx});
     const resp = try sendRequest(allocator, conn, "GET", path, null);
@@ -914,8 +895,7 @@ fn cmdLog(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize,
 
 /// POST snapshot op with a `tag=` body. `action` is one of
 /// "take", "revert", "delete".
-fn cmdSnapshotOp(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, comptime action: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdSnapshotOp(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, tag: []const u8, comptime action: []const u8) !void {
     var path_buf: [48]u8 = undefined;
     const path_fmt = comptime if (std.mem.eql(u8, action, "take"))
         "/api/vms/{d}/snapshots"
@@ -937,8 +917,7 @@ fn cmdSnapshotOp(allocator: std.mem.Allocator, conn: *transport.Connection, idx:
 }
 
 /// Generic POST to /api/vms/{idx}/{action} with no body.
-fn cmdSimple(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, action: []const u8, io: std.Io) !void {
-    _ = io;
+fn cmdSimple(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, action: []const u8) !void {
     var path_buf: [48]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, path_fmt, .{idx});
     const resp = try sendRequest(allocator, conn, "POST", path, null);
