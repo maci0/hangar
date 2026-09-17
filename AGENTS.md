@@ -32,7 +32,8 @@ zig build lint-js      # bun build over hand-written JS (vendored src/web bundle
 
 `build.zig` owns lint flags; `.github/workflows/ci.yml` owns CI setup.
 Preserve file-enumeration failure propagation and whitespace-safe filenames.
-`fmt-check` uses the Zig executable running the build.
+`fmt-check` uses the Zig executable running the build. `lint-shell` uses `--norc`
+so machine-local ShellCheck configuration cannot change the blocking rule set.
 
 ### Running a single test module
 

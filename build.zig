@@ -131,7 +131,7 @@ pub fn build(b: *std.Build) !void {
     // Same git-tracked scoping as fmt-check: a newly added .sh is covered
     // automatically instead of silently falling outside a hardcoded list.
     const lint_shell_cmd = b.addSystemCommand(&.{
-        "bash", "-euo", "pipefail", "-c", "git ls-files -z '*.sh' | xargs -0 shellcheck --enable=add-default-case,avoid-negated-conditions,avoid-nullary-conditions,check-extra-masked-returns,check-set-e-suppressed,check-unassigned-uppercase,deprecate-which,quote-safe-variables,useless-use-of-cat",
+        "bash", "-euo", "pipefail", "-c", "git ls-files -z '*.sh' | xargs -0 shellcheck --norc --enable=add-default-case,avoid-negated-conditions,avoid-nullary-conditions,check-extra-masked-returns,check-set-e-suppressed,check-unassigned-uppercase,deprecate-which,quote-safe-variables,useless-use-of-cat",
     });
     lint_shell.dependOn(&lint_shell_cmd.step);
 
