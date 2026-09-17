@@ -70,7 +70,7 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   binary check if anything looks stale (see root AGENTS.md, Testing).
 
 ## Verification
-`zig build web-e2e` (Playwright; standalone, not in the hermetic `test`). Check the
+`zig build web-e2e` (Playwright; standalone, not in `zig build test`). Check the
 trailing **failed** count, not just `N passed`. `bun tests/visual/screenshots.mjs`
 captures key views to confirm look.
 

@@ -18,8 +18,9 @@ under `zig build test`).
   change. Images only, no assertions, so it is not a gate.
 
 ## Local Contracts
-- These are **standalone** steps, NOT part of the hermetic umbrella `zig build test`
-  (which stays network/browser-free). They spawn real daemons / launch Chromium.
+- These are **standalone** steps, NOT part of `zig build test`. They spawn real
+  daemons / launch Chromium. The unit/fuzz suite uses local sockets and optional
+  QEMU subprocesses, but no browser.
 - One-time setup before first Playwright run: `bun install --frozen-lockfile` + `bun run e2e:install` (Chromium). The build requires the repository-local Playwright CLI; it never downloads a fallback runner.
 - **Every user-facing web workflow gets an e2e here** (project rule). Add it with the feature.
 - When reading results, check the **failed** line, not only the trailing `N passed`
