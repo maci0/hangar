@@ -1737,7 +1737,7 @@ fn handleClone(req: []const u8) ![]const u8 {
     if (do_linked) {
         const disk_path: []const u8 = std.mem.span(disk_path_z);
         if (vmm_handle) |h| {
-            appstate.g_vmm.createLinkedCloneFn(h, disk_path, src_disk, @intFromEnum(src_fmt), std.heap.page_allocator) catch |e| {
+            appstate.g_vmm.createLinkedCloneFn(h, disk_path, src_disk, src_fmt, std.heap.page_allocator) catch |e| {
                 logOpErr("clone (linked)", e, clone.getNameSlice());
                 return "linkerr";
             };

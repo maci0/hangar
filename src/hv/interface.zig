@@ -119,8 +119,7 @@ pub const Vmm = struct {
     accelerator: Accelerator,
 
     /// Spawn the VM process. Non-blocking: returns immediately.
-    /// The `config` pointer is an opaque VM config (VmConfig from vm.zig).
-    startFn: *const fn (ctx: VmmHandle, config: *anyopaque) VmmError!void,
+    startFn: *const fn (ctx: VmmHandle, config: *vm.VmConfig) VmmError!void,
 
     /// Force-kill the VM process (SIGKILL or equivalent).
     forceStopFn: *const fn (ctx: VmmHandle) void,
@@ -132,13 +131,20 @@ pub const Vmm = struct {
     reapFn: *const fn (ctx: VmmHandle) void,
 
     /// Create a linked clone disk (backing-file overlay).
-    createLinkedCloneFn: *const fn (ctx: VmmHandle, dest: []const u8, backing: []const u8, backing_fmt: u32, alloc: std.mem.Allocator) VmmError!void,
+    createLinkedCloneFn: *const fn (ctx: VmmHandle, dest: []const u8, backing: []const u8, backing_fmt: vm.DiskFormat, alloc: std.mem.Allocator) VmmError!void,
 
     /// Free backend-specific resources.
     deinitFn: *const fn (ctx: VmmHandle) void,
 };
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "Vmm dispatch preserves VM config and disk format types" {
+    const StartFn = *const fn (VmmHandle, *vm.VmConfig) VmmError!void;
+    const CloneFn = *const fn (VmmHandle, []const u8, []const u8, vm.DiskFormat, std.mem.Allocator) VmmError!void;
+    try std.testing.expect(@TypeOf(@as(Vmm, undefined).startFn) == StartFn);
+    try std.testing.expect(@TypeOf(@as(Vmm, undefined).createLinkedCloneFn) == CloneFn);
+}
 
 test "bestAccelerator returns valid strings" {
     const accel = bestAccelerator();

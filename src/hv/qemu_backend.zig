@@ -85,10 +85,9 @@ fn isAccelAvailable(accel: hv.Accelerator) bool {
     };
 }
 
-fn start(ctx: hv.VmmHandle, cfg_opaque: *anyopaque) hv.VmmError!void {
+fn start(ctx: hv.VmmHandle, config: *vm.VmConfig) hv.VmmError!void {
     const qv = getQv(ctx);
-    const cfg: *vm.VmConfig = @ptrCast(@alignCast(@constCast(cfg_opaque)));
-    qemu.startVm(cfg, qv.allocator) catch return error.SpawnFailed;
+    qemu.startVm(config, qv.allocator) catch return error.SpawnFailed;
 }
 
 fn forceStop(ctx: hv.VmmHandle) void {
@@ -106,9 +105,8 @@ fn reap(ctx: hv.VmmHandle) void {
     qemu.reapVm(qv.config);
 }
 
-fn createLinkedClone(ctx: hv.VmmHandle, dest: []const u8, backing: []const u8, backing_fmt_u32: u32, alloc: std.mem.Allocator) hv.VmmError!void {
+fn createLinkedClone(ctx: hv.VmmHandle, dest: []const u8, backing: []const u8, backing_fmt: vm.DiskFormat, alloc: std.mem.Allocator) hv.VmmError!void {
     _ = ctx;
-    const backing_fmt: vm.DiskFormat = @enumFromInt(@as(u8, @intCast(backing_fmt_u32)));
     qemu.createLinkedClone(dest, backing, backing_fmt, alloc) catch return error.BackendError;
 }
 
