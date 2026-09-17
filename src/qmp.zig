@@ -1269,10 +1269,10 @@ fn jsonEscapeString(s: []const u8, out: []u8) ?[]const u8 {
 fn escapeHmpArg(arg: []const u8, out: []u8) []const u8 {
     var pos: usize = 0;
     for (arg) |c| {
-        if (c == '"') {
+        if (c == '"' or c == '\\') {
             if (pos + 2 > out.len) break;
             out[pos] = '\\';
-            out[pos + 1] = '"';
+            out[pos + 1] = c;
             pos += 2;
         } else {
             if (pos >= out.len) break;
@@ -1337,6 +1337,12 @@ test "escapeHmpArg: no special chars" {
     var buf: [128]u8 = undefined;
     const r = escapeHmpArg("/path/to/iso", &buf);
     try std.testing.expectEqualStrings("/path/to/iso", r);
+}
+
+test "escapeHmpArg: preserves literal backslashes" {
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("/iso/a\\\\b.iso", escapeHmpArg("/iso/a\\b.iso", &buf));
+    try std.testing.expectEqualStrings("/iso/end\\\\", escapeHmpArg("/iso/end\\", &buf));
 }
 
 test "escapeHmpArg: quote escaping" {
@@ -1414,12 +1420,18 @@ test "fuzz: escapeHmpArg never emits an unescaped quote and stays bounded" {
         const r = escapeHmpArg(arg, &out_buf);
         // Bounded: at most two output bytes per input byte.
         try std.testing.expect(r.len <= arg.len * 2);
-        // Documented invariant: every '"' in the output is preceded by '\\'.
-        for (r, 0..) |c, k| {
-            if (c == '"') {
-                try std.testing.expect(k > 0 and r[k - 1] == '\\');
+        var encoded: usize = 0;
+        for (arg) |ch| {
+            if (ch == '"' or ch == '\\') {
+                try std.testing.expect(encoded < r.len);
+                try std.testing.expectEqual(@as(u8, '\\'), r[encoded]);
+                encoded += 1;
             }
+            try std.testing.expect(encoded < r.len);
+            try std.testing.expectEqual(ch, r[encoded]);
+            encoded += 1;
         }
+        try std.testing.expectEqual(r.len, encoded);
         // Truncation must never split an escape across the buffer boundary:
         // a trailing lone '\\' that was meant to precede an emitted '"' would
         // violate the invariant above, so this also guards the tiny-buffer case.
