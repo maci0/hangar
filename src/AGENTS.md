@@ -58,6 +58,9 @@ globals in `appstate.zig`.
   only from the root object; nested fields and string values cannot select them.
 - **VM config file size:** `persist` reads up to 32 MiB. The read cap must accommodate
   `MAX_VMS` configurations with maximum-length JSON-escaped string fields.
+- **Network JSON scope:** `vnet` reads `version` and `networks` only from the root
+  object, fields only from each network object, and records only from the
+  `networks` array. Nested extension data and trailing objects are ignored.
 - **Add a `VmConfig` field →** update `VmJson` + `emitVmJson` + `parseVmObject` +
   `fromVmJson` in `persist.zig`, add a round-trip parser test, and emit it in **both**
   `vmrender.zig` renders. Large string fields also need the `parseVmObject` `str_buf`,
@@ -81,6 +84,8 @@ globals in `appstate.zig`.
   VM handles, and notifies SSE clients without rewriting `vms.json`.
 - **AutoProtect persistence:** the ticker saves only after advancing snapshot scheduling
   metadata or to retry its failed save; idle ticks do not rewrite `vms.json`.
+  `runtimeDue` initializes process-local monotonic scheduling from the persisted
+  wall-clock timestamp once; subsequent wall-clock steps do not change the interval.
 - **VNC connection cache:** `VncClient.disconnect` must join the polling thread and
   release cached resources even after peer failure clears `connected`; framebuffer
   polling calls it before reconnecting.

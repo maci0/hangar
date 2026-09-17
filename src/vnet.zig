@@ -341,24 +341,18 @@ pub const CUR_VERSION: u32 = 1;
 /// stderr so the user knows the file was saved by a newer Hangar. Exposed for
 /// testing.
 pub fn parseVersion(content: []const u8) u32 {
-    if (std.mem.indexOf(u8, content, "\"version\"")) |vidx| {
-        var cur = skipWs(content[vidx + "\"version\"".len ..]);
-        if (cur.len > 0 and cur[0] == ':') {
-            cur = skipWs(cur[1..]);
-            var i: usize = 0;
-            var val: u32 = 0;
-            while (i < cur.len and cur[i] >= '0' and cur[i] <= '9') : (i += 1) {
-                val = val *| 10 +| (cur[i] - '0');
-            }
-            if (i == 0) return 1; // non-numeric (e.g. "abc", true) → default
-            if (val > CUR_VERSION) {
-                var msg_buf: [128]u8 = undefined;
-                wlog.logWarn(std.fmt.bufPrint(&msg_buf, "networks file version newer than supported (max {d}); some settings may be ignored", .{CUR_VERSION}) catch "networks file version newer than supported; some settings may be ignored");
-            }
-            return val;
-        }
+    const cur = findKeyValue(content, "\"version\"") orelse return 1;
+    var i: usize = 0;
+    var val: u32 = 0;
+    while (i < cur.len and cur[i] >= '0' and cur[i] <= '9') : (i += 1) {
+        val = val *| 10 +| (cur[i] - '0');
     }
-    return 1;
+    if (i == 0) return 1;
+    if (val > CUR_VERSION) {
+        var msg_buf: [128]u8 = undefined;
+        wlog.logWarn(std.fmt.bufPrint(&msg_buf, "networks file version newer than supported (max {d}); some settings may be ignored", .{CUR_VERSION}) catch "networks file version newer than supported; some settings may be ignored");
+    }
+    return val;
 }
 
 /// Read a JSON string starting at `s[0] == '"'` into `out`. Returns the
@@ -470,13 +464,63 @@ fn isValidSubnetMask(s: []const u8) bool {
 /// "type") are not followed by `:`, so they are skipped rather than mistaken for
 /// the key. Returns null when no key match exists.
 fn findKeyValue(obj: []const u8, pat: []const u8) ?[]const u8 {
-    var search = obj;
-    while (std.mem.indexOf(u8, search, pat)) |idx| {
-        const after = skipWs(search[idx + pat.len ..]);
-        if (after.len > 0 and after[0] == ':') return skipWs(after[1..]);
-        search = search[idx + pat.len ..];
+    if (pat.len < 2) return null;
+    var cur = skipWs(obj);
+    if (cur.len == 0 or cur[0] != '{') return null;
+    cur = skipWs(cur[1..]);
+    while (cur.len > 0 and cur[0] == '"') {
+        var key_buf: [64]u8 = undefined;
+        const key = readString(cur, &key_buf);
+        const after = skipWs(skipValue(cur) orelse return null);
+        if (after.len == 0 or after[0] != ':') return null;
+        cur = skipWs(after[1..]);
+        if (key) |parsed| {
+            if (std.mem.eql(u8, parsed.value, pat[1 .. pat.len - 1])) return cur;
+        }
+        cur = skipWs(skipValue(cur) orelse return null);
+        if (cur.len == 0 or cur[0] != ',') return null;
+        cur = skipWs(cur[1..]);
     }
     return null;
+}
+
+fn skipValue(input: []const u8) ?[]const u8 {
+    const s = skipWs(input);
+    if (s.len == 0) return null;
+    var stack: [128]u8 = undefined;
+    var depth: usize = 0;
+    var in_string = false;
+    for (s, 0..) |c, i| {
+        if (in_string) {
+            if (c == '"') {
+                var slashes: usize = 0;
+                var j = i;
+                while (j > 0 and s[j - 1] == '\\') : (j -= 1) slashes += 1;
+                if (slashes % 2 == 0) {
+                    in_string = false;
+                    if (depth == 0) return s[i + 1 ..];
+                }
+            }
+            continue;
+        }
+        switch (c) {
+            '"' => in_string = true,
+            '{', '[' => {
+                if (depth == stack.len) return null;
+                stack[depth] = if (c == '{') '}' else ']';
+                depth += 1;
+            },
+            '}', ']' => {
+                if (depth == 0) return if (i == 0) null else s[i..];
+                if (stack[depth - 1] != c) return null;
+                depth -= 1;
+                if (depth == 0) return s[i + 1 ..];
+            },
+            ',', ' ', '\t', '\r', '\n' => if (depth == 0) return if (i == 0) null else s[i..],
+            else => {},
+        }
+    }
+    return if (depth == 0 and !in_string) s[s.len..] else null;
 }
 
 /// Within a single object slice `obj`, find `"key"` and read the string value
@@ -544,20 +588,12 @@ pub fn fromJson(content: []const u8) NetworkSet {
         @atomicStore(bool, &load_read_failed, true, .seq_cst);
     }
 
-    // Narrow to the "networks" array; if absent, parse the whole buffer (the
-    // object scanner ignores the outer wrapper object anyway because we start
-    // after the array bracket).
-    var cur: []const u8 = content;
-    if (std.mem.indexOf(u8, content, "\"networks\"")) |idx| {
-        cur = content[idx + "\"networks\"".len ..];
-        cur = skipWs(cur);
-        if (cur.len > 0 and cur[0] == ':') cur = skipWs(cur[1..]);
-        if (cur.len > 0 and cur[0] == '[') cur = cur[1..];
-    } else {
-        return set;
-    }
+    var cur = findKeyValue(content, "\"networks\"") orelse return set;
+    if (cur.len == 0 or cur[0] != '[') return set;
+    cur = skipWs(cur[1..]);
 
     while (set.count < MAX_VNETS) {
+        if (cur.len == 0 or cur[0] != '{') break;
         const r = nextObject(cur) orelse break;
         cur = r.rest;
         const obj = r.obj;
@@ -583,6 +619,9 @@ pub fn fromJson(content: []const u8) NetworkSet {
         var pf_tmp: [PORTFWD_CAP]u8 = undefined;
         n.setPortForwards(fieldStr(obj, "port_forwards", &pf_tmp));
         set.count += 1;
+        cur = skipWs(cur);
+        if (cur.len == 0 or cur[0] != ',') break;
+        cur = skipWs(cur[1..]);
     }
     return set;
 }
@@ -788,6 +827,50 @@ test "vnet fuzz: fromJson never panics and stays bounded" {
             try testing.expect(set.nets[i].name_len < NAME_CAP);
             try testing.expect(set.nets[i].subnet_len < IP_CAP);
             try testing.expect(set.nets[i].host_iface_len < IFACE_CAP);
+        }
+    }
+}
+
+test "vnet: fields and records stay within their owning JSON objects" {
+    const json =
+        \\{"extension":{"version":99,"networks":[{"name":"nested"}]},
+        \\"version":1,"networks":[{"extension":{"name":"wrong","type":"bridged","dhcp":true},
+        \\"name":"real","type":"host_only","dhcp":false}],"other":{"name":"extra"}}
+    ;
+    try testing.expectEqual(@as(u32, 1), parseVersion(json));
+    const set = fromJson(json);
+    try testing.expectEqual(@as(usize, 1), set.count);
+    try testing.expectEqualStrings("real", set.nets[0].getNameSlice());
+    try testing.expectEqual(VNetType.host_only, set.nets[0].vtype);
+    try testing.expect(!set.nets[0].dhcp);
+    try testing.expectEqual(@as(usize, 0), fromJson("{\"networks\":[],\"other\":{\"name\":\"extra\"}}").count);
+    try testing.expectEqual(@as(usize, 0), fromJson("{\"networks\":{\"name\":\"not-array\"}}").count);
+    const escaped = fromJson("{\"netw\\u006frks\":[{\"na\\u006de\":\"escaped\"}]}");
+    try testing.expectEqual(@as(usize, 1), escaped.count);
+    try testing.expectEqualStrings("escaped", escaped.nets[0].getNameSlice());
+}
+
+test "vnet fuzz: nested metadata and trailing objects never become networks" {
+    var prng = std.Random.DefaultPrng.init(0x5C0FE);
+    const rnd = prng.random();
+    var bytes: [128]u8 = undefined;
+    var list: List = .empty;
+    defer list.deinit(testing.allocator);
+    for (0..1000) |_| {
+        const len = rnd.uintLessThan(usize, bytes.len + 1);
+        rnd.bytes(bytes[0..len]);
+        list.clearRetainingCapacity();
+        try emit(&list, testing.allocator, "{\"extension\":{\"version\":99,\"networks\":[{\"name\":");
+        try emitStr(&list, testing.allocator, bytes[0..len]);
+        try emit(&list, testing.allocator, "}]},\"version\":1,\"networks\":[{\"name\":\"real\"}],\"other\":{\"name\":\"extra\"}}");
+        try testing.expectEqual(@as(u32, 1), parseVersion(list.items));
+        const set = fromJson(list.items);
+        try testing.expectEqual(@as(usize, 1), set.count);
+        try testing.expectEqualStrings("real", set.nets[0].getNameSlice());
+        const prefix = list.items[0..rnd.uintLessThan(usize, list.items.len + 1)];
+        if (skipValue(prefix)) |rest| {
+            try testing.expect(@intFromPtr(rest.ptr) >= @intFromPtr(prefix.ptr));
+            try testing.expectEqual(@intFromPtr(prefix.ptr) + prefix.len, @intFromPtr(rest.ptr) + rest.len);
         }
     }
 }
@@ -1293,7 +1376,7 @@ test "fuzz: parseVersion never panics and saturates" {
         _ = parseVersion(buf[0..n]);
     }
     // A pathological all-9s value must saturate rather than wrap.
-    const big = "\"version\": 999999999999999999999999";
+    const big = "{\"version\": 999999999999999999999999}";
     try testing.expect(parseVersion(big) == std.math.maxInt(u32));
     // Missing key falls back to the default.
     try testing.expect(parseVersion("{}") == 1);

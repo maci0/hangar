@@ -1270,6 +1270,11 @@ pub const VmConfig = struct {
     autoprotect_max: u32 = 3, // keep newest N
     autoprotect_last_epoch: i64 = 0, // unix timestamp of last AutoProtect snapshot
     autoprotect_last_seq: u32 = 0, // sequence counter for snapshot naming
+    /// Scheduling state for the ticker: monotonic seconds of the last snapshot
+    /// (process-local, never persisted, meaningless across restarts). Wall time
+    /// above is kept for display and cross-restart reference only, so an NTP
+    /// step or manual clock change cannot delay or double-fire snapshots.
+    autoprotect_last_mono: ?i128 = null,
 
     // ── Floppy disk image path (persisted) ────────────────────────
     floppy_path_buf: [MAX_PATH + 1]u8 = [_]u8{0} ** (MAX_PATH + 1),

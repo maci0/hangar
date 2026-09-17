@@ -2448,12 +2448,16 @@ fn autoprotectTicker() void {
         var work_count: usize = 0;
 
         appstate.vms_mutex.lock();
-        const now = std.Io.Clock.real.now(appio.io()).toSeconds();
+        // Interval gating uses the monotonic clock: an NTP step or manual wall
+        // clock change must not delay, skip, or double-fire snapshots. Only the
+        // persisted `autoprotect_last_epoch` bookkeeping keeps wall time (UI).
+        const now_mono = appio.monoSecs();
+        const now_wall = std.Io.Clock.real.now(appio.io()).toSeconds();
         var i: usize = 0;
         while (i < appstate.vm_count and work_count < work_items.len) : (i += 1) {
             const v = &appstate.vms[i];
             if (!v.autoprotect or v.status != .running or !v.hasDisk()) continue;
-            if (!autoprotect.due(true, v.autoprotect_interval_min, v.autoprotect_last_epoch, now)) continue;
+            if (!autoprotect.runtimeDue(&v.autoprotect_last_mono, true, v.autoprotect_interval_min, v.autoprotect_last_epoch, now_wall, now_mono)) continue;
 
             // Need a QMP-socket-safe name; skip (without burning a seq) if unusable.
             const vname = v.getNameSlice();
@@ -2461,7 +2465,8 @@ fn autoprotectTicker() void {
 
             const seq = v.autoprotect_last_seq;
             v.autoprotect_last_seq = seq +% 1; // wrapping add
-            v.autoprotect_last_epoch = now;
+            v.autoprotect_last_epoch = now_wall;
+            v.autoprotect_last_mono = now_mono;
 
             var name_buf: [40]u8 = undefined;
             const snap_name = autoprotect.snapName(&name_buf, seq);

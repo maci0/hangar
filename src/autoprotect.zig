@@ -3,7 +3,7 @@
 //!
 //! Pure scheduling/naming/pruning logic, separated from the timer + qemu-img/QMP
 //! IO so it can be unit-tested + fuzzed. The background ticker in `web_server.zig`
-//! calls `due()` each tick; when true it takes a snapshot named by `snapName()`
+//! calls `runtimeDue()` each tick; when true it takes a snapshot named by `snapName()`
 //! and prunes the oldest
 //! AutoProtect snapshots beyond the configured maximum (see `pruneExcess`).
 
@@ -21,6 +21,16 @@ pub fn due(enabled: bool, interval_min: u32, last_unix: i64, now_unix: i64) bool
     // Widen to i128 so a huge (now - last) on adversarial inputs can't overflow.
     const elapsed: i128 = @as(i128, now_unix) - @as(i128, last_unix);
     return elapsed >= @as(i128, interval_min) * 60;
+}
+
+pub fn runtimeDue(last_mono: *?i128, enabled: bool, interval_min: u32, last_unix: i64, now_unix: i64, now_mono: u64) bool {
+    if (last_mono.* == null and last_unix != 0) {
+        const elapsed = @max(0, @as(i128, now_unix) - last_unix);
+        last_mono.* = @as(i128, now_mono) - elapsed;
+    }
+    if (!enabled or interval_min == 0) return false;
+    const last = last_mono.* orelse return due(enabled, interval_min, last_unix, now_unix);
+    return @as(i128, now_mono) - last >= @as(i128, interval_min) * 60;
 }
 
 /// Format an AutoProtect snapshot name into `buf`: `AutoProtect-` + a 10-digit
@@ -60,7 +70,7 @@ test "due: respects enabled / interval / elapsed" {
     try t.expect(due(true, 60, 0, 3600)); // 60 min
 }
 
-test "due: never taken is independent of the wall clock and interval" {
+test "due: never taken is independent of the clock and interval" {
     const times = [_]i64{ std.math.minInt(i64), -1, 0, 30, 1_800_000_000, std.math.maxInt(i64) };
     for (times) |now| {
         try t.expect(due(true, 1, 0, now));
@@ -68,8 +78,46 @@ test "due: never taken is independent of the wall clock and interval" {
         try t.expect(!due(false, 1, 0, now));
         try t.expect(!due(true, 0, 0, now));
     }
-    try t.expect(!due(true, 1, -5, 30));
-    try t.expect(due(true, 1, -5, 55));
+}
+
+test "runtimeDue: restores elapsed time once and ignores wall-clock steps" {
+    var last: ?i128 = null;
+    try t.expect(!runtimeDue(&last, true, 60, 1000, 2800, 10));
+    try t.expectEqual(@as(?i128, -1790), last);
+    try t.expect(!runtimeDue(&last, true, 60, 1000, 100000, 1809));
+    try t.expect(runtimeDue(&last, true, 60, 1000, 0, 1810));
+    last = 1810;
+    try t.expect(!runtimeDue(&last, true, 60, 0, 100000, 1811));
+    try t.expect(runtimeDue(&last, true, 60, 0, 0, 5410));
+    last = null;
+    try t.expect(runtimeDue(&last, true, 60, 0, 0, 0));
+    try t.expect(!runtimeDue(&last, false, 60, 0, 0, 0));
+    try t.expect(!runtimeDue(&last, true, 0, 0, 0, 0));
+}
+
+test "due: yearly interval gating" {
+    try t.expect(due(true, 525600, 0, 1000000000)); // enabled, yearly interval
+    try t.expect(!due(true, 525600, 1000000000, 1000000000)); // not yet due
+}
+
+test "due: zero interval with and without a previous snapshot" {
+    try t.expect(!due(true, 0, 0, 1000000));
+    try t.expect(!due(true, 0, 1000, 1000000));
+}
+
+test "fuzz: runtimeDue preserves elapsed time across wall-clock changes" {
+    var prng = std.Random.DefaultPrng.init(0xA070_9202);
+    const rnd = prng.random();
+    for (0..8000) |_| {
+        var last_mono: ?i128 = null;
+        const last = rnd.int(i64);
+        const now = rnd.int(i64);
+        const mono = rnd.int(u64);
+        const interval = rnd.intRangeAtMost(u32, 1, std.math.maxInt(u32));
+        const expected = due(true, interval, last, now);
+        try t.expectEqual(expected, runtimeDue(&last_mono, true, interval, last, now, mono));
+        try t.expectEqual(expected, runtimeDue(&last_mono, true, interval, last, rnd.int(i64), mono));
+    }
 }
 
 test "snapName: prefixed + zero-padded + lexically ordered" {
@@ -108,7 +156,7 @@ test "fuzz: due/pruneExcess never panic and stay sane" {
         const iv = rnd.int(u32);
         const last = rnd.int(i64);
         const now = rnd.int(i64);
-        _ = due(en, iv, last, now); // must not panic/overflow
+        _ = due(en, iv, last, now);
         const cur = rnd.uintLessThan(usize, 1000);
         const mx = rnd.uintLessThan(u32, 100);
         const p = pruneExcess(cur, mx);
