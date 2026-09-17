@@ -39,53 +39,47 @@ pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
     var list: std.ArrayList(u8) = .empty;
     errdefer list.deinit(a);
 
-    const w = struct {
-        fn s(l: *std.ArrayList(u8), al: std.mem.Allocator, txt: []const u8) !void {
-            try l.appendSlice(al, txt);
-        }
-    }.s;
-
-    try w(&list, a, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    try w(&list, a, "<Envelope xmlns=\"http://schemas.dmtf.org/ovf/envelope/1\"" ++
+    try list.appendSlice(a, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    try list.appendSlice(a, "<Envelope xmlns=\"http://schemas.dmtf.org/ovf/envelope/1\"" ++
         " xmlns:ovf=\"http://schemas.dmtf.org/ovf/envelope/1\"" ++
         " xmlns:rasd=\"http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData\"" ++
         " xmlns:vssd=\"http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData\">\n");
 
     // References
-    try w(&list, a, "  <References>\n");
+    try list.appendSlice(a, "  <References>\n");
     try list.print(a, "    <File ovf:href=\"", .{});
     try esc(&list, a, spec.vmdk_href);
     try list.print(a, "\" ovf:id=\"file1\" ovf:size=\"{d}\"/>", .{spec.vmdk_size_bytes});
     if (spec.disk2_href.len > 0) {
-        try w(&list, a, "\n    <File ovf:href=\"");
+        try list.appendSlice(a, "\n    <File ovf:href=\"");
         try esc(&list, a, spec.disk2_href);
         try list.print(a, "\" ovf:id=\"file2\" ovf:size=\"{d}\"/>", .{spec.disk2_size_bytes});
     }
-    try w(&list, a, "\n  </References>\n");
+    try list.appendSlice(a, "\n  </References>\n");
 
     // DiskSection
-    try w(&list, a, "  <DiskSection>\n    <Info>Virtual disks</Info>\n");
+    try list.appendSlice(a, "  <DiskSection>\n    <Info>Virtual disks</Info>\n");
     try list.print(a, "    <Disk ovf:capacity=\"{d}\" ovf:capacityAllocationUnits=\"byte\" ovf:diskId=\"vmdisk1\"" ++
         " ovf:fileRef=\"file1\" ovf:format=\"http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized\"/>", .{spec.disk_capacity_bytes});
     if (spec.disk2_href.len > 0) {
         try list.print(a, "\n    <Disk ovf:capacity=\"{d}\" ovf:capacityAllocationUnits=\"byte\" ovf:diskId=\"vmdisk2\"" ++
             " ovf:fileRef=\"file2\" ovf:format=\"http://www.vmware.com/interfaces/specifications/vmdk.html#streamOptimized\"/>", .{spec.disk2_capacity_bytes});
     }
-    try w(&list, a, "\n  </DiskSection>\n");
+    try list.appendSlice(a, "\n  </DiskSection>\n");
 
     // NetworkSection
     if (spec.has_network) {
-        try w(&list, a, "  <NetworkSection>\n    <Info>Networks</Info>\n" ++
+        try list.appendSlice(a, "  <NetworkSection>\n    <Info>Networks</Info>\n" ++
             "    <Network ovf:name=\"VM Network\"><Description>NAT</Description></Network>\n" ++
             "  </NetworkSection>\n");
     }
 
     // VirtualSystem
-    try w(&list, a, "  <VirtualSystem ovf:id=\"");
+    try list.appendSlice(a, "  <VirtualSystem ovf:id=\"");
     try esc(&list, a, spec.name);
-    try w(&list, a, "\">\n    <Info>A virtual machine</Info>\n    <Name>");
+    try list.appendSlice(a, "\">\n    <Info>A virtual machine</Info>\n    <Name>");
     try esc(&list, a, spec.name);
-    try w(&list, a, "</Name>\n    <VirtualHardwareSection>\n      <Info>Virtual hardware</Info>\n");
+    try list.appendSlice(a, "</Name>\n    <VirtualHardwareSection>\n      <Info>Virtual hardware</Info>\n");
 
     const cpu_count = std.math.clamp(spec.cpu_cores, 1, 1024) * std.math.clamp(spec.cpu_sockets, 1, 1024);
     // CPU item
@@ -102,14 +96,14 @@ pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
         "<rasd:VirtualQuantity>{d}</rasd:VirtualQuantity></Item>\n", .{ spec.memory_mb, spec.memory_mb });
 
     // SCSI controller + disk(s)
-    try w(&list, a, "      <Item><rasd:Address>0</rasd:Address><rasd:ElementName>SCSI Controller</rasd:ElementName>" ++
+    try list.appendSlice(a, "      <Item><rasd:Address>0</rasd:Address><rasd:ElementName>SCSI Controller</rasd:ElementName>" ++
         "<rasd:InstanceID>3</rasd:InstanceID><rasd:ResourceSubType>lsilogic</rasd:ResourceSubType>" ++
         "<rasd:ResourceType>6</rasd:ResourceType></Item>\n" ++
         "      <Item><rasd:ElementName>Hard Disk 1</rasd:ElementName>" ++
         "<rasd:HostResource>ovf:/disk/vmdisk1</rasd:HostResource><rasd:InstanceID>4</rasd:InstanceID>" ++
         "<rasd:Parent>3</rasd:Parent><rasd:ResourceType>17</rasd:ResourceType></Item>\n");
     if (spec.disk2_href.len > 0) {
-        try w(&list, a, "      <Item><rasd:ElementName>Hard Disk 2</rasd:ElementName>" ++
+        try list.appendSlice(a, "      <Item><rasd:ElementName>Hard Disk 2</rasd:ElementName>" ++
             "<rasd:HostResource>ovf:/disk/vmdisk2</rasd:HostResource><rasd:InstanceID>5</rasd:InstanceID>" ++
             "<rasd:Parent>3</rasd:Parent><rasd:ResourceType>17</rasd:ResourceType></Item>\n");
     }
@@ -122,7 +116,7 @@ pub fn buildDescriptor(spec: Spec, buf: []u8) ![]u8 {
             "<rasd:ResourceType>10</rasd:ResourceType></Item>\n", .{net_id});
     }
 
-    try w(&list, a, "    </VirtualHardwareSection>\n  </VirtualSystem>\n</Envelope>\n");
+    try list.appendSlice(a, "    </VirtualHardwareSection>\n  </VirtualSystem>\n</Envelope>\n");
     return list.toOwnedSlice(a);
 }
 
