@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
+    if (comptime !std.mem.eql(u8, @import("builtin").zig_version_string, @import("build.zig.zon").minimum_zig_version)) @compileError("Use the Zig version declared in build.zig.zon");
     const local_global_cache = b.pathFromRoot(".zig-cache/global");
     const local_global_cache_dir = try std.Io.Dir.cwd().createDirPathOpen(b.graph.io, local_global_cache, .{});
     b.graph.global_cache_root = .{
@@ -48,7 +49,6 @@ pub fn build(b: *std.Build) !void {
 
     web_mod.link_libc = true;
     web_mod.linkSystemLibrary("libvncclient", .{});
-    web_mod.addIncludePath(.{ .cwd_relative = "/usr/include" });
     const web_exe = b.addExecutable(.{ .name = "hangar-web", .root_module = web_mod, .use_llvm = true, .use_lld = true });
     const install_web_exe = b.addInstallArtifact(web_exe, .{});
     b.getInstallStep().dependOn(&install_web_exe.step);

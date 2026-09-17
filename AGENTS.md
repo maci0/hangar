@@ -171,7 +171,9 @@ Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, 
 - Do not hold locks during QEMU/QMP/filesystem/network I/O.
 
 ### build.zig
+- The compiler must exactly match `build.zig.zon`'s `minimum_zig_version`; `build.zig` rejects other versions.
 - Keep link/backend choices explicit (`use_llvm`/`use_lld`, see constraint above).
+- Resolve native headers through the target toolchain and system-library discovery, not a hardcoded `/usr/include`.
 - Avoid global-machine assumptions; prefer project-local cache/config for reproducible test runs.
 
 ## References
