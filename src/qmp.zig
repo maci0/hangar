@@ -177,7 +177,8 @@ pub const QmpClient = struct {
             self.line_buf[pos] = ch;
             pos += 1;
         }
-        return self.line_buf[0..pos];
+        self.disconnect();
+        return error.BufferTooSmall;
     }
 
     /// Read a command response, skipping any async event messages.
@@ -1107,6 +1108,32 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
     }
     try std.testing.expect(connected_sessions > 0);
     try std.testing.expectEqual(connected_sessions, command_batches);
+}
+
+test "readResponse: oversized replies fail and disconnect" {
+    var prng = std.Random.DefaultPrng.init(0xD382_176A);
+    const rnd = prng.random();
+    for (0..64) |_| {
+        var client = QmpClient{ .connected = true, .rbuf_len = MAX_LINE };
+        @memset(&client.rbuf, ' ');
+        const prefix = if (rnd.boolean()) "{\"return\":{}" else "{\"error\":{}";
+        @memcpy(client.rbuf[0..prefix.len], prefix);
+        client.rbuf[MAX_LINE - 2] = '}';
+        client.rbuf[MAX_LINE - 1] = '\n';
+        try std.testing.expectError(error.BufferTooSmall, client.readResponse());
+        try std.testing.expect(!client.connected);
+        try std.testing.expect(client.stream == null);
+        try std.testing.expectError(error.SocketClosed, client.readResponse());
+    }
+}
+
+test "readLine: accepts the largest supported complete line" {
+    var client = QmpClient{ .rbuf_len = MAX_LINE - 1 };
+    @memset(&client.rbuf, 'x');
+    client.rbuf[MAX_LINE - 2] = '\n';
+    const line = try client.readLine();
+    try std.testing.expectEqual(@as(usize, MAX_LINE - 2), line.len);
+    try std.testing.expectEqualSlices(u8, client.rbuf[0 .. MAX_LINE - 2], line);
 }
 
 test "readLine: splits multiple lines delivered in a single read" {
