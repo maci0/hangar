@@ -23,13 +23,11 @@ fn uptimeSec(v: *const vm.VmConfig) u64 {
     return if (now > v.started_mono_sec) now - v.started_mono_sec else 0;
 }
 
-/// Wrapper around jsonEscape that logs truncation. Returns only the escaped slice
-/// so call sites remain concise: escapeJson(&esc, s, "field_name")
+/// Wrapper around jsonEscape that logs truncation.
 /// When truncation occurs, returns "" to avoid embedding broken JSON in the response.
-fn escapeJson(buf: []u8, s: []const u8, field: []const u8) []const u8 {
+fn escapeJson(buf: []u8, s: []const u8) []const u8 {
     const result = jsonEscape(buf, s);
     if (result.truncated) {
-        _ = field; // field name is for debugging; log a concise message
         logErr("jsonEscape truncated");
         return "";
     }
@@ -48,36 +46,36 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     // bufPrint tuple args are evaluated left-to-right, and each escapeJson
     // call overwrites the same buffer: earlier slices would dangle.
     var name_buf: [vm.MAX_NAME * 2 + 64]u8 = undefined;
-    const name_e = escapeJson(&name_buf, v.getNameSlice(), "name");
+    const name_e = escapeJson(&name_buf, v.getNameSlice());
 
     var iso_buf: [vm.MAX_PATH]u8 = undefined;
-    const iso_e = if (v.hasIso()) escapeJson(&iso_buf, v.getIsoPathSlice(), "iso_path") else "";
+    const iso_e = if (v.hasIso()) escapeJson(&iso_buf, v.getIsoPathSlice()) else "";
 
     var notes_buf: [4096 * 6]u8 = undefined; // 6x: worst-case \u00XX escape of every byte
-    const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice(), "notes") else "";
+    const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice()) else "";
     var tags_buf: [256 * 6]u8 = undefined; // 6x: worst-case \u00XX escape of every byte
-    const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice(), "tags") else "";
+    const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice()) else "";
     var folder_buf: [128 * 6]u8 = undefined;
-    const folder_e = if (v.folder_len > 0) escapeJson(&folder_buf, v.getFolderSlice(), "folder") else "";
+    const folder_e = if (v.folder_len > 0) escapeJson(&folder_buf, v.getFolderSlice()) else "";
     var id_buf: [64]u8 = undefined;
-    const id_e = escapeJson(&id_buf, v.getIdSlice(), "id");
+    const id_e = escapeJson(&id_buf, v.getIdSlice());
     var vnet_buf: [256]u8 = undefined;
-    const vnet_e = if (v.vnet_len > 0) escapeJson(&vnet_buf, v.getVnetSlice(), "vnet") else "";
+    const vnet_e = if (v.vnet_len > 0) escapeJson(&vnet_buf, v.getVnetSlice()) else "";
 
     var sf_buf: [vm.MAX_PATH]u8 = undefined;
-    const sf_e = if (v.hasSharedFolder()) escapeJson(&sf_buf, v.getSharedFolderSlice(), "shared_folder") else "";
+    const sf_e = if (v.hasSharedFolder()) escapeJson(&sf_buf, v.getSharedFolderSlice()) else "";
 
     var usb_buf: [128]u8 = undefined;
-    const usb_e = if (v.hasUsbDevice()) escapeJson(&usb_buf, v.getUsbDeviceSlice(), "usb_device") else "";
+    const usb_e = if (v.hasUsbDevice()) escapeJson(&usb_buf, v.getUsbDeviceSlice()) else "";
 
     var d2_buf: [vm.MAX_PATH]u8 = undefined;
-    const d2_e = if (v.hasDisk2()) escapeJson(&d2_buf, v.getDisk2PathSlice(), "disk2_path") else "";
+    const d2_e = if (v.hasDisk2()) escapeJson(&d2_buf, v.getDisk2PathSlice()) else "";
 
     var flp_buf: [vm.MAX_PATH]u8 = undefined;
-    const flp_e = if (v.hasFloppy()) escapeJson(&flp_buf, v.getFloppyPathSlice(), "floppy_path") else "";
+    const flp_e = if (v.hasFloppy()) escapeJson(&flp_buf, v.getFloppyPathSlice()) else "";
 
     var pf_buf: [1024]u8 = undefined;
-    const pf_e = if (v.hasPortForwards()) escapeJson(&pf_buf, v.getPortForwardsSlice(), "port_forwards") else "";
+    const pf_e = if (v.hasPortForwards()) escapeJson(&pf_buf, v.getPortForwardsSlice()) else "";
 
     // First 32 fields
     const part1 = std.fmt.bufPrint(buf[w..],
@@ -145,7 +143,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     // Per-NIC vnet names are user-controlled; escape each into its own buffer.
     var nv_bufs: [7][96]u8 = undefined;
     var nv_e: [7][]const u8 = undefined;
-    for (0..7) |ni| nv_e[ni] = if (v.nics[ni + 1].vnet_len > 0) escapeJson(&nv_bufs[ni], v.getNicVnetSliceAny(ni + 1), "nic_vnet") else "";
+    for (0..7) |ni| nv_e[ni] = if (v.nics[ni + 1].vnet_len > 0) escapeJson(&nv_bufs[ni], v.getNicVnetSliceAny(ni + 1)) else "";
     const part2c = std.fmt.bufPrint(buf[w..],
         \\,"nic4_mode":"{s}","nic4_mac":"{s}","nic5_mode":"{s}","nic5_mac":"{s}","nic6_mode":"{s}","nic6_mac":"{s}","nic7_mode":"{s}","nic7_mac":"{s}","nic8_mode":"{s}","nic8_mac":"{s}","nic2_vnet":"{s}","nic3_vnet":"{s}","nic4_vnet":"{s}","nic5_vnet":"{s}","nic6_vnet":"{s}","nic7_vnet":"{s}","nic8_vnet":"{s}"
     , .{
@@ -172,13 +170,13 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     // Extra-disk paths are user-controlled; escape each into its own buffer
     // so a path containing a quote/backslash can't break the JSON document.
     var ex0_buf: [vm.MAX_PATH]u8 = undefined;
-    const ex0_e = if (v.hasExtraDisk(0)) escapeJson(&ex0_buf, v.getExtraDiskPathSlice(0), "extra0_path") else "";
+    const ex0_e = if (v.hasExtraDisk(0)) escapeJson(&ex0_buf, v.getExtraDiskPathSlice(0)) else "";
     var ex1_buf: [vm.MAX_PATH]u8 = undefined;
-    const ex1_e = if (v.hasExtraDisk(1)) escapeJson(&ex1_buf, v.getExtraDiskPathSlice(1), "extra1_path") else "";
+    const ex1_e = if (v.hasExtraDisk(1)) escapeJson(&ex1_buf, v.getExtraDiskPathSlice(1)) else "";
     var ex2_buf: [vm.MAX_PATH]u8 = undefined;
-    const ex2_e = if (v.hasExtraDisk(2)) escapeJson(&ex2_buf, v.getExtraDiskPathSlice(2), "extra2_path") else "";
+    const ex2_e = if (v.hasExtraDisk(2)) escapeJson(&ex2_buf, v.getExtraDiskPathSlice(2)) else "";
     var ex3_buf: [vm.MAX_PATH]u8 = undefined;
-    const ex3_e = if (v.hasExtraDisk(3)) escapeJson(&ex3_buf, v.getExtraDiskPathSlice(3), "extra3_path") else "";
+    const ex3_e = if (v.hasExtraDisk(3)) escapeJson(&ex3_buf, v.getExtraDiskPathSlice(3)) else "";
 
     const part2d = std.fmt.bufPrint(buf[w..],
         \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d}
@@ -201,7 +199,7 @@ pub fn renderVmDetail(req: []const u8, buf: []u8) ![]const u8 {
     // cloud-init user-data can be multi-KB and contain quotes/newlines, escape
     // it into its own buffer. This part closes the JSON object.
     var ci_esc: [vm.MAX_CLOUD_INIT * 3]u8 = undefined;
-    const ci_e = if (v.hasCloudInit()) escapeJson(&ci_esc, v.getCloudInitSlice(), "cloud_init") else "";
+    const ci_e = if (v.hasCloudInit()) escapeJson(&ci_esc, v.getCloudInitSlice()) else "";
     const part2e = std.fmt.bufPrint(buf[w..], ",\"cloud_init\":\"{s}\",\"id\":\"{s}\",\"vnet\":\"{s}\",\"video_stream\":{s},\"video_bitrate_kbps\":{d}}}", .{ ci_e, id_e, vnet_e, if (v.video_stream) "true" else "false", v.video_bitrate_kbps }) catch return error.RenderFailed;
     w += part2e.len;
 
@@ -228,40 +226,40 @@ pub fn renderJson(buf: []u8) usize {
         // Pre-escape user-controlled strings into dedicated buffers so
         // later escapeJson calls don't overwrite slices captured by earlier ones.
         var name_buf: [vm.MAX_NAME * 2 + 64]u8 = undefined;
-        const name_e = escapeJson(&name_buf, v.getNameSlice(), "name");
+        const name_e = escapeJson(&name_buf, v.getNameSlice());
 
         var iso_buf: [vm.MAX_PATH]u8 = undefined;
-        const iso_e = if (v.hasIso()) escapeJson(&iso_buf, v.getIsoPathSlice(), "iso_path") else "";
+        const iso_e = if (v.hasIso()) escapeJson(&iso_buf, v.getIsoPathSlice()) else "";
 
         // List is display-only (settings form reads the detail endpoint), so keep
         // the per-VM list buffers modest; over-long escaped notes truncate here
         // (cosmetic) rather than inflating the per-VM list-overflow budget.
         var notes_buf: [4096 * 2]u8 = undefined;
-        const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice(), "notes") else "";
+        const notes_e = if (v.hasNotes()) escapeJson(&notes_buf, v.getNotesSlice()) else "";
 
         var sf_buf: [vm.MAX_PATH]u8 = undefined;
-        const sf_e = if (v.hasSharedFolder()) escapeJson(&sf_buf, v.getSharedFolderSlice(), "shared_folder") else "";
+        const sf_e = if (v.hasSharedFolder()) escapeJson(&sf_buf, v.getSharedFolderSlice()) else "";
 
         var usb_buf: [128]u8 = undefined;
-        const usb_e = if (v.hasUsbDevice()) escapeJson(&usb_buf, v.getUsbDeviceSlice(), "usb_device") else "";
+        const usb_e = if (v.hasUsbDevice()) escapeJson(&usb_buf, v.getUsbDeviceSlice()) else "";
 
         var d2_buf: [vm.MAX_PATH]u8 = undefined;
-        const d2_e = if (v.hasDisk2()) escapeJson(&d2_buf, v.getDisk2PathSlice(), "disk2_path") else "";
+        const d2_e = if (v.hasDisk2()) escapeJson(&d2_buf, v.getDisk2PathSlice()) else "";
 
         var flp_buf: [vm.MAX_PATH]u8 = undefined;
-        const flp_e = if (v.hasFloppy()) escapeJson(&flp_buf, v.getFloppyPathSlice(), "floppy_path") else "";
+        const flp_e = if (v.hasFloppy()) escapeJson(&flp_buf, v.getFloppyPathSlice()) else "";
 
         var pf_buf: [1024]u8 = undefined;
-        const pf_e = if (v.hasPortForwards()) escapeJson(&pf_buf, v.getPortForwardsSlice(), "port_forwards") else "";
+        const pf_e = if (v.hasPortForwards()) escapeJson(&pf_buf, v.getPortForwardsSlice()) else "";
 
         var tags_buf: [512]u8 = undefined; // display-only (see notes_buf above)
-        const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice(), "tags") else "";
+        const tags_e = if (v.tags_len > 0) escapeJson(&tags_buf, v.getTagsSlice()) else "";
         var folder_buf: [256]u8 = undefined;
-        const folder_e = if (v.folder_len > 0) escapeJson(&folder_buf, v.getFolderSlice(), "folder") else "";
+        const folder_e = if (v.folder_len > 0) escapeJson(&folder_buf, v.getFolderSlice()) else "";
         var id_buf: [64]u8 = undefined;
-        const id_e = escapeJson(&id_buf, v.getIdSlice(), "id");
+        const id_e = escapeJson(&id_buf, v.getIdSlice());
         var vnet_buf: [256]u8 = undefined;
-        const vnet_e = if (v.vnet_len > 0) escapeJson(&vnet_buf, v.getVnetSlice(), "vnet") else "";
+        const vnet_e = if (v.vnet_len > 0) escapeJson(&vnet_buf, v.getVnetSlice()) else "";
 
         // First block: up through tags
         const part1 = std.fmt.bufPrint(buf[w..],
@@ -338,7 +336,7 @@ pub fn renderJson(buf: []u8) usize {
         // Per-NIC vnet names are user-controlled; escape each into its own buffer.
         var nv_bufs: [7][96]u8 = undefined;
         var nv_e: [7][]const u8 = undefined;
-        for (0..7) |ni| nv_e[ni] = if (v.nics[ni + 1].vnet_len > 0) escapeJson(&nv_bufs[ni], v.getNicVnetSliceAny(ni + 1), "nic_vnet") else "";
+        for (0..7) |ni| nv_e[ni] = if (v.nics[ni + 1].vnet_len > 0) escapeJson(&nv_bufs[ni], v.getNicVnetSliceAny(ni + 1)) else "";
         const part2c = std.fmt.bufPrint(buf[w..],
             \\,"nic4_mode":"{s}","nic4_mac":"{s}","nic5_mode":"{s}","nic5_mac":"{s}","nic6_mode":"{s}","nic6_mac":"{s}","nic7_mode":"{s}","nic7_mac":"{s}","nic8_mode":"{s}","nic8_mac":"{s}","nic2_vnet":"{s}","nic3_vnet":"{s}","nic4_vnet":"{s}","nic5_vnet":"{s}","nic6_vnet":"{s}","nic7_vnet":"{s}","nic8_vnet":"{s}"
         , .{
@@ -368,13 +366,13 @@ pub fn renderJson(buf: []u8) usize {
         // Escape user-controlled extra-disk paths (each own buffer) so a quote
         // or backslash in a path cannot corrupt the JSON for the whole list.
         var ex0_buf: [vm.MAX_PATH]u8 = undefined;
-        const ex0_e = if (v.hasExtraDisk(0)) escapeJson(&ex0_buf, v.getExtraDiskPathSlice(0), "extra0_path") else "";
+        const ex0_e = if (v.hasExtraDisk(0)) escapeJson(&ex0_buf, v.getExtraDiskPathSlice(0)) else "";
         var ex1_buf: [vm.MAX_PATH]u8 = undefined;
-        const ex1_e = if (v.hasExtraDisk(1)) escapeJson(&ex1_buf, v.getExtraDiskPathSlice(1), "extra1_path") else "";
+        const ex1_e = if (v.hasExtraDisk(1)) escapeJson(&ex1_buf, v.getExtraDiskPathSlice(1)) else "";
         var ex2_buf: [vm.MAX_PATH]u8 = undefined;
-        const ex2_e = if (v.hasExtraDisk(2)) escapeJson(&ex2_buf, v.getExtraDiskPathSlice(2), "extra2_path") else "";
+        const ex2_e = if (v.hasExtraDisk(2)) escapeJson(&ex2_buf, v.getExtraDiskPathSlice(2)) else "";
         var ex3_buf: [vm.MAX_PATH]u8 = undefined;
-        const ex3_e = if (v.hasExtraDisk(3)) escapeJson(&ex3_buf, v.getExtraDiskPathSlice(3), "extra3_path") else "";
+        const ex3_e = if (v.hasExtraDisk(3)) escapeJson(&ex3_buf, v.getExtraDiskPathSlice(3)) else "";
 
         const part2d = std.fmt.bufPrint(buf[w..],
             \\,"extra0_path":"{s}","extra0_size":{d},"extra0_format":{d},"extra1_path":"{s}","extra1_size":{d},"extra1_format":{d},"extra2_path":"{s}","extra2_size":{d},"extra2_format":{d},"extra3_path":"{s}","extra3_size":{d},"extra3_format":{d},"id":"{s}","vnet":"{s}","video_stream":{s},"video_bitrate_kbps":{d}}}
