@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) !void {
         .handle = local_global_cache_dir,
     };
 
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{ .default_target = .{ .cpu_model = .baseline } });
     const optimize = b.standardOptimizeOption(.{});
 
     // ── zig-webui Desktop App ──

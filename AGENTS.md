@@ -175,6 +175,7 @@ Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, 
 - Keep link/backend choices explicit (`use_llvm`/`use_lld`, see constraint above).
 - Resolve native headers through the target toolchain and system-library discovery, not a hardcoded `/usr/include`.
 - Avoid global-machine assumptions; prefer project-local cache/config for reproducible test runs.
+- The default target is the baseline CPU model (an explicit `-Dcpu` still overrides), so artifacts do not vary with the build host's CPU features.
 
 ## References
 
