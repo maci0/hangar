@@ -955,7 +955,15 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/plain";
     } else if (routeExact(req, "GET /api/networks")) {
         content_type = "application/json; charset=utf-8";
-        response = handleVnetsJson(&snap_buf);
+        response = blk: {
+            const json = handleVnetsJson(std.heap.page_allocator) catch |e| {
+                logReqErr("networks serialization failed", e, req);
+                status = HTTP_INTERNAL_ERROR;
+                break :blk "{\"error\":\"networks serialization failed\"}";
+            };
+            response_alloc = json;
+            break :blk json;
+        };
     } else if (routeExact(req, "POST /api/networks")) {
         response = handleVnetsSave(req) catch |e| blk: {
             // Surface a failed networks.json write: without this the browser
@@ -2275,14 +2283,9 @@ fn handleCad(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-/// Parse Content-Length header value from an HTTP request. Returns null if not found.
-fn handleVnetsJson(buf: []u8) []const u8 {
+fn handleVnetsJson(alloc: std.mem.Allocator) ![]u8 {
     const set = vnet.load();
-    const json = vnet.toJson(&set, std.heap.page_allocator) catch return "[]";
-    defer std.heap.page_allocator.free(json);
-    const n = @min(json.len, buf.len);
-    @memcpy(buf[0..n], json[0..n]);
-    return buf[0..n];
+    return vnet.toJson(&set, alloc);
 }
 
 /// Parse key=value body data. Returns empty slice when not found.
@@ -5156,9 +5159,59 @@ test "migrate.cancel: idx out of range returns 'invalid idx'" {
     try std.testing.expectEqualStrings("invalid idx", result);
 }
 
+test "serveHtml: networks response preserves the complete saved configuration" {
+    var home = try TestConfigHome.init("networks-response");
+    defer home.deinit();
+    const saved_token_len = auth.token_len;
+    defer auth.token_len = saved_token_len;
+    auth.token_len = 0;
+
+    var set = vnet.NetworkSet{};
+    for (0..vnet.MAX_VNETS) |i| {
+        var name_buf: [16]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "VMnet{d}", .{i});
+        try std.testing.expect(set.add(name, .nat, "10.0.0.0", "255.255.255.0", false, "", "", ""));
+        set.nets[i].setPortForwards("tcp:8080:80," ** 20);
+    }
+    try vnet.save(&set);
+    const expected = try vnet.toJson(&set, std.testing.allocator);
+    defer std.testing.allocator.free(expected);
+    try std.testing.expect(expected.len > 4096);
+
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+    defer _ = c.close(fds[0]);
+    const req = "GET /api/networks HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const sent = writeAll(fds[0], req.ptr, req.len);
+    _ = @atomicRmw(u32, &active_connections, .Add, 1, .seq_cst);
+    serveHtml(fds[1]);
+    try std.testing.expect(sent);
+
+    var response_buf: [32768]u8 = undefined;
+    var response_len: usize = 0;
+    while (response_len < response_buf.len) {
+        const n = c.read(fds[0], response_buf[response_len..].ptr, response_buf.len - response_len);
+        try std.testing.expect(n >= 0);
+        if (n == 0) break;
+        response_len += @intCast(n);
+    }
+    const response = response_buf[0..response_len];
+    try std.testing.expect(std.mem.startsWith(u8, response, "HTTP/1.1 200"));
+    const body = getBody(response) orelse return error.MissingBody;
+    try std.testing.expectEqualStrings(expected, body);
+}
+
+test "handleVnetsJson: propagates allocation failure" {
+    var home = try TestConfigHome.init("networks-allocation");
+    defer home.deinit();
+    try std.testing.expectError(error.OutOfMemory, handleVnetsJson(std.testing.failing_allocator));
+}
+
 test "handleVnetsJson: returns valid JSON" {
-    var buf: [4096]u8 = undefined;
-    const result = handleVnetsJson(&buf);
+    var home = try TestConfigHome.init("networks-json");
+    defer home.deinit();
+    const result = try handleVnetsJson(std.testing.allocator);
+    defer std.testing.allocator.free(result);
     try std.testing.expect(result.len >= 2);
     try std.testing.expect(result[0] == '{');
     try std.testing.expect(result[result.len - 1] == '\n');
