@@ -81,6 +81,15 @@ test('view QEMU log workflow opens the log dialog', async ({ page }) => {
     // The VM was never started, so the daemon has no log file yet, the dialog
     // must say so rather than hang on "Loading…".
     await expect(page.locator('#logbody')).toContainText(/No log output yet|empty|Failed/i);
+    for (const theme of ['light', 'dark']) {
+        await invoke(page, 'applyTheme', theme);
+        const inputStyle = await page.locator('#search').evaluate((el) => {
+            const style = getComputedStyle(el);
+            return { background: style.backgroundColor, color: style.color };
+        });
+        await expect(page.locator('#logbody')).toHaveCSS('background-color', inputStyle.background);
+        await expect(page.locator('#logbody')).toHaveCSS('color', inputStyle.color);
+    }
 });
 
 test('edit settings workflow saves without losing the VM', async ({ page }) => {
@@ -108,6 +117,17 @@ for (const [fn, dlg, label] of [
 test('keyboard shortcut "?" opens the shortcuts dialog', async ({ page }) => {
     await page.keyboard.press('?');
     await expect.poll(() => dialogOpen(page, 'shortcutsdlg')).toBe(true);
+    for (const theme of ['light', 'dark']) {
+        await invoke(page, 'applyTheme', theme);
+        await expect.poll(() => page.locator('#shortcutsdlg kbd').evaluateAll((keys) => {
+            const sharedStyle = getComputedStyle(document.querySelector('#shortcutsdlg .btn'));
+            return keys.length > 0 && keys.every((key) => {
+                const style = getComputedStyle(key);
+                return style.backgroundColor === sharedStyle.backgroundColor
+                    && style.borderRadius === sharedStyle.borderRadius;
+            });
+        })).toBe(true);
+    }
 });
 
 test('theme workflow applies light then dark', async ({ page }) => {

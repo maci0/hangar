@@ -409,7 +409,7 @@
 <dialog id="logdlg" aria-label="QEMU Log">
   <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">QEMU Log, <span id="log_vmname"></span></h3>
   <div style="padding:12px 24px">
-    <pre id="logbody" style="margin:0;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono,monospace);font-size:12px;background:var(--bg-elev,#111);color:var(--text,#ddd);padding:12px;border-radius:var(--radius);border:1px solid var(--border)">Loading…</pre>
+    <pre id="logbody" style="margin:0;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono,monospace);font-size:12px;background:var(--bg);color:var(--text);padding:12px;border-radius:var(--radius);border:1px solid var(--border)">Loading…</pre>
   </div>
   <div class="btn-row">
     <button type="button" class="btn" data-action="refreshLog">Refresh</button>
@@ -440,24 +440,24 @@
   <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Keyboard Shortcuts</h3>
   <div style="padding:16px 20px">
     <table style="width:100%;font-size:13px;border-collapse:collapse">
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">↑↓</kbd></td><td>Navigate VM list</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Enter</kbd></td><td>Power On/Off selected VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Delete</kbd></td><td>Delete selected VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Esc</kbd></td><td>Close dialog / Deselect VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">F5</kbd></td><td>Refresh VM list</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">F11</kbd></td><td>Fullscreen / Display-only mode</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+F</kbd></td><td>Focus search</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+S</kbd></td><td>Save settings (Settings tab) · Suspend VM otherwise</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+Enter</kbd></td><td>Edit VM settings</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Alt+↑↓</kbd></td><td>Reorder VM in list</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">←→</kbd></td><td>Switch between VM tabs</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+N</kbd></td><td>New VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+Shift+N</kbd></td><td>Clone VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+E</kbd> / <kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">F2</kbd></td><td>Edit VM settings</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+I</kbd></td><td>Import VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+P</kbd></td><td>Open Preferences</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">Ctrl+W</kbd></td><td>Home (deselect VM)</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd style="background:var(--raised);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:11px">?</kbd></td><td>Show this shortcuts list</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>↑↓</kbd></td><td>Navigate VM list</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Enter</kbd></td><td>Power On/Off selected VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Delete</kbd></td><td>Delete selected VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Esc</kbd></td><td>Close dialog / Deselect VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>F5</kbd></td><td>Refresh VM list</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>F11</kbd></td><td>Fullscreen / Display-only mode</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+F</kbd></td><td>Focus search</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+S</kbd></td><td>Save settings (Settings tab) · Suspend VM otherwise</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+Enter</kbd></td><td>Edit VM settings</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Alt+↑↓</kbd></td><td>Reorder VM in list</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>←→</kbd></td><td>Switch between VM tabs</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+N</kbd></td><td>New VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+Shift+N</kbd></td><td>Clone VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+E</kbd> / <kbd>F2</kbd></td><td>Edit VM settings</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+I</kbd></td><td>Import VM</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+P</kbd></td><td>Open Preferences</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+W</kbd></td><td>Home (deselect VM)</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>?</kbd></td><td>Show this shortcuts list</td></tr>
     </table>
   </div>
   <div class="btn-row">
