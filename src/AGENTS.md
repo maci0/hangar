@@ -99,8 +99,9 @@ globals in `appstate.zig`.
   CLI usage/startup messages in `web_server`/`webui_app`, not daemon log lines.
 - **Request correlation:** `serveHtml` begins `wlog` context after the first successful
   read, before rejection gates, and clears it on return. `writeHttpResponse` emits
-  `X-Request-ID`; handler logs share that ID. Completion logs include status, elapsed
-  milliseconds and send success for POSTs, server errors and failed sends, without
+  `X-Request-ID`; conditional asset 304 responses carry it too, and handler logs
+  share that ID. Completion logs include status, elapsed milliseconds and actual
+  send success for POSTs, server errors and failed sends (including 304s), without
   logging successful GET polling.
 - **Never** touch `appstate.vms`/`vm_count` without `vms_mutex`; never hold a lock during
   QEMU/QMP/filesystem/network I/O (power-on's brief `portInUse` probe is the one

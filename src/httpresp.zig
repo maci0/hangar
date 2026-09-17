@@ -219,17 +219,17 @@ fn etagMatches(req: []const u8, tag: []const u8) bool {
 /// Emit a 304 with the validators a conditional asset request expects.
 fn write304Response(conn: c.fd_t, tag: []const u8) void {
     var hbuf: [512]u8 = undefined;
+    var id_buf: [48]u8 = undefined;
+    const id_header = if (wlog.requestId() != 0)
+        std.fmt.bufPrint(&id_buf, "X-Request-ID: {d}\r\n", .{wlog.requestId()}) catch unreachable
+    else
+        "";
     const head = std.fmt.bufPrint(
         &hbuf,
-        "HTTP/1.1 304 Not Modified\r\nETag: {s}\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n",
-        .{tag},
-    ) catch {
-        const fallback = "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n";
-        _ = writeAll(conn, fallback.ptr, fallback.len);
-        return;
-    };
-    _ = writeAll(conn, head.ptr, head.len);
-    wlog.logResponse(304, true);
+        "HTTP/1.1 304 Not Modified\r\n{s}ETag: {s}\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n",
+        .{ id_header, tag },
+    ) catch "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n";
+    wlog.logResponse(304, writeAll(conn, head.ptr, head.len));
 }
 
 /// Sanitize a value for safe inclusion in a response header: drop CR/LF (header
@@ -450,11 +450,16 @@ test "httpresp: writeHttpAssetResponse serves 200 with ETag, then 304 on If-None
     try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds2));
     var req_buf: [256]u8 = undefined;
     const req2 = try std.fmt.bufPrint(&req_buf, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\n", .{tag});
+    wlog.beginRequest(req2);
+    defer wlog.endRequest();
+    var id_buf: [48]u8 = undefined;
+    const id_header = try std.fmt.bufPrint(&id_buf, "X-Request-ID: {d}\r\n", .{wlog.requestId()});
     writeHttpAssetResponse(fds2[1], HTTP_OK, "application/javascript; charset=utf-8", body, &etag_storage, req2);
     _ = c.close(fds2[1]);
     const resp2 = try drainPipe(fds2[0], &resp_buf);
     _ = c.close(fds2[0]);
     try std.testing.expect(std.mem.startsWith(u8, resp2, "HTTP/1.1 304 Not Modified\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, resp2, id_header) != null);
     try std.testing.expect(std.mem.indexOf(u8, resp2, body) == null);
 
     // Stale or malformed validators must fall through to the full response.
@@ -469,4 +474,31 @@ test "httpresp: writeHttpAssetResponse serves 200 with ETag, then 304 on If-None
     try std.testing.expect(std.mem.endsWith(u8, resp3, body));
 
     if (etag_storage) |allocated| std.heap.page_allocator.free(allocated);
+}
+
+test "httpresp: failed conditional asset send logs correlated wire outcome" {
+    var fds: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds));
+    defer _ = c.close(fds[0]);
+    const saved_log_fd = wlog.log_fd;
+    wlog.log_fd = fds[1];
+    defer wlog.log_fd = saved_log_fd;
+
+    const req = "GET /app.js HTTP/1.1\r\nIf-None-Match: \"cached\"\r\n\r\n";
+    wlog.beginRequest(req);
+    defer wlog.endRequest();
+    var id_buf: [48]u8 = undefined;
+    const correlation = try std.fmt.bufPrint(&id_buf, "request_id={d} ", .{wlog.requestId()});
+    var etag: ?[]const u8 = "\"cached\"";
+    writeHttpAssetResponse(-1, HTTP_OK, "application/javascript", "body", &etag, req);
+    _ = c.close(fds[1]);
+    wlog.log_fd = -1;
+
+    var buf: [1024]u8 = undefined;
+    const line = try drainPipe(fds[0], &buf);
+    try std.testing.expect(std.mem.indexOf(u8, line, "hangar warn: ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, correlation) != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "http_response status=304 duration_ms=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "sent=false request=[GET /app.js HTTP/1.1]") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, line, "\n"));
 }
