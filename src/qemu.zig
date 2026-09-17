@@ -1915,12 +1915,13 @@ test "qemu: disk path with comma is rejected (arg injection guard)" {
 
 test "qemu: generateCloudInitSeed builds a seed ISO from user-data" {
     var cfg = vm.VmConfig{};
-    cfg.setName("citestseed");
+    var name_buf: [64]u8 = undefined;
+    cfg.setName(try std.fmt.bufPrint(&name_buf, "citestseed-{d}", .{std.c.getpid()}));
     cfg.setCloudInit("#cloud-config\npackages:\n  - vim\n");
     // cloud-localds may be absent in some environments; skip cleanly if so.
     generateCloudInitSeed(&cfg, talloc) catch return;
     var sb: [128]u8 = undefined;
-    const seed = cloudInitSeedPath("citestseed", &sb).?;
+    const seed = cloudInitSeedPath(cfg.getNameSlice(), &sb).?;
     defer std.Io.Dir.cwd().deleteFile(appio.io(), seed) catch {};
     // A successful run leaves a readable seed ISO at the deterministic path.
     try std.Io.Dir.cwd().access(appio.io(), seed, .{});
@@ -1928,22 +1929,23 @@ test "qemu: generateCloudInitSeed builds a seed ISO from user-data" {
 
 test "qemu: cloud-init seed is attached only when the seed file exists" {
     var cfg = vm.VmConfig{};
-    cfg.setName("ciattach");
+    var name_buf: [64]u8 = undefined;
+    cfg.setName(try std.fmt.bufPrint(&name_buf, "ciattach-{d}", .{std.c.getpid()}));
     cfg.setCloudInit("#cloud-config\n");
+    var sb: [128]u8 = undefined;
+    const seed = cloudInitSeedPath(cfg.getNameSlice(), &sb).?;
     // No seed file yet → must not attach (would make QEMU fail to open the drive).
     {
         const s = try buildScriptStr(&cfg, talloc);
         defer talloc.free(s);
-        try expect(!has(s, "hangar-ci-ciattach.iso"));
+        try expect(!has(s, seed));
     }
     // With the seed present → attached read-only.
-    var sb: [128]u8 = undefined;
-    const seed = cloudInitSeedPath("ciattach", &sb).?;
     try std.Io.Dir.cwd().writeFile(appio.io(), .{ .sub_path = seed, .data = "seed" });
     defer std.Io.Dir.cwd().deleteFile(appio.io(), seed) catch {};
     const s2 = try buildScriptStr(&cfg, talloc);
     defer talloc.free(s2);
-    try expect(has(s2, "hangar-ci-ciattach.iso"));
+    try expect(has(s2, seed));
     try expect(has(s2, "readonly=on"));
 }
 

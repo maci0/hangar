@@ -62,6 +62,7 @@ pub fn build(b: *std.Build) !void {
     const vmrun_mod = b.createModule(.{ .root_source_file = b.path("src/vmrun.zig"), .target = target, .optimize = optimize });
     vmrun_mod.link_libc = true;
     const vmrun_exe = b.addExecutable(.{ .name = "vmrun", .root_module = vmrun_mod, .use_llvm = true, .use_lld = true });
+    for ([_]*std.Build.Step.Compile{ webui_app, web_exe, vmrun_exe }) |exe| exe.pie = true;
     const install_vmrun_exe = b.addInstallArtifact(vmrun_exe, .{});
     b.getInstallStep().dependOn(&install_vmrun_exe.step);
 
@@ -97,7 +98,7 @@ pub fn build(b: *std.Build) !void {
     // canonical `zig build test` non-hermetic and fail on a clean checkout. Keep
     // `zig build test` to the hermetic unit + fuzz suite; run e2e explicitly.
     const web_e2e = b.step("web-e2e", "Web UI end-to-end tests (Playwright)");
-    const web_e2e_cmd = b.addSystemCommand(&.{ "bunx", "playwright", "test" });
+    const web_e2e_cmd = b.addSystemCommand(&.{ "bun", "./node_modules/@playwright/test/cli.js", "test" });
     web_e2e_cmd.step.dependOn(&install_web_exe.step);
     web_e2e.dependOn(&web_e2e_cmd.step);
 

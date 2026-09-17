@@ -33,7 +33,7 @@ ShellCheck's default checks.
 Static-analysis pipelines propagate file-enumeration failures and preserve filenames
 with whitespace. `fmt-check` uses the Zig executable running the build.
 
-All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`.
+All executables (`hangar-web`, `hangar-webui`, `vmrun`) and all test binaries are built with `use_llvm = true, use_lld = true`. The three shipped executables also enable PIE.
 
 CI runs on Ubuntu 24.04 and installs `libvncserver-dev`, `pkg-config`, and
 `shellcheck` before building and running the existing lint and unit/fuzz gates.
@@ -106,7 +106,7 @@ Never commit a real `KV_API_KEY`. For any non-local deployment, set a strong `KV
 - Every enum must have tests for: fromIndex round-trip, toIndex inverts fromIndex, toStr values, label values, out-of-range default.
 - `qemu.zig` arg-builder tests must use the `buildScriptStr` / `buildArgs` functions, never by spawning QEMU.
 - **Confirm source or embedded-asset changes with `zig build` (the exe link), not only a single-module test:** tests may not instantiate code reachable solely through the executable. A missing string in a binary does not prove cache corruption. Check the worktree, build options, and artifact path first; if needed, rebuild with fresh repository-local `--cache-dir` and `--prefix` paths rather than deleting existing caches or outputs.
-- The Playwright e2e suite (`tests/e2e/`, config `playwright.config.mjs`) is a **standalone** `zig build web-e2e` step, NOT in the umbrella `test` (which stays hermetic). Playwright launches the built binary on a dedicated port against a temp `$HOME`. Run `bun install` and `bun run e2e:install` (Chromium) once before the first run. The shell integration tests `zig build test-api` / `zig build test-vmrun` are likewise standalone (they spawn a real daemon).
+- The Playwright e2e suite (`tests/e2e/`, config `playwright.config.mjs`) is a **standalone** `zig build web-e2e` step, NOT in the umbrella `test` (which stays hermetic). Playwright launches the built binary on a dedicated port against a temp `$HOME`. Run `bun install --frozen-lockfile` and `bun run e2e:install` (Chromium) once before the first run. The build invokes the repository-local Playwright CLI and fails if it is missing instead of downloading a runner. The shell integration tests `zig build test-api` / `zig build test-vmrun` are likewise standalone (they spawn a real daemon).
 - **Every user-facing workflow must have an end-to-end Playwright test.** Any web-UI flow (VM create/clone/delete/rename, power on/off, snapshots, settings save, import/export, log viewer, console, vnet editor, preferences) needs a Playwright e2e test that drives the real built binary (temp port + temp `$HOME`, same as the smoke harness) and asserts the observable result. Add or extend the e2e test alongside the feature, never after. A new workflow without a Playwright e2e test is incomplete.
 
 ## Code Style & Conventions
