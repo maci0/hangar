@@ -16,6 +16,7 @@ pub const PREFIX = "AutoProtect-";
 /// `last_unix == 0` (never taken) is always due once enabled.
 pub fn due(enabled: bool, interval_min: u32, last_unix: i64, now_unix: i64) bool {
     if (!enabled or interval_min == 0) return false;
+    if (last_unix == 0) return true;
     if (now_unix < last_unix) return false; // clock went backwards → wait
     // Widen to i128 so a huge (now - last) on adversarial inputs can't overflow.
     const elapsed: i128 = @as(i128, now_unix) - @as(i128, last_unix);
@@ -57,6 +58,18 @@ test "due: respects enabled / interval / elapsed" {
     try t.expect(!due(true, 1, 1000, 1000 + 59)); // 1s short
     try t.expect(!due(true, 5, 1000, 900)); // clock went backwards
     try t.expect(due(true, 60, 0, 3600)); // 60 min
+}
+
+test "due: never taken is independent of the wall clock and interval" {
+    const times = [_]i64{ std.math.minInt(i64), -1, 0, 30, 1_800_000_000, std.math.maxInt(i64) };
+    for (times) |now| {
+        try t.expect(due(true, 1, 0, now));
+        try t.expect(due(true, std.math.maxInt(u32), 0, now));
+        try t.expect(!due(false, 1, 0, now));
+        try t.expect(!due(true, 0, 0, now));
+    }
+    try t.expect(!due(true, 1, -5, 30));
+    try t.expect(due(true, 1, -5, 55));
 }
 
 test "snapName: prefixed + zero-padded + lexically ordered" {
