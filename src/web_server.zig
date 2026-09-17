@@ -1670,7 +1670,8 @@ fn handleClone(req: []const u8) ![]const u8 {
     appstate.vms_mutex.lock();
     defer appstate.vms_mutex.unlock();
     const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-    if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
+    if (idx >= appstate.vm_count) return "invalid idx";
+    if (appstate.vm_count >= appstate.MAX_VMS) return "full";
     var clone = appstate.vms[idx];
     const src = &appstate.vms[idx];
     var name_buf: [320]u8 = undefined;
@@ -1732,7 +1733,8 @@ fn handleClone(req: []const u8) ![]const u8 {
         clone.disk_format = .qcow2;
     }
 
-    if (idx >= appstate.vm_count or appstate.vm_count >= appstate.MAX_VMS) return "full";
+    if (idx >= appstate.vm_count) return "invalid idx";
+    if (appstate.vm_count >= appstate.MAX_VMS) return "full";
     clone.vnc_port = vm.findUnusedVncPort(appstate.vms[0..appstate.vm_count]);
     clone.spice_port = vm.findUnusedSpicePort(appstate.vms[0..appstate.vm_count]);
     clone.id_len = 0; // a clone is a new VM, give it its own stable id
@@ -5362,7 +5364,7 @@ test "handleClone: missing prefix returns 'invalid'" {
     try std.testing.expectEqualStrings("invalid", result);
 }
 
-test "handleClone: idx out of range or full returns 'full'" {
+test "handleClone: idx out of range returns 'invalid idx'" {
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
     appstate.vm_count = 0;
@@ -5373,7 +5375,46 @@ test "handleClone: idx out of range or full returns 'full'" {
         appstate.vms_mutex.unlock();
     }
     const result = try handleClone("POST /api/vms/0/clone HTTP/1.1");
-    try std.testing.expectEqualStrings("full", result);
+    try std.testing.expectEqualStrings("invalid idx", result);
+}
+
+test "serveHtml: clone distinguishes missing VM from full library" {
+    const prev_count = appstate.vm_count;
+    const saved_token_len = auth.token_len;
+    defer {
+        appstate.vm_count = prev_count;
+        auth.token_len = saved_token_len;
+    }
+    auth.token_len = 0;
+    const cases = .{
+        .{ @as(usize, 0), "0", "404 Not Found", "invalid idx" },
+        .{ appstate.MAX_VMS, "999999", "404 Not Found", "invalid idx" },
+        .{ appstate.MAX_VMS, "0", "409 Conflict", "full" },
+    };
+    inline for (cases) |case| {
+        appstate.vm_count = case[0];
+        var fds: [2]c.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));
+        defer _ = c.close(fds[0]);
+        const req = "POST /api/vms/" ++ case[1] ++ "/clone HTTP/1.1\r\nHost: localhost\r\nX-API-Key: hangar\r\nContent-Length: 0\r\n\r\n";
+        const sent = writeAll(fds[0], req.ptr, req.len);
+        _ = @atomicRmw(u32, &active_connections, .Add, 1, .seq_cst);
+        serveHtml(fds[1]);
+        try std.testing.expect(sent);
+        var response_buf: [2048]u8 = undefined;
+        var response_len: usize = 0;
+        while (response_len < response_buf.len) {
+            const n = c.read(fds[0], response_buf[response_len..].ptr, response_buf.len - response_len);
+            try std.testing.expect(n >= 0);
+            if (n == 0) break;
+            response_len += @intCast(n);
+        }
+        const response = response_buf[0..response_len];
+        try std.testing.expect(std.mem.startsWith(u8, response, "HTTP/1.1 " ++ case[2] ++ "\r\n"));
+        try std.testing.expectEqualStrings("application/json; charset=utf-8", (findHeader(response, "Content-Type") orelse return error.MissingContentType)[2..]);
+        try std.testing.expectEqualStrings("{\"error\":\"" ++ case[3] ++ "\"}", getBody(response) orelse return error.MissingBody);
+        try std.testing.expectEqual(case[0], appstate.vm_count);
+    }
 }
 
 test "handleClone: full array returns 'full'" {
