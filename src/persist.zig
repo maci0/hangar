@@ -1102,7 +1102,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic2_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[1].mode = vm.NetworkMode.fromStr(r.value);
+                cfg.nics[1].mode = vm.NetworkMode.fromStrOr(r.value, .none);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic2_mac")) {
@@ -1112,7 +1112,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic3_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[2].mode = vm.NetworkMode.fromStr(r.value);
+                cfg.nics[2].mode = vm.NetworkMode.fromStrOr(r.value, .none);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic3_mac")) {
@@ -1122,7 +1122,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic4_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[3].mode = vm.NetworkMode.fromStr(r.value);
+                cfg.nics[3].mode = vm.NetworkMode.fromStrOr(r.value, .none);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic4_mac")) {
@@ -1132,7 +1132,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic5_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[4].mode = vm.NetworkMode.fromStr(r.value);
+                cfg.nics[4].mode = vm.NetworkMode.fromStrOr(r.value, .none);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic5_mac")) {
@@ -1142,7 +1142,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic6_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[5].mode = vm.NetworkMode.fromStr(r.value);
+                cfg.nics[5].mode = vm.NetworkMode.fromStrOr(r.value, .none);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic6_mac")) {
@@ -1152,7 +1152,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic7_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[6].mode = vm.NetworkMode.fromStr(r.value);
+                cfg.nics[6].mode = vm.NetworkMode.fromStrOr(r.value, .none);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic7_mac")) {
@@ -1162,7 +1162,7 @@ fn parseVmObject(input: []const u8, cfg: *vm.VmConfig) []const u8 {
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic8_mode")) {
             if (parseJsonString(cur, &str_buf)) |r| {
-                cfg.nics[7].mode = vm.NetworkMode.fromStr(r.value);
+                cfg.nics[7].mode = vm.NetworkMode.fromStrOr(r.value, .none);
                 cur = r.rest;
             } else cur = skipJsonValue(cur);
         } else if (std.mem.eql(u8, key, "nic8_mac")) {
@@ -1670,6 +1670,52 @@ pub fn loadFromSlice(vms: *[MAX_VMS]vm.VmConfig, content: []const u8, prefs_out:
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "persist: secondary NIC modes preserve valid values and default to none" {
+    const cases = [_]struct { value: []const u8, expected: vm.NetworkMode }{
+        .{ .value = "user", .expected = .user },
+        .{ .value = "bridge", .expected = .bridge },
+        .{ .value = "gvproxy", .expected = .gvproxy },
+        .{ .value = "none", .expected = .none },
+        .{ .value = "USER", .expected = .user },
+        .{ .value = "BRIDGE", .expected = .bridge },
+        .{ .value = "GVPROXY", .expected = .gvproxy },
+        .{ .value = "NONE", .expected = .none },
+        .{ .value = "", .expected = .none },
+        .{ .value = "unknown", .expected = .none },
+    };
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs = vm.Prefs{};
+    var buf: [256]u8 = undefined;
+    for (1..vm.MAX_NICS) |idx| {
+        for (cases) |case| {
+            const json = try std.fmt.bufPrint(&buf, "{{\"vms\":[{{\"id\":\"nic-test\",\"nic{d}_mode\":\"{s}\"}}]}}", .{ idx + 1, case.value });
+            try std.testing.expectEqual(@as(usize, 1), loadFromSlice(&vms, json, &prefs));
+            try std.testing.expectEqual(vm.NetworkMode.user, vms[0].nics[0].mode);
+            for (1..vm.MAX_NICS) |nic_idx| {
+                try std.testing.expectEqual(if (nic_idx == idx) case.expected else vm.NetworkMode.none, vms[0].nics[nic_idx].mode);
+            }
+        }
+    }
+}
+
+test "fuzz: unknown secondary NIC modes never enable an adapter on load" {
+    var prng = std.Random.DefaultPrng.init(0x51C0_0FF0);
+    const rnd = prng.random();
+    var vms: [MAX_VMS]vm.VmConfig = undefined;
+    var prefs = vm.Prefs{};
+    var value: [32]u8 = undefined;
+    var buf: [256]u8 = undefined;
+    for (0..256) |_| {
+        const len = rnd.uintLessThan(usize, value.len + 1);
+        for (value[0..len]) |*b| b.* = rnd.intRangeAtMost(u8, '0', '9');
+        for (1..vm.MAX_NICS) |idx| {
+            const json = try std.fmt.bufPrint(&buf, "{{\"vms\":[{{\"id\":\"nic-test\",\"nic{d}_mode\":\"{s}\"}}]}}", .{ idx + 1, value[0..len] });
+            try std.testing.expectEqual(@as(usize, 1), loadFromSlice(&vms, json, &prefs));
+            for (vms[0].nics[1..]) |nic| try std.testing.expectEqual(vm.NetworkMode.none, nic.mode);
+        }
+    }
+}
 
 test "persist: corrupt non-empty file (no vms array) yields 0 VMs" {
     var vms: [vm.MAX_VMS]vm.VmConfig = undefined;
