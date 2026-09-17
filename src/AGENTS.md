@@ -42,6 +42,8 @@ globals in `appstate.zig`.
   only unset uses 9080; empty, invalid, zero, and overflowing values fail.
   Both daemon and desktop wrapper validate `KV_PORT` and `KV_API_KEY` before
   loading VM state, spawning a backend, or opening a window.
+- **CLI stdout:** all three entrypoints use `appio.writeStdout`, which writes the
+  complete slice and exits 1 with a stderr diagnostic on failure.
 - **VM and virtual-network string capacities are byte limits.** `VmConfig` and
   `VirtualNetwork` setters truncate valid UTF-8 only at scalar boundaries;
   they do not normalize or case-fold. Non-UTF-8 byte

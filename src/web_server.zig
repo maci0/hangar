@@ -4195,11 +4195,11 @@ pub fn main(init: std.process.Init) !void {
         _ = args_iter.next(); // program name
         while (args_iter.next()) |arg| switch (classifyCliArg(arg)) {
             .help => {
-                _ = c.write(1, daemon_usage.ptr, daemon_usage.len);
+                appio.writeStdout(daemon_usage);
                 std.process.exit(0);
             },
             .version => {
-                _ = c.write(1, daemon_version.ptr, daemon_version.len);
+                appio.writeStdout(daemon_version);
                 std.process.exit(0);
             },
             .unknown => {

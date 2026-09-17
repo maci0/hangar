@@ -83,7 +83,11 @@ const version = "vmrun 0.1.0\n";
 /// Write a slice to a file descriptor using its real length.
 /// Replaces error-prone hand-counted byte lengths in `c.write` calls.
 fn fdWrite(fd: c_int, msg: []const u8) void {
-    _ = c.write(fd, msg.ptr, msg.len);
+    if (fd == c.STDOUT_FILENO) {
+        @import("appio.zig").writeStdout(msg);
+    } else {
+        _ = c.write(fd, msg.ptr, msg.len);
+    }
 }
 
 /// Exit code for usage/argument errors (POSIX convention: 2).

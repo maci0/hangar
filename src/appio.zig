@@ -30,6 +30,13 @@ pub fn io() std.Io {
     return instance.io();
 }
 
+pub fn writeStdout(data: []const u8) void {
+    std.Io.File.stdout().writeStreamingAll(io(), data) catch {
+        std.Io.File.stderr().writeStreamingAll(io(), "Error: could not write stdout\n") catch {};
+        std.process.exit(1);
+    };
+}
+
 /// Look up an environment variable. Replaces `std.posix.getenv`, removed in
 /// 0.16. Backed by libc `getenv` (libc is always linked).
 pub fn getenv(name: [*:0]const u8) ?[]const u8 {

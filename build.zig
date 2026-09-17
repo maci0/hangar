@@ -146,7 +146,34 @@ pub fn build(b: *std.Build) !void {
     });
     lint_js.dependOn(&lint_js_cmd.step);
 
+    const cli_test = b.step("test-cli", "Check CLI help/version output and write failures without a daemon");
+    for ([_]*std.Build.Step.Compile{ vmrun_exe, web_exe, webui_app }) |exe| {
+        const cli_cmd = b.addSystemCommand(&.{
+            "bash",     "-euo", "pipefail", "-c",
+            \\for flag in --help --version; do
+            \\  output=$("$1" "$flag")
+            \\  test -n "$output"
+            \\  for sink in full closed; do
+            \\    rc=0
+            \\    if [ "$sink" = full ]; then
+            \\      "$1" "$flag" >/dev/full 2>/dev/null || rc=$?
+            \\    else
+            \\      "$1" "$flag" >&- 2>/dev/null || rc=$?
+            \\    fi
+            \\    test "$rc" -eq 1
+            \\  done
+            \\done
+            ,
+            "test-cli",
+        });
+        cli_cmd.addArtifactArg(exe);
+        cli_cmd.setEnvironmentVariable("NO_COLOR", "1");
+        cli_cmd.setEnvironmentVariable("TERM", "dumb");
+        cli_test.dependOn(&cli_cmd.step);
+    }
+
     const check = b.step("check", "Run CI checks (build, format, lint, unit + fuzz tests)");
+    check.dependOn(cli_test);
     check.dependOn(b.getInstallStep());
     check.dependOn(fmt_check);
     check.dependOn(lint_shell);

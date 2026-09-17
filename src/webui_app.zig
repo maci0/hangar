@@ -216,11 +216,11 @@ pub fn main(init: std.process.Init) !void {
         _ = args_iter.next(); // program name
         while (args_iter.next()) |arg| switch (classifyCliArg(arg)) {
             .help => {
-                _ = std.c.write(1, usage.ptr, usage.len);
+                @import("appio.zig").writeStdout(usage);
                 std.process.exit(0);
             },
             .version => {
-                _ = std.c.write(1, version_str.ptr, version_str.len);
+                @import("appio.zig").writeStdout(version_str);
                 std.process.exit(0);
             },
             .unknown => {
