@@ -169,15 +169,6 @@ fn run(init: std.process.Init) !void {
     var rest: [16][]const u8 = undefined;
     var rest_n: usize = 0;
     while (args_iter.next()) |a| : (rest_n += 1) {
-        if (rest_n < rest.len) rest[rest_n] = a;
-    }
-    const args = rest[0..@min(rest_n, rest.len)];
-
-    // Accept help/version anywhere in the trailing args too, so
-    // `vmrun <url> <cmd> --help` behaves like every other CLI (and never needs
-    // a running daemon). Done before validateArgs so it wins over an
-    // "argument count" complaint.
-    for (args) |a| {
         if (isHelpArg(a)) {
             fdWrite(c.STDOUT_FILENO, usage);
             std.process.exit(0);
@@ -186,7 +177,9 @@ fn run(init: std.process.Init) !void {
             fdWrite(c.STDOUT_FILENO, version);
             std.process.exit(0);
         }
+        if (rest_n < rest.len) rest[rest_n] = a;
     }
+    const args = rest[0..@min(rest_n, rest.len)];
 
     validateArgs(command, args);
 

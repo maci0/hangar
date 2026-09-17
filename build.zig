@@ -188,6 +188,22 @@ pub fn build(b: *std.Build) !void {
         \\  output=$(timeout 3 "$1" unix:///dev/null snapshot "$subcommand" --help 2>/dev/null)
         \\  [[ "$output" == "$help" ]]
         \\done
+        \\version=$("$1" --version)
+        \\args=()
+        \\for ((i=0; i<32; i++)); do
+        \\  args+=(extra)
+        \\  for flag in help -h --help -v --version; do
+        \\    output=$(timeout 3 "$1" unix:///dev/null list "${args[@]}" "$flag" 2>/dev/null)
+        \\    case "$flag" in
+        \\      -v|--version) [[ "$output" == "$version" ]] ;;
+        \\      *) [[ "$output" == "$help" ]] ;;
+        \\    esac
+        \\  done
+        \\done
+        \\rc=0
+        \\output=$(timeout 3 "$1" unix:///dev/null list "${args[@]}" 2>&1) || rc=$?
+        \\test "$rc" -eq 2
+        \\[[ "$output" == "Error: too many arguments for 'list' (run with --help for usage)" ]]
         ,
         "test-cli-help",
     });
