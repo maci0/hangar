@@ -4852,27 +4852,69 @@ test "handleReorder: same from and to returns 'ok' (no-op)" {
     try std.testing.expectEqualStrings("ok", result);
 }
 
-test "handleReorder: valid reorder produces 'ok'" {
+test "handleReorder: splice-move with middle VM shifts the block, not a swap" {
     var cfg_home = try TestConfigHome.init("reorder");
     defer cfg_home.deinit();
 
     appstate.vms_mutex.lock();
     const prev_count = appstate.vm_count;
-    appstate.vm_count = 2;
-    appstate.vms[0] = std.mem.zeroes(vm.VmConfig);
-    appstate.vms[0].setName("first");
-    appstate.vms[1] = std.mem.zeroes(vm.VmConfig);
-    appstate.vms[1].setName("second");
+    appstate.vm_count = 4;
+    const names = [_][]const u8{ "a", "b", "c", "d" };
+    for (names, 0..) |n, i| {
+        appstate.vms[i] = std.mem.zeroes(vm.VmConfig);
+        appstate.vms[i].setName(n);
+    }
     appstate.vms_mutex.unlock();
     defer {
         appstate.vms_mutex.lock();
         appstate.vm_count = prev_count;
         appstate.vms_mutex.unlock();
     }
-    const result = try handleReorder("POST /api/vms/reorder\r\n\r\nfrom=0&to=1");
+    // Moving [0] after [2] must splice the block: the middle element shifts
+    // left. A swap would leave "b" at index 2 and "a" at index 0.
+    const result = try handleReorder("POST /api/vms/reorder\r\n\r\nfrom=0&to=2");
     try std.testing.expectEqualStrings("ok", result);
-    try std.testing.expectEqualStrings("second", appstate.vms[0].getNameSlice());
-    try std.testing.expectEqualStrings("first", appstate.vms[1].getNameSlice());
+    try std.testing.expectEqualStrings("b", appstate.vms[0].getNameSlice());
+    try std.testing.expectEqualStrings("c", appstate.vms[1].getNameSlice());
+    try std.testing.expectEqualStrings("a", appstate.vms[2].getNameSlice());
+    try std.testing.expectEqualStrings("d", appstate.vms[3].getNameSlice());
+}
+
+test "handleReorder: backward splice-move and persisted order round-trip" {
+    var cfg_home = try TestConfigHome.init("reorder-back");
+    defer cfg_home.deinit();
+
+    appstate.vms_mutex.lock();
+    const prev_count = appstate.vm_count;
+    appstate.vm_count = 3;
+    const names = [_][]const u8{ "a", "b", "c" };
+    for (names, 0..) |n, i| {
+        appstate.vms[i] = std.mem.zeroes(vm.VmConfig);
+        appstate.vms[i].setName(n);
+    }
+    appstate.vms_mutex.unlock();
+    defer {
+        appstate.vms_mutex.lock();
+        appstate.vm_count = prev_count;
+        appstate.vms_mutex.unlock();
+    }
+    // Moving the last VM to the front shifts [a, b] right by one.
+    const result = try handleReorder("POST /api/vms/reorder\r\n\r\nfrom=2&to=0");
+    try std.testing.expectEqualStrings("ok", result);
+    appstate.vms_mutex.lock();
+    try std.testing.expectEqualStrings("c", appstate.vms[0].getNameSlice());
+    try std.testing.expectEqualStrings("a", appstate.vms[1].getNameSlice());
+    try std.testing.expectEqualStrings("b", appstate.vms[2].getNameSlice());
+    appstate.vms_mutex.unlock();
+
+    // The accepted reorder is persisted: a fresh load must restore it.
+    var reloaded: [vm.MAX_VMS]vm.VmConfig = undefined;
+    var prefs: vm.Prefs = undefined;
+    const n = persist.load(&reloaded, std.heap.page_allocator, &prefs);
+    try std.testing.expectEqual(@as(usize, 3), n);
+    try std.testing.expectEqualStrings("c", reloaded[0].getNameSlice());
+    try std.testing.expectEqualStrings("a", reloaded[1].getNameSlice());
+    try std.testing.expectEqualStrings("b", reloaded[2].getNameSlice());
 }
 
 test "handleSave: missing prefix returns 'invalid'" {
