@@ -69,6 +69,34 @@ mkdir -p "$TMP_CONFIG" "$TMP_HOME/home"
 export KV_PORT=$PORT
 export HOME="$TMP_HOME/home"
 export HANGAR_CONFIG_HOME="$TMP_CONFIG"
+
+expect_invalid_startup() {
+    local variable="$1" value="$2" binary="${3:-$BINARY}" status=0 output
+    output=$(env -u KV_API_KEY KV_PORT=9080 "$variable=$value" timeout 3 "$binary" 2>&1) || status=$?
+    if [ "$status" -eq 1 ] && [[ "$output" == *"$variable"* ]]; then
+        echo "  PASS: ${binary##*/}: $variable rejected before reading VM configuration"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: $variable startup validation (exit $status)"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+mkdir -p "$TMP_CONFIG/.config/hangar"
+mkfifo "$TMP_CONFIG/.config/hangar/vms.json"
+for executable in "$BINARY" "${BINARY}ui"; do
+    expect_invalid_startup KV_API_KEY "" "$executable"
+    for value in "" "0" "not-a-port" "65536"; do
+        expect_invalid_startup KV_PORT "$value" "$executable"
+    done
+done
+rm "$TMP_CONFIG/.config/hangar/vms.json"
+if [ "${1:-}" = "--startup-only" ]; then
+    echo "Startup validation: $PASS passed, $FAIL failed"
+    [ "$FAIL" -eq 0 ]
+    exit
+fi
+
 "$BINARY" &
 PID=$!
 BASE="http://127.0.0.1:$PORT"

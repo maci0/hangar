@@ -21,21 +21,8 @@ const SIGTERM: c_int = 15;
 const SIGKILL: c_int = 9;
 const WNOHANG: c_int = 1;
 
-/// Default port the web backend listens on. Matches web_server DEFAULT_PORT
-/// and transport DEFAULT_PORT.
-const WEB_PORT: u16 = transport.DEFAULT_PORT;
-
-/// Resolve the port the backend listens on, honoring KV_PORT. The spawned
-/// hangar-web child inherits our environment (execvp), so it binds whatever
-/// KV_PORT says; this wrapper must probe and open the same port. Falls back
-/// to WEB_PORT when KV_PORT is unset or invalid (web_server itself rejects an
-/// invalid KV_PORT at startup, so an out-of-range value never reaches here on
-/// a healthy launch).
-fn resolvePort() u16 {
-    const env = appio.getenv("KV_PORT") orelse return WEB_PORT;
-    const p = std.fmt.parseInt(u16, env, 10) catch return WEB_PORT;
-    if (p == 0) return WEB_PORT;
-    return p;
+fn resolvePort() !u16 {
+    return transport.configPort(appio.getenv("KV_PORT"));
 }
 
 /// Maximum time to wait for the backend to start (ms).
@@ -250,7 +237,18 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // Start the web backend on the configured port (KV_PORT or default).
-    const port = resolvePort();
+    const port = resolvePort() catch {
+        const msg = "Error: KV_PORT must be 1-65535\n";
+        _ = std.c.write(2, msg.ptr, msg.len);
+        std.process.exit(1);
+    };
+    if (appio.getenv("KV_API_KEY")) |key| {
+        if (!transport.validApiKey(key)) {
+            const msg = "Error: KV_API_KEY must be 1-64 bytes of printable ASCII (no spaces or control characters)\n";
+            _ = std.c.write(2, msg.ptr, msg.len);
+            std.process.exit(1);
+        }
+    }
     try spawnBackend(port);
     defer stopBackend();
 
@@ -325,7 +323,7 @@ test "resolvePort: unset falls back to default" {
         if (saved) |v| _ = setenv("KV_PORT", @ptrCast(v.ptr), 1) else _ = unsetenv("KV_PORT");
     }
     _ = unsetenv("KV_PORT");
-    try std.testing.expectEqual(WEB_PORT, resolvePort());
+    try std.testing.expectEqual(transport.DEFAULT_PORT, try resolvePort());
 }
 
 test "resolvePort: valid KV_PORT is honored" {
@@ -334,20 +332,18 @@ test "resolvePort: valid KV_PORT is honored" {
         if (saved) |v| _ = setenv("KV_PORT", @ptrCast(v.ptr), 1) else _ = unsetenv("KV_PORT");
     }
     _ = setenv("KV_PORT", "12345", 1);
-    try std.testing.expectEqual(@as(u16, 12345), resolvePort());
+    try std.testing.expectEqual(@as(u16, 12345), try resolvePort());
 }
 
-test "resolvePort: zero and garbage fall back to default" {
+test "resolvePort: invalid values do not fall back to default" {
     const saved = appio.getenv("KV_PORT");
     defer {
         if (saved) |v| _ = setenv("KV_PORT", @ptrCast(v.ptr), 1) else _ = unsetenv("KV_PORT");
     }
-    _ = setenv("KV_PORT", "0", 1);
-    try std.testing.expectEqual(WEB_PORT, resolvePort());
-    _ = setenv("KV_PORT", "not-a-port", 1);
-    try std.testing.expectEqual(WEB_PORT, resolvePort());
-    _ = setenv("KV_PORT", "99999999", 1); // overflows u16
-    try std.testing.expectEqual(WEB_PORT, resolvePort());
+    for ([_][:0]const u8{ "", "0", "not-a-port", "99999999" }) |value| {
+        _ = setenv("KV_PORT", value.ptr, 1);
+        try std.testing.expectError(error.InvalidPort, resolvePort());
+    }
 }
 
 test "fuzz: resolvePort never panics on random KV_PORT" {
@@ -363,7 +359,10 @@ test "fuzz: resolvePort never panics on random KV_PORT" {
         for (buf[0..len]) |*b| b.* = rnd.int(u8);
         buf[len] = 0;
         _ = setenv("KV_PORT", &buf, 1);
-        const p = resolvePort();
+        const p = resolvePort() catch |err| {
+            try std.testing.expectEqual(error.InvalidPort, err);
+            continue;
+        };
         try std.testing.expect(p != 0);
     }
 }

@@ -102,7 +102,6 @@ const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
 const isServerErrToken = httpresp.isServerErrToken;
 const jsonEscape = httpresp.jsonEscape;
 
-const DEFAULT_PORT: u16 = transport.DEFAULT_PORT; // KV_PORT default
 const CONFIG_RAW_MAX = 4 * 1024 * 1024;
 
 // Server socket fds for shutdown signaling.
@@ -4219,29 +4218,6 @@ pub fn main(init: std.process.Init) !void {
     // Ignore SIGPIPE, the only safe response to writing on a closed connection.
     _ = signal(SIGPIPE, SIG_IGN);
 
-    appstate.vm_count = persist.load(&appstate.vms, std.heap.page_allocator, &appstate.prefs);
-    appstate.g_vmm = hv_backend.createVmm(.auto);
-    appstate.g_vmm_ready = true;
-
-    // Power on VMs flagged host_autostart. Runs single-threaded here, before the
-    // listeners/tickers spawn, so no lock is needed. Best-effort: a failure is
-    // logged and the next VM is still tried. Mirrors handlePower's no-handle
-    // start path. (Previously host_autostart was persisted/shown but never acted
-    // on, an inert checkbox.)
-    {
-        var ai: usize = 0;
-        while (ai < appstate.vm_count) : (ai += 1) {
-            if (!shouldAutostart(&appstate.vms[ai])) continue;
-            qemu.startVm(&appstate.vms[ai], std.heap.page_allocator) catch |e| {
-                logOpErr("autostart", e, appstate.vms[ai].getNameSlice());
-                continue;
-            };
-            appstate.vms[ai].started_epoch = time(null);
-            appstate.vms[ai].started_mono_sec = appio.monoSecs();
-            logAudit("autostart", appstate.vms[ai].getNameSlice());
-        }
-    }
-
     // Allow custom API key via environment variable. Fail fast on an invalid
     // value instead of silently falling back to the weak built-in default,
     // an operator who set KV_API_KEY expects it to take effect.
@@ -4270,18 +4246,28 @@ pub fn main(init: std.process.Init) !void {
     // Only expose the daemon beyond loopback when a real API key is configured.
     const expose_all = auth.token_len > 0;
 
-    const port: u16 = if (appio.getenv("KV_PORT")) |env| blk: {
-        const p = std.fmt.parseInt(u16, env, 10) catch {
-            var pbuf: [128]u8 = undefined;
-            logErr(std.fmt.bufPrint(&pbuf, "KV_PORT '{s}' is not a valid port number (expected 1-65535), refusing to start", .{env}) catch "KV_PORT is not a valid port number, refusing to start");
-            std.process.exit(1);
-        };
-        if (p == 0) {
-            logErr("KV_PORT must be 1-65535 (got 0), refusing to start");
-            std.process.exit(1);
+    const port = transport.configPort(appio.getenv("KV_PORT")) catch {
+        logErr("KV_PORT must be 1-65535, refusing to start");
+        std.process.exit(1);
+    };
+
+    appstate.vm_count = persist.load(&appstate.vms, std.heap.page_allocator, &appstate.prefs);
+    appstate.g_vmm = hv_backend.createVmm(.auto);
+    appstate.g_vmm_ready = true;
+
+    {
+        var ai: usize = 0;
+        while (ai < appstate.vm_count) : (ai += 1) {
+            if (!shouldAutostart(&appstate.vms[ai])) continue;
+            qemu.startVm(&appstate.vms[ai], std.heap.page_allocator) catch |e| {
+                logOpErr("autostart", e, appstate.vms[ai].getNameSlice());
+                continue;
+            };
+            appstate.vms[ai].started_epoch = time(null);
+            appstate.vms[ai].started_mono_sec = appio.monoSecs();
+            logAudit("autostart", appstate.vms[ai].getNameSlice());
         }
-        break :blk p;
-    } else DEFAULT_PORT;
+    }
 
     const sock = c.socket(AF_INET6, SOCK_STREAM, 0);
     if (sock < 0) {

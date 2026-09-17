@@ -25,6 +25,13 @@ const O_NONBLOCK: c_int = 0o4000;
 /// Canonical value; `web_server` and `webui_app` reference it to stay in sync.
 pub const DEFAULT_PORT: u16 = 9080;
 
+pub fn configPort(value: ?[]const u8) error{InvalidPort}!u16 {
+    const text = value orelse return DEFAULT_PORT;
+    const port = std.fmt.parseInt(u16, text, 10) catch return error.InvalidPort;
+    if (port == 0) return error.InvalidPort;
+    return port;
+}
+
 /// Parse a port from a host:port tail, stopping at an optional trailing path.
 /// Falls back to DEFAULT_PORT on a missing or invalid value.
 fn parsePort(s: []const u8) u16 {
@@ -443,6 +450,31 @@ fn httpRequest(fd: c.fd_t, host: []const u8, method: []const u8, path: []const u
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+test "configPort: only an absent value uses the default" {
+    try std.testing.expectEqual(DEFAULT_PORT, try configPort(null));
+    try std.testing.expectEqual(@as(u16, 1), try configPort("1"));
+    try std.testing.expectEqual(@as(u16, 65535), try configPort("65535"));
+    for ([_][]const u8{ "", "0", "65536", "-1", "garbage", " 9080", "9080\n" }) |value| {
+        try std.testing.expectError(error.InvalidPort, configPort(value));
+    }
+}
+
+test "fuzz: configPort accepts only nonzero u16 values" {
+    var prng = std.Random.DefaultPrng.init(0xC0F19047);
+    const rnd = prng.random();
+    var buf: [32]u8 = undefined;
+    for (0..4000) |_| {
+        const len = rnd.uintLessThan(usize, buf.len + 1);
+        rnd.bytes(buf[0..len]);
+        const port = configPort(buf[0..len]) catch |err| {
+            try std.testing.expectEqual(error.InvalidPort, err);
+            continue;
+        };
+        try std.testing.expect(port != 0);
+        try std.testing.expectEqual(port, try std.fmt.parseInt(u16, buf[0..len], 10));
+    }
+}
+
 test "Connection.requestToFd propagates output write failure and closes connection" {
     var fds: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.socketpair(c.AF.UNIX, c.SOCK.STREAM, 0, &fds));

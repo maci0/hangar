@@ -177,7 +177,9 @@ to loopback-only access; a strong custom API key is required for remote access.
 
 ## Configuration
 
-All optional, read once at daemon startup:
+All optional. The daemon validates `KV_API_KEY` and `KV_PORT` before loading VM
+state or autostarting guests; the desktop wrapper validates both before spawning
+the daemon. An empty value is invalid for either variable.
 
 | Variable | Default | Effect |
 | --- | --- | --- |

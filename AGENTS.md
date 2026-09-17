@@ -82,7 +82,8 @@ Zig 0.16's C importer rejects GLib headers (they emit file-scope `_Pragma`). No 
 
 ## Configuration (environment variables)
 
-Runtime config is read once in `web_server.main`. All variables are optional.
+`web_server.main` validates `KV_API_KEY` and `KV_PORT` before reading VM state or
+autostarting guests. All variables are optional.
 
 | Variable | Default | Effect |
 | --- | --- | --- |

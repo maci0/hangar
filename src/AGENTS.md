@@ -38,6 +38,10 @@ globals in `appstate.zig`.
   these helpers without importing application state.
 
 ## Local Contracts
+- **Runtime listener configuration:** `transport.configPort` owns `KV_PORT` parsing:
+  only unset uses 9080; empty, invalid, zero, and overflowing values fail.
+  Both daemon and desktop wrapper validate `KV_PORT` and `KV_API_KEY` before
+  loading VM state, spawning a backend, or opening a window.
 - **VM string capacities are byte limits.** `VmConfig` setters truncate valid UTF-8
   only at scalar boundaries; they do not normalize or case-fold. Non-UTF-8 byte
   strings retain byte-prefix behavior for filesystem compatibility. Grapheme
@@ -67,7 +71,7 @@ globals in `appstate.zig`.
 - **Logging goes through `wlog`**, never a bare `std.c.write(2, ...)`: one timestamped,
   leveled line per call on `wlog.log_fd`, which defaults to -1 (dropped) in test builds
   so a passing `zig build test` stays silent. Untrusted text (VM names, QEMU/QMP replies,
-  argv) passes `wlog.sanitizeLogText` first. The four remaining direct fd-2 writes are
+  argv) passes `wlog.sanitizeLogText` first. Direct fd-2 writes are limited to
   CLI usage/startup messages in `web_server`/`webui_app`, not daemon log lines.
 - **Request correlation:** `serveHtml` begins `wlog` context after the first successful
   read, before rejection gates, and clears it on return. `writeHttpResponse` emits

@@ -10,7 +10,9 @@ under `zig build test`).
   `hangar-web` on a dedicated port against a temp `$HOME` (config: `../playwright.config.mjs`,
   fresh `mkdtemp` HOME per run, created under the repo's gitignored `.scratch/`, never
   `os.tmpdir()`, which is tmpfs).
-- `test_web_api.sh`: HTTP API integration (spawns a real daemon).
+- `test_web_api.sh`: HTTP API integration (spawns a real daemon). Its
+  `--startup-only` mode checks invalid runtime settings in both executables before
+  VM configuration reads or backend spawning, without starting a listener.
 - `test_vmrun.sh`: `vmrun` CLI integration (spawns a real daemon).
 - `visual/screenshots.mjs`: screenshot capture for the README and eyeballing a visual
   change. Images only, no assertions, so it is not a gate.
@@ -26,7 +28,8 @@ under `zig build test`).
 ## Work Guidance
 Commands (from repo root):
 - `zig build web-e2e`: Playwright suite.
-- `KV_PORT=<p> bash tests/test_web_api.sh`: API (expect 23 passed).
+- `KV_PORT=<p> bash tests/test_web_api.sh`: API plus startup validation.
+- `bash tests/test_web_api.sh --startup-only`: 10 startup validation checks.
 - `bash tests/test_vmrun.sh`: vmrun (expect 25 passed).
 Run real daemons on a non-default `KV_PORT`; never blanket-`pkill hangar-web` (kills a
 user's running daemon): scope cleanup to the test port/PID. Killing a test daemon
@@ -34,4 +37,4 @@ orphans its QEMU children, which keep holding VNC ports; clean those by guest na
 
 ## Verification
 Green = `zig build test` RC 0 (and silent: `wlog` drops log output in test builds) ·
-api 23/0 · vmrun 25/0 · Playwright 49 passed / 0 failed · tree clean.
+API and vmrun report zero failures · Playwright 49 passed / 0 failed · tree clean.
