@@ -159,7 +159,7 @@ async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[se
   var f=await showPromptDialog('Move "'+v.name+'" to folder (blank = none):',cur,folders);if(f===null)return;f=f.trim();
   var r=await apiPost('/api/vms/'+sel,'folder='+encodeURIComponent(f));
   if(r){await refresh();setStatus(f?('Moved to '+escHtml(f)):'Removed from folder');}}
-function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const f=(filter||'').toLowerCase();let h='';
+function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const search=document.getElementById('search');const f=(filter===undefined?(search?search.value:''):(filter||'')).toLowerCase();let h='';
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f)||(v.tags||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
 let hasFavs=false,hasNon=false,maxMem=16384;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;const m=x.v.mem||0;if(m>maxMem)maxMem=m;}
 function vmBars(v){var cpu=Number(v.cpu)||1;var mb=Number(v.mem)||0;var ramTxt=mb>=1024?(Math.round(mb/102.4)/10+' GB'):(mb+' MB');return '<div class="vm-meta" aria-hidden="true">'+escHtml(cpu)+' vCPU · '+escHtml(ramTxt)+'</div>';}
@@ -492,7 +492,7 @@ if(v.status==='running'||v.status==='paused'){b.innerHTML=pi+'Power Off';b.class
 function updateCommandState(){updatePowerBtn();var v=selectedVm();var nodes=document.querySelectorAll('[data-vm-action]');for(var i=0;i<nodes.length;i++){var n=nodes[i];var name=n.getAttribute('data-vm-action');var ok=actionAllowed(name,v);n.disabled=!ok;n.setAttribute('aria-disabled',ok?'false':'true');if(!ok){n.title=disabledReason(name,v);n.setAttribute('data-disabled-title','1');}else if(n.getAttribute('data-disabled-title')==='1'){n.removeAttribute('title');n.removeAttribute('data-disabled-title');}}
 // VM-scoped dropdown triggers gray out with no selection, like Power On/Settings.
 var trigs=document.querySelectorAll('[data-action="toggleActionMenu"][data-menu]');
-for(var ti=0;ti<trigs.length;ti++){var tmenu=trigs[ti].getAttribute('data-menu');if(tmenu==='dangerMenu')continue;trigs[ti].disabled=!v;trigs[ti].title=v?'':'Select a VM first';}
+for(var ti=0;ti<trigs.length;ti++){var tmenu=trigs[ti].getAttribute('data-menu');var scoped=tmenu!=='dangerMenu'&&tmenu!=='toolsMenu';trigs[ti].disabled=scoped&&!v;trigs[ti].title=scoped&&!v?'Select a VM first':'';}
 var tabBar=document.getElementById('tabBar');if(tabBar&&v){var consoleBtn=tabBar.querySelector('[data-tab="console"]');if(consoleBtn){consoleBtn.disabled=!(v.status==='running'&&embeddedDisplayCapable(v));consoleBtn.title=consoleBtn.disabled?'Console requires a running embedded VNC or SPICE display':'Open VM console';}}}
 function newVm(){['n_name','n_mem','n_cpu','n_disk'].forEach(function(id){var e=document.getElementById('err_'+id);if(e)e.textContent='';var f=document.getElementById(id);if(f)f.classList.remove('invalid');});
 var gsel=document.getElementById('n_guest_os');
@@ -807,7 +807,7 @@ document.addEventListener('click',function(e){if(ctxMenu&&!ctxMenu.contains(e.ta
 var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventListener('contextmenu',function(e){
   var item=e.target.closest('.vm-item');if(!item){hideCtxMenu();return;}
   var idx=parseInt(item.getAttribute('data-vm-index'),10);if(isNaN(idx)||idx>=vms.length){hideCtxMenu();return;}
-  ctxVmIdx=idx;hideCtxMenu();
+  hideCtxMenu();ctxVmIdx=idx;
   e.preventDefault();
   ctxMenu=document.createElement('div');ctxMenu.className='ctx-menu';ctxMenu.setAttribute('role','menu');
   ctxMenu.style.position='fixed';ctxMenu.style.visibility='hidden';
@@ -846,7 +846,7 @@ var vmlistEl=document.getElementById('vmlist');if(vmlistEl)vmlistEl.addEventList
     {label:'Delete',icon:'i-trash',action:'delete',danger:true,fn:deleteVm}
   ];
   items.forEach(function(item){if(item.sep){var sep=document.createElement('div');sep.className='ctx-sep';ctxMenu.appendChild(sep);return;}var mi=document.createElement('button');mi.type='button';mi.className='ctx-item'+(item.danger?' danger':'');mi.setAttribute('role','menuitem');var ok=actionAllowed(item.action,vmForMenu);mi.disabled=!ok;mi.title=ok?'':disabledReason(item.action,vmForMenu);if(item.icon){mi.innerHTML='<svg class="ico" aria-hidden="true"><use href="#'+item.icon+'"/></svg>'+escHtml(item.label);}else{mi.textContent=item.label;}
-    mi.addEventListener('click',function(){if(mi.disabled)return;var target=ctxVmIdx;Promise.resolve(select(target)).then(function(){item.fn(target);});hideCtxMenu();});
+    mi.addEventListener('click',function(){if(mi.disabled)return;var target=ctxVmIdx;Promise.resolve(select(target)).then(function(){if(sel===target)item.fn(target);});hideCtxMenu();});
     ctxMenu.appendChild(mi);});
 });
 // ── Keyboard Shortcuts ──

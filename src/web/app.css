@@ -996,7 +996,7 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
 /* ── Responsive ──────────────────────────────────────────────────── */
 @media(max-width:1100px){
   .toolbar .sep{display:none}
-  .toolbar .btn:not(.keep-mobile){display:none}
+  .toolbar > .btn:not(.keep-mobile){display:none}
   .toolbar .btn.keep-mobile{display:inline-flex}
   .toolbar .btn.toolbar-more{display:inline-flex}
 }

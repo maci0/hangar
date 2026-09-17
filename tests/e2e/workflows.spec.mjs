@@ -46,6 +46,71 @@ test.beforeEach(async ({ page }) => {
     await expect(page.locator('#vmlist')).toBeVisible();
 });
 
+for (const width of [1280, 390]) {
+    test(`global Tools remain usable from Home at ${width}px`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await expect(page.locator('#vmname')).toHaveText(/Overview|Welcome to Hangar/);
+        if (width < 900) await page.locator('.toolbar-more').click();
+        const tools = page.locator('[data-menu="toolsMenu"]:visible');
+        await expect(tools).toBeEnabled();
+        await tools.click();
+        await expect(page.locator('#toolsMenu [data-action="renameGuest"]')).toBeDisabled();
+        await page.locator('#toolsMenu [data-action="openPrefs"]').click();
+        await expect(page.locator('#prefsdlg')).toBeVisible();
+        await page.locator('#prefsdlg [data-action="closeDlg"]').click();
+        await expect(page.locator('#prefsdlg')).toBeHidden();
+        if (width < 900) await page.locator('.toolbar-more').click();
+        await tools.click();
+        await page.locator('#toolsMenu [data-action="openVnets"]').click();
+        await expect(page.locator('#vnetdlg')).toBeVisible();
+    });
+}
+
+test('reopening a context menu acts on its VM and respects discarded-selection cancellation', async ({ page }) => {
+    await createVm(page, 'wf-context-first');
+    await createVm(page, 'wf-context-second');
+    await page.reload();
+    const first = page.locator('.vm-item', { hasText: 'wf-context-first' });
+    const second = page.locator('.vm-item', { hasText: 'wf-context-second' });
+    await first.click({ button: 'right' });
+    await second.click({ button: 'right', position: { x: 10, y: 10 } });
+    await page.locator('.ctx-menu').getByRole('menuitem', { name: 'Rename…', exact: true }).click();
+    await expect(page.locator('#promptInput')).toHaveValue('wf-context-second');
+    await page.locator('#promptInput').fill('wf-context-renamed');
+    await page.locator('#promptOkBtn').click();
+    await expect.poll(() => indexOf(page, 'wf-context-renamed')).toBeGreaterThanOrEqual(0);
+    expect(await indexOf(page, 'wf-context-first')).toBeGreaterThanOrEqual(0);
+    await first.click();
+    await page.locator('.toolbar > [data-action="editVm"]').click();
+    await page.locator('#e_name').fill('unsaved-context-name');
+    await page.locator('.vm-item', { hasText: 'wf-context-renamed' }).click({ button: 'right' });
+    await page.locator('.ctx-menu').getByRole('menuitem', { name: 'Clone…', exact: true }).click();
+    await expect(page.locator('#confirmdlg')).toBeVisible();
+    await page.locator('#confirmCancelBtn').click();
+    await expect(page.locator('#confirmdlg')).toBeHidden();
+    await expect(page.locator('#clonedlg')).toBeHidden();
+    await expect(page.locator('#e_name')).toHaveValue('unsaved-context-name');
+});
+
+test('sidebar search persists through selection, favorites and refresh', async ({ page }) => {
+    await createVm(page, 'wf-search-match');
+    await createVm(page, 'wf-search-other');
+    await page.reload();
+    await page.locator('#search').fill('wf-search-match');
+    const items = page.locator('#vmlist .vm-item');
+    await expect(items).toHaveCount(1);
+    await items.first().click();
+    await expect(items).toHaveCount(1);
+    await items.first().locator('.star').click();
+    await expect(items.first().locator('.star')).toHaveClass(/fav/);
+    await expect(items).toHaveCount(1);
+    await page.evaluate(() => refresh());
+    await expect(items).toHaveCount(1);
+    await expect(page.locator('#search')).toHaveValue('wf-search-match');
+    await page.locator('#searchClear').click();
+    await expect(page.locator('#vmlist .vm-item', { hasText: 'wf-search-other' })).toBeVisible();
+});
+
 test('clone workflow creates a second VM', async ({ page }) => {
     const idx = await createVm(page, 'wf-clone-src');
     const before = (await list(page)).length;
@@ -534,7 +599,7 @@ test('inventory table lists VMs, sorts by a column, and selects a row', async ({
     await createVm(page, 'wf-inv-aaa');
     await page.reload();
     const rows = page.locator('.inv tbody tr');
-    expect(await rows.count()).toBeGreaterThanOrEqual(2);
+    await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(2);
     // Default sort is name ascending: find the Name column header, click to toggle desc.
     const nameRows = () => page.locator('.inv tbody tr td.inv-name').allTextContents();
     // The dashboard sorts case-insensitively; match that (the shared daemon
