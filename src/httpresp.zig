@@ -6,6 +6,9 @@
 const std = @import("std");
 const c = std.c;
 const wlog = @import("wlog.zig");
+const sync = @import("sync.zig");
+
+var etag_mutex = sync.SpinMutex{};
 
 pub const HTTP_OK: u16 = 200;
 pub const HTTP_CREATED: u16 = 201;
@@ -165,6 +168,70 @@ pub fn isServerErrToken(response: []const u8) bool {
     return false;
 }
 
+/// Write a static asset guarded by a strong content hash: the ETag is
+/// `"<8-byte sha256, hex>"`, computed lazily on first use and cached for the
+/// process lifetime (embedded bytes never change). A request whose
+/// `If-None-Match` carries exactly that tag gets a header-only 304, so an
+/// unchanged asset costs ~100 header bytes instead of a full re-download.
+pub fn writeHttpAssetResponse(
+    conn: c.fd_t,
+    status: u16,
+    ct: []const u8,
+    body: []const u8,
+    etag_storage: *?[]const u8,
+    req: []const u8,
+) void {
+    etag_mutex.lock();
+    if (etag_storage.* == null) {
+        var hash_bytes: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(body, &hash_bytes, .{});
+        const hex_digits = "0123456789abcdef";
+        var tag_buf: [18]u8 = undefined;
+        tag_buf[0] = '"';
+        for (hash_bytes[0..8], 0..) |b, i| {
+            tag_buf[1 + i * 2] = hex_digits[b >> 4];
+            tag_buf[2 + i * 2] = hex_digits[b & 0x0F];
+        }
+        tag_buf[17] = '"';
+        etag_storage.* = std.heap.page_allocator.dupe(u8, &tag_buf) catch null;
+    }
+    const etag = etag_storage.*;
+    etag_mutex.unlock();
+    if (etag) |tag| {
+        if (etagMatches(req, tag)) {
+            write304Response(conn, tag);
+            return;
+        }
+    }
+    writeHttpResponseTagged(conn, status, ct, body, etag);
+}
+
+/// True when the request's `If-None-Match` header carries the exact tag.
+/// Strong comparison (RFC 9110 §8.8.3): byte equality, no weak-star handling.
+fn etagMatches(req: []const u8, tag: []const u8) bool {
+    const needle = "If-None-Match: ";
+    const idx = std.mem.indexOf(u8, req, needle) orelse return false;
+    const rest = req[idx + needle.len ..];
+    const end = std.mem.indexOf(u8, rest, "\r\n") orelse rest.len;
+    return std.mem.eql(u8, std.mem.trim(u8, rest[0..end], " "), tag);
+}
+
+/// Emit a 304 with the validators a conditional asset request expects.
+fn write304Response(conn: c.fd_t, tag: []const u8) void {
+    var hbuf: [512]u8 = undefined;
+    const head = std.fmt.bufPrint(
+        &hbuf,
+        "HTTP/1.1 304 Not Modified\r\nETag: {s}\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n",
+        .{tag},
+    ) catch {
+        const fallback = "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n";
+        _ = writeAll(conn, fallback.ptr, fallback.len);
+        return;
+    };
+    _ = writeAll(conn, head.ptr, head.len);
+    wlog.logResponse(304, true);
+}
+
 /// Sanitize a value for safe inclusion in a response header: drop CR/LF (header
 /// injection) and turn `"` into `'` (so it can't break a quoted parameter like
 /// Content-Disposition filename="..."). Returns a slice of `buf`.
@@ -191,6 +258,13 @@ pub fn sanitizeHeaderValue(buf: []u8, s: []const u8) []const u8 {
 /// Write a full HTTP/1.1 response (status line + security headers + content-type
 /// + caching policy + body) to the connection in two writes.
 pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8) void {
+    writeHttpResponseTagged(conn, status, ct, body, null);
+}
+
+/// writeHttpResponse plus a strong ETag for immutable embedded assets. `etag`
+/// (a quoted token, e.g. `"1a2b…"`) adds an `ETag` header; everything else is
+/// identical to `writeHttpResponse`, including logging the wire status.
+pub fn writeHttpResponseTagged(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8, etag: ?[]const u8) void {
     const status_line: []const u8 = switch (status) {
         HTTP_OK => "HTTP/1.1 200 OK\r\n",
         HTTP_CREATED => "HTTP/1.1 201 Created\r\n",
@@ -208,8 +282,8 @@ pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []cons
     };
     // Assemble the full header block in one buffer so the response costs two
     // write() syscalls (headers + body) instead of ~11 small writes. The header
-    // set is well under 1 KiB even with the CSP string.
-    var hbuf: [1024]u8 = undefined;
+    // set is well under 1 KiB even with the CSP string and an ETag.
+    var hbuf: [1152]u8 = undefined;
     var hlen: usize = 0;
     const append = struct {
         fn add(b: []u8, n: *usize, s: []const u8) void {
@@ -226,6 +300,11 @@ pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []cons
     }
     append(&hbuf, &hlen, "X-Content-Type-Options: nosniff\r\n");
     append(&hbuf, &hlen, "X-Frame-Options: DENY\r\n");
+    if (etag) |tag| {
+        append(&hbuf, &hlen, "ETag: ");
+        append(&hbuf, &hlen, tag);
+        append(&hbuf, &hlen, "\r\n");
+    }
     append(&hbuf, &hlen, "Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'\r\n");
     append(&hbuf, &hlen, "Content-Type: ");
     append(&hbuf, &hlen, ct);
@@ -331,4 +410,63 @@ test "fuzz: isServerErrToken never panics on random response bytes" {
         for (buf[0..len]) |*b| b.* = rnd.int(u8);
         _ = isServerErrToken(buf[0..len]);
     }
+}
+
+/// Drain a pipe to EOF and return what was read. The caller closes the write
+/// end (after the handler returns) and the read end.
+fn drainPipe(drain_fd: c.fd_t, out: []u8) ![]u8 {
+    var total: usize = 0;
+    while (total < out.len) {
+        const n = c.read(drain_fd, out.ptr + total, out.len - total);
+        if (n <= 0) break;
+        total += @intCast(n);
+    }
+    return out[0..total];
+}
+
+test "httpresp: writeHttpAssetResponse serves 200 with ETag, then 304 on If-None-Match" {
+    const body = "body-bytes-for-etag-test";
+    var etag_storage: ?[]const u8 = null;
+
+    // First request: full 200 response carrying the strong ETag.
+    var fds1: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds1));
+    const req1 = "GET /app.js HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    writeHttpAssetResponse(fds1[1], HTTP_OK, "application/javascript; charset=utf-8", body, &etag_storage, req1);
+    try std.testing.expect(etag_storage != null);
+    var resp_buf: [4096]u8 = undefined;
+    _ = c.close(fds1[1]);
+    const resp1 = try drainPipe(fds1[0], &resp_buf);
+    _ = c.close(fds1[0]);
+    const tag = etag_storage.?;
+    try std.testing.expect(tag.len > 2 and tag[0] == '"' and tag[tag.len - 1] == '"');
+    try std.testing.expect(std.mem.startsWith(u8, resp1, "HTTP/1.1 200 OK\r\n"));
+    const hdr_tag = std.mem.indexOf(u8, resp1, "ETag: ") orelse return error.MissingEtag;
+    try std.testing.expect(std.mem.startsWith(u8, resp1[hdr_tag + 6 ..], tag));
+    try std.testing.expect(std.mem.endsWith(u8, resp1, body));
+
+    // Second request holding the same tag: header-only 304, no body bytes.
+    var fds2: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds2));
+    var req_buf: [256]u8 = undefined;
+    const req2 = try std.fmt.bufPrint(&req_buf, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\n", .{tag});
+    writeHttpAssetResponse(fds2[1], HTTP_OK, "application/javascript; charset=utf-8", body, &etag_storage, req2);
+    _ = c.close(fds2[1]);
+    const resp2 = try drainPipe(fds2[0], &resp_buf);
+    _ = c.close(fds2[0]);
+    try std.testing.expect(std.mem.startsWith(u8, resp2, "HTTP/1.1 304 Not Modified\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, resp2, body) == null);
+
+    // Stale or malformed validators must fall through to the full response.
+    var fds3: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds3));
+    const req3 = "GET /app.js HTTP/1.1\r\nIf-None-Match: \"stale\"\r\n\r\n";
+    writeHttpAssetResponse(fds3[1], HTTP_OK, "application/javascript; charset=utf-8", body, &etag_storage, req3);
+    _ = c.close(fds3[1]);
+    const resp3 = try drainPipe(fds3[0], &resp_buf);
+    _ = c.close(fds3[0]);
+    try std.testing.expect(std.mem.startsWith(u8, resp3, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expect(std.mem.endsWith(u8, resp3, body));
+
+    if (etag_storage) |allocated| std.heap.page_allocator.free(allocated);
 }

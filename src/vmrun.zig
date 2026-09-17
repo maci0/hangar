@@ -272,11 +272,11 @@ fn run(init: std.process.Init) !void {
             _ = c.nanosleep(&ts, null);
             return cmdPower(allocator, &conn, idx, "start");
         } else if (std.mem.eql(u8, command, "clone")) {
-            return cmdClone(allocator, &conn, idx);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/clone", "clone");
         } else if (std.mem.eql(u8, command, "linked-clone")) {
             return cmdLinkedClone(allocator, &conn, idx);
         } else if (std.mem.eql(u8, command, "delete")) {
-            return cmdDelete(allocator, &conn, idx);
+            return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/delete", "delete");
         } else if (std.mem.eql(u8, command, "suspend")) {
             return cmdSimple(allocator, &conn, idx, "/api/vms/{d}/suspend", "suspend");
         } else if (std.mem.eql(u8, command, "pause")) {
@@ -650,10 +650,6 @@ fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usiz
     fdWrite(c.STDOUT_FILENO, line);
 }
 
-fn cmdClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize) !void {
-    return cmdSimple(allocator, conn, idx, "/api/vms/{d}/clone", "clone");
-}
-
 fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize) !void {
     var path_buf: [32]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "/api/vms/{d}/clone", .{idx});
@@ -662,10 +658,6 @@ fn cmdLinkedClone(allocator: std.mem.Allocator, conn: *transport.Connection, idx
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "linked-clone VM [{d}]: {s}\n", .{ idx, resp });
     fdWrite(c.STDOUT_FILENO, line);
-}
-
-fn cmdDelete(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize) !void {
-    return cmdSimple(allocator, conn, idx, "/api/vms/{d}/delete", "delete");
 }
 
 /// Grow a VM's primary disk to `new_gb` GiB (POST /api/vms/<id>/disk/resize).

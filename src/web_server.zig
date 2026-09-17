@@ -98,6 +98,7 @@ const HTTP_SERVICE_UNAVAILABLE = httpresp.HTTP_SERVICE_UNAVAILABLE;
 const writeAll = httpresp.writeAll;
 const jsonErr = httpresp.jsonErr;
 const writeHttpResponse = httpresp.writeHttpResponse;
+const writeHttpAssetResponse = httpresp.writeHttpAssetResponse;
 const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
 const isServerErrToken = httpresp.isServerErrToken;
 const jsonEscape = httpresp.jsonEscape;
@@ -976,36 +977,9 @@ fn serveHtml(conn: c.fd_t) void {
     } else if (routeExact(req, "POST /api/config")) {
         response = handleConfigSave(req) catch "save err";
         content_type = "text/plain";
-    } else if (routeExact(req, "GET /app.css")) {
-        response = app_css;
-        content_type = "text/css; charset=utf-8";
-    } else if (routeExact(req, "GET /app.js")) {
-        response = app_js;
-        content_type = "application/javascript; charset=utf-8";
-    } else if (routeExact(req, "GET /novnc.js")) {
-        response = novnc_js;
-        content_type = "application/javascript; charset=utf-8";
-    } else if (routeExact(req, "GET /spice.js")) {
-        response = spice_js;
-        content_type = "application/javascript; charset=utf-8";
-    } else if (routeExact(req, "GET /elk.js")) {
-        response = elk_js;
-        content_type = "application/javascript; charset=utf-8";
-    } else if (routeExact(req, "GET /van.js")) {
-        response = van_js;
-        content_type = "application/javascript; charset=utf-8";
-    } else if (routeExact(req, "GET /xterm.js")) {
-        response = xterm_js;
-        content_type = "application/javascript; charset=utf-8";
-    } else if (routeExact(req, "GET /xterm-fit.js")) {
-        response = xterm_fit_js;
-        content_type = "application/javascript; charset=utf-8";
-    } else if (routeExact(req, "GET /xterm-webgl.js")) {
-        response = xterm_webgl_js;
-        content_type = "application/javascript; charset=utf-8";
-    } else if (routeExact(req, "GET /xterm.css")) {
-        response = xterm_css;
-        content_type = "text/css; charset=utf-8";
+    } else if (staticAsset(req)) |asset| {
+        writeHttpAssetResponse(conn, HTTP_OK, asset.ct, asset.body, &asset.etag, req);
+        return;
     } else if (std.mem.startsWith(u8, req, "GET / ")) {
         response = index_html;
         content_type = "text/html; charset=utf-8";
@@ -2390,6 +2364,31 @@ const xterm_fit_js = @embedFile("web/xterm-fit.js");
 const xterm_webgl_js = @embedFile("web/xterm-webgl.js");
 const xterm_css = @embedFile("web/xterm.css");
 
+/// Embedded static assets served verbatim (no VM state): exact GET routes map
+/// to their bytes, MIME type, and a lazily computed strong content-hash ETag.
+/// Guarded by writeHttpAssetResponse: a request holding the current tag gets a
+/// header-only 304, so a reloaded tab revalidates instead of re-downloading.
+var STATIC_ASSETS = [_]struct { route: []const u8, body: []const u8, ct: []const u8, etag: ?[]const u8 = null }{
+    .{ .route = "GET /app.css", .body = app_css, .ct = "text/css; charset=utf-8" },
+    .{ .route = "GET /app.js", .body = app_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /novnc.js", .body = novnc_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /spice.js", .body = spice_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /elk.js", .body = elk_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /van.js", .body = van_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /xterm.js", .body = xterm_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /xterm-fit.js", .body = xterm_fit_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /xterm-webgl.js", .body = xterm_webgl_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /xterm.css", .body = xterm_css, .ct = "text/css; charset=utf-8" },
+};
+
+/// Look up an exact static-asset GET route (see STATIC_ASSETS).
+fn staticAsset(req: []const u8) ?*@TypeOf(STATIC_ASSETS[0]) {
+    for (&STATIC_ASSETS) |*asset| {
+        if (routeExact(req, asset.route)) return asset;
+    }
+    return null;
+}
+
 /// Background thread: periodically check liveness of running VMs and reap dead ones.
 fn livenessTicker() void {
     while (true) {
@@ -2758,6 +2757,19 @@ test "serveHtml: rejected requests correlate response headers and logs" {
         try std.testing.expect(std.mem.indexOf(u8, lines, "auth rejected:") != null);
         try std.testing.expect(std.mem.indexOf(u8, lines, "http_response status=401 duration_ms=") != null);
         try std.testing.expect(std.mem.indexOf(u8, lines, "sent=true request=[POST /api/vms/0/power HTTP/1.1]") != null);
+    }
+}
+
+test "static assets cache ETags across requests" {
+    for (STATIC_ASSETS) |entry| {
+        var req_buf: [128]u8 = undefined;
+        const req = try std.fmt.bufPrint(&req_buf, "{s} HTTP/1.1\r\nHost: localhost\r\n\r\n", .{entry.route});
+        const asset = staticAsset(req) orelse return error.MissingAsset;
+        writeHttpAssetResponse(-1, HTTP_OK, asset.ct, asset.body, &asset.etag, req);
+        const tag = asset.etag orelse return error.MissingEtag;
+        try std.testing.expectEqual(@as(usize, 18), tag.len);
+        writeHttpAssetResponse(-1, HTTP_OK, asset.ct, asset.body, &asset.etag, req);
+        try std.testing.expectEqual(tag.ptr, asset.etag.?.ptr);
     }
 }
 
