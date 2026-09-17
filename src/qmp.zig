@@ -158,6 +158,7 @@ pub const QmpClient = struct {
     /// Read a single line (up to `\n`) from the socket.
     /// Returns a slice into `self.line_buf`; valid until the next call.
     fn readLine(self: *QmpClient) ![]const u8 {
+        errdefer self.disconnect();
         var pos: usize = 0;
         while (pos < self.line_buf.len - 1) {
             if (self.rbuf_pos >= self.rbuf_len) {
@@ -177,7 +178,6 @@ pub const QmpClient = struct {
             self.line_buf[pos] = ch;
             pos += 1;
         }
-        self.disconnect();
         return error.BufferTooSmall;
     }
 
@@ -1108,6 +1108,42 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
     }
     try std.testing.expect(connected_sessions > 0);
     try std.testing.expectEqual(connected_sessions, command_batches);
+}
+
+test "readResponse: EOF disconnects and clears partial replies" {
+    for ([_][]const u8{ "", "{\"return\":" }) |partial| {
+        var fds: [2]c_qmp.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c_qmp.socketpair(c_qmp.AF.UNIX, c_qmp.SOCK.STREAM, 0, &fds));
+        var client = QmpClient{ .stream = .{ .fd = fds[0] }, .connected = true };
+        defer client.disconnect();
+        {
+            defer _ = c_qmp.close(fds[1]);
+            try std.testing.expectEqual(@as(isize, @intCast(partial.len)), c_qmp.write(fds[1], partial.ptr, partial.len));
+        }
+        try std.testing.expectError(error.SocketClosed, client.expectReturn());
+        try std.testing.expect(!client.connected);
+        try std.testing.expect(client.stream == null);
+        try std.testing.expectEqual(@as(usize, 0), client.rbuf_pos);
+        try std.testing.expectEqual(@as(usize, 0), client.rbuf_len);
+        try std.testing.expectError(error.ConnectionFailed, client.pause());
+    }
+}
+
+test "readResponse: timeout discards an incomplete reply and disconnects" {
+    var fds: [2]c_qmp.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c_qmp.socketpair(c_qmp.AF.UNIX, c_qmp.SOCK.STREAM, 0, &fds));
+    defer _ = c_qmp.close(fds[1]);
+    var client = QmpClient{ .stream = .{ .fd = fds[0] }, .connected = true };
+    defer client.disconnect();
+    client.stream.?.setTimeout(20);
+    const partial = "{\"return\":";
+    try std.testing.expectEqual(@as(isize, partial.len), c_qmp.write(fds[1], partial.ptr, partial.len));
+    try std.testing.expectError(error.SocketClosed, client.expectReturn());
+    try std.testing.expect(!client.connected);
+    try std.testing.expect(client.stream == null);
+    try std.testing.expectEqual(@as(usize, 0), client.rbuf_pos);
+    try std.testing.expectEqual(@as(usize, 0), client.rbuf_len);
+    try std.testing.expectError(error.ConnectionFailed, client.pause());
 }
 
 test "readResponse: oversized replies fail and disconnect" {
