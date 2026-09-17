@@ -16,7 +16,8 @@ under `zig build test`).
 - `test_web_api.sh`: HTTP API integration (spawns a real daemon). Its
   `--startup-only` mode checks invalid runtime settings in both executables before
   VM configuration reads or backend spawning, without starting a listener.
-- `test_vmrun.sh`: `vmrun` CLI integration (spawns a real daemon).
+- `test_vmrun.sh`: `vmrun` CLI integration (spawns a real daemon). A failed build
+  aborts before checking or launching binaries, even when stale artifacts exist.
 - `visual/screenshots.mjs`: screenshot capture for the README and eyeballing a visual
   change. Images only, no assertions, so it is not a gate.
 

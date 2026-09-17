@@ -56,7 +56,7 @@ expect_fails() {
 
 echo "=== Building ==="
 cd "$(dirname "$0")/.." || exit 1
-zig build
+zig build || exit 1
 [ -x "$WEB" ] || { echo "FAIL: $WEB not built"; exit 1; }
 [ -x "$VMRUN" ] || { echo "FAIL: $VMRUN not built"; exit 1; }
 
