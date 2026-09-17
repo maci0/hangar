@@ -74,7 +74,8 @@ pub fn parseVmIdxExact(req: []const u8, prefix: []const u8) ?usize {
 
 /// Find a header value by (case-insensitive) name in the header block. `name`
 /// must include the trailing `": "`. Returns the value up to CRLF, or null.
-pub fn findHeader(headers: []const u8, name: []const u8) ?[]const u8 {
+pub fn findHeader(raw: []const u8, name: []const u8) ?[]const u8 {
+    const headers = raw[0 .. std.mem.indexOf(u8, raw, "\r\n\r\n") orelse raw.len];
     var pos: usize = 0;
     while (pos < headers.len) {
         if (headers.len - pos >= name.len and
@@ -104,7 +105,8 @@ pub fn requestLine(req: []const u8, out: []u8) []const u8 {
 }
 
 /// Parse the Content-Length header value (case-insensitive), or null.
-pub fn parseContentLength(req: []const u8) ?usize {
+pub fn parseContentLength(raw: []const u8) ?usize {
+    const req = if (std.mem.indexOf(u8, raw, "\r\n\r\n")) |end| raw[0 .. end + 2] else raw;
     var pos: usize = 0;
     while (pos < req.len) {
         if (std.mem.indexOfScalarPos(u8, req, pos, '\n')) |nl| {
@@ -164,6 +166,19 @@ test "httpreq: findHeader + parseContentLength are case-insensitive" {
     try std.testing.expectEqual(@as(?usize, 42), parseContentLength(req));
     try std.testing.expectEqualStrings("secret", findHeader(req, "x-api-key: ").?);
     try std.testing.expectEqualStrings("body", getBody(req).?);
+}
+
+test "httpreq: header lookup stops before the body" {
+    const req = "POST /x HTTP/1.1\r\nHost: localhost\r\n\r\nContent-Length: 42\r\n";
+    try std.testing.expect(parseContentLength(req) == null);
+    try std.testing.expect(findHeader(req, "Content-Length: ") == null);
+    try std.testing.expectEqualStrings("localhost", findHeader(req, "Host: ").?);
+}
+
+test "httpreq: header values take precedence over body text" {
+    const req = "POST /x HTTP/1.1\r\nContent-Length: 20\r\n\r\nContent-Length: 42\r\n";
+    try std.testing.expectEqual(@as(?usize, 20), parseContentLength(req));
+    try std.testing.expectEqualStrings("20", findHeader(req, "Content-Length: ").?);
 }
 
 test "httpreq: requestLine sanitizes control bytes" {

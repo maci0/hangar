@@ -51,6 +51,8 @@ globals in `appstate.zig`.
   release cached resources even after peer failure clears `connected`; framebuffer
   polling calls it before reconnecting.
 - **New static asset / GET route →** add to `auth.isAuthExempt` only if non-sensitive.
+- **HTTP header lookup:** `httpreq.findHeader` and `parseContentLength` stop at the
+  CRLFCRLF boundary; body bytes must never supply header values.
 - **Logging goes through `wlog`**, never a bare `std.c.write(2, ...)`: one timestamped,
   leveled line per call on `wlog.log_fd`, which defaults to -1 (dropped) in test builds
   so a passing `zig build test` stays silent. Untrusted text (VM names, QEMU/QMP replies,
