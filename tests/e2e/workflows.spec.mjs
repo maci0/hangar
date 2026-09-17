@@ -279,6 +279,35 @@ test('VM folders: the folder field groups the VM in a collapsible sidebar tree',
     await expect(page.locator('.folder-hdr[data-folder="TestFolder"]')).not.toHaveClass(/open/);
 });
 
+test('elk.js is not fetched on page load and loads on first topology open', async ({ page }) => {
+    const elkRequests = [];
+    page.on('request', (r) => { if (r.url().endsWith('/elk.js')) elkRequests.push(r.url()); });
+    await createVm(page, 'wf-topo-lazy');
+    await page.reload();
+    expect(elkRequests, 'elk.js must not load before the topology is opened').toHaveLength(0);
+    let release;
+    const loading = new Promise((resolve) => { release = resolve; });
+    await page.route('**/elk.js', async (route) => { await loading; await route.continue(); });
+    await page.evaluate(() => { void openTopology(); });
+    await expect(page.locator('#topoWrap')).toContainText('Loading layout engine');
+    await page.evaluate(() => { void openTopology(); });
+    release();
+    await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
+    await page.evaluate(() => openTopology());
+    expect(elkRequests).toHaveLength(1);
+});
+
+test('a failed elk.js load degrades visibly with a retry', async ({ page }) => {
+    await createVm(page, 'wf-topo-fail');
+    await page.reload();
+    await page.route('**/elk.js', (route) => route.abort());
+    await page.evaluate(() => openTopology());
+    await expect(page.locator('#topoWrap')).toContainText('failed to load', { timeout: 10000 });
+    await page.unroute('**/elk.js');
+    await page.click('#topoWrap [data-action="openTopology"]');
+    await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
+});
+
 test('per-NIC vnet binding round-trips and appears in the topology', async ({ page }) => {
     await createVm(page, 'wf-nicvnet');
     const idx = await indexOf(page, 'wf-nicvnet');

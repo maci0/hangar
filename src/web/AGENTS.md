@@ -33,6 +33,9 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   recoverable deletes use the undo toast (`toastUndo`), irreversible operations
   (snapshot revert, disk ops) use `showConfirmDialog({danger:true})`. Don't mix.
 
+- **Topology loading**: `/elk.js` loads only when the topology opens, never from
+  `index.html`. Concurrent opens share the pending load. Loading is visible; failed,
+  invalid, or timed-out loads expose Retry and clear the pending promise.
 - **Reactivity**: `GET /api/events` (SSE) pushes a change event whenever the daemon's
   state version bumps; the client refreshes on it (5s poll stays as fallback). The host
   dashboard is a VanJS component driven by `vmsState`/`dashSortState`. Update state,

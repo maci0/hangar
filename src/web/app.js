@@ -920,9 +920,33 @@ function topoSvg(res,meta){
  return s+'</svg>';
 }
 async function openTopology(){var d=document.getElementById('topodlg');if(d&&!d.open)d.showModal();await renderTopology();}
+var topoElk=null;
+const TOPO_LOAD_TIMEOUT_MS=15000;
+function ensureElk(){
+ if(typeof ELK==='function')return Promise.resolve();
+ if(topoElk)return topoElk;
+ topoElk=new Promise(function(resolve,reject){
+  var s=document.createElement('script');
+  var timer=setTimeout(function(){finish(false);},TOPO_LOAD_TIMEOUT_MS);
+  function finish(ok){
+   clearTimeout(timer);s.onload=null;s.onerror=null;
+   if(ok){resolve();}else{s.remove();topoElk=null;reject(new Error('Failed to load /elk.js'));}
+  }
+  s.src='/elk.js';s.async=true;
+  s.onload=function(){finish(typeof ELK==='function');};
+  s.onerror=function(){finish(false);};
+  document.head.appendChild(s);
+ });
+ return topoElk;
+}
 async function renderTopology(){
  var wrap=document.getElementById('topoWrap');if(!wrap)return;
- if(typeof ELK==='undefined'){wrap.innerHTML='<div class="topo-loading">Layout engine unavailable.</div>';return;}
+ if(typeof ELK!=='function'){
+  wrap.innerHTML='<div class="topo-loading" role="status">Loading layout engine…</div>';
+  try{await ensureElk();}catch(e){
+   wrap.innerHTML='<div class="topo-loading" role="alert">Layout engine failed to load. <button type="button" class="btn" data-action="openTopology">Retry</button></div>';return;
+  }
+ }
  try{await loadVnets();}catch(e){}
  var built=buildTopologyGraph();
  if(!built.graph.children.length){wrap.innerHTML='<div class="topo-loading">No VMs or networks to display.</div>';return;}
