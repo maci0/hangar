@@ -103,7 +103,10 @@ pub const VirtualNetwork = struct {
     port_fwd_len: u16 = 0,
 
     fn setBuf(buf: []u8, len: *u16, s: []const u8) void {
-        const n: usize = @min(s.len, buf.len - 1);
+        var n = @min(s.len, buf.len - 1);
+        if (n < s.len and std.unicode.utf8ValidateSlice(s)) {
+            while (n > 0 and s[n] & 0xc0 == 0x80) : (n -= 1) {}
+        }
         @memcpy(buf[0..n], s[0..n]);
         buf[n] = 0;
         len.* = @intCast(n);
@@ -691,6 +694,65 @@ test "vnet: emit -> parse round-trip preserves fields" {
         try testing.expectEqualStrings(orig.nets[i].getHostIfaceSlice(), back.nets[i].getHostIfaceSlice());
         try testing.expectEqualStrings(orig.nets[i].getGatewaySlice(), back.nets[i].getGatewaySlice());
         try testing.expectEqualStrings(orig.nets[i].getPortForwardsSlice(), back.nets[i].getPortForwardsSlice());
+    }
+}
+
+test "vnet: UTF-8 names remain valid through truncation and JSON round-trip" {
+    const input = "a" ** 14 ++ "é";
+    var original = NetworkSet{};
+    try testing.expect(original.add(input, .nat, "", "", false, "", "", ""));
+    try testing.expectEqualStrings(input[0..14], original.nets[0].getNameSlice());
+    const json = try toJson(&original, testing.allocator);
+    defer testing.allocator.free(json);
+    try testing.expect(std.unicode.utf8ValidateSlice(json));
+    const restored = fromJson(json);
+    try testing.expectEqual(@as(usize, 1), restored.count);
+    try testing.expectEqualStrings(input[0..14], restored.nets[0].getNameSlice());
+}
+
+test "vnet: setBuf preserves Unicode prefixes and arbitrary bytes" {
+    const text = "ée\u{301}€\u{1f680}";
+    const boundaries = [_]usize{ 0, 0, 2, 3, 3, 5, 5, 5, 8, 8, 8, 8, 12 };
+    var buf: [32]u8 = undefined;
+    var len: u16 = 0;
+    for (boundaries, 0..) |expected, cap| {
+        VirtualNetwork.setBuf(buf[0 .. cap + 1], &len, text);
+        try testing.expectEqualStrings(text[0..expected], buf[0..len]);
+        try testing.expectEqual(@as(u8, 0), buf[len]);
+    }
+    VirtualNetwork.setBuf(buf[0..3], &len, "a\xffb");
+    try testing.expectEqualStrings("a\xff", buf[0..len]);
+}
+
+test "vnet fuzz: setBuf keeps the longest complete UTF-8 prefix" {
+    var prng = std.Random.DefaultPrng.init(0x8016_5E7);
+    const rnd = prng.random();
+    var input: [256]u8 = undefined;
+    var output: [257]u8 = undefined;
+    for (0..2000) |_| {
+        var input_len: usize = 0;
+        var boundaries = [_]bool{false} ** 257;
+        boundaries[0] = true;
+        while (input_len + 4 <= input.len) {
+            const cp = rnd.uintLessThan(u21, 0x110000);
+            if (cp >= 0xd800 and cp <= 0xdfff) continue;
+            var encoded: [4]u8 = undefined;
+            const n = try std.unicode.utf8Encode(cp, &encoded);
+            @memcpy(input[input_len..][0..n], encoded[0..n]);
+            input_len += n;
+            boundaries[input_len] = true;
+        }
+        const cap = rnd.uintLessThan(usize, output.len);
+        var len: u16 = 0;
+        VirtualNetwork.setBuf(output[0 .. cap + 1], &len, input[0..input_len]);
+        try testing.expect(len <= cap and len <= input_len);
+        try testing.expect(boundaries[len]);
+        try testing.expectEqualSlices(u8, input[0..len], output[0..len]);
+        try testing.expectEqual(@as(u8, 0), output[len]);
+        try testing.expect(std.unicode.utf8ValidateSlice(output[0..len]));
+        for (len + 1..@min(cap, input_len) + 1) |i| {
+            try testing.expect(!boundaries[i]);
+        }
     }
 }
 

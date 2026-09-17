@@ -42,8 +42,9 @@ globals in `appstate.zig`.
   only unset uses 9080; empty, invalid, zero, and overflowing values fail.
   Both daemon and desktop wrapper validate `KV_PORT` and `KV_API_KEY` before
   loading VM state, spawning a backend, or opening a window.
-- **VM string capacities are byte limits.** `VmConfig` setters truncate valid UTF-8
-  only at scalar boundaries; they do not normalize or case-fold. Non-UTF-8 byte
+- **VM and virtual-network string capacities are byte limits.** `VmConfig` and
+  `VirtualNetwork` setters truncate valid UTF-8 only at scalar boundaries;
+  they do not normalize or case-fold. Non-UTF-8 byte
   strings retain byte-prefix behavior for filesystem compatibility. Grapheme
   clusters are not the unit of storage.
 - **Persistence JSON strings:** `persist` and `vnet` decode `\b` and `\f` to their
