@@ -9,8 +9,9 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 - `index.html`: markup, dialogs, the inline SVG icon sprite (`#i-*`), script tags.
 - `app.js` (~1750 lines), all behavior: refresh poll, render, action dispatch, dialogs,
   console/serial viewers, command palette, folders, topology.
-- `app.css` (~1150 lines): theme (`:root` dark default + `:root.light`) + components;
-  a trailing "serious flat reskin" override block wins by cascade order.
+- `app.css`: flat slate theme (`:root` dark default + `:root.light`) + components.
+  Logo and empty-state emblems use the shared accent and radius tokens, without
+  decorative gradients or colored shadows.
 - Vendored libs: `novnc.js`, `spice.js`, `elk.js`, `van.js` (vanjs-core, ESM export
   converted to `window.van`), `xterm.js`/`xterm.css`/`xterm-fit.js`/`xterm-webgl.js`
   (@xterm UMD builds), `favicon.svg`. Each is `@embedFile`'d, served at `/novnc.js`
