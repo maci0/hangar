@@ -24,7 +24,6 @@ pub const MAX_TAG_LEN = 255;
 pub fn validateTag(tag: []const u8) bool {
     if (tag.len == 0 or tag.len > MAX_TAG_LEN) return false;
     for (tag) |b| {
-        if (b == 0) return false; // reject null bytes
         if (b < 0x20) return false; // reject control characters
     }
     if (std.mem.indexOf(u8, tag, "..") != null) return false;

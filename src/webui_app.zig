@@ -254,15 +254,12 @@ pub fn main(init: std.process.Init) !void {
     try spawnBackend(port);
     defer stopBackend();
 
-    // Create the webui window.
     var w = webui.newWindow();
 
-    // Set window properties.
     w.setSize(1280, 800);
     w.setMinimumSize(800, 500);
     w.setCenter();
 
-    // Build the URL to the local web backend.
     var url_buf: [64]u8 = undefined;
     const url = try std.fmt.bufPrintZ(&url_buf, "http://127.0.0.1:{d}", .{port});
 
@@ -288,7 +285,6 @@ pub fn main(init: std.process.Init) !void {
     // Block until the window is closed.
     webui.wait();
 
-    // Cleanup.
     webui.clean();
 }
 
