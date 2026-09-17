@@ -51,8 +51,6 @@ const form_parsers = @import("form_parsers.zig");
 const path_helpers = @import("path_helpers.zig");
 const transport = @import("transport.zig");
 
-extern fn time(t: ?*c_long) c_long;
-
 // HTTP status codes
 const httpresp = @import("httpresp.zig");
 const auth = @import("auth.zig");
@@ -1296,7 +1294,7 @@ fn powerOp(req: []const u8, mode: PowerMode) ![]const u8 {
                 appstate.vms[j].started_epoch = 0;
                 appstate.vms[j].started_mono_sec = 0;
             } else {
-                appstate.vms[j].started_epoch = time(null);
+                appstate.vms[j].started_epoch = std.Io.Clock.real.now(appio.io()).toSeconds();
                 appstate.vms[j].started_mono_sec = appio.monoSecs();
             }
         } else if (!was_alive) {
@@ -1349,7 +1347,7 @@ fn handlePowerLocked(idx: usize) []const u8 {
             logOpErr("power on", e, vm_name_buf[0..vm_name.len]);
             return "start err";
         };
-        appstate.vms[idx].started_epoch = time(null);
+        appstate.vms[idx].started_epoch = std.Io.Clock.real.now(appio.io()).toSeconds();
         appstate.vms[idx].started_mono_sec = appio.monoSecs();
     }
     logAudit(if (was_alive) "power off" else "power on", vm_name_buf[0..vm_name.len]);
@@ -2448,7 +2446,7 @@ fn autoprotectTicker() void {
         var work_count: usize = 0;
 
         appstate.vms_mutex.lock();
-        const now = time(null);
+        const now = std.Io.Clock.real.now(appio.io()).toSeconds();
         var i: usize = 0;
         while (i < appstate.vm_count and work_count < work_items.len) : (i += 1) {
             const v = &appstate.vms[i];
@@ -4408,7 +4406,7 @@ pub fn main(init: std.process.Init) !void {
                 logOpErr("autostart", e, appstate.vms[ai].getNameSlice());
                 continue;
             };
-            appstate.vms[ai].started_epoch = time(null);
+            appstate.vms[ai].started_epoch = std.Io.Clock.real.now(appio.io()).toSeconds();
             appstate.vms[ai].started_mono_sec = appio.monoSecs();
             logAudit("autostart", appstate.vms[ai].getNameSlice());
         }
