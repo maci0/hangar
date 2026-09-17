@@ -6,7 +6,7 @@ video** (H.264/AV1) decoded by **WebCodecs** and presented on the **WebGPU**
 canvas: Moonlight/Parsec-class console latency and quality, replacing
 framebuffer tiles for high-motion content.
 
-## Where we are today (shipped, verified)
+## Baseline console (shipped; fallback for encoded video)
 
 ```
 guest 3D → virtio-vga-gl → virgl → host EGL render (egl-headless)
@@ -19,7 +19,13 @@ Both ends are GPU-accelerated (host virgl render, browser composite); the
 transport is unencoded pixels. Fine for consoles/installs; caps out well below
 30 fps at 1080p for video-like content and burns relay + browser CPU.
 
-## Target architecture
+## Original target architecture (deferred)
+
+The shipped non-virgl path is recorded in [Phases](#phases): CPU framebuffer
+assembly, an ffmpeg child, and a WebCodecs 2D overlay. The GL/dmabuf and WebGPU
+path below is not shipped. The `video_stream` arg-builder tests in
+[qemu.zig](../src/qemu.zig) assert that virgl retains `egl-headless` rather
+than enabling D-Bus capture.
 
 ```
 guest 3D → virtio-vga-gl → virgl
@@ -39,7 +45,8 @@ QEMU's dbus display exists precisely for external UIs (GNOME Boxes uses it):
 QEMU exports `org.qemu.Display1` on a private P2P D-Bus socket and pushes
 **dmabuf file descriptors per scanout update** plus damage rectangles, cursor
 state, and input interfaces. No scraping, no copies until the encoder, and it
-coexists with `-vnc`/`-spice` (fallback console stays).
+supports a fallback console in non-GL mode. The GL target cannot coexist
+with `-vnc`; see [Spike results](#spike-results-verified-on-the-reference-host-qemu-110).
 
 Alternatives rejected:
 - QMP `screendump` loop: PNG round-trip per frame; slow, disk-touching.
@@ -84,17 +91,16 @@ Auth/handshake identical to the other WS routes (subprotocol echoed).
 Source: `serveVideoClient` / `emitAu` in [dbusdisplay.zig](../src/dbusdisplay.zig)
 and `startVideoStream` in [app.js](../src/web/app.js); introduced in `b2005c7`.
 
-### Browser side (app.js, no framework needed)
-- `VideoDecoder` with `{codec:'avc1.42E01E', optimizeForLatency:true,
-  hardwareAcceleration:'prefer-hardware'}`; feed `EncodedVideoChunk`s.
-- Decoded `VideoFrame` → existing presenter: WebGPU
-  `copyExternalImageToTexture(frame)` (zero-copy where the platform allows),
-  WebGL2 `texImage2D(frame)` fallback; `frame.close()` after upload.
-- Renderer badge becomes `H264 · WEBGPU`.
-- Capability gate: `'VideoDecoder' in window` AND the daemon advertises the
-  encoder in `/api/capabilities`: otherwise the console silently stays on the
-  current noVNC/spice path. The video path is an *upgrade*, never a
-  requirement.
+### Browser side (shipped)
+
+The decoder, overlay, and badge are described in [phase 3](#phases), introduced
+in `b2005c7`. `startVideoStream` in [app.js](../src/web/app.js) checks for
+`VideoDecoder` and the VM's `video_stream` flag, not an encoder advertisement
+in `/api/capabilities`. It configures `hardwareAcceleration:'no-preference'`,
+draws decoded frames through a 2D canvas context, and closes each frame.
+Decoder or WebSocket errors tear down the overlay; the underlying VNC/SPICE
+console remains. WebGPU presentation of decoded video is still a target,
+not the shipped browser path.
 
 ## Spike results (verified on the reference host, QEMU 11.0)
 
@@ -160,7 +166,8 @@ and `startVideoStream` in [app.js](../src/web/app.js); introduced in `b2005c7`.
 - D-Bus protocol hand-rolling is the long pole; sd-bus extern fallback noted.
 - VAAPI device permissions: daemon must reach `/dev/dri/renderD*` (reference
   host: world-rw; document the `render` group requirement).
-- WebCodecs H.264 absent on some Linux Chromium builds without proprietary
-  codecs → capability gate above covers it; AV1 fallback helps long-term.
+- WebCodecs H.264 can be absent even when `VideoDecoder` exists. Decoder
+  configuration/decode errors fall back to the underlying console; AV1 remains
+  unimplemented.
 - Multi-client fan-out is shipped (see [phase 4](#phases)); per-client bitrate
   adaptation is out of scope.

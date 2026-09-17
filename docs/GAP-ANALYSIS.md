@@ -18,7 +18,7 @@
 | Preferences | ✅ Theme, default mem/CPU, autoprotect defaults |
 | About dialog | ✅ Version + feature list + keyboard shortcuts |
 | VNC/SPICE display | ✅ Auto-connect + Web VNC WS proxy + canvas framebuffer |
-| Serial console | ✅ Ring buffer + reader thread + Web WebSocket serial |
+| Serial console | Live WebSocket-to-Unix-socket relay; see [PRD](PRD.md#key-features-v10) |
 | Keyboard shortcuts | ✅ Ctrl+N/W/E, F2/F11, DEL, Ctrl+Shift+N, Ctrl+I |
 | Context menu | ✅ Right-click popup with full action set |
 | Autoprotect | ✅ Interval-based auto-snapshots with prune |
