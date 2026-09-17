@@ -33,6 +33,9 @@ globals in `appstate.zig`.
 - **Leaf helpers:** `sync` `usock` `appio` `fbmath`
   `snapparse` `ovf` `autoprotect` `path_helpers` `hostinfo`
   (host CPU/RAM capacity for the dashboard).
+- **Storage paths:** `path_helpers` owns `configDir`, `vmsPath`, and `networksPath`,
+  resolving `HANGAR_CONFIG_HOME` with a `HOME` fallback. Persistence modules use
+  these helpers without importing application state.
 
 ## Local Contracts
 - **Add a `VmConfig` field →** update `VmJson` + `emitVmJson` + `parseVmObject` +

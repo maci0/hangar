@@ -1,21 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! Shared global state for the Hangar web backend and CLI tools.
 //!
-//! All VM arrays, session state, VNC/SPICE clients, and small cross-cutting
-//! helpers live here so that persist, vnet, and the handler modules can share
-//! them without circular imports.
+//! VM arrays, session state, transition guards, and VMM handles shared by handlers.
 
 const std = @import("std");
 const vm = @import("vm.zig");
 const sync = @import("sync.zig");
 const hv_iface = @import("hv/interface.zig");
 const hv_backend = @import("hv/qemu_backend.zig");
-const appio = @import("appio.zig");
 
 pub const MAX_VMS = vm.MAX_VMS;
-
-extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
-extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 // ── VM state ────────────────────────────────────────────────────────
 
@@ -131,39 +125,6 @@ pub fn destroyVmmHandle(idx: usize) void {
     }
 }
 
-// ── Config path helpers ────────────────────────────────────────────
-
-/// Read an env var, treating an empty value as unset.
-fn getenvNonEmpty(key: [*:0]const u8) ?[]const u8 {
-    const v = appio.getenv(key) orelse return null;
-    return if (v.len > 0) v else null;
-}
-
-fn configHome() ?[]const u8 {
-    // Treat an env var set to the empty string as unset: an empty
-    // HANGAR_CONFIG_HOME/HOME would otherwise produce filesystem-root paths
-    // like "/.config/hangar/vms.json" instead of falling through correctly.
-    return getenvNonEmpty("HANGAR_CONFIG_HOME") orelse getenvNonEmpty("HOME");
-}
-
-/// Return the hangar config directory path, or null if no config home is set.
-pub fn configDir(buf: *[512]u8) ?[]const u8 {
-    const home = configHome() orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/hangar", .{home}) catch null;
-}
-
-/// Return the path to vms.json, or null if no config home is set.
-pub fn vmsPath(buf: *[512]u8) ?[]const u8 {
-    const home = configHome() orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/hangar/vms.json", .{home}) catch null;
-}
-
-/// Return the path to networks.json, or null if no config home is set.
-pub fn networksPath(buf: *[512]u8) ?[]const u8 {
-    const home = configHome() orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/.config/hangar/networks.json", .{home}) catch null;
-}
-
 // ── Tests ───────────────────────────────────────────────────────────
 
 test "appstate: transition guard claim/refuse/release by id" {
@@ -192,80 +153,6 @@ test "appstate: idxById resolves a stable id to its current slot" {
     vm_count = 0;
 }
 
-test "appstate: configDir returns expected suffix when HOME is set" {
-    var buf: [512]u8 = undefined;
-    if (configDir(&buf)) |path| {
-        try std.testing.expect(std.mem.endsWith(u8, path, "/.config/hangar"));
-    }
-}
-
-test "appstate: vmsPath returns expected suffix when HOME is set" {
-    var buf: [512]u8 = undefined;
-    if (vmsPath(&buf)) |path| {
-        try std.testing.expect(std.mem.endsWith(u8, path, "/.config/hangar/vms.json"));
-    }
-}
-
-test "appstate: networksPath returns expected suffix when HOME is set" {
-    var buf: [512]u8 = undefined;
-    if (networksPath(&buf)) |path| {
-        try std.testing.expect(std.mem.endsWith(u8, path, "/.config/hangar/networks.json"));
-    }
-}
-
-test "appstate: config path helpers return null when HOME is unset" {
-    // Save and clear HOME.
-    const saved = appio.getenv("HOME");
-    const saved_config = appio.getenv("HANGAR_CONFIG_HOME");
-    defer {
-        if (saved) |v| _ = setenv("HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HOME");
-        if (saved_config) |v| _ = setenv("HANGAR_CONFIG_HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HANGAR_CONFIG_HOME");
-    }
-    _ = unsetenv("HOME");
-    _ = unsetenv("HANGAR_CONFIG_HOME");
-
-    var buf: [512]u8 = undefined;
-    try std.testing.expect(configDir(&buf) == null);
-    try std.testing.expect(vmsPath(&buf) == null);
-    try std.testing.expect(networksPath(&buf) == null);
-}
-
-test "appstate: empty config-home env vars are treated as unset" {
-    const saved_home = appio.getenv("HOME");
-    const saved_config = appio.getenv("HANGAR_CONFIG_HOME");
-    defer {
-        if (saved_home) |v| _ = setenv("HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HOME");
-        if (saved_config) |v| _ = setenv("HANGAR_CONFIG_HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HANGAR_CONFIG_HOME");
-    }
-
-    // Empty HANGAR_CONFIG_HOME must fall through to HOME rather than yielding
-    // a filesystem-root path.
-    _ = setenv("HANGAR_CONFIG_HOME", "", 1);
-    _ = setenv("HOME", "/tmp/hangar-home-test", 1);
-    var buf: [512]u8 = undefined;
-    const path = vmsPath(&buf) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("/tmp/hangar-home-test/.config/hangar/vms.json", path);
-
-    // Both empty → no config home at all.
-    _ = setenv("HOME", "", 1);
-    try std.testing.expect(vmsPath(&buf) == null);
-}
-
-test "appstate: HANGAR_CONFIG_HOME overrides HOME" {
-    const saved_home = appio.getenv("HOME");
-    const saved_config = appio.getenv("HANGAR_CONFIG_HOME");
-    defer {
-        if (saved_home) |v| _ = setenv("HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HOME");
-        if (saved_config) |v| _ = setenv("HANGAR_CONFIG_HOME", @ptrCast(v.ptr), 1) else _ = unsetenv("HANGAR_CONFIG_HOME");
-    }
-    _ = setenv("HOME", "/home/ignored", 1);
-    _ = setenv("HANGAR_CONFIG_HOME", "/tmp/hangar-config-test", 1);
-
-    var buf: [512]u8 = undefined;
-    const path = configDir(&buf).?;
-    try std.testing.expectEqualStrings("/tmp/hangar-config-test/.config/hangar", path);
-}
-
 test "appstate: getVmmHandle out-of-bounds returns null" {
     // vm_count defaults to 0, so any idx should return null.
     vm_count = 0;
@@ -285,17 +172,4 @@ test "appstate: destroyVmmHandle null handle no-ops" {
     destroyVmmHandle(0);
     // A no-op on a null slot must leave the slot null (no spurious handle).
     try std.testing.expectEqual(@as(?hv_iface.VmmHandle, null), g_vmm_handles[0]);
-}
-
-test "appstate: fuzz config path helpers never panic" {
-    var prng = std.Random.DefaultPrng.init(0x570A7E57);
-    const rnd = prng.random();
-    for (0..1000) |_| {
-        var buf: [512]u8 = undefined;
-        // Fill with random data before each call.
-        for (&buf) |*b| b.* = rnd.int(u8);
-        _ = configDir(&buf);
-        _ = vmsPath(&buf);
-        _ = networksPath(&buf);
-    }
 }

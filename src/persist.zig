@@ -16,7 +16,7 @@
 
 const std = @import("std");
 const appio = @import("appio.zig");
-const appstate = @import("appstate.zig");
+const path_helpers = @import("path_helpers.zig");
 const vm = @import("vm.zig");
 const wlog = @import("wlog.zig");
 
@@ -607,7 +607,7 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
 
     // Ensure config directory exists.
     var dir_buf: [512]u8 = undefined;
-    if (appstate.configDir(&dir_buf)) |dir_path| {
+    if (path_helpers.configDir(&dir_buf)) |dir_path| {
         // Owner-only (0o700): the config dir holds VM inventory with paths and
         // MAC addresses: keep it unreadable to other local users.
         _ = std.Io.Dir.cwd().createDirPathStatus(appio.io(), dir_path, .fromMode(0o700)) catch {
@@ -616,7 +616,7 @@ pub fn save(vms: []const vm.VmConfig, count: usize, prefs: vm.Prefs) !void {
     }
 
     var path_buf: [512]u8 = undefined;
-    const file_path = appstate.vmsPath(&path_buf) orelse return error.HomeNotFound;
+    const file_path = path_helpers.vmsPath(&path_buf) orelse return error.HomeNotFound;
 
     // Build JSON in memory. Reserve up front so the page-allocator-backed
     // ArrayList does not repeatedly remap as ~200 small slices are appended
@@ -1545,7 +1545,7 @@ pub fn load(vms: *[MAX_VMS]vm.VmConfig, allocator: std.mem.Allocator, prefs_out:
     prefs_out.* = .{};
     prefs_out.theme = .light;
     var path_buf: [512]u8 = undefined;
-    const file_path = appstate.vmsPath(&path_buf) orelse return 0;
+    const file_path = path_helpers.vmsPath(&path_buf) orelse return 0;
 
     const content = std.Io.Dir.cwd().readFileAlloc(
         appio.io(),

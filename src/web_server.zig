@@ -1128,7 +1128,7 @@ fn handleVideoWs(conn: c.fd_t, req: []const u8) void {
 /// Caller owns the returned memory.
 fn serveConfigRawAlloc() ?[]u8 {
     var path_buf: [512]u8 = undefined;
-    const path = appstate.vmsPath(&path_buf) orelse return null;
+    const path = path_helpers.vmsPath(&path_buf) orelse return null;
     const raw = std.Io.Dir.cwd().readFileAlloc(
         appio.io(),
         path,

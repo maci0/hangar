@@ -13,7 +13,7 @@
 
 const std = @import("std");
 const appio = @import("appio.zig");
-const appstate = @import("appstate.zig");
+const path_helpers = @import("path_helpers.zig");
 const wlog = @import("wlog.zig");
 
 /// Hard cap on virtual switches. VMware Workstation exposes VMnet0..VMnet19.
@@ -305,7 +305,7 @@ pub fn save(set: *const NetworkSet) !void {
     const alloc = std.heap.page_allocator;
 
     var dir_buf: [512]u8 = undefined;
-    if (appstate.configDir(&dir_buf)) |dir_path| {
+    if (path_helpers.configDir(&dir_buf)) |dir_path| {
         // Owner-only (0o700): keep network config unreadable to other local users.
         _ = std.Io.Dir.cwd().createDirPathStatus(appio.io(), dir_path, .fromMode(0o700)) catch {
             wlog.logErr("vnet: createDirPath failed");
@@ -313,7 +313,7 @@ pub fn save(set: *const NetworkSet) !void {
     }
 
     var path_buf: [512]u8 = undefined;
-    const file_path = appstate.networksPath(&path_buf) orelse return error.HomeNotFound;
+    const file_path = path_helpers.networksPath(&path_buf) orelse return error.HomeNotFound;
 
     const json = try toJson(set, alloc);
     defer alloc.free(json);
@@ -587,7 +587,7 @@ pub fn fromJson(content: []const u8) NetworkSet {
 pub fn load() NetworkSet {
     const alloc = std.heap.page_allocator;
     var path_buf: [512]u8 = undefined;
-    const file_path = appstate.networksPath(&path_buf) orelse return NetworkSet.defaults();
+    const file_path = path_helpers.networksPath(&path_buf) orelse return NetworkSet.defaults();
 
     const content = std.Io.Dir.cwd().readFileAlloc(
         appio.io(),
