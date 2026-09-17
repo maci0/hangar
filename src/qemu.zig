@@ -499,6 +499,7 @@ const gvproxy_qemu_socket = "/tmp/hangar-gvproxy-qemu.sock";
 /// freed before the argv is handed to `execvp`.
 const ArgBuffers = struct {
     mach_buf: [64]u8 = undefined,
+    cpu_buf: [256]u8 = undefined,
     smp_buf: [32]u8 = undefined,
     mem_buf: [32]u8 = undefined,
     disk_buf: [vm.MAX_PATH + 192]u8 = undefined,
@@ -622,7 +623,11 @@ fn buildArgs(config: *const vm.VmConfig, args: *std.ArrayList([]const u8), alloc
     try args.append(alloc, mach_str);
     try args.append(alloc, "-cpu");
     if (config.hyperv_enlightenments) {
-        try args.append(alloc, "host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time,hv_vpindex,hv_runtime,hv_synic,hv_stimer,hv_reset,hv_frequencies,hv_tlbflush,hv_reenlightenment,hv_ipi");
+        try args.append(alloc, try std.fmt.bufPrint(
+            &bufs.cpu_buf,
+            "{s},hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time,hv_vpindex,hv_runtime,hv_synic,hv_stimer,hv_reset,hv_frequencies,hv_tlbflush,hv_reenlightenment,hv_ipi",
+            .{std.mem.span(config.cpu_model.toStr())},
+        ));
     } else {
         const cpu_str = config.cpu_model.toStr();
         try args.append(alloc, std.mem.span(cpu_str));
@@ -1775,6 +1780,7 @@ test "fuzz: buildScriptStr never crashes on random configs" {
         var c = vm.VmConfig{};
         c.cpu_cores = rnd.int(u32);
         c.cpu_sockets = rnd.int(u32);
+        c.cpu_model = vm.CpuModel.fromIndex(rnd.uintLessThan(usize, vm.CpuModel.count));
         c.memory_mb = rnd.int(u32);
         c.disk_size_gb = rnd.int(u32);
         c.disk2_size_gb = rnd.int(u32);
@@ -2778,6 +2784,37 @@ test "qemu: buildScriptStr with hyperv_enlightenments emits hv flags" {
     try expect(has(s, "hv_relaxed"));
     try expect(has(s, "hv_spinlocks=0x1fff"));
     try expect(has(s, "hv_vapic"));
+}
+
+test "qemu: Hyper-V enlightenments preserve the selected CPU model" {
+    for (0..vm.CpuModel.count) |i| {
+        for ([_]bool{ false, true }) |enabled| {
+            var cfg = vm.VmConfig{};
+            cfg.cpu_model = vm.CpuModel.fromIndex(i);
+            cfg.hyperv_enlightenments = enabled;
+            var args: std.ArrayList([]const u8) = .empty;
+            defer args.deinit(talloc);
+            var bufs: ArgBuffers = .{};
+            try buildArgs(&cfg, &args, talloc, &bufs);
+            var cpu_count: usize = 0;
+            for (args.items, 0..) |arg, arg_index| {
+                if (!std.mem.eql(u8, arg, "-cpu")) continue;
+                cpu_count += 1;
+                const cpu = args.items[arg_index + 1];
+                const model_end = std.mem.indexOfScalar(u8, cpu, ',') orelse cpu.len;
+                try std.testing.expectEqualStrings(std.mem.span(cfg.cpu_model.toStr()), cpu[0..model_end]);
+                if (enabled) {
+                    try std.testing.expectEqualStrings(
+                        ",hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time,hv_vpindex,hv_runtime,hv_synic,hv_stimer,hv_reset,hv_frequencies,hv_tlbflush,hv_reenlightenment,hv_ipi",
+                        cpu[model_end..],
+                    );
+                } else {
+                    try std.testing.expectEqual(model_end, cpu.len);
+                }
+            }
+            try std.testing.expectEqual(@as(usize, 1), cpu_count);
+        }
+    }
 }
 
 test "qemu: buildScriptStr with watchdog emits watchdog args" {
