@@ -2432,6 +2432,7 @@ fn livenessTicker() void {
 
 /// Background thread: periodically take AutoProtect snapshots for VMs that have it enabled.
 fn autoprotectTicker() void {
+    var save_pending = false;
     while (true) {
         appio.sleepMs(30_000);
 
@@ -2482,6 +2483,8 @@ fn autoprotectTicker() void {
             work_count += 1;
         }
         appstate.vms_mutex.unlock();
+
+        save_pending = save_pending or work_count > 0;
 
         // Perform snapshot I/O outside the lock, through each VM's live QMP
         // monitor (savevm/info snapshots/delvm). qemu-img is unusable here: the
@@ -2540,12 +2543,74 @@ fn autoprotectTicker() void {
             }
         }
 
-        // Re-acquire lock only for the save
-        appstate.vms_mutex.lock();
-        persist.save(&appstate.vms, appstate.vm_count, appstate.prefs) catch |e| {
+        saveAutoprotectProgress(&save_pending) catch |e| {
             logSaveErr("", e);
         };
-        appstate.vms_mutex.unlock();
+    }
+}
+
+fn saveAutoprotectProgress(save_pending: *bool) !void {
+    if (!save_pending.*) return;
+    appstate.vms_mutex.lock();
+    defer appstate.vms_mutex.unlock();
+    try persist.save(&appstate.vms, appstate.vm_count, appstate.prefs);
+    save_pending.* = false;
+}
+
+test "saveAutoprotectProgress: saves once while pending, stops after success" {
+    var cfg_home = try TestConfigHome.init("ap-save-gate");
+    defer cfg_home.deinit();
+
+    var path_buf: [512]u8 = undefined;
+    const vms_path = path_helpers.vmsPath(&path_buf).?;
+
+    var pending = false;
+    try saveAutoprotectProgress(&pending);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(appio.io(), vms_path, .{}));
+
+    pending = true;
+    try saveAutoprotectProgress(&pending);
+    try std.testing.expect(!pending);
+    const stat_after = try std.Io.Dir.cwd().statFile(appio.io(), vms_path, .{});
+
+    try saveAutoprotectProgress(&pending);
+    try std.testing.expect(!pending);
+    const stat_idle = try std.Io.Dir.cwd().statFile(appio.io(), vms_path, .{});
+    try std.testing.expectEqual(stat_after.inode, stat_idle.inode);
+
+    try std.Io.Dir.cwd().deleteFile(appio.io(), vms_path);
+    try std.Io.Dir.cwd().createDir(appio.io(), vms_path, .default_dir);
+    pending = true;
+    if (saveAutoprotectProgress(&pending)) |_| {
+        return error.ExpectedSaveFailure;
+    } else |_| {}
+    try std.testing.expect(pending);
+
+    try std.Io.Dir.cwd().deleteDir(appio.io(), vms_path);
+    try saveAutoprotectProgress(&pending);
+    try std.testing.expect(!pending);
+    _ = try std.Io.Dir.cwd().statFile(appio.io(), vms_path, .{});
+}
+
+test "saveAutoprotectProgress fuzz: only pending ticks replace the config" {
+    var cfg_home = try TestConfigHome.init("ap-save-fuzz");
+    defer cfg_home.deinit();
+    var path_buf: [512]u8 = undefined;
+    const vms_path = path_helpers.vmsPath(&path_buf).?;
+    var pending = true;
+    try saveAutoprotectProgress(&pending);
+    var previous = try std.Io.Dir.cwd().statFile(appio.io(), vms_path, .{});
+
+    var prng = std.Random.DefaultPrng.init(0xA1705A7E);
+    const rnd = prng.random();
+    for (0..32) |_| {
+        const dirty = rnd.boolean();
+        pending = dirty;
+        try saveAutoprotectProgress(&pending);
+        try std.testing.expect(!pending);
+        const current = try std.Io.Dir.cwd().statFile(appio.io(), vms_path, .{});
+        try std.testing.expectEqual(dirty, previous.inode != current.inode);
+        previous = current;
     }
 }
 
