@@ -85,7 +85,7 @@ const usage =
     \\
 ;
 
-const version = "vmrun 0.1.0\n";
+const version = "vmrun 0.2.0\n";
 
 /// Write a slice to a file descriptor using its real length.
 /// Replaces error-prone hand-counted byte lengths in `c.write` calls.

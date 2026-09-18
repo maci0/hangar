@@ -138,12 +138,11 @@ lifecycle already goes through a dispatch table (`src/hv/`).
 
 ## Release notes and upgrades
 
-`v0.1.0` is the first and latest tagged release. The changes below are unreleased;
-`build.zig.zon` and the private frontend-test `package.json` still declare
-`0.1.0`. With only one release tag and no stated compatibility or deprecation
-policy, version history does not establish a compatibility guarantee.
+`v0.2.0` is the latest tagged release. `build.zig.zon` and the private
+frontend-test `package.json` declare `0.2.0`. There is no stated compatibility
+or deprecation policy.
 
-### Unreleased
+### v0.2.0 (2026-09-18)
 
 #### Changed: API key validation
 
@@ -215,6 +214,15 @@ changes. Review the CPU settings above before restarting guests on either versio
 
 - Framebuffer polling no longer leaves the framebuffer lock held when no pixels
   are available, preventing subsequent polls and updates from deadlocking.
+- The web UI shows VM uptime from daemon elapsed seconds, and restores the
+  global tools, context-menu target, and search.
+- Cloning a missing VM returns HTTP 404 instead of 409 with a full inventory.
+- `vmrun` honors help and version in every argument position, keeps list
+  records intact for names that contain braces, and rejects invalid
+  `KV_API_KEY` values before connecting.
+- QMP clients disconnect after a failed read and after the async event cap.
+- Unix socket I/O is bounded so a hung peer cannot stall the daemon.
+- Re-opening a dialog during its close animation no longer hides the new prompt.
 
 ### v0.1.0 (2026-08-26)
 

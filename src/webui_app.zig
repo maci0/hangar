@@ -192,7 +192,7 @@ const usage =
     \\
 ;
 
-const version_str = "hangar-webui 0.1.0\n";
+const version_str = "hangar-webui 0.2.0\n";
 
 /// Argument classes for the desktop wrapper's minimal flag set. It takes no
 /// positional arguments, so a bare word is `.other` and the app launches; a

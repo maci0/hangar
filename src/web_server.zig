@@ -4315,7 +4315,7 @@ const daemon_usage =
     \\
 ;
 
-const daemon_version = "hangar-web 0.1.0\n";
+const daemon_version = "hangar-web 0.2.0\n";
 
 /// The argument classes the daemon recognizes. It takes no positional
 /// arguments. The bare word `help` is accepted as a `.help` alias (matching
@@ -4495,7 +4495,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     std.debug.print("\n╔══════════════════════════════════════════════╗\n", .{});
-    std.debug.print("║  Hangar Daemon v0.1.0                       ║\n", .{});
+    std.debug.print("║  Hangar Daemon v0.2.0                       ║\n", .{});
     std.debug.print("║  TCP:   http://{s}:{d}\n", .{ if (expose_all) "0.0.0.0" else "127.0.0.1", port });
     std.debug.print("║  Unix:  unix://{s}       ║\n", .{unix_path});
     std.debug.print("║  Health: GET /api/health                    ║\n", .{});
