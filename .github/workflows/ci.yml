@@ -51,4 +51,6 @@ jobs:
           zig build lint-shell
           zig build lint-js
       - name: Hermetic unit + fuzz tests
-        run: zig build test --summary all
+        # Serial + verbose so a wedged test names itself in the log. `timeout`
+        # is a backstop: without it a hung listener burns the whole job budget.
+        run: timeout --foreground --signal=TERM 25m zig build -j1 test --summary all --verbose
