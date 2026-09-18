@@ -17,7 +17,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -51,6 +51,4 @@ jobs:
           zig build lint-shell
           zig build lint-js
       - name: Hermetic unit + fuzz tests
-        # Serial + verbose so a wedged test names itself in the log. `timeout`
-        # is a backstop: without it a hung listener burns the whole job budget.
-        run: timeout --foreground --signal=TERM 25m zig build -j1 test --summary all --verbose
+        run: zig build test --summary all

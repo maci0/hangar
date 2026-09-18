@@ -2018,11 +2018,13 @@ test "qemu: bridge network + UEFI firmware flags" {
     var cfg = vm.VmConfig{};
     cfg.nics[0].mode = .bridge;
     cfg.firmware = .uefi;
-    const s = try buildScriptStr(&cfg, talloc);
+    // Hosts without OVMF (CI runners) cannot emit -bios; skip rather than fail.
+    const s = buildScriptStr(&cfg, talloc) catch |err| switch (err) {
+        error.OvmfNotFound => return error.SkipZigTest,
+        else => return err,
+    };
     defer talloc.free(s);
     try expect(has(s, "bridge,id=net0,br=br0"));
-    // UEFI selects OVMF via -bios when findOvmfPath() locates the firmware
-    // (otherwise buildScriptStr returns OvmfNotFound).
     try expect(has(s, "-bios"));
 }
 

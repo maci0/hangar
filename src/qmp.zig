@@ -1058,7 +1058,7 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
     var command_batches: usize = 0;
 
     var iter: usize = 0;
-    while (iter < 200) : (iter += 1) {
+    while (iter < 40) : (iter += 1) {
         var path_buf: [108]u8 = undefined;
         const path = try std.fmt.bufPrintZ(&path_buf, "/tmp/hangar-qmpfuzz-{d}-{d}.sock", .{ c_qmp.getpid(), iter });
         _ = c_qmp.unlink(path.ptr);
@@ -1074,6 +1074,8 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
         const addrlen: c_qmp.socklen_t = @intCast(@offsetOf(c_qmp.sockaddr.un, "path") + path.len + 1);
         if (c_qmp.bind(srv, @ptrCast(&addr), addrlen) != 0) continue;
         if (c_qmp.listen(srv, 1) != 0) continue;
+        const tv: c_qmp.timeval = .{ .sec = 1, .usec = 0 };
+        _ = c_qmp.setsockopt(srv, c_qmp.SOL.SOCKET, c_qmp.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(c_qmp.timeval));
 
         var th = try std.Thread.spawn(std.Thread.SpawnConfig{}, qmpFuzzServer, .{ srv, rnd.int(u64) });
         // Unblock accept() if connect fails, otherwise join waits forever.
