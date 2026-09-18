@@ -23,7 +23,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Zig 0.16.0
-        uses: mlugg/setup-zig@53fc45b17fe98b52f92ee5ea08ff48a85a3e7eb7
+        # v2.2.1: v1 fetches zig-linux-x86_64-*.tar.xz, which 404s for 0.16.0
+        # (tarball names flipped to zig-x86_64-linux-* in 0.14.1).
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: 0.16.0
       - name: Install Bun
