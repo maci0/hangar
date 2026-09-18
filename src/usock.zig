@@ -97,7 +97,10 @@ test "usock: connect/write/read/close round-trip over a real listener" {
         }
     };
     var th = try std.Thread.spawn(std.Thread.SpawnConfig{}, Echo.run, .{srv});
-    defer th.join();
+    defer {
+        _ = c.shutdown(srv, 2);
+        th.join();
+    }
 
     const stream = try UnixStream.connect(path);
     defer stream.close();

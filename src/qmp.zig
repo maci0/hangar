@@ -1076,7 +1076,11 @@ test "fuzz: QmpClient survives a malformed/garbage server" {
         if (c_qmp.listen(srv, 1) != 0) continue;
 
         var th = try std.Thread.spawn(std.Thread.SpawnConfig{}, qmpFuzzServer, .{ srv, rnd.int(u64) });
-        defer th.join();
+        // Unblock accept() if connect fails, otherwise join waits forever.
+        defer {
+            _ = c_qmp.shutdown(srv, 2);
+            th.join();
+        }
 
         var client = QmpClient{};
         // connect drives readLine + readResponse against the garbage greeting.

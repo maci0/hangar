@@ -20,6 +20,11 @@ const c = @cImport({
 
 const alloc = std.heap.c_allocator;
 
+/// libvncclient treats 0 as "wait forever". Bound handshake and reads so a
+/// missing or stalled RFB peer cannot wedge the caller.
+const RFB_CONNECT_TIMEOUT_S: c_uint = 5;
+const RFB_READ_TIMEOUT_S: c_uint = 5;
+
 pub const VncClient = struct {
     rfb: [*c]c.rfbClient = null,
     thread: ?std.Thread = null,
@@ -58,6 +63,8 @@ pub const VncClient = struct {
 
         const cl: [*c]c.rfbClient = c.rfbGetClient(8, 3, 4);
         if (cl == null) return false;
+        cl.*.connectTimeout = RFB_CONNECT_TIMEOUT_S;
+        cl.*.readTimeout = RFB_READ_TIMEOUT_S;
 
         // BGRA pixel format.
         cl.*.format.redShift = 16;
@@ -468,7 +475,10 @@ test "fuzz: VNC client against a minimal/fuzzed RFB server (connect/poll/onMallo
         const dims = [_][2]u16{ .{ 64, 48 }, .{ 1024, 768 }, .{ 2048, 2048 }, .{ 1, 1 } };
         const d = dims[iter % dims.len];
         var th = std.Thread.spawn(std.Thread.SpawnConfig{}, rfbFuzzServer, .{ srv, d[0], d[1], rnd.int(u64) }) catch continue;
-        defer th.join();
+        defer {
+            _ = cc.shutdown(srv, 2);
+            th.join();
+        }
 
         const client = VncClient.new() orelse continue;
         defer client.free();

@@ -792,6 +792,10 @@ test "Connection.connect + request: TCP round-trip via localhost" {
     };
     const server = ServerCtx{ .lfd = lfd };
     const th = try std.Thread.spawn(std.Thread.SpawnConfig{}, ServerCtx.run, .{server});
+    defer {
+        _ = c.shutdown(lfd, 2);
+        th.join();
+    }
 
     // Connect and send a request.
     var host_buf: [32]u8 = undefined;
@@ -804,8 +808,6 @@ test "Connection.connect + request: TCP round-trip via localhost" {
     const n = conn.request("GET", "/api/status", null, &resp);
     try std.testing.expect(n > 0);
     try std.testing.expect(std.mem.indexOf(u8, resp[0..n], "{\"ok\":true}") != null);
-
-    th.join();
 }
 
 test "Connection.request redials for a second request (Connection: close)" {
@@ -921,6 +923,10 @@ test "Connection.request over Unix sends valid HTTP (regression: no //api framin
     var reqlen: usize = 0;
     const server = ServerCtx{ .lfd = lfd, .req = &reqbuf, .req_len = &reqlen };
     const th = try std.Thread.spawn(std.Thread.SpawnConfig{}, ServerCtx.run, .{server});
+    defer {
+        _ = c.shutdown(lfd, 2);
+        th.join();
+    }
 
     var url_buf: [64]u8 = undefined;
     const urlstr = try std.fmt.bufPrint(&url_buf, "unix://{s}", .{path});
@@ -930,7 +936,6 @@ test "Connection.request over Unix sends valid HTTP (regression: no //api framin
 
     var resp: [256]u8 = undefined;
     const n = conn.request("POST", "/api/vms/0/power", "x=1", &resp);
-    th.join();
 
     try std.testing.expect(n > 0);
     try std.testing.expect(std.mem.indexOf(u8, resp[0..n], "{\"ok\":true}") != null);
