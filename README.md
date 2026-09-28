@@ -138,9 +138,15 @@ lifecycle already goes through a dispatch table (`src/hv/`).
 
 ## Release notes and upgrades
 
-`v0.2.0` is the latest tagged release. `build.zig.zon` and the private
-frontend-test `package.json` declare `0.2.0`. There is no stated compatibility
+`v0.3.0` is the latest tagged release. `build.zig.zon` and the private
+frontend-test `package.json` declare `0.3.0`. There is no stated compatibility
 or deprecation policy.
+
+### v0.3.0 (2026-09-28)
+
+No functional changes since `v0.2.0`. No other branches were merged. Version
+strings on the daemon, `vmrun`, and the native wrapper match this tag. The
+`v0.2.0` upgrade and rollback precautions still apply.
 
 ### v0.2.0 (2026-09-18)
 
