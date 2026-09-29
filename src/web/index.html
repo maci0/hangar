@@ -27,6 +27,7 @@
     <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
     <symbol id="i-theme" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></symbol>
     <symbol id="i-more" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></symbol>
     <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></symbol>
@@ -58,7 +59,7 @@
 </svg>
 
 <div id="connbanner" role="alert" aria-live="assertive" style="display:none">
-  <span><span aria-hidden="true">⚠ </span>Connection lost: retrying automatically</span>
+  <span>Connection lost: retrying automatically</span>
   <button class="btn" data-action="dismissBanner">Dismiss</button>
 </div>
 
@@ -242,7 +243,7 @@
 <!-- New VM Dialog -->
 <dialog id="newdlg" aria-label="New Virtual Machine">
   <form method="dialog">
-    <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">New Virtual Machine</h3>
+    <h3>New Virtual Machine</h3>
     <div style="padding:16px 20px">
       <label for="n_name">Name <span class="req" aria-hidden="true">*</span></label>
       <input id="n_name" type="text" required maxlength="80" style="width:100%;margin:4px 0 12px">
@@ -272,7 +273,7 @@
 
 <!-- Snapshot Dialog -->
 <dialog id="importdlg" aria-label="Import Virtual Machine">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Import Virtual Machine</h3>
+  <h3>Import Virtual Machine</h3>
   <div style="padding:16px 20px">
     <p class="muted" style="margin:0 0 12px;font-size:12px">Imports an existing disk image as a new VM. The image is used in place; it is not copied.</p>
     <label for="imp_path">Disk Image Path <span class="req" aria-hidden="true">*</span></label>
@@ -289,7 +290,7 @@
 </dialog>
 
 <dialog id="snapdlg" aria-label="Snapshot Manager">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Snapshot Manager</h3>
+  <h3>Snapshot Manager</h3>
   <div style="padding:16px 20px">
     <div id="snapMeta" class="dialog-meta"></div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
@@ -305,7 +306,7 @@
 
 <!-- Clone Dialog -->
 <dialog id="clonedlg" aria-label="Clone VM">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Clone Virtual Machine</h3>
+  <h3>Clone Virtual Machine</h3>
   <div style="padding:16px 20px">
     <p>Clone <strong id="clone_name"></strong>?</p>
   </div>
@@ -318,7 +319,7 @@
 
 <!-- VNet Editor Dialog -->
 <dialog id="vnetdlg" aria-label="Virtual Network Editor" style="width:min(620px,95vw)">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Virtual Network Editor</h3>
+  <h3>Virtual Network Editor</h3>
   <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
     <div>
       <div id="vnet_sel" class="vnet-list" role="listbox" aria-label="Network list"></div>
@@ -350,7 +351,7 @@
 </dialog>
 
 <dialog id="topodlg" aria-label="Network Topology" style="width:min(1000px,96vw)">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Network Topology</h3>
+  <h3>Network Topology</h3>
   <p style="padding:4px 20px 0;color:var(--text-dim);font-size:12px">Virtual networks, the VMs attached to each (by NIC mode), and the host uplink. Click a VM to open it; click a network to edit it.</p>
   <div id="topoWrap" class="topo-wrap"><div class="topo-loading">Computing layout…</div></div>
   <div class="btn-row">
@@ -361,7 +362,7 @@
 
 <!-- Preferences Dialog -->
 <dialog id="prefsdlg" aria-label="Preferences">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Preferences</h3>
+  <h3>Preferences</h3>
   <div style="padding:16px 20px">
     <label for="p_theme">Theme</label>
     <select id="p_theme" data-action="applyTheme" style="width:100%;margin:4px 0 12px">
@@ -392,9 +393,9 @@
 
 <!-- About Dialog -->
 <dialog id="aboutdlg" aria-label="About Hangar">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">About Hangar</h3>
+  <h3>About Hangar</h3>
   <div style="padding:16px 20px;text-align:center">
-    <div style="width:48px;height:48px;background:var(--gradient);border-radius:var(--radius);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--text-on-accent);margin-bottom:12px">H</div>
+    <div style="width:48px;height:48px;background:var(--accent);border-radius:var(--radius-lg);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--text-on-accent);margin-bottom:12px">H</div>
     <p style="font-weight:600;font-size:15px">Hangar VM Manager</p>
     <p style="color:var(--text-muted);font-size:13px;margin-top:4px">Lightweight QEMU VM manager</p>
     <p style="color:var(--text-dim);font-size:12px;margin-top:8px">Zig + QEMU + noVNC/SPICE web UI</p>
@@ -407,7 +408,7 @@
 
 <!-- QEMU Log Dialog -->
 <dialog id="logdlg" aria-label="QEMU Log">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">QEMU Log, <span id="log_vmname"></span></h3>
+  <h3>QEMU Log, <span id="log_vmname"></span></h3>
   <div style="padding:12px 24px">
     <pre id="logbody" style="margin:0;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono,monospace);font-size:12px;background:var(--bg);color:var(--text);padding:12px;border-radius:var(--radius);border:1px solid var(--border)">Loading…</pre>
   </div>
@@ -419,7 +420,7 @@
 
 <!-- Migrate Dialog -->
 <dialog id="migratedlg" aria-label="Migrate VM">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Migrate Virtual Machine</h3>
+  <h3>Migrate Virtual Machine</h3>
   <div style="padding:16px 20px">
     <p style="margin-bottom:12px"><strong id="migrate_vmname"></strong></p>
     <label for="mig_host">Target Host <span class="req" aria-hidden="true">*</span></label>
@@ -437,7 +438,7 @@
 
 <!-- Keyboard Shortcuts Dialog -->
 <dialog id="shortcutsdlg" aria-label="Keyboard Shortcuts">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">Keyboard Shortcuts</h3>
+  <h3>Keyboard Shortcuts</h3>
   <div style="padding:16px 20px">
     <table style="width:100%;font-size:13px;border-collapse:collapse">
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>↑↓</kbd></td><td>Navigate VM list</td></tr>
@@ -467,7 +468,7 @@
 
 <!-- Catalog Dialog -->
 <dialog id="catalogdlg" aria-label="VM Catalog" style="width:min(860px,94vw)">
-  <h3 style="padding:20px 20px 0;font-size:17px;font-weight:600">VM Catalog</h3>
+  <h3>VM Catalog</h3>
   <p style="padding:4px 24px 12px;font-size:12px;color:var(--text-muted)">Choose a template to create a pre-configured VM.</p>
   <div id="catalogList" class="catalog-grid" style="padding:0 24px 22px;max-height:62vh;overflow-y:auto"></div>
   <div class="btn-row">

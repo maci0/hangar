@@ -26,6 +26,31 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
     the metadata header.
 
 ## Local Contracts
+- **Tokens are the only place a visual value is written.** `:root` and
+  `:root.light` each declare the full set: surfaces, `--inset` (the recessed
+  fill behind capacity bars, spec chips, and disabled controls), `--font-sans` /
+  `--font-mono`, and the 5/8/11px `--radius-sm` / `--radius` / `--radius-lg`
+  scale. Never hardcode a radius, an inset gray, or a font stack in a rule or a
+  `style=` attribute, and never write a fallback like
+  `var(--inset,rgba(127,127,127,.18))` for a token `:root` already owns. The sans
+  is the platform UI stack on purpose: this is a desktop-style operator console,
+  not a document surface, and a webfont would render unlike the surrounding
+  desktop.
+- **Iconography is the inline sprite set.** Every control uses a `#i-*` symbol
+  via `<svg class="ico"><use href="#..."/></svg>`. A control that shows state
+  (the theme toggle) swaps the `<use href>` between symbols; it never replaces
+  the button contents with text. A platform emoji in a control is a defect: it
+  ignores the accent and radius tokens and renders at the platform's whim.
+- **Emblem radius follows emblem size**: 20px `.os-badge` -> `--radius-sm`,
+  30px `.vm-emblem` and 34px `.snap-emblem` -> `--radius`, 44px `.cat-emblem` ->
+  `--radius-lg`. The four read as one family; never round them independently.
+- **Dialog chrome comes from the `dialog h3` / `.dialog-body` rules**, not from
+  a per-dialog inline style. Do not add `!important` to the dialog rules to win
+  a cascade fight; the remaining `!important` in the sheet are `#display`
+  stacking overrides and the reduced-motion block.
+- **Stat tiles are not interactive.** `.dash-card` carries no hover transform;
+  reserve elevation-on-hover for things that can be pressed.
+
 - **UI patterns** (keep consistent when adding surfaces): menu items are
   `<button class="menu-item">` with a leading 13px `.ico` sprite svg and trailing `…`
   for dialog-openers; dialog footers are `.btn-row` (right-aligned, primary last,

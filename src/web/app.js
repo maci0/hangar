@@ -19,11 +19,18 @@ window.applyTheme=function(t){
  document.documentElement.classList.toggle('dark',t==='dark');
 };
 window.applyTheme(saved);
-var themeIcons={system:'🌓',light:'☀️',dark:'🌙'};
+// The toggle shows which theme is active through the sprite set (moon / sun /
+// display), not a color emoji: every other toolbar control is a sprite, and a
+// platform emoji is the one glyph that ignores the accent and radius tokens.
+var themeIcons={system:'#i-monitor',light:'#i-sun',dark:'#i-theme'};
 function syncThemeButtons(theme){
  var btns=document.querySelectorAll('.theme-toggle-btn');
  var label='Theme: '+theme.charAt(0).toUpperCase()+theme.slice(1)+' (click to change)';
- for(var i=0;i<btns.length;i++){btns[i].textContent=themeIcons[theme]||'🌓';btns[i].setAttribute('aria-label',label);btns[i].setAttribute('title',label);}
+ for(var i=0;i<btns.length;i++){
+  var use=btns[i].querySelector('use');
+  if(!use){var svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('class','ico');svg.setAttribute('aria-hidden','true');use=document.createElementNS('http://www.w3.org/2000/svg','use');svg.appendChild(use);btns[i].appendChild(svg);}
+  use.setAttribute('href',themeIcons[theme]||themeIcons.system);
+  btns[i].setAttribute('aria-label',label);btns[i].setAttribute('title',label);}
 }
 syncThemeButtons(saved);
 window.matchMedia('(prefers-color-scheme:light)').addEventListener('change',function(){
