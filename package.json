@@ -9,7 +9,8 @@
     "e2e:install": "playwright install chromium",
     "build:web": "bun scripts/build-web.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint --deny-warnings"
+    "lint": "oxlint --deny-warnings",
+    "check:contrast": "bun scripts/contrast.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",

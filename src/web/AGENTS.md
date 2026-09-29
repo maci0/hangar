@@ -20,7 +20,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
   (see On-demand bundles); none of them is a `<script>` in `index.html`.
   - `favicon.svg` is hand-written, not vendored: it is the same mark as
     `.sidebar-header .logo` and the About dialog emblem (flat `--accent` fill,
-    `--radius` corner, one "H"), pinned to a literal color because a favicon
+    `--radius-md` corner, one "H"), pinned to a literal color because a favicon
     resolves no page stylesheet. Keep it that mark; a gradient tile or a letter
     in a different face breaks the one surface every window shows.
   - **Provenance:** every bundle starts with a header comment naming package@version
