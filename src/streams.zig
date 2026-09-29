@@ -520,14 +520,7 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
             return;
         };
         const body: []const u8 = if (std.mem.indexOf(u8, req, "\r\n\r\n")) |bs| req[bs + 4 ..] else "";
-        var raw_name: []const u8 = "";
-        var pairs = std.mem.splitScalar(u8, body, '&');
-        while (pairs.next()) |pair| {
-            var kv = std.mem.splitScalar(u8, pair, '=');
-            const key = kv.next() orelse continue;
-            const val = kv.next() orelse continue;
-            if (std.mem.eql(u8, key, "name")) raw_name = val;
-        }
+        const raw_name: []const u8 = httpreq.formField(body, "name") orelse "";
         if (raw_name.len > 0) {
             const decoded = urlencode.urlDecode(&name_buf2, raw_name);
             if (!vm.isValidVmName(decoded) or std.mem.indexOf(u8, decoded, "..") != null) {

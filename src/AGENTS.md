@@ -109,6 +109,9 @@ globals in `appstate.zig`.
   document. `no-store` stays for API JSON and error bodies, which carry state.
 - **HTTP header lookup:** `httpreq.findHeader` and `parseContentLength` stop at the
   CRLFCRLF boundary; body bytes must never supply header values.
+- **Form-body fields:** read one `key=value` with `httpreq.formField`, which
+  keeps the last value for a repeated key and returns the raw percent-encoded
+  text. Handlers must not open-code the `&`/`=` split.
 - **Logging goes through `wlog`**, never a bare `std.c.write(2, ...)`: one timestamped,
   leveled line per call on `wlog.log_fd`, which defaults to -1 (dropped) in test builds
   so a passing `zig build test` stays silent. Untrusted text (VM names, QEMU/QMP replies,

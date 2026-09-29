@@ -94,7 +94,7 @@ Zig 0.16's C importer rejects GLib headers (they emit file-scope `_Pragma`). No 
   - `vms` / `vm_count` / `vms_mutex`, `prefs`, `g_vmm` + `g_vmm_handles`, undo state.
 - `web_server.zig` is both the local web UI server and the remote daemon. Remote clients (`vmrun`, `webui_app`) talk to it via `transport.zig` (Unix/TCP + HTTP helpers).
 - `web_server.zig` is the router + VM CRUD/lifecycle core; cohesive handler groups and leaf utilities have been carved into their own modules, which `web_server` `@import`s and (for the leaf helpers) aliases so call sites read unchanged:
-  - HTTP plumbing (leaf): `httpreq.zig` (request-line/header/route parsers), `httpresp.zig` (status codes + response writer + `isServerErrToken`/`sanitizeHeaderValue`), `wlog.zig` (structured logging), `netutil.zig` (socket constants + `setTcpNoDelay`), `auth.zig` (API-key check, exempt list, host/WS gates).
+  - HTTP plumbing (leaf): `httpreq.zig` (request-line/header/route parsers + `formField` for one `key=value` of a form body), `httpresp.zig` (status codes + response writer + `isServerErrToken`/`sanitizeHeaderValue`), `wlog.zig` (structured logging), `netutil.zig` (socket constants + `setTcpNoDelay`), `auth.zig` (API-key check, exempt list, host/WS gates).
   - Handler groups: `snapshots.zig`, `migrate.zig`, `disk.zig` (info/compact/resize), `cdrom.zig`, `guestagent.zig`, `streams.zig` (conn-streaming: screenshot/download/upload/exportOva), `wsproxy.zig` (VNC/SPICE/serial relays), `framebuffer.zig`, `vmrender.zig` (list + detail renders). `catalog.zig` is model/persistence, not a handler group.
   - Uniform `POST /api/vms/<id>/<action>` routes and create/save form fields are
     table-driven, not copy-pasted arms; the table names and extension rule are in

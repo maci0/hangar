@@ -2202,15 +2202,8 @@ fn handleImport(req: []const u8) ![]const u8 {
     if (appstate.vm_count >= appstate.MAX_VMS) return "full";
     const body_start = std.mem.indexOf(u8, req, "\r\n\r\n") orelse return "no body";
     const body = req[body_start + 4 ..];
-    // Parse key=value from body (JS sends "path=<encoded-path>")
-    var path: []const u8 = "";
-    var pairs = std.mem.splitScalar(u8, body, '&');
-    while (pairs.next()) |pair| {
-        var kv = std.mem.splitScalar(u8, pair, '=');
-        const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
-        if (std.mem.eql(u8, key, "path")) path = val;
-    }
+    // JS sends "path=<encoded-path>"
+    const path = httpreq.formField(body, "path") orelse return "no path";
     if (path.len == 0) return "no path";
     // URL-decode the path before validation (JS sends encoded).
     var decode_buf: [vm.MAX_PATH]u8 = undefined;

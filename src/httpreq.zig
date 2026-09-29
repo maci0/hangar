@@ -128,6 +128,21 @@ pub fn getBody(req: []const u8) ?[]const u8 {
     return req[body_start + 4 ..];
 }
 
+/// Value of a `key=value` field in a `&`-separated form body, still
+/// percent-encoded. A repeated key keeps its last value, matching the order the
+/// browser submits. Null when the key is absent or has no `=`.
+pub fn formField(body: []const u8, key: []const u8) ?[]const u8 {
+    var found: ?[]const u8 = null;
+    var pairs = std.mem.splitScalar(u8, body, '&');
+    while (pairs.next()) |pair| {
+        var kv = std.mem.splitScalar(u8, pair, '=');
+        const k = kv.next() orelse continue;
+        const v = kv.next() orelse continue;
+        if (std.mem.eql(u8, k, key)) found = v;
+    }
+    return found;
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 test "fuzz: httpreq parsers never panic on random request bytes" {
@@ -144,7 +159,10 @@ test "fuzz: httpreq parsers never panic on random request bytes" {
         _ = parseVmIdxSuffix(req, "GET /ws/vnc/", "");
         _ = findHeader(req, "Content-Length: ");
         if (parseContentLength(req)) |cl| std.debug.assert(cl <= std.math.maxInt(usize));
-        if (getBody(req)) |b| std.debug.assert(b.len <= req.len);
+        if (getBody(req)) |b| {
+            std.debug.assert(b.len <= req.len);
+            if (formField(b, "size")) |v| std.debug.assert(v.len <= b.len);
+        }
         const line = requestLine(req, &out);
         std.debug.assert(line.len <= out.len);
     }
@@ -186,4 +204,18 @@ test "httpreq: header values take precedence over body text" {
 test "httpreq: requestLine sanitizes control bytes" {
     var out: [64]u8 = undefined;
     try std.testing.expectEqualStrings("GET /x", requestLine("GET /x\r\nHost: y", &out));
+}
+
+test "httpreq: formField extracts one key and keeps the last duplicate" {
+    try std.testing.expectEqualStrings("20", formField("size=10&size=20&name=a", "size").?);
+    try std.testing.expectEqualStrings("a", formField("size=10&name=a", "name").?);
+    try std.testing.expectEqualStrings("", formField("size=10&name=", "name").?);
+    try std.testing.expect(formField("size=10&name=a", "dest") == null);
+    try std.testing.expect(formField("size=10&bare", "bare") == null);
+    try std.testing.expect(formField("", "size") == null);
+}
+
+test "httpreq: formField only matches a whole key, not a prefix" {
+    try std.testing.expectEqualStrings("", formField("disk_size=40&size=", "size").?);
+    try std.testing.expect(formField("disk_size=40", "size") == null);
 }

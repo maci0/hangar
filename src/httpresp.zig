@@ -168,6 +168,15 @@ pub fn isServerErrToken(response: []const u8) bool {
     return false;
 }
 
+/// Write a header-only 304 when `req` revalidates against `tag`. Returns true
+/// when the 304 was sent and the caller must skip the full response.
+fn write304IfUnchanged(conn: c.fd_t, tag: ?[]const u8, req: []const u8) bool {
+    const t = tag orelse return false;
+    if (!etagMatches(req, t)) return false;
+    write304Response(conn, t);
+    return true;
+}
+
 /// Write a static asset guarded by a strong content hash: the ETag is
 /// `"<8-byte sha256, hex>"`, computed lazily on first use and cached for the
 /// process lifetime (embedded bytes never change). A request whose
@@ -182,12 +191,7 @@ pub fn writeHttpAssetResponse(
     req: []const u8,
 ) void {
     const etag = assetEtag(body, etag_storage);
-    if (etag) |tag| {
-        if (etagMatches(req, tag)) {
-            write304Response(conn, tag);
-            return;
-        }
-    }
+    if (write304IfUnchanged(conn, etag, req)) return;
     writeHttpResponseTagged(conn, status, ct, body, etag);
 }
 
@@ -204,12 +208,7 @@ pub fn writeHttpShellResponse(
     req: []const u8,
 ) void {
     const etag = assetEtag(body, etag_storage);
-    if (etag) |tag| {
-        if (etagMatches(req, tag)) {
-            write304Response(conn, tag);
-            return;
-        }
-    }
+    if (write304IfUnchanged(conn, etag, req)) return;
     writeHttpResponseCached(conn, HTTP_OK, "text/html; charset=utf-8", body, etag);
 }
 

@@ -840,6 +840,29 @@ fn parseJsonBool(s: []const u8) ?struct { value: bool, rest: []const u8 } {
     return null;
 }
 
+/// Skip a JSON container that starts at `cur[0]`, counting `open`/`close`
+/// brackets outside strings. Returns the slice after the closing bracket, or
+/// the remainder when the container never closes.
+fn skipJsonContainer(cur: []const u8, open: u8, close: u8) []const u8 {
+    var depth: usize = 1;
+    var i: usize = 1;
+    var in_str = false;
+    while (i < cur.len and depth > 0) {
+        if (in_str) {
+            if (cur[i] == '\\') {
+                i += 1;
+            } else if (cur[i] == '"') {
+                in_str = false;
+            }
+        } else {
+            if (cur[i] == '"') in_str = true else if (cur[i] == open) depth += 1 else if (cur[i] == close) depth -= 1;
+        }
+        i += 1;
+    }
+    // A trailing backslash inside a string can push i past cur.len; clamp.
+    return cur[@min(i, cur.len)..];
+}
+
 /// Skip a JSON value (string, number, bool, null, object, or array).
 fn skipJsonValue(s: []const u8) []const u8 {
     var cur = skipWs(s);
@@ -855,46 +878,8 @@ fn skipJsonValue(s: []const u8) []const u8 {
             }
             return cur[cur.len..];
         },
-        '{' => {
-            // Skip object: count braces
-            var depth: usize = 1;
-            var i: usize = 1;
-            var in_str = false;
-            while (i < cur.len and depth > 0) {
-                if (in_str) {
-                    if (cur[i] == '\\') {
-                        i += 1;
-                    } else if (cur[i] == '"') {
-                        in_str = false;
-                    }
-                } else {
-                    if (cur[i] == '"') in_str = true else if (cur[i] == '{') depth += 1 else if (cur[i] == '}') depth -= 1;
-                }
-                i += 1;
-            }
-            // A trailing backslash inside a string can push i past cur.len; clamp.
-            return cur[@min(i, cur.len)..];
-        },
-        '[' => {
-            // Skip array: count brackets
-            var depth: usize = 1;
-            var i: usize = 1;
-            var in_str = false;
-            while (i < cur.len and depth > 0) {
-                if (in_str) {
-                    if (cur[i] == '\\') {
-                        i += 1;
-                    } else if (cur[i] == '"') {
-                        in_str = false;
-                    }
-                } else {
-                    if (cur[i] == '"') in_str = true else if (cur[i] == '[') depth += 1 else if (cur[i] == ']') depth -= 1;
-                }
-                i += 1;
-            }
-            // A trailing backslash inside a string can push i past cur.len; clamp.
-            return cur[@min(i, cur.len)..];
-        },
+        '{' => return skipJsonContainer(cur, '{', '}'),
+        '[' => return skipJsonContainer(cur, '[', ']'),
         else => {
             // number, bool, null: skip until delimiter
             var i: usize = 0;

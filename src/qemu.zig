@@ -57,13 +57,11 @@ fn buildCArgv(argv: []const []const u8, arena: std.mem.Allocator) ![:null]?[*:0]
     return out;
 }
 
-/// Run `argv` to completion, returning an error unless it exits with 0.
-/// If `err_path` is non-null, stderr is redirected to that file.
-pub fn runWait(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[:0]const u8) !void {
-    const pid = try forkExec(argv, allocator, err_path);
+/// Block until `pid` exits and reap it. EINTR is retried; a failed wait must
+/// not be reported as success (status would stay 0, the caller would believe
+/// the op succeeded when it did not).
+fn waitExitClean(pid: c_int) !void {
     var status: c_int = 0;
-    // Retry on EINTR; a failed wait must not be reported as success (status
-    // would stay 0 → caller believes the op succeeded when it did not).
     while (true) {
         const rc = std.c.waitpid(pid, &status, 0);
         if (rc < 0) {
@@ -73,6 +71,12 @@ pub fn runWait(argv: []const []const u8, allocator: std.mem.Allocator, err_path:
         break;
     }
     if (!exitedClean(status)) return QemuError.ProcessFailed;
+}
+
+/// Run `argv` to completion, returning an error unless it exits with 0.
+/// If `err_path` is non-null, stderr is redirected to that file.
+pub fn runWait(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[:0]const u8) !void {
+    try waitExitClean(try forkExec(argv, allocator, err_path));
 }
 
 /// Parse the first unsigned integer that follows `key` in `text` (a tiny
@@ -226,16 +230,7 @@ pub fn runCapture(argv: []const []const u8, out: []u8, allocator: std.mem.Alloca
     }
     _ = std.c.close(read_fd);
 
-    var status: c_int = 0;
-    while (true) {
-        const rc = std.c.waitpid(pid, &status, 0);
-        if (rc < 0) {
-            if (std.c._errno().* == @intFromEnum(std.c.E.INTR)) continue;
-            return QemuError.ProcessFailed;
-        }
-        break;
-    }
-    if (!exitedClean(status)) return QemuError.ProcessFailed;
+    try waitExitClean(pid);
     return total;
 }
 

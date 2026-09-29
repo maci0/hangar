@@ -34,14 +34,7 @@ pub fn validateTag(tag: []const u8) bool {
 /// Returns the decoded tag, or an error token to return to the client.
 fn parseTag(req: []const u8, decode_buf: []u8) error{Token}![]const u8 {
     const body = httpreq.getBody(req) orelse return error.Token;
-    var tag: []const u8 = "";
-    var pairs = std.mem.splitScalar(u8, body, '&');
-    while (pairs.next()) |pair| {
-        var kv = std.mem.splitScalar(u8, pair, '=');
-        const key = kv.next() orelse continue;
-        const val = kv.next() orelse continue;
-        if (std.mem.eql(u8, key, "tag")) tag = val;
-    }
+    const tag = httpreq.formField(body, "tag") orelse return error.Token;
     if (tag.len == 0) return error.Token;
     const decoded = urlencode.urlDecode(decode_buf, tag);
     if (!validateTag(decoded)) return error.Token;

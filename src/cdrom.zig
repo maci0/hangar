@@ -39,14 +39,7 @@ pub fn change(req: []const u8) ![]const u8 {
         if (idx >= appstate.vm_count) return "invalid idx";
         const v = &appstate.vms[idx];
         const body = httpreq.getBody(req) orelse return "no body";
-        var path: []const u8 = "";
-        var pairs = std.mem.splitScalar(u8, body, '&');
-        while (pairs.next()) |pair| {
-            var kv = std.mem.splitScalar(u8, pair, '=');
-            const key = kv.next() orelse continue;
-            const val = kv.next() orelse continue;
-            if (std.mem.eql(u8, key, "path")) path = val;
-        }
+        const path = httpreq.formField(body, "path") orelse return "no path";
         if (path.len == 0) return "no path";
         decoded = urlencode.urlDecode(&decode_buf, path);
         if (decoded.len == 0 or !isSafePath(decoded)) return "bad path";

@@ -85,14 +85,7 @@ pub fn resize(req: []const u8) ![]const u8 {
         if (!v.hasDisk()) return "no disk";
         if (v.isAlive()) return "vm running";
         const body = httpreq.getBody(req) orelse return "no body";
-        var size_str: []const u8 = "";
-        var pairs = std.mem.splitScalar(u8, body, '&');
-        while (pairs.next()) |pair| {
-            var kv = std.mem.splitScalar(u8, pair, '=');
-            const key = kv.next() orelse continue;
-            const val = kv.next() orelse continue;
-            if (std.mem.eql(u8, key, "size")) size_str = val;
-        }
+        const size_str = httpreq.formField(body, "size") orelse "";
         const parsed = std.fmt.parseInt(u32, size_str, 10) catch return "bad size";
         new_gb = vm.clampDiskSize(parsed);
         if (new_gb <= v.disk_size_gb) return "shrink not allowed"; // grow only
