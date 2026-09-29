@@ -139,9 +139,41 @@ lifecycle already goes through a dispatch table (`src/hv/`).
 
 ## Release notes and upgrades
 
-`v0.3.0` is the latest tagged release. `build.zig.zon` and the private
-frontend-test `package.json` declare `0.3.0`. There is no stated compatibility
+`v0.4.0` is the latest tagged release. `build.zig.zon` and the private
+frontend-test `package.json` declare `0.4.0`. There is no stated compatibility
 or deprecation policy.
+
+### v0.4.0 (2026-09-29)
+
+#### Changed: web UI accessibility and on-demand assets
+
+- Console clients (noVNC, SPICE) and terminal bundles (xterm.js) now load on
+  demand when opening the Console tab rather than at initial page load, and
+  revalidate using HTTP ETag / If-None-Match headers.
+- Context menus, dialogs, and status messages are fully reachable and navigable
+  by keyboard with standard ARIA roles and tab indexing.
+- Text glyphs and emoji across the web UI are replaced with consistent design
+  token styles and SVG sprite icons.
+- Unified memory unit conventions (MB/MiB) across inventory, dialogs, and CLI.
+
+#### Changed: path validation and upload streaming
+
+- Comma characters (`,`) are rejected in VM names and disk paths to prevent
+  QEMU CLI argument parsing collisions and injection vulnerabilities.
+- Shared unified Content-Length validation and path parsing across HTTP handlers
+  and CLI transport.
+- Upload stream prefix rescanning is removed to reduce CPU churn on large image
+  transfers.
+- Overflow-safe bounds calculation for VNC damage rectangles.
+
+#### Build and CI
+
+- Added `-Dtest-filter` option to filter tests by substring across test suites.
+- Added YAML linting with `yamllint` (`zig build lint-yaml`) to the blocking CI
+  analysis step.
+- Optimized CI caching for Zig build artifacts across commits.
+- Added `THIRD-PARTY-NOTICES.md` documenting licenses and sources of third-party
+  code.
 
 ### v0.3.0 (2026-09-28)
 
