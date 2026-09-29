@@ -39,6 +39,9 @@ zig build fmt-check    # zig fmt --check --ast-check over tracked *.zig/*.zon
 zig build lint-shell   # shellcheck over tracked *.sh
 zig build lint-yaml    # yamllint over tracked *.yml/*.yaml (CI workflows)
 zig build lint-js      # bun build over hand-written JS (vendored src/web bundles excluded)
+bun run lint           # oxlint strict + Rika anti-slop + @shadcn/lint over src/web/ui and scripts
+bun run typecheck      # tsc --noEmit over src/web/ui and scripts
+bun run build:web      # bundle src/web/ui to src/web/dist (zig build runs this itself)
 ```
 
 `build.zig` owns lint flags; `.yamllint` owns the YAML rule set;
@@ -263,7 +266,8 @@ When the user requests a durable behavior change, record it here or in the relev
 - [src/AGENTS.md](src/AGENTS.md): Zig core: VM model, persistence, QEMU/QMP, HTTP server +
   remote daemon, leaf utils, the module map and source-local contracts. Children:
   - [src/hv/AGENTS.md](src/hv/AGENTS.md): hypervisor process-lifecycle dispatch table.
-  - [src/web/AGENTS.md](src/web/AGENTS.md): embedded vanilla-JS web UI + vendored libs.
+  - [src/web/AGENTS.md](src/web/AGENTS.md): embedded web UI (legacy vanilla JS + vendored libs).
+    - [src/web/ui/AGENTS.md](src/web/ui/AGENTS.md): Preact + Tailwind v4 source, bundled to `dist/`.
 - [tests/AGENTS.md](tests/AGENTS.md): standalone integration/e2e suites (Playwright,
   shell API/vmrun) that drive the built binary; distinct from the in-module unit/fuzz tests.
 

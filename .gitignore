@@ -62,3 +62,6 @@ __pycache__/
 tests/visual/**/*.png
 tests/visual/results.json
 _*.mjs
+
+# Built UI bundle (bun run build:web)
+src/web/dist/

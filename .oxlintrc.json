@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "options": { "typeAware": true },
+  "env": { "browser": true, "es2022": true },
+  "globals": { "Bun": "readonly" },
+  "extends": ["./node_modules/@rikalabs/oxlint-standards/presets/strict.json"],
+  "jsPlugins": ["@rikalabs/oxlint-standards/plugin", "@shadcn/lint"],
+  "ignorePatterns": ["*.mjs", ".scratch", "src/web/dist", "src/web/*.js", "tests", "node_modules"],
+  "rules": { "shadcn/no-arbitrary-values": "error" }
+}

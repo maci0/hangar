@@ -61,6 +61,9 @@ jobs:
           zig build lint-shell
           zig build lint-yaml
           zig build lint-js
+          bun install --frozen-lockfile
+          bun run lint
+          bun run typecheck
       - name: Hermetic unit + fuzz tests
         run: zig build test --summary all
       - name: Save Zig build artifacts

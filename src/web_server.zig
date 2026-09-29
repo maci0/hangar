@@ -2353,6 +2353,8 @@ const index_html = @embedFile("web/index.html");
 var index_html_etag: ?[]const u8 = null;
 const app_css = @embedFile("web/app.css");
 const app_js = @embedFile("web/app.js");
+const ui_js = @embedFile("web/dist/ui.js");
+const ui_css = @embedFile("web/dist/ui.css");
 const novnc_js = @embedFile("web/novnc.js");
 const spice_js = @embedFile("web/spice.js");
 const elk_js = @embedFile("web/elk.js");
@@ -2369,6 +2371,8 @@ const xterm_css = @embedFile("web/xterm.css");
 var STATIC_ASSETS = [_]struct { route: []const u8, body: []const u8, ct: []const u8, etag: ?[]const u8 = null }{
     .{ .route = "GET /app.css", .body = app_css, .ct = "text/css; charset=utf-8" },
     .{ .route = "GET /app.js", .body = app_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /ui.js", .body = ui_js, .ct = "application/javascript; charset=utf-8" },
+    .{ .route = "GET /ui.css", .body = ui_css, .ct = "text/css; charset=utf-8" },
     .{ .route = "GET /novnc.js", .body = novnc_js, .ct = "application/javascript; charset=utf-8" },
     .{ .route = "GET /spice.js", .body = spice_js, .ct = "application/javascript; charset=utf-8" },
     .{ .route = "GET /elk.js", .body = elk_js, .ct = "application/javascript; charset=utf-8" },

@@ -50,6 +50,9 @@ pub fn build(b: *std.Build) !void {
     web_mod.link_libc = true;
     web_mod.linkSystemLibrary("libvncclient", .{});
     const web_exe = b.addExecutable(.{ .name = "hangar-web", .root_module = web_mod, .use_llvm = true, .use_lld = true });
+    // The UI bundle (src/web/dist) is @embedFile'd, so it must exist before the exe compiles.
+    const build_ui = b.addSystemCommand(&.{ "bun", "scripts/build-web.ts" });
+    web_exe.step.dependOn(&build_ui.step);
     const install_web_exe = b.addInstallArtifact(web_exe, .{});
     b.getInstallStep().dependOn(&install_web_exe.step);
 
@@ -84,6 +87,7 @@ pub fn build(b: *std.Build) !void {
             tm.addImport("webui", webui_mod);
         }
         const tests = b.addTest(.{ .root_module = tm, .use_llvm = true, .use_lld = true, .filters = test_filters });
+        tests.step.dependOn(&build_ui.step);
         const run_tests = b.addRunArtifact(tests);
         const module_test = b.step(b.fmt("test-unit-{s}", .{mod}), b.fmt("Run {s} module tests (including imported tests)", .{mod}));
         module_test.dependOn(&run_tests.step);

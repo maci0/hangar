@@ -1,9 +1,10 @@
 # AGENTS.md: src/web (embedded web UI)
 
 ## Purpose
-The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
-`@embedFile`'d into the daemon and served by `web_server.zig`. Targets VMware
-(vSphere/Workstation) admin conventions.
+The browser UI: legacy hand-written vanilla JS/CSS/HTML (`app.js`, `app.css`, `index.html`)
+plus the Preact + Tailwind source in `ui/`. Bun bundles `ui/` to `dist/` (gitignored) during
+`zig build`; every bundle is `@embedFile`'d into the daemon and served by `web_server.zig`.
+Targets VMware (vSphere/Workstation) admin conventions.
 
 ## Ownership
 - `index.html`: markup, dialogs, the inline SVG icon sprite (`#i-*`), script tags.
@@ -176,3 +177,6 @@ If a WebSocket sticks in CONNECTING under headless Chromium, suspect the server'
 101 response before the client: malformed CRLF there breaks every console at once
 (`ws.zig` has regression tests for it). The live-console e2e boots a real guest
 headlessly and asserts canvas + serial connect.
+
+## Child DOX Index
+- [ui/AGENTS.md](ui/AGENTS.md): Preact + Tailwind v4 + shadcn-style source, bundled to `dist/`.
