@@ -11,6 +11,7 @@ import type { TopologyState } from "@/components/dialogs/topology";
 import type { VnetsRequest } from "@/components/dialogs/vnets";
 import type { PaletteCommand } from "@/components/dialogs/palette";
 import { netKindOf, type NetKind } from "@/lib/network";
+import { createPanelsBridge, type PanelsBridge } from "@/panels";
 import { createOverlayBridge, createShellBridge, type OverlayBridge, type ShellBridge } from "@/shell";
 import { Toolbar, toolbarControl, type ToolbarProps } from "@/components/toolbar";
 import { VmList, type VmListProps } from "@/components/vm-list";
@@ -65,7 +66,8 @@ type HangarUi = {
   /** Opens the command palette over the given commands; ignored while it is open. */
   readonly openPalette: (commands: ReadonlyArray<PaletteCommand>) => void;
 } & ShellBridge &
-  OverlayBridge;
+  OverlayBridge &
+  PanelsBridge;
 
 declare global {
   // Bridge for the legacy app.js, which computes state and hands it over for rendering.
@@ -74,6 +76,7 @@ declare global {
   var syncToolbar: (() => void) | undefined;
   var syncSidebarButton: (() => void) | undefined;
   var syncShell: (() => void) | undefined;
+  var syncPanels: (() => void) | undefined;
 }
 
 const CLOSED_DIALOGS: DialogsState = {
@@ -94,7 +97,7 @@ const CLOSED_DIALOGS: DialogsState = {
   palette: null,
 };
 
-type DialogBridge = Omit<HangarUi, "renderVmList" | "setToolbar" | "closeToolbarMenus" | keyof ShellBridge | keyof OverlayBridge>;
+type DialogBridge = Omit<HangarUi, "renderVmList" | "setToolbar" | "closeToolbarMenus" | keyof ShellBridge | keyof OverlayBridge | keyof PanelsBridge>;
 
 /** Dialog state lives here; `#dialog-root` is redrawn from it after every change. */
 type DialogStore = {
@@ -239,6 +242,7 @@ const createBridge = (): HangarUi => {
     ...createDialogBridge(),
     ...createShellBridge(),
     ...createOverlayBridge(),
+    ...createPanelsBridge(),
     renderVmList: (props) => {
       const list = document.querySelector("#vmlist");
       if (list) {
@@ -262,3 +266,4 @@ globalThis.renderList?.();
 globalThis.syncToolbar?.();
 globalThis.syncSidebarButton?.();
 globalThis.syncShell?.();
+globalThis.syncPanels?.();

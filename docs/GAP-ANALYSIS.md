@@ -46,7 +46,7 @@
 | VM catalog / quickstart | ✅ Built-in templates (`POST /api/vms/quickstart/<slug>`) |
 | Tags & folders | ✅ Sidebar filter by tag, collapsible folder tree |
 | Cloud-init user-data | ✅ Per-VM `cloud_init` field (8 KB); seed ISO generated via cloud-localds at power-on |
-| Host dashboard | ✅ CPU/RAM capacity + inventory totals (VanJS) |
+| Host dashboard | ✅ CPU/RAM capacity + inventory totals |
 
 ## Web Frontend Parity
 

@@ -174,7 +174,7 @@ pub fn build(b: *std.Build) !void {
     const lint_js_cmd = b.addSystemCommand(&.{
         "bash", "-euo", "pipefail", "-c",
         \\git ls-files -z '*.js' '*.mjs' |
-        \\grep -zvE '^src/web/(novnc|spice|elk|van|xterm(-fit|-webgl)?)\.js$' |
+        \\grep -zvE '^src/web/(novnc|spice|elk|xterm(-fit|-webgl)?)\.js$' |
         \\xargs -0rn1 bun build --no-bundle >/dev/null
         \\
     });

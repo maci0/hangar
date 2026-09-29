@@ -125,6 +125,7 @@
   --color-danger-text: var(--danger-text);
   --shadow-menu: var(--shadow-pop);
   --shadow-dialog: var(--shadow-modal);
+  --shadow-card: var(--shadow-card);
   --color-backdrop: var(--backdrop);
   --color-on-accent: var(--text-on-accent);
   --color-on-danger: var(--text-on-danger);
@@ -134,4 +135,29 @@
 /* Catalog cards: as many 360px-wide columns as fit, one on a narrow dialog. */
 @utility grid-cols-catalog {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 22.5rem), 1fr));
+}
+
+/* Summary cards: as many 20rem columns as fit. */
+@utility grid-cols-summary {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+}
+
+/* Dashboard stat tiles: at least 140px each. */
+@utility grid-cols-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.75rem), 1fr));
+}
+
+/* Settings form fields: as many 14rem columns as fit. */
+@utility grid-cols-fields {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+}
+
+/* Settings: category nav beside the panels. */
+@utility grid-cols-settings {
+  grid-template-columns: 13.75rem minmax(0, 1fr);
+}
+
+/* Capacity gauge row: label, bar, value, overcommit note. */
+@utility grid-cols-gauge {
+  grid-template-columns: 7.5rem 1fr 8.125rem 6.875rem;
 }

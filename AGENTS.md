@@ -41,6 +41,7 @@ zig build lint-yaml    # yamllint over tracked *.yml/*.yaml (CI workflows)
 zig build lint-js      # bun build over hand-written JS (vendored src/web bundles excluded)
 bun run lint           # oxlint strict + Rika anti-slop + @shadcn/lint over src/web/ui and scripts
 bun run typecheck      # tsc --noEmit over src/web/ui and scripts
+bun run test           # bun test over src/web/ui (pure formatting, dashboard and settings logic)
 bun run build:web      # bundle src/web/ui to src/web/dist (zig build runs this itself)
 ```
 

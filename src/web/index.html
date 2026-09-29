@@ -12,14 +12,15 @@
 <a id="skip-link" href="#main-content">Skip to main content</a>
 
 
-<!-- Connection-lost banner, sidebar head, bulk bar, VM header, status bar and toasts are Preact. -->
+<!-- Connection-lost banner, sidebar head, bulk bar, VM header, status bar and toasts are Preact,
+     and so are the Summary and Settings panels (mounted in #summary-root and #settings-root). -->
 <div id="banner-root" class="contents"></div>
 
 <!-- ═══ Sidebar ═══ -->
 <aside id="sidebar" aria-label="VM Library">
   <div id="sidebar-head-root" class="contents"></div>
   <div id="vmlist" role="group" aria-label="VM Library">
-    <div class="empty-state px-5 py-10 text-center">
+    <div class="px-5 py-10 text-center">
       <p class="text-xs text-fg-dim">No VMs</p>
     </div>
   </div>
@@ -65,25 +66,12 @@
 
     <!-- Tab: Summary -->
     <div id="tabSummary" role="tabpanel" aria-labelledby="tab-btn-summary" aria-hidden="false">
-      <div class="empty-state">
-        <svg class="empty-icon" aria-hidden="true"><use href="/icons.svg#i-monitor"/></svg>
-        <h2>No Virtual Machine Selected</h2>
-        <p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p>
-        <div class="empty-actions">
-          <button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-plus"/></svg>New VM</button>
-          <button class="btn" data-action="importGuest">Import VM</button>
-          <button class="btn" data-action="openCatalog">Catalog</button>
-        </div>
-      </div>
+      <div id="summary-root" class="contents"></div>
     </div>
 
     <!-- Tab: Settings (hidden) -->
     <div id="tabSettings" class="hidden" role="tabpanel" aria-labelledby="tab-btn-settings" aria-hidden="true">
-      <div class="empty-state">
-        <svg class="empty-icon" aria-hidden="true"><use href="/icons.svg#i-gear"/></svg>
-        <h2>No Virtual Machine Selected</h2>
-        <p>Select a VM from the sidebar to edit its settings.</p>
-      </div>
+      <div id="settings-root" class="contents"></div>
     </div>
 
     <!-- Migration progress bar -->
@@ -116,7 +104,6 @@
 <!-- The console clients (noVNC, SPICE) and the xterm serial terminal are
      several hundred KB each and are needed only once a guest console opens,
      so app.js loads them on demand instead of blocking the first paint. -->
-<script src="/van.js" defer></script>
 <script src="/app.js" defer></script>
 <script src="/ui.js" defer></script>
 </body>

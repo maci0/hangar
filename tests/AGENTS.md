@@ -10,7 +10,7 @@ under `zig build test`).
   `hangar-web` on a dedicated port against a temp `$HOME` (config: `../playwright.config.mjs`,
   fresh `mkdtemp` HOME per run, created under the repo's gitignored `.scratch/`, never
   `os.tmpdir()`, which is tmpfs).
-- `e2e/a11y.spec.mjs`: axe WCAG 2.2 AA gate over dashboard, VM summary, settings, the command palette, the context menu and a stack of toasts, plus the New VM, Import, Clone, Snapshot Manager, Migrate, Virtual Network Editor (validation error showing), Network Topology and VM Catalog dialogs, in both themes.
+- `e2e/a11y.spec.mjs`: axe WCAG 2.2 AA gate over dashboard, VM summary, every settings section (with a validation error and a warning showing), the command palette, the context menu and a stack of toasts, plus the New VM, Import, Clone, Snapshot Manager, Migrate, Virtual Network Editor (validation error showing), Network Topology and VM Catalog dialogs, in both themes.
 - `e2e/config.spec.mjs`: checks Playwright daemon environment isolation. The
   daemon pins `HANGAR_CONFIG_HOME` to its test HOME and `KV_API_KEY` to `hangar`,
   overriding operator settings while preserving the `KV_PORT` selector.
@@ -28,6 +28,8 @@ under `zig build test`).
   QEMU subprocesses, but no browser.
 - One-time setup before first Playwright run: `bun install --frozen-lockfile` + `bun run e2e:install` (Chromium). The build requires the repository-local Playwright CLI; it never downloads a fallback runner. The `web-e2e` step preflights `node_modules/@playwright/test/cli.js` and names those two commands instead of failing with a bare module-not-found.
 - **Every user-facing web workflow gets an e2e here** (project rule). Add it with the feature.
+- The shared daemon holds 64 VMs at most (`MAX_VMS`), so a test deletes the VMs it creates (`removeVms` in `workflows.spec.mjs`); tests that open the palette wait for the VM list first because it lists the VMs loaded when it opens.
+- Status text asserted after an action reads `#statusannounce`; `#statusmsg` is overwritten by the passive VM count on every refresh.
 - When reading results, check the **failed** line, not only the trailing `N passed`
   (a "1 failed" line prints above the pass count).
 

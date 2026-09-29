@@ -63,9 +63,9 @@ Flat slate design system (dark default + light, token-driven; see
 (Console / Summary / Settings, the embedded display and xterm.js serial
 terminal live inside the Console tab). Reactivity: `GET /api/events` (SSE)
 pushes change notifications; the 5-second `GET /api/vms` poll remains as
-fallback. The host dashboard is a VanJS component. Vendored, embedded
-frontend libs: noVNC, spice-html5, elkjs (vnet topology), vanjs-core,
-@xterm/xterm (+fit/webgl addons). Guest display chain: virtio-vga-gl → virgl
+fallback. The host dashboard, Summary and Settings tabs are Preact
+components. Vendored, embedded frontend libs: noVNC, spice-html5, elkjs
+(vnet topology), @xterm/xterm (+fit/webgl addons). Guest display chain: virtio-vga-gl → virgl
 → egl-headless host render → VNC/SPICE scanout stream → WebGPU/WebGL2
 presenter (see docs/VIDEO-PIPELINE.md for the encoded-video path (phases 1-3
 shipped, polish ongoing)).

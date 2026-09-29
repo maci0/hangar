@@ -64,6 +64,7 @@ jobs:
           bun install --frozen-lockfile
           bun run lint
           bun run typecheck
+          bun run test
       - name: Hermetic unit + fuzz tests
         run: zig build test --summary all
       - name: Save Zig build artifacts

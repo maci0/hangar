@@ -2359,7 +2359,6 @@ const icons_svg = @embedFile("web/dist/icons.svg");
 const novnc_js = @embedFile("web/novnc.js");
 const spice_js = @embedFile("web/spice.js");
 const elk_js = @embedFile("web/elk.js");
-const van_js = @embedFile("web/van.js");
 const xterm_js = @embedFile("web/xterm.js");
 const xterm_fit_js = @embedFile("web/xterm-fit.js");
 const xterm_webgl_js = @embedFile("web/xterm-webgl.js");
@@ -2378,7 +2377,6 @@ var STATIC_ASSETS = [_]struct { route: []const u8, body: []const u8, ct: []const
     .{ .route = "GET /novnc.js", .body = novnc_js, .ct = "application/javascript; charset=utf-8" },
     .{ .route = "GET /spice.js", .body = spice_js, .ct = "application/javascript; charset=utf-8" },
     .{ .route = "GET /elk.js", .body = elk_js, .ct = "application/javascript; charset=utf-8" },
-    .{ .route = "GET /van.js", .body = van_js, .ct = "application/javascript; charset=utf-8" },
     .{ .route = "GET /xterm.js", .body = xterm_js, .ct = "application/javascript; charset=utf-8" },
     .{ .route = "GET /xterm-fit.js", .body = xterm_fit_js, .ct = "application/javascript; charset=utf-8" },
     .{ .route = "GET /xterm-webgl.js", .body = xterm_webgl_js, .ct = "application/javascript; charset=utf-8" },

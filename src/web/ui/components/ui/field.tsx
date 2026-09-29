@@ -1,6 +1,7 @@
 import type { ComponentChildren } from "preact";
 import { Input, type InputProps } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/cn";
 
 const present = (text: string | undefined): text is string => text !== undefined && text !== "";
 
@@ -13,24 +14,44 @@ export type FieldProps = {
   /** Validation message under the control. Needs `errorId`; the control points `aria-describedby` at it. */
   readonly error?: string;
   readonly errorId?: string;
+  /** A warning does not block the form; it reads in the warn color instead of red. */
+  readonly errorTone?: FieldErrorTone;
   readonly children: ComponentChildren;
 };
 
+export type FieldErrorTone = "error" | "warning";
+
 /** Live region for a validation message; hidden while empty. Exists before the message so screen readers announce it. */
-export const FieldError = ({ id, children }: { readonly id: string; readonly children?: string }) => (
-  <div id={id} aria-live="polite" class="text-caption font-medium text-danger-text empty:hidden">
+export const FieldError = ({
+  id,
+  tone = "error",
+  children,
+}: {
+  readonly id: string;
+  readonly tone?: FieldErrorTone;
+  readonly children?: string;
+}) => (
+  <div
+    id={id}
+    aria-live="polite"
+    class={cn("text-caption font-medium empty:hidden", tone === "warning" ? "text-warn" : "text-danger-text")}
+  >
     {present(children) ? children : null}
   </div>
 );
 
 /** A label stacked over its control, with an optional live error line. */
-export const Field = ({ label, htmlFor, labelId, error, errorId, children }: FieldProps) => (
+export const Field = ({ label, htmlFor, labelId, error, errorId, errorTone, children }: FieldProps) => (
   <div class="grid gap-1">
     <Label id={labelId} htmlFor={htmlFor}>
       {label}
     </Label>
     {children}
-    {errorId !== undefined && <FieldError id={errorId}>{error}</FieldError>}
+    {errorId !== undefined && (
+      <FieldError id={errorId} tone={errorTone}>
+        {error}
+      </FieldError>
+    )}
   </div>
 );
 

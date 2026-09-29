@@ -16,7 +16,6 @@ header on its first lines; the header and this table must agree.
 | `novnc.js` | noVNC | not recorded | https://github.com/novnc/noVNC (bundled `dist`) | MPL-2.0 |
 | `spice.js` | spice-html5 | not recorded | https://gitlab.freedesktop.org/spice/spice-html5 (esbuild bundle) | LGPL-3.0-or-later |
 | `elk.js` | elkjs | 0.11.1 | npm `elkjs`, `lib/elk.bundled.js` | EPL-2.0 |
-| `van.js` | vanjs-core | 1.6.0 | npm `vanjs-core` | MIT |
 | `xterm.js` | @xterm/xterm | 6.0.0 | npm `@xterm/xterm`, `lib/xterm.js` | MIT |
 | `xterm.css` | @xterm/xterm | 6.0.0 | npm `@xterm/xterm`, `css/xterm.css` | MIT |
 | `xterm-fit.js` | @xterm/addon-fit | 0.11.0 | npm `@xterm/addon-fit`, `lib/addon-fit.js` | MIT |
@@ -48,7 +47,7 @@ artifacts.
 | Package | Version | Used for | License |
 | --- | --- | --- | --- |
 | @playwright/test (and `playwright`, `playwright-core`) | 1.62.1 | e2e and visual suites | Apache-2.0 |
-| @xterm/xterm, @xterm/addon-fit, @xterm/addon-webgl, elkjs, vanjs-core | see above | sources for re-vendoring the browser bundles | see above |
+| @xterm/xterm, @xterm/addon-fit, @xterm/addon-webgl, elkjs | see above | sources for re-vendoring the browser bundles | see above |
 | zig_webui | 2.5.0-beta.4 | native WebView wrapper (`zig build webui`) | not stated in the tarball; upstream declares MIT |
 | webui (transitive of zig_webui) | 2.5.0-beta.4 | WebView assets, linked into the wrapper | not stated in the tarball; upstream is MIT |
 

@@ -5,6 +5,11 @@ import { test, expect } from '@playwright/test';
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'];
 const SETTLE_MS = 600; // view transitions fade in; axe reads mid-fade colors otherwise
 
+async function scan(page, step) {
+    const { violations } = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
+    expect(violations.map((v) => `${step}: ${v.id} ${v.nodes[0].target}`)).toEqual([]);
+}
+
 for (const theme of ['dark', 'light']) {
     test(`axe finds no WCAG AA violations (${theme})`, async ({ page }) => {
         await page.addInitScript((t) => localStorage.setItem('hangar-theme', t), theme);
@@ -35,8 +40,19 @@ for (const theme of ['dark', 'light']) {
                     });
                 }
                 await page.waitForTimeout(SETTLE_MS);
-                const { violations } = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
-                expect(violations.map((v) => `${step}: ${v.id} ${v.nodes[0].target}`)).toEqual([]);
+                await scan(page, step);
+                if (step === 'settings') {
+                    // Each settings section is its own panel; scan them all, with the validation states showing.
+                    await page.locator('#e_mem').fill('64');
+                    await page.locator('[data-settings-category="display_and_video"]').click();
+                    await page.locator('#e_embed_display').selectOption('1');
+                    await page.locator('#e_display').selectOption('0');
+                    for (const id of await page.locator('[data-settings-category]').evaluateAll((els) => els.map((e) => e.getAttribute('data-settings-category')))) {
+                        await page.locator(`[data-settings-category="${id}"]`).click();
+                        await page.waitForTimeout(SETTLE_MS);
+                        await scan(page, `settings/${id}`);
+                    }
+                }
                 if (step === 'palette') {
                     await page.keyboard.press('Escape');
                     await expect(page.locator('#palette')).toHaveCount(0);

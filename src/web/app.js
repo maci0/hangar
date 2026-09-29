@@ -60,11 +60,8 @@ function idxById(id){if(!id)return -1;for(var i=0;i<vms.length;i++){if(vms[i].id
 // every consumer below compares them as the strings 'true'/'false'. Coerce any
 // boolean-valued property back to that string form so the comparisons hold.
 function normVmBools(arr){if(Array.isArray(arr)){for(var i=0;i<arr.length;i++){var v=arr[i];if(v&&typeof v==='object'){for(var k in v){if(typeof v[k]==='boolean')v[k]=v[k]?'true':'false';}}}}return arr;}
-var dashSort={col:'name',dir:1}; // host-dashboard inventory-table sort state
 var selectMode=false; var checkedIds=new Set(); // sidebar multi-select bulk-ops state
-var settingsCategory='compute';
 var displayLabels=['GTK','SDL','SPICE','VNC','None'];
-var gpuLabels=['Virtio-GPU (virgl 3D)','Virtio-VGA (virgl 3D)','Virtio-GPU','Virtio-VGA','QXL','Standard VGA'];
 function relAge(ts){var t=Date.parse(String(ts).replace(' ','T'));if(!t)return '';var d=Math.floor((Date.now()-t)/1000);if(d<0)return '';
 if(d<60)return 'just now';if(d<3600)return Math.floor(d/60)+' min ago';if(d<86400)return Math.floor(d/3600)+' h ago';return Math.floor(d/86400)+' d ago';}
 // Shared OS/distro visual identity (emblem color + monogram), used by the
@@ -132,7 +129,7 @@ var newEl=tab==='settings'?st:(tab==='console'?co:s);
 if(!newEl)return;
 if(oldEl){oldEl.style.display='none';oldEl.setAttribute('aria-hidden','true');newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
 else{newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
-if(tab==='settings'&&sel!==null)editVm();}
+if(tab==='settings'&&sel!==null)showSettings();}
 var serverDown=false;
 var saveInFlight=false;
 function setServerDown(s){serverDown=s;syncShell();if(s)setStatus('Server unreachable, retrying...');}
@@ -148,8 +145,6 @@ function filterList(){const s=document.getElementById('search');if(!s)return;con
 // VM folders are a `folder:<path>` tag convention (no backend change). The sidebar
 // groups non-favorite VMs into collapsible folders; open/closed persists locally.
 function vmFolder(v){return (v&&v.folder)?v.folder.trim():'';}
-// User-facing tags exclude the structural folder:<path> tag.
-function visibleTags(t){return (t||'').split(',').map(function(s){return s.trim();}).filter(function(s){return s&&s.toLowerCase().indexOf('folder:')!==0;});}
 function folderOpen(f){try{var c=JSON.parse(localStorage.getItem('hangar.folders')||'{}');return c[f]!==false;}catch(e){return true;}}
 function setFolderOpen(f,o){try{var c=JSON.parse(localStorage.getItem('hangar.folders')||'{}');c[f]=o;localStorage.setItem('hangar.folders',JSON.stringify(c));}catch(e){}}
 async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[sel];var cur=vmFolder(v);
@@ -177,200 +172,54 @@ else{setStatusText(parts,statusState.loading);}updateCommandState();}
 async function toggleFavorite(i){if(i>=vms.length)return;const fav=vms[i].favorite==='true'?'0':'1';
 const r=await apiPost('/api/vms/'+i,'favorite='+fav);if(r){if(i<vms.length){vms[i].favorite=fav==='1'?'true':'false';}renderList();if(sel===i)renderDetails();}}
 function selectedVm(){return sel!==null&&sel<vms.length?vms[sel]:null;}
-function statusLabel(s){if(s==='running')return 'Running';if(s==='paused')return 'Paused';if(s==='suspended')return 'Suspended';if(s==='stopped')return 'Stopped';return s||'Unknown';}
+function statusLabel(s){return window.hangarUi.statusLabel(s);}
 function embeddedDisplayCapable(v){var dt=Number(v&&v.display);return v&&v.embed_display==='true'&&(dt===2||dt===3);}
-function networkLabel(v){var n=(v&&v.net)||'user';if(n==='user')return 'NAT (user mode)';if(n==='gvproxy')return 'gvproxy (user mode)';if(n==='bridge')return 'Bridged';if(n==='none')return 'Disconnected';return n;}
-function displayInfo(v){var displayLabel=displayLabels[Number(v&&v.display)]||'Display';var gpuLabel=gpuLabels[Number(v&&v.gpu_device)]||'GPU';var has3d=v&&v.enable_3d==='true';if(!has3d)gpuLabel=gpuLabel.replace(/ \(virgl 3D\)/,'');var embedLabel=v&&v.embed_display==='true'?'Embedded':'Native';var accelLabel=has3d?'3D accelerated':'2D';return {displayLabel:displayLabel,gpuLabel:gpuLabel,embedLabel:embedLabel,accelLabel:accelLabel};}
 function closeToolbarMenus(returnFocus){return !!(window.hangarUi&&window.hangarUi.closeToolbarMenus(returnFocus));}
 async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;settingsDirty=false;}stopFb();stopSerial(true);sel=i;renderList();closeSidebar();closeToolbarMenus(false);if(sel!==null){var v=vms[sel];if(v&&v.status==='running'&&embeddedDisplayCapable(v)&&activeTab!=='settings')activeTab='console';if(activeTab==='settings')editVm();else renderDetails();if(v&&v.status==='running'){startFb();startSerial(sel);}}else{showEmptyState();}updateCommandState();}
 async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}stopFb();stopSerial(true);sel=null;renderList();showEmptyState();updateCommandState();}
-// Host inventory dashboard shown when no VM is selected: state breakdown +
-// allocated-capacity totals + an attention list. Pure render from the polled vms[].
-// ── Reactive host dashboard (VanJS) ──────────────────────────────────
-// vmsState/dashSortState drive the dashboard DOM in place: no innerHTML
-// rebuilds, so focus (e.g. a sort header) survives every refresh.
 // Hardware slot limits: served by GET /api/capabilities (vm.zig constants);
 // the defaults below only cover the window before that fetch resolves.
 var MAX_NICS=8,MAX_EXTRA_DISKS=4;
 (function(){try{fetch('/api/capabilities').then(function(r){return r.json();}).then(function(c){if(c.max_nics)MAX_NICS=c.max_nics;if(c.max_extra_disks)MAX_EXTRA_DISKS=c.max_extra_disks;}).catch(function(){});}catch(e){}})();
-// Settings rows for NIC 2..MAX_NICS and the extra-disk slots are generated,
-// never hand-enumerated: adding a slot in vm.zig must not require UI edits.
-function nicRows(v){var r=[];for(var n=2;n<=MAX_NICS;n++){r.push(['NIC '+n,'e_nic'+n,'select',v['nic'+n+'_mode']||'none'],['NIC '+n+' MAC','e_nic'+n+'_mac','text',v['nic'+n+'_mac']||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],['NIC '+n+' VMnet','e_nic'+n+'_vnet','text',v['nic'+n+'_vnet']||'','placeholder="virtual network name (optional)"']);}return r;}
-function extraDiskRows(v){var r=[];for(var n=0;n<MAX_EXTRA_DISKS;n++){r.push(['Extra '+n+' Path','e_extra'+n+'_path','text',v['extra'+n+'_path']||''],['Extra '+n+' Size','e_extra'+n+'_size','number',v['extra'+n+'_size']||0,'min="0" max="65536" step="1"'],['Extra '+n+' Format','e_extra'+n+'_format','select',v['extra'+n+'_format']||0]);}return r;}
-
-var vmsState=null,dashSortState=null,dashMounted=false,hostState=null;
-function publishVms(){if(window.van){if(!vmsState){vmsState=van.state(vms.slice());}else{vmsState.val=vms.slice();}}}
-function fetchHost(){if(!window.van)return;if(!hostState)hostState=van.state({cpu_cores:0,ram_mb:0});try{fetch('/api/host').then(function(r){return r.json();}).then(function(h){hostState.val={cpu_cores:h.cpu_cores||0,ram_mb:h.ram_mb||0};}).catch(function(){});}catch(e){}}
-function dashStats(list){var st={running:0,stopped:0,paused:0,suspended:0},vcpu=0,ram=0,disk=0,att=[];
- for(var i=0;i<list.length;i++){var v=list[i];st[v.status]=(st[v.status]||0)+1;vcpu+=Number(v.cpu)||0;ram+=Number(v.mem)||0;disk+=Number(v.disk)||0;if(summaryWarnings(v)!=='')att.push(v.name);}
- return {st:st,vcpu:vcpu,ramMB:ram,ramGB:memGiB(ram),disk:disk,att:att,count:list.length};}
-var DASH_COLS=[['name','Name'],['status','State'],['os','Guest OS'],['cpu','vCPU'],['mem','RAM'],['disk','Disk'],['folder','Folder'],['tags','Tags']];
-function DashView(){
- var t=van.tags;
- if(!dashSortState)dashSortState=van.state({col:dashSort.col,dir:dashSort.dir});
- function card(get,label,cls){return t.div({class:'dash-card'},t.div({class:'dash-num '+(cls||'')},get),t.div({class:'dash-lbl'},label));}
- function physCpu(){return (hostState&&hostState.val.cpu_cores)||0;}
- function physRamMb(){return (hostState&&hostState.val.ram_mb)||0;}
- function gauge(label,getCommitted,getPhysical,unit){
-  return t.div({class:'cap-row'},
-   t.span({class:'cap-label'},label),
-   t.div({class:'cap-bar'},t.span({class:'cap-fill',style:function(){var c=getCommitted(),p=getPhysical();var pct=p>0?Math.min(100,Math.round(c/p*100)):0;return 'width:'+pct+'%;background:'+(p>0&&c>p?'var(--danger)':'var(--accent)');}})),
-   t.span({class:'cap-val'},function(){var c=getCommitted(),p=getPhysical();return p>0?(c+' / '+p+' '+unit):(c+' '+unit);}),
-   t.span({class:'cap-over'},function(){var c=getCommitted(),p=getPhysical();return (p>0&&c>p)?((Math.round(c/p*100)/100)+'× overcommit'):'';}));
- }
- return t.div({class:'dash'},
-  t.div({class:'dash-head'},t.h2('Inventory'),t.span({class:'muted'},function(){var c=vmsState.val.length;return c+' virtual machine'+(c===1?'':'s');})),
-  t.div({class:'cap-panel',style:function(){return (physCpu()||physRamMb())?'':'display:none';}},
-   t.div({class:'cap-panel-head'},t.h3('Host Capacity'),t.span({class:'muted'},function(){return physCpu()+' cores · '+memGiB(physRamMb())+' GiB RAM';})),
-   gauge('vCPU committed',function(){return dashStats(vmsState.val).vcpu;},physCpu,'vCPU'),
-   gauge('RAM committed',function(){return dashStats(vmsState.val).ramMB;},physRamMb,'MiB')),
-  t.div({class:'dash-cards'},
-   card(function(){return String(dashStats(vmsState.val).st.running||0);},'Running','running'),
-   card(function(){return String(dashStats(vmsState.val).st.stopped||0);},'Stopped',''),
-   card(function(){return String(dashStats(vmsState.val).st.paused||0);},'Paused','paused'),
-   card(function(){return String(dashStats(vmsState.val).st.suspended||0);},'Suspended','suspended')),
-  t.div({class:'dash-cards'},
-   card(function(){return String(dashStats(vmsState.val).vcpu);},'vCPU allocated',''),
-   card(function(){return dashStats(vmsState.val).ramGB+' GiB';},'RAM allocated',''),
-   card(function(){return dashStats(vmsState.val).disk+' GB';},'Disk provisioned','')),
-  function(){var att=dashStats(vmsState.val).att;
-   return att.length?t.div({class:'dash-attention'},t.h3('Needs attention'),t.ul(att.map(function(n){return t.li(n);}))):t.div();},
-  t.div({class:'inv-wrap'},t.table({class:'inv'},
-   t.thead(t.tr(DASH_COLS.map(function(c){return t.th({'data-action':'sortInv','data-col':c[0],tabindex:'0','aria-sort':function(){var so=dashSortState.val;return so.col===c[0]?(so.dir>0?'ascending':'descending'):'none';}},function(){var so=dashSortState.val;return c[1]+(so.col===c[0]?(so.dir>0?' ▲':' ▼'):'');});}))),
-   function(){var so=dashSortState.val;var rows=vmsState.val.map(function(v,i){return {v:v,i:i};});
-    rows.sort(function(a,b){var c=so.col,d=so.dir,x=a.v[c],y=b.v[c];
-     if(c==='cpu'||c==='mem'||c==='disk'){return ((Number(x)||0)-(Number(y)||0))*d;}
-     x=(x||'').toString().toLowerCase();y=(y||'').toString().toLowerCase();return x<y?-d:x>y?d:0;});
-    return t.tbody(rows.map(function(r){var v=r.v;var mt=escHtml(memText(v.mem));
-     return t.tr({'data-action':'select','data-vm-index':String(r.i),tabindex:'0'},
-      t.td({class:'inv-name'},v.name),
-      t.td(t.span({class:'sdot '+v.status}),statusLabel(v.status)),
-      t.td(function(){var br=osBrand(v.name,v.os);return t.span({class:'os-cell'},t.span({class:'os-badge',style:'background:'+br.c},br.m),v.os);}),t.td(String(v.cpu)),t.td(mt),t.td(v.disk+' GB'),
-      t.td({class:'muted'},v.folder||''),
-      t.td(visibleTags(v.tags).map(function(tag){return t.span({class:'tag-chip sm'},tag);})));}));}
-  )),
-  t.div({class:'empty-actions',style:'justify-content:flex-start;margin-top:18px'},
-   t.button({class:'btn primary','data-action':'newVm'},'New VM'),
-   t.button({class:'btn','data-action':'importGuest'},'Import VM'),
-   t.button({class:'btn','data-action':'openCatalog'},'Catalog')));
-}
-function mountDashboard(host){
- if(dashMounted&&host.firstChild&&host.firstChild.classList&&host.firstChild.classList.contains('dash'))return;
- publishVms();fetchHost();host.innerHTML='';van.add(host,DashView());addActionIcons(host);dashMounted=true;}
-
-// VanJS builds nodes from tag functions, so the sprite glyph for the dashboard
-// action buttons is inserted after mount. Same pattern as the theme toggle:
-// every action button carries its `/icons.svg#i-*` symbol.
-var dashActionIcons={'newVm':'/icons.svg#i-plus','importGuest':'/icons.svg#i-import','openCatalog':'/icons.svg#i-grid'};
-function addActionIcons(root){const btns=root.querySelectorAll('.empty-actions [data-action]');
- for(let i=0;i<btns.length;i++){const b=btns[i];const href=dashActionIcons[b.getAttribute('data-action')];if(!href||b.querySelector('svg'))continue;
-  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('class','ico');svg.setAttribute('aria-hidden','true');
-  const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href',href);svg.appendChild(use);b.insertBefore(svg,b.firstChild);}}
-
-function hostDashboardHtml(){
-  var st={running:0,stopped:0,paused:0,suspended:0};var vcpu=0,ram=0,disk=0,attention=[];
-  for(var i=0;i<vms.length;i++){var v=vms[i];st[v.status]=(st[v.status]||0)+1;
-    vcpu+=Number(v.cpu)||0;ram+=Number(v.mem)||0;disk+=Number(v.disk)||0;
-    if(summaryWarnings(v)!=='')attention.push(v.name);}
-  var ramGB=memGiB(ram);
-  function card(n,l,cls){return '<div class="dash-card"><div class="dash-num '+(cls||'')+'">'+n+'</div><div class="dash-lbl">'+l+'</div></div>';}
-  var h='<div class="dash"><div class="dash-head"><h2>Inventory</h2><span class="muted">'+vms.length+' virtual machine'+(vms.length===1?'':'s')+'</span></div>';
-  h+='<div class="dash-cards">'+card(st.running||0,'Running','running')+card(st.stopped||0,'Stopped','')+card(st.paused||0,'Paused','paused')+card(st.suspended||0,'Suspended','suspended')+'</div>';
-  h+='<div class="dash-cards">'+card(vcpu,'vCPU allocated')+card(ramGB+' GiB','RAM allocated')+card(disk+' GB','Disk provisioned')+'</div>';
-  if(attention.length){h+='<div class="dash-attention"><h3>Needs attention</h3><ul>';for(var a=0;a<attention.length;a++)h+='<li>'+escHtml(attention[a])+'</li>';h+='</ul></div>';}
-  // Sortable inventory table (vSphere "VMs" grid). Rows reuse the select handler.
-  var cols=DASH_COLS;
-  var rows=vms.map(function(v,i){return {v:v,i:i};});
-  rows.sort(function(a,b){var c=dashSort.col,d=dashSort.dir,x=a.v[c],y=b.v[c];
-    if(c==='cpu'||c==='mem'||c==='disk'){return ((Number(x)||0)-(Number(y)||0))*d;}
-    x=(x||'').toString().toLowerCase();y=(y||'').toString().toLowerCase();return x<y?-d:x>y?d:0;});
-  h+='<div class="inv-wrap"><table class="inv"><thead><tr>';
-  cols.forEach(function(c){var on=dashSort.col===c[0];var ar=on?(dashSort.dir>0?' ▲':' ▼'):'';h+='<th data-action="sortInv" data-col="'+c[0]+'" tabindex="0" aria-sort="'+(on?(dashSort.dir>0?'ascending':'descending'):'none')+'">'+c[1]+ar+'</th>';});
-  h+='</tr></thead><tbody>';
-  rows.forEach(function(r){var v=r.v;var mt=escHtml(memText(v.mem));
-    h+='<tr data-action="select" data-vm-index="'+r.i+'" tabindex="0">';
-    h+='<td class="inv-name">'+escHtml(v.name)+'</td>';
-    h+='<td><span class="sdot '+v.status+'"></span>'+escHtml(statusLabel(v.status))+'</td>';
-    h+='<td>'+escHtml(v.os)+'</td><td>'+escHtml(v.cpu)+'</td><td>'+mt+'</td><td>'+escHtml(v.disk)+' GB</td>'
-h+='<td class="muted">'+escHtml(v.folder||'')+'</td>';
-    h+='<td>'+visibleTags(v.tags).map(function(t){return '<span class="tag-chip sm">'+escHtml(t)+'</span>';}).join('')+'</td>';
-    h+='</tr>';});
-  h+='</tbody></table></div>';
-  h+='<div class="empty-actions" style="justify-content:flex-start;margin-top:18px"><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-plus"/></svg>New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
-  return h;
-}
+function hardwareSlots(){return {nics:MAX_NICS,extraDisks:MAX_EXTRA_DISKS};}
+// The Summary panel is Preact (ui/panels.tsx): app.js picks the view and pushes it. With no VM
+// selected it is the host dashboard, which publishVms redraws on every list change.
+var dashShown=false,hostInfo={cpuCores:0,ramMib:0};
+function fetchHost(){try{fetch('/api/host').then(function(r){return r.json();}).then(function(h){hostInfo={cpuCores:h.cpu_cores||0,ramMib:h.ram_mb||0};if(dashShown)pushDashboard();}).catch(function(){});}catch(e){}}
+function dashboardRows(){return vms.map(function(v,i){var b=osBrand(v.name,v.os);return {index:i,vm:v,brand:{color:b.c,text:b.m}};});}
+function pushDashboard(){if(window.hangarUi)window.hangarUi.setSummary(vms.length?{kind:'dashboard',rows:dashboardRows(),host:hostInfo}:{kind:'welcome'});}
+function publishVms(){if(dashShown)pushDashboard();}
+// Guest IP and disk usage arrive after the summary is drawn. They are kept per VM so the 5s poll
+// redraws with the last answer instead of blanking it while the next one loads.
+var vmLookups={id:null,ip:{kind:'loading'},disk:{kind:'loading'}};
+function summaryProps(v){if(vmLookups.id!==v.id)vmLookups={id:v.id,ip:{kind:'loading'},disk:{kind:'loading'}};if(v.status!=='running')vmLookups.ip={kind:'loading'};
+return {kind:'vm',vm:v,folder:vmFolder(v),guestIp:vmLookups.ip,diskUsage:vmLookups.disk,slots:hardwareSlots()};}
+function pushSummary(){var v=selectedVm();if(v&&window.hangarUi)window.hangarUi.setSummary(summaryProps(v));}
+function setLookup(idx,key,answer){if(sel!==idx||!vms[idx]||vms[idx].id!==vmLookups.id)return;vmLookups[key]=answer;pushSummary();}
+function syncPanels(){if(sel!==null&&sel<vms.length)renderDetails();else showEmptyState();}
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
-const c=document.getElementById('tabConsole');
-if(!t||!s)return;
+const c=document.getElementById('tabConsole');const ui=window.hangarUi;
+if(!t||!s||!ui)return;
 document.title='Hangar, VM Manager';syncTabPanels();
 t.style.display='block';s.style.display='none';if(c)c.style.display='none';activeTab='summary';
 t.setAttribute('aria-hidden','false');s.setAttribute('aria-hidden','true');if(c)c.setAttribute('aria-hidden','true');
-if(vms.length&&window.van){mountDashboard(t);publishVms();s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="/icons.svg#i-gear"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';var chv=document.getElementById('consoleHint');if(chv)chv.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';updateCommandState();return;}
-dashMounted=false;
-var empty=vms.length?hostDashboardHtml():'<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="/icons.svg#i-monitor"/></svg><h3>No Virtual Machines Yet</h3><p>Create your first virtual machine, import an existing disk image, or start from a catalog template.</p><div class="empty-actions"><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-plus"/></svg>New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
-t.innerHTML=empty;
-s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="/icons.svg#i-gear"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';
+if(vms.length&&!dashShown)fetchHost();
+dashShown=vms.length>0;pushDashboard();ui.closeSettings();settingsDirty=false;
 var ch0=document.getElementById('consoleHint');if(ch0)ch0.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';
 updateCommandState();}
 function renderDetails(){if(sel===null||sel>=vms.length){showEmptyState();return;}
-const ts=document.getElementById('tabSummary');const tc=document.getElementById('tabConsole');
-if(!ts)return;
-const v=vms[sel];const sc=v.status==='running'?'running':v.status==='paused'?'paused':v.status==='suspended'?'suspended':'stopped';
+const ts=document.getElementById('tabSummary');
+if(!ts||!window.hangarUi)return;
+const v=vms[sel];
 if(activeTab==='console'&&!(v.status==='running'&&embeddedDisplayCapable(v)))activeTab='summary';
 syncTabPanels();
 document.title='Hangar: '+v.name;
-var info=displayInfo(v);
-var videoMeta=escHtml(info.embedLabel+' '+info.displayLabel)+' · '+escHtml(info.gpuLabel)+' · '+escHtml(info.accelLabel);
+var displayLabel=displayLabels[Number(v.display)]||'Display';
 var ch=document.getElementById('consoleHint');
 if(ch){if(embeddedDisplayCapable(v)){ch.innerHTML=v.status==='running'?'':'<div class="console-empty"><strong>'+escHtml(v.name)+' is powered off.</strong><span>Power on the VM to open its console here.</span></div>';}
-else{ch.innerHTML='<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}}
-function row(l,vv,ic){var icon=ic?'<svg class="srow-ico" aria-hidden="true"><use href="/icons.svg#'+ic+'"/></svg>':'';return '<div class="srow"><dt>'+icon+l+'</dt><dd>'+vv+'</dd></div>';}
-const memTxt=escHtml(memText(v.mem));
-let h='<div class="vm-facts">';
-h+='<span class="fact-badge '+sc+'">'+escHtml(statusLabel(v.status))+'</span>';
-h+='<span class="fact">'+escHtml(v.os)+'</span>';
-h+='<span class="fact"><b>'+escHtml(v.cpu)+'</b> vCPU</span>';
-h+='<span class="fact"><b>'+memTxt+'</b> RAM</span>';
-h+='<span class="fact"><b>'+escHtml(v.disk)+'</b> GB disk</span>';
-if(v.status==='running')h+='<span class="fact">IP <span id="guestIpVal">…</span></span>';
-h+='</div><div class="summary-sections">';
-// VM Hardware
-h+='<section class="sum-section"><h3>VM Hardware</h3><dl class="sum-dl">';
-h+=row('CPU',escHtml(v.cpu)+(Number(v.cpu)===1?' core':' cores')+(Number(v.cpu_sockets)>1?' · '+escHtml(v.cpu_sockets)+' sockets':''),'i-cpu');
-h+=row('Memory',escHtml(memText(v.mem)),'i-ram');
-h+=row('Hard Disk',escHtml(v.disk)+' GB'+(v.hasDisk==='true'?'<div class="usage" id="diskUsageVal">…</div>':''),'i-hdd');
-if(v.hasDisk2==='true')h+=row('Disk 2',escHtml(v.disk2_size)+' GB');
-['extra0','extra1','extra2','extra3'].forEach(function(k,i){if(v[k+'_path'])h+=row('Extra Disk '+(i+1),escHtml(v[k+'_size'])+' GB');});
-if(v.iso_path)h+=row('CD/DVD',escHtml(v.iso_path));
-if(v.hasFloppy==='true')h+=row('Floppy','attached');
-h+=row('Network',escHtml(networkLabel(v))+(v.mac?' · '+escHtml(v.mac):''),'i-net');
-  if(v.vnet)h+=row('Virtual Network',escHtml(v.vnet));
-[2,3,4,5,6,7,8].forEach(function(n){var m=v['nic'+n+'_mode'];if(m&&m!=='none')h+=row('NIC '+n,escHtml(m));});
-h+=row('Video',videoMeta,'i-monitor');
-if(v.usb_device)h+=row('USB Device',escHtml(v.usb_device));
-h+='</dl></section>';
-// Guest & Tools
-h+='<section class="sum-section"><h3>Guest &amp; Tools</h3><dl class="sum-dl">';
-h+=row('Guest OS',escHtml(v.os));
-h+=row('Guest Tools',v.guest_tools==='true'?'<span class="ok">✓ installed</span>':'<span class="muted">not installed</span>');
-if(v.autoprotect==='true')h+=row('AutoProtect','every '+escHtml(v.autoprotect_interval)+' min · keep '+escHtml(v.autoprotect_max));
-h+='</dl></section>';
-// Options
-var opts='';
-if(v.shared_folder)opts+=row('Shared Folder',escHtml(v.shared_folder));
-if(v.port_forwards)opts+=row('Port Forwards',escHtml(v.port_forwards));
-if(opts)h+='<section class="sum-section"><h3>Options</h3><dl class="sum-dl">'+opts+'</dl></section>';
-// Tags
-var vtags=visibleTags(v.tags);
-if(vtags.length){var chips=vtags.map(function(t){return '<span class="tag-chip">'+escHtml(t)+'</span>';}).join('');h+='<section class="sum-section"><h3>Tags</h3><div class="tag-chips">'+chips+'</div></section>';}
-var vfld=vmFolder(v);if(vfld)h+='<section class="sum-section"><h3>Folder</h3><div class="sum-dl"><div class="srow"><dt>Path</dt><dd>'+escHtml(vfld)+'</dd></div></div></section>';
-// Notes (full width)
-if(v.notes)h+='<section class="sum-section span2"><h3>Notes</h3><div class="sum-notes">'+escHtml(v.notes)+'</div></section>';
-h+='</div>';
-var warn=summaryWarnings(v);
-if(warn)h+='<div class="summary-grid" style="margin-top:14px">'+warn+'</div>';
-h+='<div class="summary-actions" style="margin-top:16px;display:flex;gap:8px"><button type="button" class="btn" data-action="viewLog">View QEMU Log</button>'+(v.status==='running'?'<button type="button" class="btn" data-action="takeScreenshot">Screenshot</button>':'')+'</div>';
-dashMounted=false;ts.innerHTML=h;
+else{ch.innerHTML='<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(displayLabel)+' QEMU window.</span></div>';}}
+dashShown=false;
+window.hangarUi.setSummary(summaryProps(v));
 if(v.hasDisk==='true')loadDiskInfo(sel);
 if(v.status==='running')loadGuestInfo(sel);
 updateCommandState();}
@@ -454,7 +303,6 @@ info.textContent='Migration '+s.status+'...';
 }catch(e){info.textContent='Migration polling error';}
 migPollTimer=setTimeout(pollMigStatus,500);}
 async function cancelMigrate(){if(migId===null)return;var mi=idxById(migId);if(mi<0){hideMigProgress();return;}var r=await apiPost('/api/vms/'+mi+'/migrate/cancel','');if(r){var info=document.getElementById('mig_pct');if(info)info.textContent='Cancelling...';setStatus('Migration cancel requested');}}
-function summaryWarnings(v){var warnings=[];if(v.embed_display==='true'&&!embeddedDisplayCapable(v))warnings.push('Embedded display is enabled, but browser console requires VNC or SPICE.');if(v.net==='none')warnings.push('Network adapter is disconnected.');if(v.net==='gvproxy')warnings.push('gvproxy networking requires a gvproxy daemon listening on /tmp/hangar-gvproxy-qemu.sock.');if(v.net==='bridge')warnings.push('Bridged networking requires a configured host bridge (e.g. br0).');if(!warnings.length)return'';var h='<div class="summary-card warning-card"><div class="card-label">Attention</div><div class="card-value">';for(var i=0;i<warnings.length;i++)h+='<div>'+escHtml(warnings[i])+'</div>';return h+'</div></div>';}
 function actionAllowed(name,v){var has=!!v;var running=v&&v.status==='running';var paused=v&&v.status==='paused';switch(name){
 case'settings':case'rename':case'clone':case'export':case'delete':case'snapshot':return has;
 case'power-toggle':return has;
@@ -498,153 +346,27 @@ apiPost('/api/vms/reorder','from='+from+'&to='+to).then(async function(r){
   renderList();if(sel!==null)renderDetails();
  }
 }).catch(function(){saveInFlight=false;});}
-async function editVm(){if(sel===null)return;if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}switchTab('settings');if(sel===null||sel>=vms.length)return;
-const v=vms[sel];
-const fields=[
-{s:'Basic'},['Name','e_name','text',v.name||'','required maxlength="80"'],['Guest OS','e_guest_os','select',v.guest_os||0],
-['Memory (MB)','e_mem','number',v.mem||2048,'required min="128" max="65536" step="1"'],['CPU Cores','e_cpu','number',v.cpu||2,'required min="1" max="256" step="1"'],
-['CPU Sockets','e_cpu_sockets','number',v.cpu_sockets||1,'min="1" max="64" step="1"'],
-['CPU Model','e_cpu_model','select',v.cpu_model||'host'],
-['Disk Size (GB)','e_disk','number',v.disk||20,'required min="1" max="65536" step="1"'],['Disk Format','e_disk_format','select',v.disk_format||0],
-['Disk Cache','e_disk_cache','select',v.disk_cache||0],
-['ISO Path','e_iso_path','text',v.iso_path||''],['','','cdactions',''],['Firmware','e_firmware','select',v.fw||'bios'],
-['Boot Order','e_boot_order','select',v.boot_order||0],['RTC Clock','e_rtc','select',v.rtc||0],
-{s:'Network &amp; Boot'},['Network','e_network','select',v.net||'user'],['Virtual Network','e_vnet','text',v.vnet||'','placeholder="bind to a virtual network name (optional)"'],['MAC Address','e_mac_address','text',v.mac||'','pattern="([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"'],
-].concat(nicRows(v)).concat([
-['Port Forwards','e_portfw','text',v.port_forwards||''],
-{s:'Sharing'},['Shared Folder','e_shared_folder','text',v.shared_folder||''],['USB Device','e_usb','text',v.usb_device||''],
-['USB Policy','e_usb_policy','select',v.usb_policy||0],
-['Guest Tools','e_guest_tools','select',v.guest_tools==='true'?'1':'0'],
-{s:'AutoProtect'},['AutoProtect','e_autoprotect','select',v.autoprotect==='true'?'1':'0'],
-['AP Interval','e_ap_interval','number',v.autoprotect_interval||60,'min="1" max="1440" step="1"'],
-['AP Max','e_ap_max','number',v.autoprotect_max||10,'min="1" max="100" step="1"'],
-{s:'Display &amp; Video'},['Display','e_display','select',v.display||0],['Display Res','e_display_resolution','select',v.display_resolution||0],
-['3D Accel','e_enable_3d','select',v.enable_3d==='true'?'1':'0'],['GPU Device','e_gpu_device','select',v.gpu_device||0],
-['Embed Display','e_embed_display','select',v.embed_display==='true'?'1':'0'],['Serial','e_enable_serial','select',v.hasSerial==='true'?'1':'0'],
-['Num Displays','e_num_displays','number',v.num_displays||1,'min="1" max="16" step="1"'],
-['VNC Port','e_vnc_port','number',v.vnc_port||5900,'min="1" max="65535" step="1"'],['SPICE Port','e_spice_port','number',v.spice_port||5901,'min="1" max="65535" step="1"'],
-['Accelerator','e_accel','select',v.accel||'auto'],['Audio','e_audio','select',v.audio||0],
-['Video Stream (experimental)','e_video_stream','select',v.video_stream==='true'?'1':'0'],['Video Bitrate (kbps, 0=auto)','e_video_bitrate','number',v.video_bitrate_kbps||0,'min="0" max="50000" step="500"'],
-{s:'Storage &amp; Notes'},['Disk 2 Path','e_disk2_path','text',v.disk2_path||''],['','','disk2actions',''],['Disk 2 Size','e_disk2_size','number',v.disk2_size||0,'min="0" max="65536" step="1"'],
-['Disk 2 Format','e_disk2_format','select',v.disk2_format||0],
-['Floppy','e_floppy','text',v.floppy_path||''],
-['Favorite','e_favorite','select',v.favorite==='true'?'1':'0'],['Notes','e_notes','text',v.notes||''],['Tags','e_tags','text',v.tags||'','placeholder="comma-separated, e.g. prod, web"'],['Cloud-Init User-Data','e_cloud_init','textarea',v.cloud_init||'','placeholder="#cloud-config&#10;… (NoCloud user-data; attached as a seed ISO)"'],
-{s:'Extra Disks'},
-].concat(extraDiskRows(v)).concat([
-{s:'Advanced'},
-['Guest Agent','e_guest_agent','select',v.guest_agent==='true'?'1':'0'],
-['virtio-rng Entropy','e_virtio_rng','select',v.virtio_rng==='true'?'1':'0'],
-['TPM','e_tpm','select',v.tpm==='true'?'1':'0'],
-['Secure Boot','e_secure_boot','select',v.secure_boot==='true'?'1':'0'],
-['Hyper-V Enlightenments','e_hyperv_enlightenments','select',v.hyperv_enlightenments==='true'?'1':'0'],
-['Hugepages','e_hugepages','select',v.hugepages==='true'?'1':'0'],
-['Watchdog','e_watchdog','select',v.watchdog||0],
-['Ballooning','e_ballooning','select',v.ballooning==='true'?'1':'0'],
-['Host Autostart','e_host_autostart','select',v.host_autostart==='true'?'1':'0'],
-['I/O Threads','e_io_threads','number',v.io_threads||0,'min="0" max="64" step="1"'],
-['Disk Throttle (bytes/s, 0 = off)','e_disk_bps_throttle','number',v.disk_bps_throttle||0,'min="0" max="1099511627776" step="1"'],
-['Disk Throttle (IOPS, 0 = off)','e_disk_iops_throttle','number',v.disk_iops_throttle||0,'min="0" max="100000000" step="1"']]));
-const selects={e_network:[['user','NAT (User)'],['gvproxy','gvproxy (User)'],['bridge','Bridged'],['none','None']],
-e_firmware:[['bios','BIOS'],['uefi','UEFI']],e_disk_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
-e_disk2_format:[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']],
-e_disk_cache:[['0','Writeback'],['1','Writethrough'],['2','None'],['3','Direct Sync'],['4','Unsafe']],
-e_cpu_model:[['host','Host'],['host-passthrough','Host Passthrough'],['max','Max'],['qemu64','QEMU64'],['kvm64','KVM64'],['EPYC','EPYC'],['EPYC-Rome','EPYC-Rome'],['EPYC-Milan','EPYC-Milan'],['Skylake-Server','Skylake-Server'],['Skylake-Client','Skylake-Client'],['Cascadelake-Server','Cascadelake-Server'],['Icelake-Server','Icelake-Server'],['Nehalem','Nehalem'],['Westmere','Westmere'],['SandyBridge','SandyBridge'],['IvyBridge','IvyBridge'],['Haswell','Haswell'],['Broadwell','Broadwell'],['Opteron_G5','Opteron G5'],['Cooperlake','Cooperlake'],['SapphireRapids','SapphireRapids'],['GraniteRapids','GraniteRapids'],['Neoverse-N1','Neoverse-N1'],['Neoverse-N2','Neoverse-N2'],['Neoverse-V1','Neoverse-V1'],['aarch64','AArch64']],
-e_enable_3d:[['0','No'],['1','Yes']],e_gpu_device:[['0','Virtio-GPU (3D)'],['1','Virtio-VGA (3D)'],['2','Virtio-GPU'],['3','Virtio-VGA'],['4','QXL'],['5','Standard VGA']],
-e_display:[['0','GTK'],['1','SDL'],['2','SPICE'],['3','VNC'],['4','None']],
-e_display_resolution:[['0','Auto'],['1','800x600'],['2','1024x768'],['3','1280x800'],['4','1920x1080']],
-e_guest_os:[['0','Linux'],['1','Windows'],['2','FreeBSD'],['3','macOS'],['4','Other']],
-e_audio:[['0','None'],['1','Intel HDA'],['2','AC97']],e_boot_order:[['0','Hard Disk'],['1','CD/DVD'],['2','PXE']],e_rtc:[['0','UTC'],['1','Local time (Windows)']],
-e_accel:[['auto','Auto (best available)'],['tcg','TCG (software)'],['kvm','KVM (Linux)'],['hvf','HVF (macOS)'],['whpx','WHPX (Windows)']],e_embed_display:[['0','No'],['1','Yes']],
-e_enable_serial:[['0','No'],['1','Yes']],e_favorite:[['0','No'],['1','Yes']],
-e_guest_tools:[['0','No'],['1','Yes']],e_autoprotect:[['0','Off'],['1','On']],
-e_guest_agent:[['0','No'],['1','Yes']],e_virtio_rng:[['0','No'],['1','Yes']],
-e_tpm:[['0','No'],['1','Yes']],e_secure_boot:[['0','No'],['1','Yes']],
-e_hyperv_enlightenments:[['0','No'],['1','Yes']],e_hugepages:[['0','No'],['1','Yes']],
-e_ballooning:[['0','No'],['1','Yes']],e_video_stream:[['0','No'],['1','Yes']],e_host_autostart:[['0','No'],['1','Yes']],
-e_watchdog:[['0','None'],['1','Reset Guest'],['2','Power Off Guest'],['3','Pause Guest']],
-e_usb_policy:[['0','None'],['1','USB 2.0 (EHCI)'],['2','USB 3.0 (xHCI)']]};
-(function(){var nm=[['none','None'],['user','NAT'],['gvproxy','gvproxy'],['bridge','Bridged']],df=[['0','QCOW2'],['1','Raw'],['2','VMDK'],['3','VDI']];for(var n=2;n<=MAX_NICS;n++)selects['e_nic'+n]=nm;for(var k=0;k<MAX_EXTRA_DISKS;k++)selects['e_extra'+k+'_format']=df;})();
-
-	var sectionNotes={
-	 basic:'Identity, operating system, firmware, and boot defaults.',
-	 network_and_boot:'VMnet, NAT, bridged adapters, MAC addresses, and port forwarding.',
-	 sharing:'Guest integration, shared folders, and USB policy.',
-	 autoprotect:'Automatic snapshot scheduling for this VM.',
-	 display_and_video:'Browser console, SPICE/VNC, virgl, display ports, serial, audio.',
-	 storage_and_notes:'Secondary storage, removable media, notes, tags, and cloud-init.',
-	 extra_disks:'Additional virtual disks exposed to the guest.',
-	 advanced:'Advanced QEMU capabilities and performance controls.'
-	};
-	function secId(title){return title.replace(/&amp;/g,'and').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');}
-	var sections=[];var current=null;
-	for(const f of fields){if(f.s!==undefined){current={id:secId(f.s),title:f.s,fields:[]};sections.push(current);continue;}if(!current){current={id:'general',title:'General',fields:[]};sections.push(current);}current.fields.push(f);}
-	if(!sections.some(function(s){return s.id===settingsCategory;}))settingsCategory=sections.length?sections[0].id:'basic';
-	function renderField(f){const[lbl,id,type,val]=f;const attrs=f.length>4?f[4]:'';var out='<div class="field-group" data-field-id="'+id+'">';if(lbl)out+=`<label for="${id}">${lbl}</label>`;
-	if(type==='disk2actions'){out+='<span class="inline-actions"><button type="button" class="btn" data-action="resizeDisk">Resize Primary Disk</button><button type="button" class="btn" data-action="compactDisk">Compact Primary Disk</button><button type="button" class="btn" data-action="disk2upload">Upload Disk 2</button><button type="button" class="btn" data-action="disk2download">Download Disk 2</button></span>';}
-	if(type==='cdactions'){out+='<span class="inline-actions"><button type="button" class="btn" data-action="changeCd">Change CD/ISO</button><button type="button" class="btn" data-action="ejectCd">Eject CD/ISO</button></span>';}
-	else if(type==='select'&&selects[id]){out+=`<select id="${id}" data-field="${id}">`;for(const[ov,ol]of selects[id])out+=`<option value="${ov}"${ov===String(val)?' selected':''}>${ol}</option>`;out+='</select>';}
-	else if(type==='textarea'){out+=`<textarea id="${id}" data-field="${id}" rows="6" spellcheck="false" ${attrs}>${escHtml(String(val))}</textarea>`;}
-		else{out+=`<input id="${id}" data-field="${id}" type="${type}" value="${escHtml(String(val))}" ${attrs}>`;}
-	out+='<div class="field-error" id="err_'+id+'" aria-live="polite"></div></div>';return out;}
-	let h='<div class="settings-shell"><nav class="settings-nav" aria-label="Settings categories">';
-	for(const sec of sections){h+=`<button type="button" class="settings-nav-item${sec.id===settingsCategory?' active':''}"${sec.id===settingsCategory?' aria-current="page"':''} data-action="setSettingsCategory" data-settings-category="${sec.id}"><span>${sec.title}</span><small>${escHtml(sectionNotes[sec.id]||'Configure this virtual hardware group.')}</small></button>`;}
-	h+='</nav><div class="settings-detail">';
-	for(const sec of sections){h+=`<section class="settings-panel${sec.id===settingsCategory?' active':''}" data-settings-panel="${sec.id}"${sec.id===settingsCategory?'':' style="display:none"'}><div class="settings-panel-head"><h3>${sec.title}</h3><p>${escHtml(sectionNotes[sec.id]||'Configure this virtual hardware group.')}</p></div><div class="settings-form">`;for(const f of sec.fields)h+=renderField(f);h+='</div></section>';}
-	h+='</div></div><div class="settings-actions"><button type="button" class="btn" data-action="switchTab" data-tab="summary">Cancel</button><button id="savevmbtn" type="button" class="btn primary" data-action="saveVm" title="Save VM settings">Save Changes</button></div>';
-	var ts=document.getElementById('tabSettings');if(ts)ts.innerHTML=h;settingsDirty=false;
-	// Workstation-style guard: virtual hardware is locked while the VM has live
-	// or saved state. Identity/metadata fields stay editable; CD/ISO buttons stay
-	// active (media changes apply live over QMP).
-	var hwLocked=v.status==='running'||v.status==='paused'||v.status==='suspended';
-	if(hwLocked&&ts){var soft={e_name:1,e_notes:1,e_tags:1,e_folder:1,e_vnet:1,e_favorite:1,e_autoprotect:1,e_ap_interval:1,e_ap_max:1};
-	 var ctrls=ts.querySelectorAll('.settings-form input,.settings-form select,.settings-form textarea');
-	 for(var ci=0;ci<ctrls.length;ci++){if(!soft[ctrls[ci].id]){ctrls[ci].disabled=true;ctrls[ci].title='Power off the VM to change virtual hardware';}}
-	 var shell=ts.querySelector('.settings-shell');
-	 if(shell){var ban=document.createElement('div');ban.className='settings-runlock';ban.setAttribute('role','note');ban.textContent='This VM is '+statusLabel(v.status).toLowerCase()+': virtual hardware is locked. Name, notes, tags, folder and AutoProtect stay editable; CD/ISO can be changed live.';ts.insertBefore(ban,shell);}}}
-function setSettingsCategory(cat){settingsCategory=cat;var panels=document.querySelectorAll('.settings-panel');for(var i=0;i<panels.length;i++){var on=panels[i].getAttribute('data-settings-panel')===cat;panels[i].classList.toggle('active',on);panels[i].style.display=on?'block':'none';}
-var items=document.querySelectorAll('.settings-nav-item');for(var j=0;j<items.length;j++){var on=items[j].getAttribute('data-settings-category')===cat;items[j].classList.toggle('active',on);if(on)items[j].setAttribute('aria-current','page');else items[j].removeAttribute('aria-current');}}
-function setFieldError(id,msg,kind){var el=document.getElementById('err_'+id);var field=document.getElementById(id);if(el){el.textContent=msg||'';el.classList.toggle('warning',kind==='warn');}if(field){var bad=!!msg&&kind!=='warn';field.classList.toggle('invalid',bad);if(bad){field.setAttribute('aria-invalid','true');field.setAttribute('aria-describedby','err_'+id);}else{field.removeAttribute('aria-invalid');if(field.getAttribute('aria-describedby')==='err_'+id)field.removeAttribute('aria-describedby');}}}
-function validateSettings(show){var ok=true;function fail(id,msg){ok=false;if(show)setFieldError(id,msg);}function clear(id){if(show)setFieldError(id,'');}
-var nameEl=document.getElementById('e_name');if(nameEl){clear('e_name');if(!nameEl.value.trim())fail('e_name','Name is required.');}
-[['e_mem',128,65536,'Memory must be 128-65536 MB.'],['e_cpu',1,256,'CPU cores must be 1-256.'],['e_disk',1,65536,'Disk size must be 1-65536 GB.']].forEach(function(c){var el=document.getElementById(c[0]);if(!el)return;clear(c[0]);var n=parseInt(el.value,10);if(!Number.isFinite(n)||n<c[1]||n>c[2])fail(c[0],c[3]);});
-var macIds=['e_mac_address'];for(var mn=2;mn<=MAX_NICS;mn++)macIds.push('e_nic'+mn+'_mac');for(var i=0;i<macIds.length;i++){var m=document.getElementById(macIds[i]);if(!m)continue;var val=m.value.trim();clear(macIds[i]);if(val&&!/^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(val))fail(macIds[i],'Use XX:XX:XX:XX:XX:XX.');}
-['e_vnc_port','e_spice_port'].forEach(function(id){var p=document.getElementById(id);if(!p)return;var n=parseInt(p.value,10);clear(id);if(!Number.isFinite(n)||n<1||n>65535)fail(id,'Port must be 1-65535.');});
-var pf=document.getElementById('e_portfw');if(pf){clear('e_portfw');var val=pf.value.trim();if(val&&!/^\s*\d{1,5}:\d{1,5}(\s*,\s*\d{1,5}:\d{1,5})*\s*$/.test(val)&&!/^\s*\d{1,5}:[^,]+:\d{1,5}(\s*,\s*\d{1,5}:[^,]+:\d{1,5})*\s*$/.test(val))fail('e_portfw','Use host:guest or host:ip:guest entries.');}
-var embed=document.getElementById('e_embed_display');var disp=document.getElementById('e_display');var accel=document.getElementById('e_enable_3d');var gpu=document.getElementById('e_gpu_device');if(embed&&disp){clear('e_display');if(embed.value==='1'&&!(disp.value==='2'||disp.value==='3')&&show)setFieldError('e_display','Browser console requires SPICE or VNC; native display opens outside the browser.','warn');}
-if(embed&&disp&&accel&&gpu){clear('e_gpu_device');if(embed.value==='1'&&disp.value==='3'&&accel.value==='1'&&(gpu.value==='0'||gpu.value==='1')&&show)setFieldError('e_gpu_device','Virgl 3D needs embedded SPICE; VNC will fall back to non-GL virtio.','warn');}
-return ok;}
-async function saveVm(){const idx=sel;if(idx===null)return;const btn=document.getElementById('savevmbtn');if(btn){btn.disabled=true;btn.textContent='Saving...';}
-if(!validateSettings(true)){var bad=document.querySelector('#tabSettings .invalid');if(bad){var panel=bad.closest('.settings-panel');if(panel)setSettingsCategory(panel.getAttribute('data-settings-panel')||settingsCategory);bad.focus({preventScroll:false});}if(btn){btn.disabled=false;btn.textContent='Save Changes';}showToast('Fix highlighted settings before saving.','error');return;}
+// The Settings form is Preact (ui/components/settings.tsx). It owns the values, validation and dirty
+// state; app.js opens it for the selected VM and persists the body it builds.
+async function editVm(){if(sel===null)return;if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}
+if(activeTab==='settings')showSettings();else await switchTab('settings');}
+function showSettings(){if(sel===null||sel>=vms.length||!window.hangarUi)return;settingsDirty=false;
+window.hangarUi.openSettings({vm:vms[sel],slots:hardwareSlots(),save:persistSettings,onDirty:function(dirty){settingsDirty=dirty;},onInvalid:function(){showToast('Fix highlighted settings before saving.','error');}});}
+function saveVm(){if(window.hangarUi)window.hangarUi.saveSettings();}
+async function persistSettings(body){const idx=sel;if(idx===null)return false;
 saveInFlight=true;
-const formEls=document.querySelectorAll('#tabSettings input, #tabSettings select, #tabSettings button');for(let i=0;i<formEls.length;i++)formEls[i].disabled=true;
-const fieldIds=['name','mem','cpu','cpu_sockets','cpu_model','disk','disk_format','disk_cache','iso_path','mac_address','network','vnet','firmware','shared_folder','usb','usb_policy','guest_tools','autoprotect',
-'ap_interval','ap_max','disk2_path','disk2_size','disk2_format','floppy','portfw','notes','tags','cloud_init',
-'enable_3d','gpu_device','display','display_resolution','guest_os','audio','boot_order','rtc',
-'accel','embed_display','vnc_port','spice_port','enable_serial','num_displays','favorite',
-'guest_agent','virtio_rng','tpm','secure_boot','hyperv_enlightenments','hugepages','watchdog','ballooning','host_autostart',
-'io_threads','disk_bps_throttle','disk_iops_throttle','video_stream','video_bitrate'];
-// Generated NIC 2..MAX_NICS and extra-disk slots are saved too (their form
-// rows are generated from /api/capabilities; the field list must match).
-for(var bn=2;bn<=MAX_NICS;bn++)fieldIds.push('nic'+bn,'nic'+bn+'_mac','nic'+bn+'_vnet');
-for(var bk=0;bk<MAX_EXTRA_DISKS;bk++)fieldIds.push('extra'+bk+'_path','extra'+bk+'_size','extra'+bk+'_format');
-const body=fieldIds.map(id=>{const el=document.getElementById('e_'+id);if(el)return id+'='+encodeURIComponent(el.value);return'';}).filter(s=>s).join('&');
-try{const r=await apiPost('/api/vms/'+idx,body);if(r){settingsDirty=false;saveInFlight=false;/* refresh() no-ops while saveInFlight, clear it first or the summary renders stale data */await refresh();switchTab('summary');setStatus('Settings saved.');}
-else{setStatus('Save failed.');}}catch(e){setStatus('Save failed: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Save Changes';}
-saveInFlight=false;
-for(let i=0;i<formEls.length;i++)formEls[i].disabled=false;}}
+try{const r=await apiPost('/api/vms/'+idx,body);if(r){settingsDirty=false;saveInFlight=false;/* refresh() no-ops while saveInFlight, clear it first or the summary renders stale data */await refresh();switchTab('summary');setStatus('Settings saved.');return true;}
+setStatus('Save failed.');return false;}catch(e){setStatus('Save failed: '+e.message);return false;}finally{saveInFlight=false;}}
 async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=document.createElement('input');inp.type='file';inp.accept='.qcow2,.qcow,.vmdk,.vdi,.vhdx,.raw,.img';inp.onchange=async function(){const file=inp.files&&inp.files[0];
 if(!file)return;const fd=new FormData();fd.append('disk2',file);setStatus('Uploading Disk 2 for "'+vms[idx].name+'"...');try{const r=await fetch('/api/vms/'+idx+'/disk2',{method:'POST',body:fd,headers:{'X-API-Key':API_KEY}});if(!r.ok){var em=await r.text().catch(function(){return'';});try{var j=JSON.parse(em);if(j.error)em=j.error;}catch(e){}throw new Error(em||'HTTP '+r.status);}await refresh();setStatus('Disk 2 uploaded successfully.');if(sel===idx)editVm();}catch(e){setStatus('Upload failed: '+e.message);showToast('Disk 2 upload failed: '+e.message,'error');}};inp.click();}
 function downloadDisk2(){if(sel===null)return;const a=document.createElement('a');a.href='/api/vms/'+sel+'/disk2/download';a.download=vms[sel].name+'_disk2.qcow2';document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);},1000);}
-function fmtBytes(n){if(!Number.isFinite(n)||n<0)return'?';const u=['B','KiB','MiB','GiB','TiB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++;}return(i===0?x:x.toFixed(1))+' '+u[i];}
-// Memory arrives from the daemon in MiB. Every memory label goes through these
-// two helpers: the /1024 step is a binary multiple, so a scaled value is GiB,
-// never a decimal "GB" (same convention as fmtBytes).
-function memGiB(mb){return Math.round((Number(mb)||0)/1024*10)/10;}
-function memText(mb){var n=Number(mb)||0;return n>=1024?memGiB(n)+' GiB':n+' MiB';}
-async function loadGuestInfo(idx){const el=document.getElementById('guestIpVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/guestinfo',{headers:{'X-API-Key':API_KEY}});if(!r.ok)throw 0;const j=await r.json();if(sel===idx&&document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent=(j.ips&&j.ips.length)?j.ips:'unavailable, guest agent not running';}catch(e){if(document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent='unavailable';}}
-async function loadDiskInfo(idx){const el=document.getElementById('diskUsageVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/diskinfo');if(!r.ok)throw 0;const j=await r.json();if(j.error)throw 0;if(sel===idx&&document.getElementById('diskUsageVal')){var pct=j.virtual_bytes>0?Math.min(100,Math.round(j.actual_bytes/j.virtual_bytes*100)):0;document.getElementById('diskUsageVal').innerHTML='<div class="ubar"><span style="width:'+pct+'%"></span></div><div class="ubar-txt">'+fmtBytes(j.actual_bytes)+' used / '+fmtBytes(j.virtual_bytes)+' ('+pct+'%)</div>';}}catch(e){if(document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent='unavailable';}}
+// Memory arrives from the daemon in MiB. Every memory label goes through memText (ui/lib/format.ts):
+// the /1024 step is a binary multiple, so a scaled value is GiB, never a decimal "GB".
+function memText(mb){return window.hangarUi.memText(mb);}
+async function loadGuestInfo(idx){try{const r=await fetch('/api/vms/'+idx+'/guestinfo',{headers:{'X-API-Key':API_KEY}});if(!r.ok)throw 0;const j=await r.json();setLookup(idx,'ip',(j.ips&&j.ips.length)?{kind:'ready',value:j.ips}:{kind:'unavailable',text:'unavailable, guest agent not running'});}catch(e){setLookup(idx,'ip',{kind:'unavailable',text:'unavailable'});}}
+async function loadDiskInfo(idx){try{const r=await fetch('/api/vms/'+idx+'/diskinfo');if(!r.ok)throw 0;const j=await r.json();if(j.error)throw 0;setLookup(idx,'disk',{kind:'ready',value:{actualBytes:j.actual_bytes,virtualBytes:j.virtual_bytes}});}catch(e){setLookup(idx,'disk',{kind:'unavailable',text:'unavailable'});}}
 async function takeScreenshot(){if(sel===null)return;try{const r=await fetch('/api/vms/'+sel+'/screenshot',{headers:{'X-API-Key':API_KEY}});if(!r.ok){let t='';try{const j=await r.json();t=j.error||'';}catch(e){}showToast('Screenshot failed: '+(t||('HTTP '+r.status)),'error');return;}const b=await r.blob();const u=URL.createObjectURL(b);window.open(u,'_blank');setTimeout(function(){URL.revokeObjectURL(u);},10000);}catch(e){showToast('Screenshot failed','error');}}
-async function changeCd(){if(sel===null)return;const cur=(document.getElementById('e_iso_path')||{}).value||vms[sel].iso_path||'';const p=await showPromptDialog('Path to the CD/ISO image to mount:',cur);if(p===null||p==='')return;const r=await apiPost('/api/vms/'+sel+'/cdrom','path='+encodeURIComponent(p));if(r){await refresh();setStatus('CD/ISO changed.'+(vms[sel].status==='running'?'':' Mounts on next boot.'));}}
+async function changeCd(){if(sel===null)return;const cur=vms[sel].iso_path||'';const p=await showPromptDialog('Path to the CD/ISO image to mount:',cur);if(p===null||p==='')return;const r=await apiPost('/api/vms/'+sel+'/cdrom','path='+encodeURIComponent(p));if(r){await refresh();setStatus('CD/ISO changed.'+(vms[sel].status==='running'?'':' Mounts on next boot.'));}}
 async function ejectCd(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/cdrom/eject','');if(r){await refresh();setStatus('CD/ISO ejected.');}}
 async function compactDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before compacting its disk','warn');return;}if(!await showConfirmDialog('Compact the primary disk? This rewrites the image to reclaim freed space (VM must stay off during the operation).'))return;const r=await apiPost('/api/vms/'+sel+'/disk/compact','');if(r){await refresh();setStatus('Primary disk compacted.');}}
 async function resizeDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before resizing its disk','warn');return;}const cur=parseInt(v.disk,10)||0;const n=await showPromptDialog('New primary disk size in GB (grow only; current '+cur+' GB):',String(cur));if(n===null)return;const gb=parseInt(n,10);if(!Number.isFinite(gb)||gb<=cur){showToast('Enter a size larger than '+cur+' GB','error');return;}const r=await apiPost('/api/vms/'+sel+'/disk/resize','size='+gb);if(r){await refresh();setStatus('Primary disk resized to '+gb+' GB.');}}
@@ -1511,7 +1233,6 @@ var actionHandlers={
  exportSerial:function(){if(!serialBuf)return;var blob=new Blob([serialBuf],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='hangar-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
  saveVm:function(){saveVm();},
  select:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);},
-	 sortInv:function(el){var c=el.getAttribute('data-col');if(!c)return;if(dashSort.col===c)dashSort.dir=-dashSort.dir;else{dashSort.col=c;dashSort.dir=1;}if(window.van&&dashSortState){dashSortState.val={col:dashSort.col,dir:dashSort.dir};}else{showEmptyState();}},
 	 toggleSelectMode:function(){toggleSelectMode();},
 	 toggleCheck:function(el){var n=el.getAttribute('data-vm-id');if(!n)return;if(el.checked)checkedIds.add(n);else checkedIds.delete(n);updateBulkBar();},
 	 bulkPower:function(el){doBulkPower(el.getAttribute('data-on')==='1');},
@@ -1537,8 +1258,7 @@ var actionHandlers={
 	 takeScreenshot:function(){takeScreenshot();},
 	 enterDisplayOnly:function(){enterDisplayOnly();},
 	 exitDisplayOnly:function(){exitDisplayOnly();},
-	 reconnectDisplay:function(){reconnectDisplay();},
-	 setSettingsCategory:function(el){setSettingsCategory(el.getAttribute('data-settings-category')||'compute');}
+	 reconnectDisplay:function(){reconnectDisplay();}
 	};
 document.body.addEventListener('click',function(e){
  // Click anywhere outside an open menu/popover closes it (Escape already does).
@@ -1546,14 +1266,10 @@ document.body.addEventListener('click',function(e){
  var action=el.getAttribute('data-action');var h=actionHandlers[action];if(h)h(el);
 });
 document.body.addEventListener('input',function(e){
- if(e.target.closest('#tabSettings')){settingsDirty=true;validateSettings(true);}
  var el=e.target.closest('[data-action="filterList"]');if(el){
   if(filterTimer)clearTimeout(filterTimer);
   filterTimer=setTimeout(filterList,180);
  }
-});
-document.body.addEventListener('change',function(e){
- if(e.target.closest('#tabSettings')){settingsDirty=true;validateSettings(true);}
 });
 document.body.addEventListener('keydown',function(e){
  if((e.key==='Enter'||e.key===' ')&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'&&e.target.tagName!=='SELECT'){

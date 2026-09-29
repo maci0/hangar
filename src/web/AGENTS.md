@@ -1,23 +1,24 @@
 # AGENTS.md: src/web (embedded web UI)
 
 ## Purpose
-The browser UI: legacy hand-written vanilla JS/CSS/HTML (`app.js`, `app.css`, `index.html`)
+The browser UI: hand-written vanilla JS/CSS/HTML (`app.js`, `app.css`, `index.html`)
 plus the Preact + Tailwind source in `ui/`. Bun bundles `ui/` to `dist/` (gitignored) during
 `zig build`; every bundle is `@embedFile`'d into the daemon and served by `web_server.zig`.
 Targets VMware (vSphere/Workstation) admin conventions.
 
 ## Ownership
-- `index.html`: page markup and script tags. It holds no dialog and no `style=` attribute (a Tailwind utility or token replaces one; an initially hidden element carries the `hidden` class and app.js toggles its inline `style.display`). The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`. The page chrome is Preact too and only its mounts are here: `#banner-root` (connection banner), `#sidebar-head-root` (logo, select toggle, search), `#bulk-root` (bulk bar), `#vmheader-root` (VM emblem, name, tab bar), `#statusbar-root` (status bar and announcer) and `#overlay-root` (toasts and the context menu). Every dialog is Preact, the command palette included: `#dialog-root` is the mount for `Dialogs`. The tab panels (`#tabConsole`, `#tabSummary`, `#tabSettings`) and the display-only bar are still static markup. The migration progress bar (`#mig_progress`, `#mig_pct`, `#mig_cancel`) is page markup below the tabs, not part of the Migrate dialog.
+- `index.html`: page markup and script tags. It holds no dialog and no `style=` attribute (a Tailwind utility or token replaces one; an initially hidden element carries the `hidden` class and app.js toggles its inline `style.display`). The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`. The page chrome is Preact too and only its mounts are here: `#banner-root` (connection banner), `#sidebar-head-root` (logo, select toggle, search), `#bulk-root` (bulk bar), `#vmheader-root` (VM emblem, name, tab bar), `#statusbar-root` (status bar and announcer) and `#overlay-root` (toasts and the context menu). Every dialog is Preact, the command palette included: `#dialog-root` is the mount for `Dialogs`. The Summary and Settings tab panels are Preact too: `#tabSummary` holds `#summary-root` (welcome state, host dashboard or the selected VM) and `#tabSettings` holds `#settings-root` (the settings form or its no-VM state). The panels themselves, `#tabConsole` and the display-only bar are static markup. The migration progress bar (`#mig_progress`, `#mig_pct`, `#mig_cancel`) is page markup below the tabs, not part of the Migrate dialog.
 - `app.js`: refresh poll, render, action dispatch, console/serial viewers, folders. `showConfirmDialog`, `showPromptDialog`, `openPrefs`, `openAbout`, `showShortcutsModal` and `viewLog` keep their signatures and promise behavior but only call `hangarUi` (`confirm`, `prompt`, `openPrefs`, `openAbout`, `openShortcuts`, `openLog`); the fetches stay in `app.js`. `newVm`, `importGuest`, `cloneGuest`, `openSnapshots` (also `takeSnapshot`) and `migrateGuest` open their dialog through `hangarUi` and hand it the action callbacks: `createVm(values)`, `importConfirm(path, name)`, `doClone(linked)`, `takeSnapshotFromDlg(tag)`, `revertSnapshot(tag)`, `deleteSnapshot(tag)` and `doMigrate(host, port)`. Each takes typed, already validated values and resolves whether the dialog may close; `loadSnapshots` pushes the list with `hangarUi.setSnapshots`. The dialogs own their form state and field validation. `openVnets(select?)` loads `/api/networks` and opens the editor with `save(networks, saved)` and `confirmDiscard`; `openCatalog` opens the catalog as `loading` and pushes the templates with `hangarUi.setCatalog`, its `create` callback is `quickstartVm`; `openTopology` opens the topology and `renderTopology` pushes each step (`loading`, `failed`, `empty`, `ready` with the ELK result as a typed layout) with `hangarUi.setTopology`. Data, fetches and the ELK layout stay in `app.js`.
+
+  Summary and Settings: `renderDetails()` and `showEmptyState()` choose the view and push it with `hangarUi.setSummary(view)` (`welcome`, `dashboard` with the rows in list order, the emblem of each VM and the host size, or `vm` with the VM record, its folder, the `guestIp` and `diskUsage` lookups and the NIC and extra-disk slot counts). `loadGuestInfo` and `loadDiskInfo` fetch the lookups after the draw and store each answer per VM in `vmLookups`, so the poll redraws with the last answer instead of blanking it. `fetchHost()` runs when the dashboard first appears and redraws it when `/api/host` answers; `publishVms()` redraws it on every list change. `editVm()` (also the toolbar Settings entry and `switchTab('settings')`) asks before dropping unsaved edits, then `showSettings()` calls `hangarUi.openSettings({vm, slots, save, onDirty, onInvalid})`; `save` is `persistSettings(body)`, which POSTs the body the form built and then refreshes and returns to Summary. `saveVm()` (Ctrl+S, the Save button's `data-action`) only calls `hangarUi.saveSettings()`. `settingsDirty` mirrors the form's `onDirty`. The disk and CD/ISO buttons in the form keep their `data-action`s (`resizeDisk`, `compactDisk`, `disk2upload`, `disk2download`, `changeCd`, `ejectCd`) and the delegated handlers in `app.js` run them. `syncPanels()` redraws the panel for the current selection; `ui.js` calls it once on load.
 
   Page chrome state is derived in `app.js` and pushed whole: `syncShell()` builds `hangarUi.setShell({selectMode, checkedCount, searchActive, bannerVisible, header, status, live, announcement})` from `sel`, `activeTab`, `selectMode`, `checkedIds`, `serverDown`, the status text and the event-stream flag, and every code path that changes one of them calls it (`syncTabPanels`, `switchTab`, `updateCommandState`, `updateBulkBar`, `setServerDown`, `setStatus*`). `setStatus(s)` sets the text and announces it; `setStatusLoading(s)` does the same with a pulsing `s…`; the passive list summary goes through `setStatusText` and is never announced. Nothing writes to `#statusmsg`, `#vmname`, `#tabBar` or `#bulkCount` directly. `showToast(msg, type, {duration})` and `toastUndo(msg, onUndo)` call `hangarUi.showToast`. `openCtxMenu(idx, x, y)` builds the entries (label, sprite name, danger, disabled reason, `run`) for `hangarUi.openContextMenu`; Escape goes through `closeCtxMenu(returnFocus)`. `openPalette()` hands `paletteCommands()` (label, optional sprite name, `run`) to `hangarUi.openPalette`. `syncShell` skips until `hangarUi` exists and `ui.js` calls it once on load.
 - `app.css`: flat slate theme (`:root` dark default + `:root.light`) + components.
   Logo and empty-state emblems use the shared accent and radius tokens, without
   decorative gradients or colored shadows.
-- Vendored libs: `novnc.js`, `spice.js`, `elk.js`, `van.js` (vanjs-core, ESM export
-  converted to `window.van`), `xterm.js`/`xterm.css`/`xterm-fit.js`/`xterm-webgl.js`
+- Vendored libs: `novnc.js`, `spice.js`, `elk.js`, `xterm.js`/`xterm.css`/`xterm-fit.js`/`xterm-webgl.js`
   (@xterm UMD builds). Each is `@embedFile`'d, served at `/novnc.js`
-  etc, and listed in `auth.isAuthExempt`. All except `van.js` load on demand
+  etc, and listed in `auth.isAuthExempt`. All load on demand
   (see On-demand bundles); none of them is a `<script>` in `index.html`.
   - `favicon.svg` is hand-written, not vendored: it is the same mark as
     the sidebar logo and the About dialog emblem (flat `--accent` fill,
@@ -25,7 +26,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
     resolves no page stylesheet. Keep it that mark; a gradient tile or a letter
     in a different face breaks the one surface every window shows.
   - **Provenance:** every bundle starts with a header comment naming package@version
-    + license + vendor date. Versions for `elk`/`van`/`xterm*` are pinned as exact
+    + license + vendor date. Versions for `elk`/`xterm*` are pinned as exact
     devDependencies in `../../package.json` (+ `bun.lock`); re-vendor by bumping there,
     running `bun install`, copying the dist file in, and updating the header.
     `novnc.js`/`spice.js` have no registry pin (upstream version not recorded at
@@ -65,13 +66,13 @@ Targets VMware (vSphere/Workstation) admin conventions.
   (the theme toggle) swaps the `<use href>` between symbols; it never replaces
   the button contents with text. A platform emoji in a control is a defect: it
   ignores the accent and radius tokens and renders at the platform's whim.
-- **Emblem radius follows emblem size**: 20px `.os-badge` -> `--radius-sm`,
+- **Emblem radius follows emblem size**: the 20px inventory `OsBadge` (`ui/components/vm-parts.tsx`, `rounded-sm`) -> `--radius-sm`,
   the 30px VM header emblem (`#vmemblem`, Preact, `rounded-md`) and the 34px snapshot row emblem (Preact, `rounded-md`) -> `--radius-md`, 44px `.cat-emblem` ->
   `--radius-lg`. The four read as one family; never round them independently.
 - **Dialog chrome comes from the `Dialog` primitive** (`ui/components/ui/dialog.tsx`), not from a per-dialog inline style. `app.css` has no `dialog` rule. The
   `!important` in the sheet are `#display` stacking overrides and the reduced-motion block; do not add one to win a cascade fight.
 - **VM list rows are `role="button"` with `aria-current` on the selected one**, and the favorite star is a sibling inside `.vm-row`, never a child of the row: axe rejects a button (or option) that contains another control. `#vmlist` is a `role="group"`.
-- **Stat tiles are not interactive.** `.dash-card` carries no hover transform;
+- **Stat tiles are not interactive.** `.dash-card` carries no hover or focus state;
   reserve elevation-on-hover for things that can be pressed.
 - **Every composite follows the ARIA keyboard pattern.** `role="menu"`
   containers hold `role="menuitem"` children (the toolbar's More popover rows too) and
@@ -92,11 +93,10 @@ Targets VMware (vSphere/Workstation) admin conventions.
   (snapshot revert and delete, disk ops) use `showConfirmDialog({danger:true})`. Don't mix.
   Status and notification glyphs come from the sprite too (a toast maps
   success/error/info/warn to `check`/`x`/`info`/`alert`); a text
-  substitute like `✓` or `＋` is a defect. VanJS-built buttons get their sprite
-  after mount with `addActionIcons`.
+  substitute like `✓` or `＋` is a defect. Preact buttons draw their sprite with `Icon`.
 - **Unsaved state**: a dialog with edits the user has not committed passes `guard` to the
   Preact `Dialog`, which runs it for the button, Escape and backdrop paths; the guard may return a promise
-  (the VNet editor asks `confirmDiscard`; the Settings tab uses `settingsDirty`). A save button either persists (with status
+  (the VNet editor asks `confirmDiscard`; the Settings tab asks through `showConfirmDialog` when `settingsDirty` is set). A save button either persists (with status
   feedback) or it does not exist: Save Selected writes to the daemon, it is
   not a form-only re-render.
 
@@ -113,9 +113,12 @@ Targets VMware (vSphere/Workstation) admin conventions.
   the toolbar's intended state before confirmation and re-resolve its VM afterward.
 - **RAM capacity**: compare committed and physical memory in exact MiB; round only
   display labels, never the quantities used for overcommit or gauge ratios. Every
-  memory label goes through `memText(mb)` (or `memGiB(mb)` for a bare number):
+  memory label goes through `memText(mb)` (`ui/lib/format.ts`; `app.js` calls it as `hangarUi.memText`; `memGiB(mb)` gives a bare number in the components):
   the daemon sends MiB, the `/1024` step is binary, so a scaled value is `GiB`.
   Never hand-roll a memory conversion or label a MiB total "GB".
+- **Host dashboard** (`ui/components/dashboard.tsx`, logic in `ui/lib/dashboard.ts`): shows while no VM is selected. Host Capacity (`.cap-panel`, hidden while `/api/host` reports neither cores nor RAM) compares committed vCPU and exact MiB with the host; the bar is `bg-danger` past 100% and `.cap-over` says `N× overcommit`. Two rows of `.dash-card` tiles follow (four states, then vCPU, RAM and disk allocated), the "Needs attention" list of VMs with a configuration warning, and the sortable inventory. Sorting is `data-col` on the `th` (Enter and Space work too), `aria-sort` is set on every header, and the default is Name ascending; numbers sort by value, text case-insensitively. A row is `data-action="select"` with `data-vm-index`.
+- **Summary tab** (`ui/components/summary.tsx`): `.vm-facts` chips (state, OS, vCPU, RAM, disk, and the guest IP while running, in `#guestIpVal`), then cards for VM Hardware, Guest & Tools, Options, Tags, Folder and Notes; a card with nothing to show is omitted. The primary disk shows the usage bar in `#diskUsageVal` while `/diskinfo` answers, and `unavailable` when it does not. Configuration warnings sit under the cards. `View QEMU Log` and (running) `Screenshot` are `data-action` buttons.
+- **Settings tab** (`ui/components/settings.tsx`, field catalogue, validation and payload in `ui/lib/settings.ts`): a left nav (`.settings-nav-item`, `aria-current="page"`, category id in `data-settings-category`) and one `.settings-panel` per category. Inactive panels stay in the page hidden, so every control keeps its `e_<key>` id and error line `err_e_<key>`. Sections: `basic`, `network_and_boot`, `sharing`, `autoprotect`, `display_and_video`, `storage_and_notes`, `extra_disks`, `advanced`; the chosen category survives `editVm` calls. NIC 2..N and extra-disk rows follow `/api/capabilities` (`MAX_NICS`, `MAX_EXTRA_DISKS`): adding a slot in `vm.zig` needs no UI edit. The form owns its values; the request body is `settingsBody`, keys in the fixed order of `BODY_KEYS` (then NICs, then extra disks) and every value URL-encoded, so the payload matches what the daemon has always been sent. A select whose stored value is not one of its options starts on the first option. Validation appears after the first edit or a Save attempt: errors (name required, memory 128-65536, cores 1-256, disk 1-65536, MACs, display ports, port forwards) mark the control `aria-invalid`; warnings (embedded display without SPICE or VNC, virgl over VNC) only colour the message. A refused Save toasts "Fix highlighted settings before saving.", switches to the section of the first bad field and focuses it, and sends nothing. The form is dirty only while a value differs from its start, so putting a value back clears the unsaved-changes prompt. While the VM is running, paused or suspended the hardware controls are disabled with a title and `.settings-runlock` (`role="note"`) explains it; name, notes, tags, vnet, favorite and AutoProtect stay editable and the CD/ISO buttons work live. While a save is pending the whole form is disabled and the button reads "Saving...". Cancel is `data-action="switchTab" data-tab="summary"`.
 - **Library search**: list redraws preserve the search input's current query.
 - **VM uptime**: display the daemon's monotonic `uptime_sec`, including zero.
   Never subtract `started` from the browser clock; omit unavailable durations.
@@ -123,7 +126,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
 - **Topology loading**: `/elk.js` loads only when the topology opens, never from
   `index.html`. Concurrent opens share the pending load. Loading is visible; failed,
   invalid, or timed-out loads expose Retry (`data-action="openTopology"`, also on Refresh) and clear the pending promise. Nodes are drawn by the dialog as SVG from the typed layout; VM and network nodes are focusable buttons, the host and NIC-mode nodes are not.
-- **On-demand bundles**: `index.html` loads only `app.css`, `van.js` and `app.js`.
+- **On-demand bundles**: `index.html` loads only `app.css`, `ui.css`, `app.js` and `ui.js`.
   `ensureAsset(src, isReady)` is the single loader for every other bundle
   (`/novnc.js`, `/spice.js`, `/elk.js`, `/xterm.js`, `/xterm-fit.js`,
   `/xterm-webgl.js`): it caches the pending promise per URL, times out after
@@ -136,8 +139,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
   `ensureAsset` call at the point of use, and keep the failure path.
 - **Reactivity**: `GET /api/events` (SSE) pushes a change event whenever the daemon's
   state version bumps; the client refreshes on it (5s poll stays as fallback). The host
-  dashboard is a VanJS component driven by `vmsState`/`dashSortState`. Update state,
-  never rebuild its innerHTML. The console (`#display` + `#serialpanel`) lives inside
+  dashboard is a Preact component (`ui/components/dashboard.tsx`): the list arrives as props and the sort column lives in the bridge, so a poll or SSE redraw keeps focus (a sort header stays focused). Push new state, never write its DOM. The console (`#display` + `#serialpanel`) lives inside
   `#tabConsole`; hints go to `#consoleHint` (renders must not wipe the panel). The serial
   terminal is xterm.js (bidirectional, `onData` → WS → guest; WebGL renderer with
   built-in fallback); export reads the `serialBuf` shadow buffer, not the DOM.
@@ -175,7 +177,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
   binary check if anything looks stale (see root AGENTS.md, Testing).
 
 ## Verification
-`zig build web-e2e` (Playwright; standalone, not in `zig build test`). Check the
+`bun run test` (unit tests of the pure formatting, dashboard and settings logic in `ui/lib`). `zig build web-e2e` (Playwright; standalone, not in `zig build test`). Check the
 trailing **failed** count, not just `N passed`. `bun tests/visual/screenshots.mjs`
 captures key views to confirm look.
 
