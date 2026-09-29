@@ -188,10 +188,12 @@ pub fn download(conn: c.fd_t, req: []const u8) !void {
         @memcpy(path_buf[0..dp.len], dp);
         path_buf[dp.len] = 0;
         const nm = v.getNameSlice();
-        if (nm.len <= name_buf.len) {
-            @memcpy(name_buf[0..nm.len], nm);
-            name_len = nm.len;
+        if (nm.len > name_buf.len) {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"bad vm name\"}");
+            return;
         }
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
     }
 
     const disk2_path: [*:0]const u8 = @ptrCast(&path_buf);
@@ -522,10 +524,12 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
         }
 
         const nm = v.getNameSlice();
-        if (nm.len <= name_buf.len) {
-            @memcpy(name_buf[0..nm.len], nm);
-            name_len = nm.len;
+        if (nm.len > name_buf.len) {
+            writeHttpResponse(conn, HTTP_INTERNAL_ERROR, "application/json; charset=utf-8", "{\"error\":\"bad vm name\"}");
+            return;
         }
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
 
         disk_format = v.disk_format;
         disk2_format = v.disk2_format;

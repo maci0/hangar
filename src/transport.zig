@@ -3,6 +3,7 @@
 //! Supports Unix sockets and TCP/HTTP for client↔daemon communication.
 const std = @import("std");
 const c = std.c;
+const httpreq = @import("httpreq.zig");
 
 /// Client socket I/O timeout (ms). Prevents a CLI command (vmrun/remote) from
 /// hanging forever against a dead or wedged daemon that accepts the connection
@@ -143,19 +144,8 @@ pub const Url = struct {
 
 /// Parse the Content-Length header value from an HTTP header block (bytes
 /// before the body). Case-insensitive header name. Null if absent/unparseable.
-fn parseContentLength(headers: []const u8) ?usize {
-    var line_start: usize = 0;
-    while (line_start < headers.len) {
-        const nl = std.mem.indexOfScalar(u8, headers[line_start..], '\n') orelse break;
-        const line = std.mem.trim(u8, headers[line_start .. line_start + nl], " \r\t");
-        line_start += nl + 1;
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-        if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, line[0..colon], " "), "content-length")) {
-            return std.fmt.parseInt(usize, std.mem.trim(u8, line[colon + 1 ..], " "), 10) catch null;
-        }
-    }
-    return null;
-}
+/// Shared with the server so both ends accept the same header spellings.
+const parseContentLength = httpreq.parseContentLength;
 
 pub const Connection = struct {
     proto: Proto,

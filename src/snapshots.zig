@@ -116,10 +116,9 @@ pub fn list(req: []const u8, raw_buf: []u8) []const u8 {
         const v = &appstate.vms[idx];
         if (!v.hasDisk()) return "no disk";
         const nm = v.getNameSlice();
-        if (nm.len <= name_buf.len) {
-            @memcpy(name_buf[0..nm.len], nm);
-            name_len = nm.len;
-        }
+        if (nm.len > name_buf.len) return "no disk";
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
         // Capture the disk path; run qemu-img with the lock RELEASED (it's a
         // blocking subprocess). `-U` lets it read a running VM's locked image.
         const dp = v.getDiskPathSlice();
@@ -175,10 +174,9 @@ pub fn revert(req: []const u8) ![]const u8 {
         if (v.isAlive()) return "vm running";
         const decoded = parseTag(req, &decode_buf) catch return "no name";
         const nm = v.getNameSlice();
-        if (nm.len <= name_buf.len) {
-            @memcpy(name_buf[0..nm.len], nm);
-            name_len = nm.len;
-        }
+        if (nm.len > name_buf.len) return "apply err";
+        @memcpy(name_buf[0..nm.len], nm);
+        name_len = nm.len;
         // VM is guaranteed stopped → offline qemu-img revert with the lock released.
         const dp = v.getDiskPathSlice();
         if (dp.len == 0 or dp.len >= disk_buf.len) return "apply err";

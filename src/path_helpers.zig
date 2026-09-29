@@ -38,6 +38,19 @@ pub fn networksPath(buf: *[512]u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "{s}/.config/hangar/networks.json", .{home}) catch null;
 }
 
+/// True when `p` is safe to embed in a QEMU path-valued option
+/// (`file=`, `backing_file=`, a virtfs/host device path). Rejects `..`, the
+/// `,` that separates `-drive`/`-device` properties, and control bytes.
+/// One definition shared by the config form and the CD/ISO handlers so the
+/// accepted set cannot drift.
+pub fn isSafePath(p: []const u8) bool {
+    if (std.mem.indexOf(u8, p, "..") != null) return false;
+    for (p) |ch| {
+        if (ch == ',' or ch < 0x20 or ch == 0x7f) return false;
+    }
+    return true;
+}
+
 /// Extract the basename from a path and strip the file extension.
 /// Returns the portion after the last '/' and before the last '.'.
 /// If no extension, returns the whole basename.
@@ -258,5 +271,30 @@ test "fuzz: deriveVmdkHref never panics" {
         const n = rnd.uintLessThan(usize, 200);
         for (path_buf[0..n]) |*b| b.* = rnd.int(u8);
         _ = deriveVmdkHref(path_buf[0..n], &out_buf) catch continue;
+    }
+}
+
+test "isSafePath rejects traversal, comma, and control bytes" {
+    try std.testing.expect(isSafePath("/iso/x.iso"));
+    try std.testing.expect(isSafePath(""));
+    try std.testing.expect(!isSafePath("/a,b.iso"));
+    try std.testing.expect(!isSafePath("/a/../b"));
+    try std.testing.expect(!isSafePath(".."));
+    try std.testing.expect(!isSafePath("a\x01b"));
+    try std.testing.expect(!isSafePath("a\x7fb"));
+}
+
+test "fuzz: isSafePath accepts nothing carrying a rejected byte" {
+    var prng = std.Random.DefaultPrng.init(0x15AFE_0001);
+    const rnd = prng.random();
+    var buf: [128]u8 = undefined;
+    for (0..4000) |_| {
+        const n = rnd.uintLessThan(usize, buf.len);
+        for (buf[0..n]) |*b| b.* = rnd.int(u8);
+        const p = buf[0..n];
+        if (isSafePath(p)) {
+            try std.testing.expect(std.mem.indexOf(u8, p, "..") == null);
+            for (p) |ch| try std.testing.expect(ch != ',' and ch >= 0x20 and ch != 0x7f);
+        }
     }
 }

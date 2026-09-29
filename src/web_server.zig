@@ -381,7 +381,7 @@ fn applyFormField(v: *vm.VmConfig, key: []const u8, val: []const u8, flags: ?*Fo
     if (std.mem.eql(u8, key, "disk")) v.disk_size_gb = vm.clampDiskSize(form_parsers.parseU32OrDefault(val, vm.DEFAULT_DISK_SIZE_GB));
     _ = applyEnumField(v, key, val);
     if (std.mem.eql(u8, key, "iso_path")) {
-        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        if (!path_helpers.isSafePath(val)) return "bad path";
         v.setIsoPath(val);
     }
     if (std.mem.eql(u8, key, "mac_address")) {
@@ -393,11 +393,11 @@ fn applyFormField(v: *vm.VmConfig, key: []const u8, val: []const u8, flags: ?*Fo
     if (std.mem.eql(u8, key, "network")) v.nics[0].mode = vm.NetworkMode.fromStr(val);
     if (std.mem.eql(u8, key, "firmware")) v.firmware = vm.BootFirmware.fromStr(val);
     if (std.mem.eql(u8, key, "shared_folder")) {
-        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        if (!path_helpers.isSafePath(val)) return "bad path";
         v.setSharedFolder(val);
     }
     if (std.mem.eql(u8, key, "usb")) {
-        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        if (!path_helpers.isSafePath(val)) return "bad path";
         v.setUsbDevice(val);
     }
     _ = applyBoolField(v, key, val);
@@ -411,12 +411,12 @@ fn applyFormField(v: *vm.VmConfig, key: []const u8, val: []const u8, flags: ?*Fo
     if (std.mem.eql(u8, key, "video_bitrate")) v.video_bitrate_kbps = @min(vm.MAX_VIDEO_BITRATE_KBPS, form_parsers.parseU32OrDefault(val, v.video_bitrate_kbps));
     if (std.mem.eql(u8, key, "ap_max")) v.autoprotect_max = @max(1, @min(vm.PREF_AUTOPROTECT_MAX_MAX, form_parsers.parseU32OrDefault(val, v.autoprotect_max)));
     if (std.mem.eql(u8, key, "disk2_path")) {
-        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        if (!path_helpers.isSafePath(val)) return "bad path";
         v.setDisk2Path(val);
     }
     if (std.mem.eql(u8, key, "disk2_size")) v.disk2_size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, v.disk2_size_gb));
     if (std.mem.eql(u8, key, "floppy")) {
-        if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+        if (!path_helpers.isSafePath(val)) return "bad path";
         v.setFloppyPath(val);
     }
     if (std.mem.eql(u8, key, "nic2")) v.nics[1].mode = vm.NetworkMode.fromStr(val);
@@ -464,7 +464,7 @@ fn applyFormField(v: *vm.VmConfig, key: []const u8, val: []const u8, flags: ?*Fo
     // Extra disks (path/size/format per slot), comptime-unrolled.
     inline for (0..vm.MAX_EXTRA_DISKS) |i| {
         if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_path", .{i}))) {
-            if (std.mem.indexOf(u8, val, "..") != null) return "bad path";
+            if (!path_helpers.isSafePath(val)) return "bad path";
             v.setExtraDiskPath(i, val);
         }
         if (std.mem.eql(u8, key, std.fmt.comptimePrint("extra{d}_size", .{i}))) v.extra_disks[i].size_gb = vm.clampOptionalDiskSize(form_parsers.parseU32OrDefault(val, v.extra_disks[i].size_gb));
@@ -2199,8 +2199,9 @@ fn handleImport(req: []const u8) ![]const u8 {
     // URL-decode the path before validation (JS sends encoded).
     var decode_buf: [vm.MAX_PATH]u8 = undefined;
     const decoded_path = urlencode.urlDecode(&decode_buf, path);
-    // Reject path traversal attempts (check decoded form to catch %2e%2e).
-    if (std.mem.indexOf(u8, decoded_path, "..") != null) return "bad path";
+    // Reject path traversal and QEMU-option injection (check the decoded form
+    // to catch %2e%2e and %2c).
+    if (!path_helpers.isSafePath(decoded_path)) return "bad path";
     // Reject non-disk extensions
     if (!(std.mem.endsWith(u8, decoded_path, ".vmdk") or std.mem.endsWith(u8, decoded_path, ".qcow2") or std.mem.endsWith(u8, decoded_path, ".qcow") or std.mem.endsWith(u8, decoded_path, ".img") or std.mem.endsWith(u8, decoded_path, ".raw"))) return "bad ext";
     // Verify the file actually exists before creating a VM config for it.

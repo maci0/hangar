@@ -105,23 +105,19 @@ pub fn requestLine(req: []const u8, out: []u8) []const u8 {
     return out[0..n];
 }
 
-/// Parse the Content-Length header value (case-insensitive), or null.
+/// Parse the Content-Length header value (case-insensitive), or null. The
+/// space after the colon is optional per RFC 9110, so `Content-Length:42` and
+/// `Content-Length: 42` must both parse.
 pub fn parseContentLength(raw: []const u8) ?usize {
     const req = if (std.mem.indexOf(u8, raw, "\r\n\r\n")) |end| raw[0 .. end + 2] else raw;
     var pos: usize = 0;
     while (pos < req.len) {
-        if (std.mem.indexOfScalarPos(u8, req, pos, '\n')) |nl| {
-            const line_start = pos;
-            pos = nl + 1;
-            var line = req[line_start..nl];
-            if (line.len > 0 and line[line.len - 1] == '\r') {
-                line = line[0 .. line.len - 1];
-            }
-            const cl = "content-length: ";
-            if (line.len >= cl.len and std.ascii.eqlIgnoreCase(line[0..cl.len], cl)) {
-                return std.fmt.parseInt(usize, line[cl.len..], 10) catch null;
-            }
-        } else break;
+        const nl = std.mem.indexOfScalarPos(u8, req, pos, '\n') orelse break;
+        const line = std.mem.trim(u8, req[pos..nl], " \r\t");
+        pos = nl + 1;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, line[0..colon], " \t"), "content-length")) continue;
+        return std.fmt.parseInt(usize, std.mem.trim(u8, line[colon + 1 ..], " \t"), 10) catch null;
     }
     return null;
 }
@@ -167,6 +163,11 @@ test "httpreq: findHeader + parseContentLength are case-insensitive" {
     try std.testing.expectEqual(@as(?usize, 42), parseContentLength(req));
     try std.testing.expectEqualStrings("secret", findHeader(req, "x-api-key: ").?);
     try std.testing.expectEqualStrings("body", getBody(req).?);
+}
+
+test "httpreq: Content-Length tolerates the optional space after the colon" {
+    try std.testing.expectEqual(@as(?usize, 42), parseContentLength("POST /x HTTP/1.1\r\nContent-Length:42\r\n\r\n"));
+    try std.testing.expectEqual(@as(?usize, 42), parseContentLength("POST /x HTTP/1.1\r\ncontent-length:   42  \r\n\r\n"));
 }
 
 test "httpreq: header lookup stops before the body" {
