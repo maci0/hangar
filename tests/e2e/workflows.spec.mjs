@@ -567,6 +567,33 @@ test('vnet Save All validates and persists the selected form without Save Select
     }
 });
 
+test('vnet Save Selected persists without closing and unsaved edits are confirmed on close', async ({ page }) => {
+    const original = await api(page, 'GET', '/api/networks', null);
+    expect(original.ok).toBe(true);
+    try {
+        await page.evaluate(() => actionHandlers.openVnets(document.body));
+        await expect(page.locator('#vnetdlg')).toBeVisible();
+        await page.locator('[data-action="vnetAdd"]').click();
+        await page.locator('#vn_name').fill('wf-save-selected');
+        await page.locator('[data-action="vnetSaveCurrent"]').click();
+        // Saved in place: the editor stays open and the network is on disk.
+        await expect(page.locator('#vnetdlg')).toBeVisible();
+        await expect(page.locator('#statusmsg')).toContainText('wf-save-selected');
+        const saved = JSON.parse((await api(page, 'GET', '/api/networks', null)).text);
+        expect(saved.networks.map((n) => n.name)).toContain('wf-save-selected');
+        // Editing again and closing asks before the edit is thrown away.
+        await page.locator('#vn_gateway').fill('192.168.100.2');
+        await page.locator('#vnetdlg [data-action="closeDlg"]').click();
+        await expect(page.locator('#confirmdlg')).toBeVisible();
+        await page.locator('#confirmCancelBtn').click();
+        await expect(page.locator('#vnetdlg')).toBeVisible();
+        await expect(page.locator('#vn_gateway')).toHaveValue('192.168.100.2');
+    } finally {
+        const restored = await api(page, 'POST', '/api/networks', original.text);
+        expect(restored.ok).toBe(true);
+    }
+});
+
 test('catalog quickstart creates a VM with the template OS and firmware', async ({ page }) => {
     const cat = await api(page, 'GET', '/api/catalog', null);
     const entries = JSON.parse(cat.text);

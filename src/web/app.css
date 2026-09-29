@@ -241,6 +241,8 @@ aside input#search::-webkit-search-cancel-button{-webkit-appearance:none;appeara
   color:var(--text-dim);
   line-height:1;
   font-size:11px;
+  align-items:center;
+  justify-content:center;
 }
 .search-wrap .clear-btn:hover{background:var(--surface-2);color:var(--text)}
 .search-wrap .clear-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
@@ -925,7 +927,7 @@ main #loadbar{position:absolute}
   font-size:13px;
   animation:toast-in .14s cubic-bezier(.2,.6,.3,1);
 }
-.toast .toast-icon{font-weight:800}
+.toast .toast-icon{display:inline-flex;align-items:center;justify-content:center}
 .toast .toast-msg{flex:1;overflow-wrap:anywhere}
 .toast .toast-action{padding:3px 9px;border:1px solid var(--accent);border-radius:var(--radius-sm);background:transparent;color:var(--accent);font-size:11px;font-weight:700;text-transform:uppercase}
 .toast .toast-action:hover{background:var(--accent);color:var(--text-on-accent)}

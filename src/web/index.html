@@ -30,6 +30,8 @@
     <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></symbol>
     <symbol id="i-more" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
     <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></symbol>
     <symbol id="i-ram" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="8" width="20" height="8" rx="1"/><path d="M6 16v2M10 16v2M14 16v2M18 16v2M6 11v2M10 11v2M14 11v2"/></symbol>
     <symbol id="i-hdd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="16" cy="12" r="2"/><path d="M7 9h4"/></symbol>
@@ -72,7 +74,7 @@
   </div>
   <div class="search-wrap">
     <input id="search" type="search" placeholder="Search VMs…" data-action="filterList" aria-label="Search VMs" autocomplete="off">
-    <button id="searchClear" class="clear-btn" data-action="clearSearch" aria-label="Clear search">✕</button>
+    <button id="searchClear" class="clear-btn" data-action="clearSearch" aria-label="Clear search"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button>
   </div>
   <div id="vmlist" role="listbox" aria-label="VM Library">
     <div class="empty-state" style="padding:40px 20px;text-align:center">
@@ -168,7 +170,7 @@
       </div>
     </div>
 
-    <!-- Tab: Summary -->
+    <!-- Tab: Console -->
     <div id="tabConsole" role="tabpanel" aria-labelledby="tab-btn-console" aria-hidden="true" style="display:none">
     <div id="display">
       <div class="display-badge" id="displayBadge" aria-hidden="true"></div>
@@ -201,7 +203,7 @@
         <h2>No Virtual Machine Selected</h2>
         <p>Select a VM from the sidebar, create a new virtual machine, import an existing disk, or use the catalog.</p>
         <div class="empty-actions">
-          <button class="btn primary" data-action="newVm">＋ New VM</button>
+          <button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>New VM</button>
           <button class="btn" data-action="importGuest">Import VM</button>
           <button class="btn" data-action="openCatalog">Catalog</button>
         </div>
@@ -448,6 +450,7 @@
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>F5</kbd></td><td>Refresh VM list</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>F11</kbd></td><td>Fullscreen / Display-only mode</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+F</kbd></td><td>Focus search</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+K</kbd></td><td>Command palette (run a command or jump to a VM)</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+S</kbd></td><td>Save settings (Settings tab) · Suspend VM otherwise</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+Enter</kbd></td><td>Edit VM settings</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Alt+↑↓</kbd></td><td>Reorder VM in list</td></tr>

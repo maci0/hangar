@@ -70,6 +70,16 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   destructive `.btn.danger` grouped left when present). Destructive-action rule:
   recoverable deletes use the undo toast (`toastUndo`), irreversible operations
   (snapshot revert, disk ops) use `showConfirmDialog({danger:true})`. Don't mix.
+  Status and notification glyphs come from the sprite too (`toastIcons` maps
+  success/error/info/warn to `i-check`/`i-x`/`i-info`/`i-alert`); a text
+  substitute like `✓` or `＋` is a defect. VanJS-built buttons get their sprite
+  after mount with `addActionIcons`.
+- **Unsaved state**: a dialog with edits the user has not committed sets its dirty
+  flag on input and registers `_closeGuard`, which the shared `close()` wrapper
+  runs for the button, Escape and backdrop paths; the guard may return a promise
+  (`settingsDirty`/`vnetsDirty`). A save button either persists (with status
+  feedback) or it does not exist: `vnetSaveCurrent` writes to the daemon, it is
+  not a form-only re-render.
 
 - **Navigation**: Tools stays available without a selected VM; only VM-specific
   entries are disabled. Responsive toolbar hiding applies to direct toolbar buttons,

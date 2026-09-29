@@ -90,8 +90,8 @@ function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function announceStatus(s){var a=document.getElementById('statusannounce');if(a)a.textContent=s;}
 function setStatus(s){var el=document.getElementById('statusmsg');if(!el)return;el.textContent=s;el.classList.remove('loading');announceStatus(s);}
 function setStatusLoading(s){var el=document.getElementById('statusmsg');if(!el)return;el.textContent=s+'…';el.classList.add('loading');announceStatus(s);}
-var toastIcons={success:'✓',error:'✗',info:'ℹ',warn:'⚠'};
-function showToast(msg,type,opts){type=type||'info';var c=document.getElementById('toast-container');if(!c)return;var toasts=c.querySelectorAll('.toast');while(toasts.length>=5){c.removeChild(toasts[0]);toasts=c.querySelectorAll('.toast');}var t=document.createElement('div');t.className='toast '+type;t.setAttribute('role',(type==='error'||type==='warn')?'alert':'status');var icon=toastIcons[type]||toastIcons.info;var inner='<span class=\"toast-icon\" aria-hidden=\"true\">'+icon+'</span><span class=\"toast-msg\">'+escHtml(msg)+'</span>';if(opts&&opts.action){inner+='<button class=\"toast-action\" data-toast-action=\"'+opts.action+'\">UNDO</button>';}t.innerHTML=inner;c.appendChild(t);
+var toastIcons={success:'i-check',error:'i-x',info:'i-info',warn:'i-alert'};
+function showToast(msg,type,opts){type=type||'info';var c=document.getElementById('toast-container');if(!c)return;var toasts=c.querySelectorAll('.toast');while(toasts.length>=5){c.removeChild(toasts[0]);toasts=c.querySelectorAll('.toast');}var t=document.createElement('div');t.className='toast '+type;t.setAttribute('role',(type==='error'||type==='warn')?'alert':'status');var icon=toastIcons[type]||toastIcons.info;var inner='<span class=\"toast-icon\" aria-hidden=\"true\"><svg class=\"ico\"><use href=\"#'+icon+'\"/></svg></span><span class=\"toast-msg\">'+escHtml(msg)+'</span>';if(opts&&opts.action){inner+='<button class=\"toast-action\" data-toast-action=\"'+opts.action+'\">UNDO</button>';}t.innerHTML=inner;c.appendChild(t);
 if(opts&&opts.action&&opts.onAction){t.querySelector('.toast-action').addEventListener('click',function(){opts.onAction();c.removeChild(t);});}
 var reducedMotion=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
 var defaultDur=type==='error'?6500:type==='warn'?5000:4000;
@@ -153,7 +153,7 @@ setServerDown(false);vms=normVmBools(await r.json());publishVms();
 // the stale prevStatus would flap it. Compare by name (indices shift on
 // delete/reorder).
 if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);if(activeTab==='summary'&&embeddedDisplayCapable(vms[sel]))switchTab('console');}else{stopFb();stopSerial(true);if(activeTab==='console')switchTab('summary');}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();else if(sel===null)showEmptyState();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
-function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'block':'none';renderList(f.toLowerCase());}
+function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;const clr=document.getElementById('searchClear');if(clr)clr.style.display=f?'inline-flex':'none';renderList(f.toLowerCase());}
 // VM folders are a `folder:<path>` tag convention (no backend change). The sidebar
 // groups non-favorite VMs into collapsible folders; open/closed persists locally.
 function vmFolder(v){return (v&&v.folder)?v.folder.trim():'';}
@@ -288,7 +288,16 @@ function DashView(){
 }
 function mountDashboard(host){
  if(dashMounted&&host.firstChild&&host.firstChild.classList&&host.firstChild.classList.contains('dash'))return;
- publishVms();fetchHost();host.innerHTML='';van.add(host,DashView());dashMounted=true;}
+ publishVms();fetchHost();host.innerHTML='';van.add(host,DashView());addActionIcons(host);dashMounted=true;}
+
+// VanJS builds nodes from tag functions, so the sprite glyph for the dashboard
+// action buttons is inserted after mount. Same pattern as the theme toggle:
+// every action button carries its `#i-*` symbol.
+var dashActionIcons={'newVm':'#i-plus','importGuest':'#i-import','openCatalog':'#i-grid'};
+function addActionIcons(root){const btns=root.querySelectorAll('.empty-actions [data-action]');
+ for(let i=0;i<btns.length;i++){const b=btns[i];const href=dashActionIcons[b.getAttribute('data-action')];if(!href||b.querySelector('svg'))continue;
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('class','ico');svg.setAttribute('aria-hidden','true');
+  const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href',href);svg.appendChild(use);b.insertBefore(svg,b.firstChild);}}
 
 function hostDashboardHtml(){
   var st={running:0,stopped:0,paused:0,suspended:0};var vcpu=0,ram=0,disk=0,attention=[];
@@ -713,9 +722,10 @@ async function ejectCd(){if(sel===null)return;const r=await apiPost('/api/vms/'+
 async function compactDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before compacting its disk','warn');return;}if(!await showConfirmDialog('Compact the primary disk? This rewrites the image to reclaim freed space (VM must stay off during the operation).'))return;const r=await apiPost('/api/vms/'+sel+'/disk/compact','');if(r){await refresh();setStatus('Primary disk compacted.');}}
 async function resizeDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before resizing its disk','warn');return;}const cur=parseInt(v.disk,10)||0;const n=await showPromptDialog('New primary disk size in GB (grow only; current '+cur+' GB):',String(cur));if(n===null)return;const gb=parseInt(n,10);if(!Number.isFinite(gb)||gb<=cur){showToast('Enter a size larger than '+cur+' GB','error');return;}const r=await apiPost('/api/vms/'+sel+'/disk/resize','size='+gb);if(r){await refresh();setStatus('Primary disk resized to '+gb+' GB.');}}
 // ── VNet Editor ──
-let vnetsData=[],vnetIdx=-1;
+const VNET_MAX=20;
+let vnetsData=[],vnetIdx=-1,vnetsDirty=false;
 async function openVnets(){await loadVnets();var vd=document.getElementById('vnetdlg');if(vd)vd.showModal();}
-async function loadVnets(){try{const r=await fetch('/api/networks');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};logDebug('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};logDebug('Failed to load VNets:',e);}renderVnetList();}
+async function loadVnets(){try{const r=await fetch('/api/networks');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};logDebug('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};logDebug('Failed to load VNets:',e);}vnetsDirty=false;renderVnetList();}
 function netAccent(type){var t=(type||'').toLowerCase();
  if(t==='nat')return 'var(--network-nat)';
  if(t==='bridged')return 'var(--network-bridged)';
@@ -774,15 +784,18 @@ n.subnet=subnet;n.mask=mask;
 n.dhcp=vd?vd.value==='1':false;n.dhcp_start=dstart;
 n.dhcp_end=dend;n.host_iface=iface.replace(/[\x00-\x1f\x7f]/g,'');
 n.gateway=gw;n.port_forwards=(vp?vp.value||'':'').replace(/[\x00-\x1f\x7f]/g,'');return true;}
-function vnetSaveCurrent(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;if(!readVnetForm(vnetsData.networks[vnetIdx]))return;renderVnetList();}
-function vnetAdd(){if(vnetsData.networks.length>=20)return;const n={name:'VMnet'+vnetsData.networks.length,type:'host_only',subnet:'192.168.100.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.100.128',dhcp_end:'192.168.100.254',host_iface:'',gateway:'',port_forwards:''};
-vnetsData.networks.push(n);vnetIdx=vnetsData.networks.length-1;renderVnetList();}
-function vnetRemove(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length)return;vnetsData.networks.splice(vnetIdx,1);if(vnetIdx>=vnetsData.networks.length)vnetIdx=vnetsData.networks.length-1;renderVnetList();}
+function vnetSaveCurrent(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length){showToast('Select a network first','warn');return;}if(!readVnetForm(vnetsData.networks[vnetIdx]))return;renderVnetList();vnetSave('Saved "'+vnetsData.networks[vnetIdx].name+'".');}
+function vnetAdd(){if(vnetsData.networks.length>=VNET_MAX){showToast('The limit of '+VNET_MAX+' virtual networks is reached','warn');return;}const n={name:'VMnet'+vnetsData.networks.length,type:'host_only',subnet:'192.168.100.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.100.128',dhcp_end:'192.168.100.254',host_iface:'',gateway:'',port_forwards:''};
+vnetsData.networks.push(n);vnetIdx=vnetsData.networks.length-1;vnetsDirty=true;renderVnetList();}
+function vnetRemove(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length){showToast('Select a network first','warn');return;}vnetsData.networks.splice(vnetIdx,1);if(vnetIdx>=vnetsData.networks.length)vnetIdx=vnetsData.networks.length-1;vnetsDirty=true;renderVnetList();}
 function vnetDefaults(){const def=[{name:'VMnet0',type:'bridged',subnet:'',mask:'',dhcp:false,dhcp_start:'',dhcp_end:'',host_iface:'auto',gateway:'',port_forwards:''},{name:'VMnet1',type:'host_only',subnet:'192.168.118.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.118.128',dhcp_end:'192.168.118.254',host_iface:'',gateway:'',port_forwards:''},{name:'VMnet8',type:'nat',subnet:'192.168.140.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.140.128',dhcp_end:'192.168.140.254',host_iface:'',gateway:'192.168.140.2',port_forwards:'2222:192.168.140.128:22'}];
-vnetsData={networks:def};vnetIdx=0;renderVnetList();}
+vnetsData={networks:def};vnetIdx=0;vnetsDirty=true;renderVnetList();}
+// One save path for both buttons: the daemon persists the whole network set, so
+// "Save Selected" writes it and keeps the editor open, "Save All" writes and closes.
+async function vnetSave(msg){const r=await apiPost('/api/networks',JSON.stringify(vnetsData));if(r){vnetsDirty=false;setStatus(msg);}return !!r;}
 async function vnetSaveAll(){
 if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length&&!readVnetForm(vnetsData.networks[vnetIdx]))return;
-const r=await apiPost('/api/networks',JSON.stringify(vnetsData));if(r){var vd=document.getElementById('vnetdlg');if(vd)vd.close();setStatus('VNet settings saved.');}}
+if(await vnetSave('VNet settings saved.')){var vd=document.getElementById('vnetdlg');if(vd)vd.close();}}
 // ── Preferences ──
 var pendingTheme=null;
 var prefsOrigTheme=null;
@@ -822,7 +835,11 @@ var dialogFocusStack=[];
 var FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 function trapFocus(dlg){if(dlg._trapFocusHandler)return;var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}};dlg._trapFocusHandler=onKey;dlg.addEventListener('keydown',onKey);first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
 function releaseFocus(dlg){var handler=dlg._trapFocusHandler;if(handler){dlg.removeEventListener('keydown',handler);delete dlg._trapFocusHandler;}dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
-['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','catalogdlg','migratedlg','logdlg','shortcutsdlg','confirmdlg','promptdlg','topodlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;var origClose=dlg.close;dlg.showModal=function(){if(dlg.hasAttribute('data-closing')){dlg.removeAttribute('data-closing');trapFocus(dlg);return;}trapFocus(dlg);origShow.call(dlg);};dlg.close=function(){if(!dlg.open||dlg.hasAttribute('data-closing'))return;dlg.setAttribute('data-closing','');function done(){if(!dlg.hasAttribute('data-closing'))return;dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
+['newdlg','snapdlg','clonedlg','vnetdlg','prefsdlg','aboutdlg','catalogdlg','migratedlg','logdlg','shortcutsdlg','confirmdlg','promptdlg','topodlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;var origClose=dlg.close;dlg.showModal=function(){if(dlg.hasAttribute('data-closing')){dlg.removeAttribute('data-closing');trapFocus(dlg);return;}trapFocus(dlg);origShow.call(dlg);};dlg.close=function(){if(!dlg.open||dlg.hasAttribute('data-closing'))return;if(dlg._closeGuard&&!dlg.hasAttribute('data-guard-ok')){var guard=dlg._closeGuard();if(guard&&typeof guard.then==='function'){guard.then(function(ok){if(ok){dlg.setAttribute('data-guard-ok','');dlg.close();}dlg.removeAttribute('data-guard-ok');});return;}if(!guard)return;}dlg.setAttribute('data-closing','');function done(){if(!dlg.hasAttribute('data-closing'))return;dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
+// ── Network editor: unsaved edits are confirmed before any close path ──
+(function(){var vd=document.getElementById('vnetdlg');if(!vd)return;
+ vd._closeGuard=function(){if(!vnetsDirty)return true;return showConfirmDialog('Discard unsaved network changes?',{danger:true,okLabel:'Discard'});};
+ vd.addEventListener('input',function(){vnetsDirty=true;});})();
 // ── Enter in a dialog input triggers its primary action ──
 [{id:'newdlg',fn:createVm},{id:'importdlg',fn:importConfirm},{id:'migratedlg',fn:doMigrate},{id:'snapdlg',fn:takeSnapshotFromDlg},{id:'prefsdlg',fn:savePrefs}].forEach(function(o){var d=document.getElementById(o.id);if(!d)return;d.addEventListener('keydown',function(e){if(e.key!=='Enter')return;var t=e.target;if(t&&t.tagName==='INPUT'&&t.type!=='button'&&!t.readOnly){e.preventDefault();o.fn();}});});
 // ── New VM dialog: live inline validation (mirrors the Settings form) ──
