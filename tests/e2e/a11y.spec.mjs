@@ -41,10 +41,18 @@ const DIALOGS = [
     ['cloneGuest', 'clonedlg', async () => {}],
     ['openSnapshots', 'snapdlg', async (page) => page.locator('#snapdlg button[type="submit"]').click()],
     ['migrateGuest', 'migratedlg', async (page) => page.locator('#migratedlg button[type="submit"]').click()],
+    ['openVnets', 'vnetdlg', async (page) => {
+        await page.locator('[data-action="vnetAdd"]').click();
+        await page.locator('#vn_subnet').fill('bad');
+        await page.locator('[data-action="vnetSaveAll"]').click();
+        await page.locator('#err_vn_subnet').waitFor();
+    }],
+    ['openTopology', 'topodlg', async (page) => page.waitForSelector('.topo-svg .topo-node')],
+    ['openCatalog', 'catalogdlg', async (page) => page.waitForSelector('.cat-card')],
 ];
 
 for (const theme of ['dark', 'light']) {
-    test(`axe finds no violations in the VM dialogs (${theme})`, async ({ page }) => {
+    test(`axe finds no violations in the VM and network dialogs (${theme})`, async ({ page }) => {
         await page.addInitScript((t) => localStorage.setItem('hangar-theme', t), theme);
         await page.goto('/', { waitUntil: 'domcontentloaded' });
         await page.waitForSelector('#vmlist');
@@ -67,6 +75,7 @@ for (const theme of ['dark', 'light']) {
                 const { violations } = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
                 expect(violations.map((v) => `${id}: ${v.id} ${v.nodes[0].target}`)).toEqual([]);
                 await page.keyboard.press('Escape');
+                if (id === 'vnetdlg') await page.locator('#confirmOkBtn').click();
                 await expect(page.locator(`#${id}`)).toHaveCount(0);
             }
         } finally {

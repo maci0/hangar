@@ -483,6 +483,39 @@ test('a failed elk.js load degrades visibly with a retry', async ({ page }) => {
     await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
 });
 
+test('topology shows a computing state, Refresh recomputes and a network node opens the editor on it', async ({ page }) => {
+    await createVm(page, 'wf-topo-net');
+    const idx = await indexOf(page, 'wf-topo-net');
+    await api(page, 'POST', `/api/vms/${idx}`, 'vnet=VMnet8');
+    await page.reload();
+    await page.evaluate(() => openTopology());
+    await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
+    let computes = 0;
+    await page.route('**/api/networks', async (route) => { computes += 1; await route.continue(); });
+    await page.locator('#topodlg [data-action="openTopology"]', { hasText: 'Refresh' }).click();
+    await expect.poll(() => computes).toBeGreaterThan(0);
+    await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
+    // Clicking a network node closes the topology and opens the editor with that network selected.
+    await page.locator('.topo-node.vnet[role="button"]').filter({ hasText: 'VMnet8' }).first().click();
+    await expect(page.locator('#topodlg')).toHaveCount(0);
+    await expect(page.locator('#vnetdlg')).toBeVisible();
+    await expect(page.locator('#vn_name')).toHaveValue('VMnet8');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#vnetdlg')).toHaveCount(0);
+});
+
+test('topology nodes activate from the keyboard', async ({ page }) => {
+    await createVm(page, 'wf-topo-key');
+    await page.reload();
+    await page.evaluate(() => openTopology());
+    await page.waitForSelector('.topo-svg .topo-node', { timeout: 10000 });
+    const node = page.locator('.topo-node.vm[role="button"]').filter({ hasText: 'wf-topo-key' });
+    await node.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#topodlg')).toHaveCount(0);
+    await expect(page.locator('#vmname')).toHaveText('wf-topo-key');
+});
+
 test('per-NIC vnet binding round-trips and appears in the topology', async ({ page }) => {
     await createVm(page, 'wf-nicvnet');
     const idx = await indexOf(page, 'wf-nicvnet');
@@ -551,7 +584,8 @@ test('vnet Save All validates and persists the selected form without Save Select
         await page.locator('#vn_name').fill('wf-save-net');
         await page.locator('#vn_subnet').fill('invalid');
         await page.locator('[data-action="vnetSaveAll"]').click();
-        await expect(page.locator('.toast.error')).toContainText('Invalid subnet format');
+        await expect(page.locator('#err_vn_subnet')).toHaveText('Invalid subnet format.');
+        await expect(page.locator('#vn_subnet')).toBeFocused();
         await expect(page.locator('#vnetdlg')).toBeVisible();
         await expect(page.locator('#vn_name')).toHaveValue('wf-save-net');
         expect((await api(page, 'GET', '/api/networks', null)).text).toBe(original.text);
@@ -596,6 +630,96 @@ test('vnet Save Selected persists without closing and unsaved edits are confirme
     }
 });
 
+test('vnet editor rejects names over 15 characters inline and saves nothing', async ({ page }) => {
+    const original = await api(page, 'GET', '/api/networks', null);
+    let posts = 0;
+    await page.route('**/api/networks', async (route) => {
+        if (route.request().method() === 'POST') posts += 1;
+        await route.continue();
+    });
+    await page.evaluate(() => actionHandlers.openVnets(document.body));
+    await expect(page.locator('#vnetdlg')).toBeVisible();
+    await page.locator('[data-action="vnetAdd"]').click();
+    await page.locator('#vn_name').fill('a-network-name-16');
+    await page.locator('[data-action="vnetSaveAll"]').click();
+    await expect(page.locator('#err_vn_name')).toHaveText('Network name is at most 15 characters.');
+    await expect(page.locator('#vn_name')).toHaveAttribute('aria-invalid', 'true');
+    await page.locator('#vn_name').fill('a-network-name');
+    await expect(page.locator('#err_vn_name')).toHaveText('');
+    await page.locator('#vn_name').fill('');
+    await page.locator('[data-action="vnetSaveAll"]').click();
+    await expect(page.locator('#err_vn_name')).toHaveText('Network name is required.');
+    await page.locator('#vn_mask').fill('255.0.255.0');
+    await page.locator('[data-action="vnetSaveAll"]').click();
+    await expect(page.locator('#err_vn_mask')).toHaveText('Invalid mask format.');
+    expect(posts, 'no save request while a field is invalid').toBe(0);
+    expect((await api(page, 'GET', '/api/networks', null)).text).toBe(original.text);
+    // Escape asks before discarding the edits, and Discard closes it.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#confirmdlg')).toBeVisible();
+    await page.locator('#confirmOkBtn').click();
+    await expect(page.locator('#vnetdlg')).toHaveCount(0);
+});
+
+test('vnet editor keeps edits across selection, moves with arrow keys and persists every field', async ({ page }) => {
+    const original = await api(page, 'GET', '/api/networks', null);
+    expect(original.ok).toBe(true);
+    try {
+        await page.evaluate(() => actionHandlers.openVnets(document.body));
+        await expect(page.locator('#vnetdlg')).toBeVisible();
+        await page.locator('[data-action="vnetAdd"]').click();
+        await page.locator('#vn_name').fill('wf-fields');
+        await page.locator('#vn_type').selectOption('bridged');
+        await page.locator('#vn_dhcp').selectOption('1');
+        await page.locator('#vn_dstart').fill('192.168.100.10');
+        await page.locator('#vn_dend').fill('192.168.100.20');
+        await page.locator('#vn_iface').fill('eth9');
+        await page.locator('#vn_gw').fill('192.168.100.1');
+        await page.locator('#vn_pf').fill('8080:192.168.100.10:80');
+        await expect(page.locator('.vnet-item.active .vnet-type-badge')).toHaveText('Bridged');
+        // Selecting another network and coming back keeps the unsaved edits.
+        const items = page.locator('.vnet-item');
+        await items.first().click();
+        await expect(items.first()).toHaveClass(/active/);
+        await expect(page.locator('#vn_name')).not.toHaveValue('wf-fields');
+        await items.last().click();
+        await expect(page.locator('#vn_name')).toHaveValue('wf-fields');
+        await expect(page.locator('#vn_pf')).toHaveValue('8080:192.168.100.10:80');
+        // Arrow keys move the selection and focus (roving tab stop).
+        await items.last().focus();
+        await page.keyboard.press('ArrowUp');
+        await expect(items.nth((await items.count()) - 2)).toBeFocused();
+        await expect(items.nth((await items.count()) - 2)).toHaveClass(/active/);
+        await page.keyboard.press('End');
+        await expect(items.last()).toHaveClass(/active/);
+        await page.keyboard.press('Home');
+        await expect(items.first()).toHaveClass(/active/);
+        await page.locator('.vnet-item', { hasText: 'wf-fields' }).click();
+        await page.locator('[data-action="vnetSaveAll"]').click();
+        await expect(page.locator('#vnetdlg')).toHaveCount(0);
+        const saved = JSON.parse((await api(page, 'GET', '/api/networks', null)).text).networks.find((n) => n.name === 'wf-fields');
+        expect(saved).toMatchObject({ type: 'bridged', dhcp: true, dhcp_start: '192.168.100.10', dhcp_end: '192.168.100.20', host_iface: 'eth9', gateway: '192.168.100.1', port_forwards: '8080:192.168.100.10:80' });
+    } finally {
+        const restored = await api(page, 'POST', '/api/networks', original.text);
+        expect(restored.ok).toBe(true);
+    }
+});
+
+test('vnet Remove and Defaults edit the set and close without saving discards them', async ({ page }) => {
+    const original = await api(page, 'GET', '/api/networks', null);
+    await page.evaluate(() => actionHandlers.openVnets(document.body));
+    await expect(page.locator('#vnetdlg')).toBeVisible();
+    await page.locator('[data-action="vnetDefaults"]').click();
+    await expect(page.locator('.vnet-item')).toHaveText([/VMnet0/, /VMnet1/, /VMnet8/]);
+    await page.locator('[data-action="vnetRemove"]').click();
+    await expect(page.locator('.vnet-item')).toHaveCount(2);
+    await page.locator('#vnetdlg [data-action="closeDlg"]').click();
+    await expect(page.locator('#confirmdlg')).toBeVisible();
+    await page.locator('#confirmOkBtn').click();
+    await expect(page.locator('#vnetdlg')).toHaveCount(0);
+    expect((await api(page, 'GET', '/api/networks', null)).text).toBe(original.text);
+});
+
 test('catalog quickstart creates a VM with the template OS and firmware', async ({ page }) => {
     const cat = await api(page, 'GET', '/api/catalog', null);
     const entries = JSON.parse(cat.text);
@@ -616,6 +740,37 @@ test('catalog quickstart creates a VM with the template OS and firmware', async 
     await api(page, 'POST', '/api/vms/quickstart/win11', '');
     const after = await list(page);
     expect(after.filter(v => v.name.startsWith('Windows 11')).length).toBe(2);
+});
+
+test('catalog dialog lists templates and Create makes a VM and closes', async ({ page }) => {
+    await page.locator('[data-action="openCatalog"]:visible').first().click();
+    await expect(page.locator('#catalogdlg')).toBeVisible();
+    const cards = page.locator('#catalogList .cat-card');
+    await expect.poll(() => cards.count()).toBeGreaterThanOrEqual(10);
+    const debian = cards.filter({ hasText: 'Debian 12' });
+    await expect(debian).toContainText('2 vCPU');
+    await expect(debian).toContainText('2 GiB RAM');
+    await expect(debian).toContainText('20 GB disk');
+    await debian.getByRole('button', { name: 'Create VM from Debian 12' }).click();
+    await expect(page.locator('#catalogdlg')).toHaveCount(0);
+    await expect.poll(async () => (await list(page)).some((v) => v.name === 'Debian 12')).toBe(true);
+    await expect(page.locator('#vmlist .vm-item', { hasText: 'Debian 12' })).toBeVisible();
+});
+
+test('catalog dialog shows loading, failure and empty states', async ({ page }) => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    await page.route('**/api/catalog', async (route) => { await gate; await route.abort(); });
+    await page.evaluate(() => { void openCatalog(); });
+    await expect(page.locator('#catalogList')).toHaveText('Loading catalog…');
+    release();
+    await expect(page.locator('#catalogList')).toHaveText('Failed to load catalog.');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#catalogdlg')).toHaveCount(0);
+    await page.unroute('**/api/catalog');
+    await page.route('**/api/catalog', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+    await page.evaluate(() => { void openCatalog(); });
+    await expect(page.locator('#catalogList')).toHaveText('No templates available.');
 });
 
 test('dashboard shows host capacity (committed vs physical)', async ({ page }) => {
@@ -773,6 +928,8 @@ test('command palette (Ctrl+K) opens, filters, runs a command, and closes', asyn
     await expect(page.locator('#catalogdlg')).toBeVisible();
     await expect(page.locator('#palette')).toBeHidden();
     await page.keyboard.press('Escape'); // close catalog
+    // The dialog stays modal (page inert) through its exit animation; wait it out before reopening the palette.
+    await expect(page.locator('#catalogdlg')).toHaveCount(0);
     // Reopen and dismiss with Escape.
     await page.keyboard.press('Control+k');
     await expect(page.locator('#palette')).toBeVisible();

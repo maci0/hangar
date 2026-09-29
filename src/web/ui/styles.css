@@ -71,7 +71,12 @@
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-soft: var(--accent-soft);
+  --color-accent-2: var(--accent-2);
   --color-success: var(--success);
+  --color-pause: var(--pause);
+  --color-net-nat: var(--network-nat);
+  --color-net-bridged: var(--network-bridged);
+  --color-net-host-only: var(--network-host-only);
   --color-warn: var(--warn);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
@@ -81,4 +86,9 @@
   --color-backdrop: var(--backdrop);
   --color-on-accent: var(--text-on-accent);
   --color-on-danger: var(--text-on-danger);
+}
+
+/* Catalog cards: as many 360px-wide columns as fit, one on a narrow dialog. */
+@utility grid-cols-catalog {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22.5rem), 1fr));
 }

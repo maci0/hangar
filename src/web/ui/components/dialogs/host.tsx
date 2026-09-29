@@ -1,4 +1,5 @@
 import { AboutDialog } from "@/components/dialogs/about";
+import { CatalogDialog, type CatalogState } from "@/components/dialogs/catalog";
 import { CloneDialog, type CloneRequest } from "@/components/dialogs/clone";
 import { ConfirmDialog, type ConfirmRequest } from "@/components/dialogs/confirm";
 import { ImportDialog, type ImportRequest } from "@/components/dialogs/import";
@@ -9,6 +10,8 @@ import { PrefsDialog, type PrefsRequest } from "@/components/dialogs/prefs";
 import { PromptDialog, type PromptRequest } from "@/components/dialogs/prompt";
 import { ShortcutsDialog } from "@/components/dialogs/shortcuts";
 import { SnapshotsDialog, type SnapshotsState } from "@/components/dialogs/snapshots";
+import { TopologyDialog, type TopologyState } from "@/components/dialogs/topology";
+import { VnetsDialog, type VnetsRequest } from "@/components/dialogs/vnets";
 
 /** Which dialogs are open. Each slot is null when closed. */
 export type DialogsState = {
@@ -24,6 +27,9 @@ export type DialogsState = {
   readonly clone: CloneRequest | null;
   readonly snapshots: SnapshotsState | null;
   readonly migrate: MigrateRequest | null;
+  readonly vnets: VnetsRequest | null;
+  readonly topology: TopologyState | null;
+  readonly catalog: CatalogState | null;
 };
 
 export type DialogsProps = DialogsState & {
@@ -44,6 +50,9 @@ export const Dialogs = ({
   clone,
   snapshots,
   migrate,
+  vnets,
+  topology,
+  catalog,
   onClose,
 }: DialogsProps) => (
   <>
@@ -52,6 +61,9 @@ export const Dialogs = ({
     {clone && <CloneDialog request={clone} onClose={() => onClose("clone", clone)} />}
     {snapshots && <SnapshotsDialog state={snapshots} onClose={() => onClose("snapshots", snapshots)} />}
     {migrate && <MigrateDialog request={migrate} onClose={() => onClose("migrate", migrate)} />}
+    {vnets && <VnetsDialog request={vnets} onClose={() => onClose("vnets", vnets)} />}
+    {topology && <TopologyDialog state={topology} onClose={() => onClose("topology", topology)} />}
+    {catalog && <CatalogDialog state={catalog} onClose={() => onClose("catalog", catalog)} />}
     {prefs && <PrefsDialog request={prefs} onClose={() => onClose("prefs", prefs)} />}
     {about && <AboutDialog version={about.version} onClose={() => onClose("about", about)} />}
     {shortcuts && <ShortcutsDialog onClose={() => onClose("shortcuts", shortcuts)} />}

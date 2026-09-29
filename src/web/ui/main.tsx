@@ -5,7 +5,11 @@ import type { ImportRequest } from "@/components/dialogs/import";
 import type { MigrateRequest } from "@/components/dialogs/migrate";
 import type { NewVmRequest } from "@/components/dialogs/new-vm";
 import type { PrefsRequest } from "@/components/dialogs/prefs";
+import type { CatalogState } from "@/components/dialogs/catalog";
 import type { SnapshotsState } from "@/components/dialogs/snapshots";
+import type { TopologyState } from "@/components/dialogs/topology";
+import type { VnetsRequest } from "@/components/dialogs/vnets";
+import { netKindOf, type NetKind } from "@/lib/network";
 import { Toolbar, toolbarControl, type ToolbarProps } from "@/components/toolbar";
 import { VmList, type VmListProps } from "@/components/vm-list";
 
@@ -42,6 +46,20 @@ type HangarUi = {
   readonly openSnapshots: (state: SnapshotsState) => void;
   /** Merges the fields into the open Snapshot Manager; ignored while it is closed. */
   readonly setSnapshots: (patch: Partial<SnapshotsState>) => void;
+  /** Accent kind of a virtual network `type` string, for topology nodes. */
+  readonly netKind: (type: string) => NetKind;
+  /** Opens the Virtual Network Editor with the daemon's networks. */
+  readonly openVnets: (request: VnetsRequest) => void;
+  /** Selects a network in the open editor; ignored while it is closed. */
+  readonly selectVnet: (name: string) => void;
+  /** Opens Network Topology; the view starts as given and `setTopology` replaces it. */
+  readonly openTopology: (state: TopologyState) => void;
+  /** Merges the fields into the open topology; ignored while it is closed. */
+  readonly setTopology: (patch: Partial<TopologyState>) => void;
+  /** Opens the VM Catalog; the list starts as loading until `setCatalog` pushes it. */
+  readonly openCatalog: (state: CatalogState) => void;
+  /** Merges the fields into the open catalog; ignored while it is closed. */
+  readonly setCatalog: (patch: Partial<CatalogState>) => void;
 };
 
 declare global {
@@ -64,6 +82,9 @@ const CLOSED_DIALOGS: DialogsState = {
   clone: null,
   snapshots: null,
   migrate: null,
+  vnets: null,
+  topology: null,
+  catalog: null,
 };
 
 type DialogBridge = Omit<HangarUi, "renderVmList" | "setToolbar" | "closeToolbarMenus">;
@@ -153,9 +174,34 @@ const createVmDialogs = ({ get, set }: DialogStore) => ({
   },
 });
 
+const createNetworkDialogs = ({ get, set }: DialogStore) => ({
+  netKind: netKindOf,
+  openVnets: (request: VnetsRequest) => set({ vnets: get().vnets ?? request }),
+  selectVnet: (name: string) => {
+    const { vnets } = get();
+    if (vnets) {
+      set({ vnets: { ...vnets, select: { name } } });
+    }
+  },
+  openTopology: (state: TopologyState) => set({ topology: get().topology ?? state }),
+  setTopology: (patch: Partial<TopologyState>) => {
+    const { topology } = get();
+    if (topology) {
+      set({ topology: { ...topology, ...patch } });
+    }
+  },
+  openCatalog: (state: CatalogState) => set({ catalog: get().catalog ?? state }),
+  setCatalog: (patch: Partial<CatalogState>) => {
+    const { catalog } = get();
+    if (catalog) {
+      set({ catalog: { ...catalog, ...patch } });
+    }
+  },
+});
+
 const createDialogBridge = (): DialogBridge => {
   const store = createDialogStore();
-  return { ...createAnswerDialogs(store), ...createInfoDialogs(store), ...createVmDialogs(store) };
+  return { ...createAnswerDialogs(store), ...createInfoDialogs(store), ...createVmDialogs(store), ...createNetworkDialogs(store) };
 };
 
 const createBridge = (): HangarUi => {

@@ -647,112 +647,33 @@ async function ejectCd(){if(sel===null)return;const r=await apiPost('/api/vms/'+
 async function compactDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before compacting its disk','warn');return;}if(!await showConfirmDialog('Compact the primary disk? This rewrites the image to reclaim freed space (VM must stay off during the operation).'))return;const r=await apiPost('/api/vms/'+sel+'/disk/compact','');if(r){await refresh();setStatus('Primary disk compacted.');}}
 async function resizeDisk(){if(sel===null)return;const v=vms[sel];if(v.status!=='stopped'){showToast('Power off the VM before resizing its disk','warn');return;}const cur=parseInt(v.disk,10)||0;const n=await showPromptDialog('New primary disk size in GB (grow only; current '+cur+' GB):',String(cur));if(n===null)return;const gb=parseInt(n,10);if(!Number.isFinite(gb)||gb<=cur){showToast('Enter a size larger than '+cur+' GB','error');return;}const r=await apiPost('/api/vms/'+sel+'/disk/resize','size='+gb);if(r){await refresh();setStatus('Primary disk resized to '+gb+' GB.');}}
 // ── VNet Editor ──
-const VNET_MAX=20;
-let vnetsData=[],vnetIdx=-1,vnetsDirty=false;
-async function openVnets(){await loadVnets();var vd=document.getElementById('vnetdlg');if(vd)vd.showModal();}
-async function loadVnets(){try{const r=await fetch('/api/networks');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};logDebug('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};logDebug('Failed to load VNets:',e);}vnetsDirty=false;renderVnetList();}
-function netAccent(type){var t=(type||'').toLowerCase();
- if(t==='nat')return 'var(--network-nat)';
- if(t==='bridged')return 'var(--network-bridged)';
- if(t==='host_only'||t==='host-only')return 'var(--network-host-only)';
- return 'var(--text-dim)';}
-function vnetTypeMeta(t){return {c:netAccent(t),label:vnetTypeLabel(t)};}
-function vnetTypeLabel(t){t=(t||'').toLowerCase();
- if(t==='nat')return 'NAT';
- if(t==='bridged')return 'Bridged';
- if(t==='host_only'||t==='host-only')return 'Host-Only';
- return t||', ';}
-function renderVnetList(){const sel=document.getElementById('vnet_sel');if(!sel)return;if(!vnetsData.networks)vnetsData={networks:[]};
- if(vnetIdx<0&&vnetsData.networks.length)vnetIdx=0;
- let h='';
- for(let i=0;i<vnetsData.networks.length;i++){const n=vnetsData.networks[i];const tm=vnetTypeMeta(n.type);const on=i===vnetIdx;
-  h+='<button type="button" class="vnet-item'+(on?' active':'')+'" role="option" aria-selected="'+(on?'true':'false')+'" data-action="onVnetSelect" data-vnet-idx="'+i+'" data-vnet-type="'+escHtml((n.type||'').toLowerCase())+'">'
-   +'<span class="vnet-dot" style="background:'+tm.c+'" aria-hidden="true"></span>'
-   +'<span class="vnet-item-name">'+escHtml(n.name)+'</span>'
-   +'<span class="vnet-type-badge" data-net-type="'+escHtml((n.type||'').toLowerCase())+'" style="color:'+tm.c+';border-color:'+tm.c+'">'+escHtml(tm.label)+'</span>'
-   +'</button>';}
- if(!vnetsData.networks.length)h='<div class="vnet-empty">No virtual networks. Add one below.</div>';
- sel.innerHTML=h;
- if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length){showVnetFields(vnetIdx);}else{clearVnetFields();}}
-function clearVnetFields(){['vn_name','vn_type','vn_subnet','vn_mask','vn_dhcp','vn_dstart','vn_dend','vn_iface','vn_gw','vn_pf'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});var vt=document.getElementById('vn_type');if(vt)vt.value='nat';var vd=document.getElementById('vn_dhcp');if(vd)vd.value='0';}
-function onVnetSelect(el){var idx=el&&el.getAttribute?parseInt(el.getAttribute('data-vnet-idx'),10):NaN;if(isNaN(idx))return;vnetIdx=idx;renderVnetList();}
-function showVnetFields(i){const n=vnetsData.networks[i];if(!n)return;
-var vn=document.getElementById('vn_name');if(!vn)return;vn.value=n.name||'';
-var vt=document.getElementById('vn_type');if(vt)vt.value=n.type||'nat';
-var vs=document.getElementById('vn_subnet');if(vs)vs.value=n.subnet||'';
-var vm=document.getElementById('vn_mask');if(vm)vm.value=n.mask||'';
-var vd=document.getElementById('vn_dhcp');if(vd)vd.value=n.dhcp?'1':'0';
-var vds=document.getElementById('vn_dstart');if(vds)vds.value=n.dhcp_start||'';
-var vde=document.getElementById('vn_dend');if(vde)vde.value=n.dhcp_end||'';
-var vi=document.getElementById('vn_iface');if(vi)vi.value=n.host_iface||'';
-var vg=document.getElementById('vn_gw');if(vg)vg.value=n.gateway||'';
-var vp=document.getElementById('vn_pf');if(vp)vp.value=n.port_forwards||'';}
-function readVnetForm(n){
-var vn=document.getElementById('vn_name');if(!vn)return false;
-const name=vn.value.trim();if(!name){showToast('Network name is required','error');return false;}
-var vt=document.getElementById('vn_type');var vs=document.getElementById('vn_subnet');
-var vm=document.getElementById('vn_mask');var vd=document.getElementById('vn_dhcp');
-var vds=document.getElementById('vn_dstart');var vde=document.getElementById('vn_dend');
-var vi=document.getElementById('vn_iface');var vg=document.getElementById('vn_gw');
-var vp=document.getElementById('vn_pf');
-const subnet=(vs?vs.value:'').trim();const mask=(vm?vm.value:'').trim();
-const dstart=(vds?vds.value:'').trim();const dend=(vde?vde.value:'').trim();
-const gw=(vg?vg.value:'').trim();const iface=(vi?vi.value:'').trim();
-if(subnet&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(subnet)){showToast('Invalid subnet format','error');return false;}
-if(mask&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(mask)){showToast('Invalid mask format','error');return false;}
-if(dstart&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(dstart)){showToast('Invalid DHCP start IP format','error');return false;}
-if(dend&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(dend)){showToast('Invalid DHCP end IP format','error');return false;}
-if(gw&&!/^\d{1,3}(\.\d{1,3}){3}$/.test(gw)){showToast('Invalid gateway IP format','error');return false;}
-// strip control characters from name/iface
-n.name=name.replace(/[\x00-\x1f\x7f]/g,'');n.type=vt?vt.value:'nat';
-n.subnet=subnet;n.mask=mask;
-n.dhcp=vd?vd.value==='1':false;n.dhcp_start=dstart;
-n.dhcp_end=dend;n.host_iface=iface.replace(/[\x00-\x1f\x7f]/g,'');
-n.gateway=gw;n.port_forwards=(vp?vp.value||'':'').replace(/[\x00-\x1f\x7f]/g,'');return true;}
-function vnetSaveCurrent(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length){showToast('Select a network first','warn');return;}if(!readVnetForm(vnetsData.networks[vnetIdx]))return;renderVnetList();vnetSave('Saved "'+vnetsData.networks[vnetIdx].name+'".');}
-function vnetAdd(){if(vnetsData.networks.length>=VNET_MAX){showToast('The limit of '+VNET_MAX+' virtual networks is reached','warn');return;}const n={name:'VMnet'+vnetsData.networks.length,type:'host_only',subnet:'192.168.100.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.100.128',dhcp_end:'192.168.100.254',host_iface:'',gateway:'',port_forwards:''};
-vnetsData.networks.push(n);vnetIdx=vnetsData.networks.length-1;vnetsDirty=true;renderVnetList();}
-function vnetRemove(){if(vnetIdx<0||vnetIdx>=vnetsData.networks.length){showToast('Select a network first','warn');return;}vnetsData.networks.splice(vnetIdx,1);if(vnetIdx>=vnetsData.networks.length)vnetIdx=vnetsData.networks.length-1;vnetsDirty=true;renderVnetList();}
-function vnetDefaults(){const def=[{name:'VMnet0',type:'bridged',subnet:'',mask:'',dhcp:false,dhcp_start:'',dhcp_end:'',host_iface:'auto',gateway:'',port_forwards:''},{name:'VMnet1',type:'host_only',subnet:'192.168.118.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.118.128',dhcp_end:'192.168.118.254',host_iface:'',gateway:'',port_forwards:''},{name:'VMnet8',type:'nat',subnet:'192.168.140.0',mask:'255.255.255.0',dhcp:true,dhcp_start:'192.168.140.128',dhcp_end:'192.168.140.254',host_iface:'',gateway:'192.168.140.2',port_forwards:'2222:192.168.140.128:22'}];
-vnetsData={networks:def};vnetIdx=0;vnetsDirty=true;renderVnetList();}
-// One save path for both buttons: the daemon persists the whole network set, so
-// "Save Selected" writes it and keeps the editor open, "Save All" writes and closes.
-async function vnetSave(msg){const r=await apiPost('/api/networks',JSON.stringify(vnetsData));if(r){vnetsDirty=false;setStatus(msg);}return !!r;}
-async function vnetSaveAll(){
-if(vnetIdx>=0&&vnetIdx<vnetsData.networks.length&&!readVnetForm(vnetsData.networks[vnetIdx]))return;
-if(await vnetSave('VNet settings saved.')){var vd=document.getElementById('vnetdlg');if(vd)vd.close();}}
+// The editor (Preact) owns the form, validation and dirty state; this side fetches and writes the set.
+async function loadVnets(){try{const r=await fetch('/api/networks');if(r.ok){const d=await r.json();return d.networks||[];}logDebug('Failed to load VNets:',r.status);}catch(e){logDebug('Failed to load VNets:',e);}return null;}
+async function openVnets(select){
+ if(document.getElementById('vnetdlg')){if(select)window.hangarUi.selectVnet(select);return;}
+ const networks=await loadVnets();
+ if(networks===null){showToast('Failed to load virtual networks','error');return;}
+ window.hangarUi.openVnets({networks:networks,select:select?{name:select}:undefined,save:saveVnets,confirmDiscard:function(){return showConfirmDialog('Discard unsaved network changes?',{danger:true,okLabel:'Discard'});}});}
+// The daemon persists the whole network set: Save Selected (`saved` names it) and Save All write the same body.
+async function saveVnets(networks,saved){const r=await apiPost('/api/networks',JSON.stringify({networks:networks}));if(r)setStatus(saved?'Saved "'+saved+'".':'VNet settings saved.');return !!r;}
 // ── Preferences ──
 async function openPrefs(){var cfg={};try{var r=await fetch('/api/config');if(r.ok)cfg=await r.json();}catch(e){logDebug('Failed to load config:',e);}
 var pf=cfg.prefs||{};
 window.hangarUi.openPrefs({values:{theme:cfg.theme||window.hangarTheme||(document.documentElement.classList.contains('light')?'light':'dark'),defaultVmDir:pf.default_vm_dir||'',defaultMemoryMb:String(pf.default_memory_mb||2048),defaultCpuCores:String(pf.default_cpu_cores||2),autoprotectEnabled:pf.autoprotect_enabled_default?'1':'0',autoprotectIntervalMin:String(pf.autoprotect_interval_min_default||60),autoprotectMax:String(pf.autoprotect_max_default||10)},save:savePrefs});}
 async function savePrefs(body){var r=await apiPost('/api/config',body);if(!r)return false;setStatus('Preferences saved.');return true;}
 function openAbout(){window.hangarUi.openAbout();try{fetch('/api/capabilities').then(function(r){return r.json();}).then(function(c){window.hangarUi.setAboutVersion('Version '+(c.version||'?')+' · up to '+(c.max_vms||'?')+' VMs');}).catch(function(e){logDebug('Failed to load capabilities:',e);});}catch(e){logDebug('Failed to load capabilities:',e);}}
-async function openCatalog(){var cd=document.getElementById('catalogdlg');if(!cd)return;var list=document.getElementById('catalogList');if(list)list.innerHTML='<div class="spinner" role="status" style="padding:20px;text-align:center">Loading catalog…</div>';cd.showModal();try{var r=await fetch('/api/catalog');if(!r.ok){if(list)list.innerHTML='<p role="alert" style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';return;}var entries=await r.json();if(!list)return;if(!entries||!entries.length){list.innerHTML='<p role="status" style="color:var(--text-muted);padding:20px;text-align:center">No templates available.</p>';return;}var guestOsLabels=['Linux','Windows','FreeBSD','macOS','Other'];
+// Catalog cards are drawn by the Preact dialog; this side fetches the templates and creates the VM.
 // Distro/OS visual identity: accent color + monogram for the card emblem.
-function catalogBrand(e){var fam=['Linux','Windows','FreeBSD','macOS','Other'][e.guest_os]||'';return osBrand((e.name||'')+' '+(e.id||''),fam);}
-var h='';for(var i=0;i<entries.length;i++){var e=entries[i];var osLabel=guestOsLabels[e.guest_os]||'Other';var br=catalogBrand(e);
- h+='<div class="cat-card">'
-  +'<div class="cat-emblem" style="background:'+br.c+'" aria-hidden="true">'+escHtml(br.m)+'</div>'
-  +'<div class="cat-body">'
-   +'<div class="cat-name">'+escHtml(e.name)+'</div>'
-   +'<div class="cat-os">'+escHtml(osLabel)+'</div>'
-   +'<div class="cat-desc">'+escHtml(e.description||'')+'</div>'
-   +'<div class="cat-specs"><span class="cat-spec">'+e.cpu_cores+' vCPU</span><span class="cat-spec">'+memText(e.memory_mb)+' RAM</span><span class="cat-spec">'+e.disk_size_gb+' GB disk</span></div>'
-  +'</div>'
-  +'<button class="btn primary cat-create" data-action="quickstartVm" data-catalog-id="'+escHtml(e.id)+'" aria-label="Create VM from '+escHtml(e.name)+'">Create</button>'
-  +'</div>';}
-list.innerHTML=h;}catch(ex){if(list)list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';}}
-async function quickstartVm(slug){if(!slug)return;var r=await apiPost('/api/vms/quickstart/'+slug);if(r){var cd=document.getElementById('catalogdlg');if(cd)cd.close();await refresh();setStatus('VM created from template.');}}
-// ── Dialog Focus Trap + Backdrop Click-to-Close ──
-var dialogFocusStack=[];
-var FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
-function trapFocus(dlg){if(dlg._trapFocusHandler)return;var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}};dlg._trapFocusHandler=onKey;dlg.addEventListener('keydown',onKey);first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
-function releaseFocus(dlg){var handler=dlg._trapFocusHandler;if(handler){dlg.removeEventListener('keydown',handler);delete dlg._trapFocusHandler;}dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
-['vnetdlg','catalogdlg','topodlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;var origClose=dlg.close;dlg.showModal=function(){if(dlg.hasAttribute('data-closing')){dlg.removeAttribute('data-closing');trapFocus(dlg);return;}trapFocus(dlg);origShow.call(dlg);};dlg.close=function(){if(!dlg.open||dlg.hasAttribute('data-closing'))return;if(dlg._closeGuard&&!dlg.hasAttribute('data-guard-ok')){var guard=dlg._closeGuard();if(guard&&typeof guard.then==='function'){guard.then(function(ok){if(ok){dlg.setAttribute('data-guard-ok','');dlg.close();}dlg.removeAttribute('data-guard-ok');});return;}if(!guard)return;}dlg.setAttribute('data-closing','');function done(){if(!dlg.hasAttribute('data-closing'))return;dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
-// ── Network editor: unsaved edits are confirmed before any close path ──
-(function(){var vd=document.getElementById('vnetdlg');if(!vd)return;
- vd._closeGuard=function(){if(!vnetsDirty)return true;return showConfirmDialog('Discard unsaved network changes?',{danger:true,okLabel:'Discard'});};
- vd.addEventListener('input',function(){vnetsDirty=true;});})();
+function catalogEntry(e){var os=['Linux','Windows','FreeBSD','macOS','Other'];var br=osBrand((e.name||'')+' '+(e.id||''),os[e.guest_os]||'');
+ return {id:e.id,name:e.name,os:os[e.guest_os]||'Other',description:e.description||'',cpuCores:e.cpu_cores,memory:memText(e.memory_mb),diskGb:e.disk_size_gb,brandColor:br.c,monogram:br.m};}
+async function openCatalog(){
+ if(document.getElementById('catalogdlg'))return;
+ window.hangarUi.openCatalog({list:{kind:'loading'},create:quickstartVm});
+ try{var r=await fetch('/api/catalog');if(!r.ok){window.hangarUi.setCatalog({list:{kind:'failed'}});return;}
+  var entries=await r.json();
+  window.hangarUi.setCatalog({list:entries&&entries.length?{kind:'ready',items:entries.map(catalogEntry)}:{kind:'empty'}});
+ }catch(ex){logDebug('Failed to load catalog:',ex);window.hangarUi.setCatalog({list:{kind:'failed'}});}}
+async function quickstartVm(slug){var r=await apiPost('/api/vms/quickstart/'+slug);if(!r)return false;await refresh();setStatus('VM created from template.');return true;}
 // ── Sidebar Overlay Click-to-Close ──
 document.body.addEventListener('click',function(e){if(document.body.classList.contains('sidebar-overlay')&&!e.target.closest('aside')){closeSidebar();}});
 // ── Toolbar More Click-Outside ──
@@ -866,37 +787,32 @@ function runPalette(i){var it=paletteItems[i];if(!it)return;closePalette();if(it
 
 // ── Visual network topology (elkjs auto-layout → SVG) ──
 function modeLabel(m){return m==='user'?'NAT (user)':m==='gvproxy'?'gvproxy':m==='bridge'?'Bridged':m==='none'?'Isolated':m;}
-function modeColor(m){return m==='bridge'?'var(--network-bridged)':(m==='user'||m==='gvproxy')?'var(--network-nat)':m==='none'?'var(--text-dim)':'var(--accent)';}
-function vnetColorByName(name){if(vnetsData&&vnetsData.networks)for(var i=0;i<vnetsData.networks.length;i++){if(vnetsData.networks[i].name===name)return vnetTypeMeta(vnetsData.networks[i].type).c;}return 'var(--accent)';}
+function modeKind(m){return m==='bridge'?'bridged':(m==='user'||m==='gvproxy')?'nat':m==='none'?'dim':'accent';}
+function vnetKindByName(nets,name){for(var i=0;i<nets.length;i++){if(nets[i].name===name)return window.hangarUi.netKind(nets[i].type);}return 'accent';}
 function vmModes(v){var m=[v.net||'user'];for(var i=2;i<=8;i++){var nm=v['nic'+i+'_mode'];if(nm&&nm!=='none')m.push(nm);}return m.filter(Boolean);}
-function buildTopologyGraph(){
+function buildTopologyGraph(nets){
  var children=[],edges=[],meta={},seen={},eid=0,modesUsed={},anyUplink=false;
  var edgeSeen={};
- function addNode(id,label,kind,act,color){if(seen[id])return;seen[id]=1;var w=Math.max(96,Math.round(label.length*7.2)+26);children.push({id:id,width:w,height:38,labels:[{text:label}]});meta[id]={kind:kind,act:act,label:label,color:color||''};}
+ function addNode(id,label,kind,target,accent,state){if(seen[id])return;seen[id]=1;var w=Math.max(96,Math.round(label.length*7.2)+26);children.push({id:id,width:w,height:38,labels:[{text:label}]});meta[id]={kind:kind,label:label,target:target,accent:accent||null,state:state||''};}
  function addEdge(a,b){var key=a+'>'+b;if(edgeSeen[key])return;edgeSeen[key]=1;edges.push({id:'e'+(eid++),sources:[a],targets:[b]});}
- for(var i=0;i<vms.length;i++){var v=vms[i];var vid='vm:'+v.name;addNode(vid,v.name,'vm '+(v.status||''),'data-action="topoSelectVm" data-vm-name="'+escHtml(v.name)+'"');
+ for(var i=0;i<vms.length;i++){var v=vms[i];var vid='vm:'+v.name;addNode(vid,v.name,'vm',{kind:'vm',name:v.name},null,v.status||'');
   // Explicit vnet binding: draw the real VM -> named virtual-network edge.
   var bound=[v.vnet];for(var bn=2;bn<=8;bn++){bound.push(v['nic'+bn+'_vnet']);}
-  for(var bi=0;bi<bound.length;bi++){var bname=bound[bi];if(!bname)continue;var bnid='net:'+bname;addNode(bnid,bname,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(bname)+'"',vnetColorByName(bname));addEdge(vid,bnid);addEdge(bnid,'host');anyUplink=true;}
-  var modes=vmModes(v),dd={};for(var k=0;k<modes.length;k++){var mode=modes[k];if(dd[mode])continue;dd[mode]=1;var mid='mode:'+mode;addNode(mid,modeLabel(mode),'net','',modeColor(mode));modesUsed[mode]=1;addEdge(vid,mid);}}
- if(vnetsData&&vnetsData.networks)for(var n=0;n<vnetsData.networks.length;n++){var net=vnetsData.networks[n];var nid='net:'+net.name;addNode(nid,net.name+' · '+net.type,'vnet','data-action="topoEditNet" data-net-name="'+escHtml(net.name)+'"',vnetTypeMeta(net.type).c);addEdge(nid,'host');anyUplink=true;}
+  for(var bi=0;bi<bound.length;bi++){var bname=bound[bi];if(!bname)continue;var bnid='net:'+bname;addNode(bnid,bname,'vnet',{kind:'network',name:bname},vnetKindByName(nets,bname));addEdge(vid,bnid);addEdge(bnid,'host');anyUplink=true;}
+  var modes=vmModes(v),dd={};for(var k=0;k<modes.length;k++){var mode=modes[k];if(dd[mode])continue;dd[mode]=1;var mid='mode:'+mode;addNode(mid,modeLabel(mode),'net',null,modeKind(mode));modesUsed[mode]=1;addEdge(vid,mid);}}
+ for(var n=0;n<nets.length;n++){var net=nets[n];var nid='net:'+net.name;addNode(nid,net.name+' · '+net.type,'vnet',{kind:'network',name:net.name},window.hangarUi.netKind(net.type));addEdge(nid,'host');anyUplink=true;}
  Object.keys(modesUsed).forEach(function(m){if(m!=='none'){addEdge('mode:'+m,'host');anyUplink=true;}});
- if(anyUplink)addNode('host','Host / Physical','host','');
+ if(anyUplink)addNode('host','Host / Physical','host',null);
  return {graph:{id:'root',layoutOptions:{'elk.algorithm':'layered','elk.direction':'RIGHT','elk.spacing.nodeNode':'22','elk.layered.spacing.nodeNodeBetweenLayers':'80'},children:children,edges:edges},meta:meta};
 }
-function topoSvg(res,meta){
- var W=Math.ceil(res.width||800),H=Math.ceil(res.height||400);
- var s='<svg viewBox="0 0 '+W+' '+H+'" class="topo-svg" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Network topology diagram">';
- (res.edges||[]).forEach(function(e){(e.sections||[]).forEach(function(sec){var pts=[sec.startPoint].concat(sec.bendPoints||[]).concat([sec.endPoint]);var d=pts.map(function(p,i){return (i?'L':'M')+Math.round(p.x)+' '+Math.round(p.y);}).join(' ');s+='<path class="topo-edge" d="'+d+'"/>';});});
- (res.children||[]).forEach(function(nd){var m=meta[nd.id]||{};var lab=m.label||nd.id;
-  var col=m.color||'';var stroke=col?' style="stroke:'+col+'"':'';
-  s+='<g class="topo-node '+(m.kind||'')+'" '+(m.act||'')+' transform="translate('+Math.round(nd.x)+','+Math.round(nd.y)+')" tabindex="0" role="button" aria-label="'+escHtml(lab)+'">';
-  s+='<rect width="'+nd.width+'" height="'+nd.height+'" rx="3"'+stroke+'/>';
-  if(col)s+='<rect width="4" height="'+nd.height+'" rx="3" fill="'+col+'" stroke="none"/>';
-  s+='<text x="'+(nd.width/2)+'" y="'+(nd.height/2+4)+'" text-anchor="middle">'+escHtml(lab)+'</text></g>';});
- return s+'</svg>';
+// ELK result -> the typed layout the Preact dialog draws (edge path data, positioned nodes).
+function topoLayout(res,meta){
+ var edges=[];(res.edges||[]).forEach(function(e){(e.sections||[]).forEach(function(sec){var pts=[sec.startPoint].concat(sec.bendPoints||[]).concat([sec.endPoint]);edges.push(pts.map(function(p,i){return (i?'L':'M')+Math.round(p.x)+' '+Math.round(p.y);}).join(' '));});});
+ var nodes=(res.children||[]).map(function(nd){var m=meta[nd.id]||{};return {id:nd.id,x:nd.x,y:nd.y,width:nd.width,height:nd.height,label:m.label||nd.id,kind:m.kind||'net',state:m.state||'',accent:m.accent||null,target:m.target||null};});
+ return {width:Math.ceil(res.width||800),height:Math.ceil(res.height||400),edges:edges,nodes:nodes};
 }
-async function openTopology(){var d=document.getElementById('topodlg');if(d&&!d.open)d.showModal();await renderTopology();}
+function openTopologyTarget(t){if(t.kind==='vm')topoSelectVm(t.name);else topoEditNet(t.name);}
+async function openTopology(){if(!document.getElementById('topodlg'))window.hangarUi.openTopology({view:{kind:'loading',message:'Computing layout…'},open:openTopologyTarget});await renderTopology();}
 // On-demand browser bundles. The layout engine, the two console clients and
 // the serial terminal add up to over a megabyte that the VM library never
 // touches, so they are fetched the first time the surface that needs them
@@ -932,23 +848,21 @@ function ensureStylesheet(href){
  });
 }
 function ensureElk(){return ensureAsset('/elk.js',function(){return typeof ELK==='function';});}
+// Every step pushes a view to the dialog: loading (engine, then layout), failed (Retry), empty or ready.
 async function renderTopology(){
- var wrap=document.getElementById('topoWrap');if(!wrap)return;
+ var ui=window.hangarUi;
  if(typeof ELK!=='function'){
-  wrap.innerHTML='<div class="topo-loading" role="status">Loading layout engine…</div>';
-  try{await ensureElk();}catch(e){
-   wrap.innerHTML='<div class="topo-loading" role="alert">Layout engine failed to load. <button type="button" class="btn" data-action="openTopology">Retry</button></div>';return;
-  }
+  ui.setTopology({view:{kind:'loading',message:'Loading layout engine…'}});
+  try{await ensureElk();}catch(e){ui.setTopology({view:{kind:'failed',message:'Layout engine failed to load.'}});return;}
  }
- try{await loadVnets();}catch(e){}
- var built=buildTopologyGraph();
- if(!built.graph.children.length){wrap.innerHTML='<div class="topo-loading">No VMs or networks to display.</div>';return;}
- wrap.innerHTML='<div class="topo-loading">Computing layout…</div>';
- try{var elk=new ELK();var res=await elk.layout(built.graph);wrap.innerHTML=topoSvg(res,built.meta);}
- catch(e){wrap.innerHTML='<div class="topo-loading">Layout failed: '+escHtml((e&&e.message)||'error')+'</div>';}
+ var built=buildTopologyGraph((await loadVnets())||[]);
+ if(!built.graph.children.length){ui.setTopology({view:{kind:'empty'}});return;}
+ ui.setTopology({view:{kind:'loading',message:'Computing layout…'}});
+ try{var res=await new ELK().layout(built.graph);ui.setTopology({view:{kind:'ready',layout:topoLayout(res,built.meta)}});}
+ catch(e){ui.setTopology({view:{kind:'failed',message:'Layout failed: '+((e&&e.message)||'error')}});}
 }
-function topoSelectVm(name){var d=document.getElementById('topodlg');if(d)d.close();var vd=document.getElementById('vnetdlg');if(vd&&vd.open)vd.close();var idx=idxByName(name);if(idx>=0)select(idx);}
-function topoEditNet(name){var d=document.getElementById('topodlg');if(d)d.close();var vd=document.getElementById('vnetdlg');if(vd&&!vd.open)vd.showModal();if(vnetsData&&vnetsData.networks){for(var i=0;i<vnetsData.networks.length;i++){if(vnetsData.networks[i].name===name){vnetIdx=i;var s=document.getElementById('vnet_sel');if(s)s.value=String(i);showVnetFields(i);break;}}}}
+function topoSelectVm(name){var d=document.getElementById('topodlg');if(d)d.close();var vd=document.getElementById('vnetdlg');if(vd)vd.close();var idx=idxByName(name);if(idx>=0)select(idx);}
+function topoEditNet(name){var d=document.getElementById('topodlg');if(d)d.close();openVnets(name);}
 
 // ── Sidebar multi-select + bulk operations ──
 function toggleSelectMode(){selectMode=!selectMode;if(!selectMode)checkedIds.clear();var t=document.getElementById('selectToggle');if(t)t.setAttribute('aria-pressed',selectMode?'true':'false');var sv=document.getElementById('search');renderList(sv?sv.value.toLowerCase():'');}
@@ -1628,7 +1542,6 @@ var actionHandlers={
  exportOvf:function(){exportOvf();},migrateGuest:function(){migrateGuest();},openVnets:function(){openVnets();},
  openPrefs:function(){openPrefs();},openAbout:function(){openAbout();},openCatalog:function(){openCatalog();},
  showShortcutsModal:function(){showShortcutsModal();},
- quickstartVm:function(el){var slug=el.getAttribute('data-catalog-id');if(slug)quickstartVm(slug);},
  batchStart:function(){batchStart();},batchStop:function(){batchStop();},
  deleteVm:function(){deleteVm();},clearSearch:function(){clearSearch();},
  newVm:function(){newVm();},
@@ -1636,9 +1549,6 @@ var actionHandlers={
  clearSerial:function(){if(serialTerm)serialTerm.reset();serialBuf='';},
  exportSerial:function(){if(!serialBuf)return;var blob=new Blob([serialBuf],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='hangar-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
  saveVm:function(){saveVm();},
- vnetAdd:function(){vnetAdd();},vnetRemove:function(){vnetRemove();},
- vnetDefaults:function(){vnetDefaults();},vnetSaveCurrent:function(){vnetSaveCurrent();},
- vnetSaveAll:function(){vnetSaveAll();},
  select:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);},
 	 sortInv:function(el){var c=el.getAttribute('data-col');if(!c)return;if(dashSort.col===c)dashSort.dir=-dashSort.dir;else{dashSort.col=c;dashSort.dir=1;}if(window.van&&dashSortState){dashSortState.val={col:dashSort.col,dir:dashSort.dir};}else{showEmptyState();}},
 	 toggleSelectMode:function(){toggleSelectMode();},
@@ -1649,8 +1559,6 @@ var actionHandlers={
 	 toggleFolder:function(el){var f=el.getAttribute('data-folder');if(f===null)return;setFolderOpen(f,!folderOpen(f));filterList();},
 	 moveToFolder:function(){moveToFolder();},
 	 openTopology:function(){openTopology();},
-	 topoSelectVm:function(el){topoSelectVm(el.getAttribute('data-vm-name'));},
-	 topoEditNet:function(el){topoEditNet(el.getAttribute('data-net-name'));},
  toggleFavorite:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))toggleFavorite(i);},
  switchTab:function(el){switchTab(el.getAttribute('data-tab')||'summary');},
  closeDlg:function(el){var id=el.getAttribute('data-dialog');if(id){var d=document.getElementById(id);if(d)d.close();}},
@@ -1659,7 +1567,6 @@ var actionHandlers={
  cancelMigrate:function(){cancelMigrate();},
  toggleTheme:function(){window.cycleTheme();},
  filterList:function(){filterList();},
- onVnetSelect:function(el){onVnetSelect(el);},
 	 disk2upload:function(){uploadDisk2();},
 	 disk2download:function(){downloadDisk2();},
 	 resizeDisk:function(){resizeDisk();},
@@ -1686,14 +1593,11 @@ document.body.addEventListener('input',function(e){
 });
 document.body.addEventListener('change',function(e){
  if(e.target.closest('#tabSettings')){settingsDirty=true;validateSettings(true);}
- var el=e.target.closest('[data-action]');if(!el)return;
- var action=el.getAttribute('data-action');
- if(action==='onVnetSelect')onVnetSelect();
 });
 document.body.addEventListener('keydown',function(e){
  if((e.key==='Enter'||e.key===' ')&&e.target.tagName!=='INPUT'&&e.target.tagName!=='TEXTAREA'&&e.target.tagName!=='SELECT'){
   // Keyboard-activate focusable non-button controls (CSP-safe dispatch is click
-  // only): list rows, folder headers, sort headers, topology nodes.
+  // only): list rows, folder headers, sort headers.
   var el=e.target.closest('[data-action]');if(!el)return;
   if(el.getAttribute('role')==='button'||el.tagName==='TH'||el.getAttribute('data-action')==='select'){
    e.preventDefault();var action=el.getAttribute('data-action');var h=actionHandlers[action];if(h)h(el);

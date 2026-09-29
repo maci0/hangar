@@ -7,9 +7,8 @@ plus the Preact + Tailwind source in `ui/`. Bun bundles `ui/` to `dist/` (gitign
 Targets VMware (vSphere/Workstation) admin conventions.
 
 ## Ownership
-- `index.html`: markup, the remaining legacy dialogs (`vnetdlg`, `topodlg`, `catalogdlg`), script tags. The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`. Confirm, prompt, About, Keyboard Shortcuts, QEMU log, Preferences, New VM, Import, Clone, Snapshot Manager and Migrate are not here either: `#dialog-root` is the mount for the Preact `Dialogs`. The migration progress bar (`#mig_progress`, `#mig_pct`, `#mig_cancel`) is page markup below the tabs, not part of the Migrate dialog.
-- `app.js`: refresh poll, render, action dispatch, the remaining legacy dialogs,
-  console/serial viewers, command palette, folders, topology. `showConfirmDialog`, `showPromptDialog`, `openPrefs`, `openAbout`, `showShortcutsModal` and `viewLog` keep their signatures and promise behavior but only call `hangarUi` (`confirm`, `prompt`, `openPrefs`, `openAbout`, `openShortcuts`, `openLog`); the fetches stay in `app.js`. `newVm`, `importGuest`, `cloneGuest`, `openSnapshots` (also `takeSnapshot`) and `migrateGuest` open their dialog through `hangarUi` and hand it the action callbacks: `createVm(values)`, `importConfirm(path, name)`, `doClone(linked)`, `takeSnapshotFromDlg(tag)`, `revertSnapshot(tag)`, `deleteSnapshot(tag)` and `doMigrate(host, port)`. Each takes typed, already validated values and resolves whether the dialog may close; `loadSnapshots` pushes the list with `hangarUi.setSnapshots`. The dialogs own their form state and field validation.
+- `index.html`: page markup and script tags. It holds no dialog and no `style=` attribute (a Tailwind utility or token replaces one; an initially hidden element carries the `hidden` class and app.js toggles its inline `style.display`). The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`. Every dialog is Preact: `#dialog-root` is the mount for `Dialogs`. The migration progress bar (`#mig_progress`, `#mig_pct`, `#mig_cancel`) is page markup below the tabs, not part of the Migrate dialog.
+- `app.js`: refresh poll, render, action dispatch, console/serial viewers, command palette, folders. `showConfirmDialog`, `showPromptDialog`, `openPrefs`, `openAbout`, `showShortcutsModal` and `viewLog` keep their signatures and promise behavior but only call `hangarUi` (`confirm`, `prompt`, `openPrefs`, `openAbout`, `openShortcuts`, `openLog`); the fetches stay in `app.js`. `newVm`, `importGuest`, `cloneGuest`, `openSnapshots` (also `takeSnapshot`) and `migrateGuest` open their dialog through `hangarUi` and hand it the action callbacks: `createVm(values)`, `importConfirm(path, name)`, `doClone(linked)`, `takeSnapshotFromDlg(tag)`, `revertSnapshot(tag)`, `deleteSnapshot(tag)` and `doMigrate(host, port)`. Each takes typed, already validated values and resolves whether the dialog may close; `loadSnapshots` pushes the list with `hangarUi.setSnapshots`. The dialogs own their form state and field validation. `openVnets(select?)` loads `/api/networks` and opens the editor with `save(networks, saved)` and `confirmDiscard`; `openCatalog` opens the catalog as `loading` and pushes the templates with `hangarUi.setCatalog`, its `create` callback is `quickstartVm`; `openTopology` opens the topology and `renderTopology` pushes each step (`loading`, `failed`, `empty`, `ready` with the ELK result as a typed layout) with `hangarUi.setTopology`. Data, fetches and the ELK layout stay in `app.js`.
 - `app.css`: flat slate theme (`:root` dark default + `:root.light`) + components.
   Logo and empty-state emblems use the shared accent and radius tokens, without
   decorative gradients or colored shadows.
@@ -67,12 +66,8 @@ Targets VMware (vSphere/Workstation) admin conventions.
 - **Emblem radius follows emblem size**: 20px `.os-badge` -> `--radius-sm`,
   30px `.vm-emblem` and the 34px snapshot row emblem (Preact, `rounded-md`) -> `--radius-md`, 44px `.cat-emblem` ->
   `--radius-lg`. The four read as one family; never round them independently.
-- **Dialog chrome comes from the shared rules**, not from a per-dialog inline style:
-  the `Dialog` primitive for Preact dialogs (`ui/components/ui/dialog.tsx`), the
-  `dialog h3` / `dialog .btn-row` rules in `app.css` for the legacy ones that remain.
-  Do not add `!important` to the dialog rules to win a cascade fight; the remaining
-  `!important` in the sheet are `#display` stacking overrides and the reduced-motion block.
-  The generic `dialog` rules in `app.css` go when the last legacy dialog is ported.
+- **Dialog chrome comes from the `Dialog` primitive** (`ui/components/ui/dialog.tsx`), not from a per-dialog inline style. `app.css` has no `dialog` rule. The
+  `!important` in the sheet are `#display` stacking overrides and the reduced-motion block; do not add one to win a cascade fight.
 - **VM list rows are `role="button"` with `aria-current` on the selected one**, and the favorite star is a sibling inside `.vm-row`, never a child of the row: axe rejects a button (or option) that contains another control. `#vmlist` is a `role="group"`.
 - **Stat tiles are not interactive.** `.dash-card` carries no hover transform;
   reserve elevation-on-hover for things that can be pressed.
@@ -97,12 +92,10 @@ Targets VMware (vSphere/Workstation) admin conventions.
   success/error/info/warn to `i-check`/`i-x`/`i-info`/`i-alert`); a text
   substitute like `✓` or `＋` is a defect. VanJS-built buttons get their sprite
   after mount with `addActionIcons`.
-- **Unsaved state**: a dialog with edits the user has not committed sets its dirty
-  flag on input and registers `_closeGuard` (legacy dialogs) or passes `guard` to the
-  Preact `Dialog`; the shared `close()` wrapper (or the `Dialog` itself) runs it for the
-  button, Escape and backdrop paths; the guard may return a promise
-  (`settingsDirty`/`vnetsDirty`). A save button either persists (with status
-  feedback) or it does not exist: `vnetSaveCurrent` writes to the daemon, it is
+- **Unsaved state**: a dialog with edits the user has not committed passes `guard` to the
+  Preact `Dialog`, which runs it for the button, Escape and backdrop paths; the guard may return a promise
+  (the VNet editor asks `confirmDiscard`; the Settings tab uses `settingsDirty`). A save button either persists (with status
+  feedback) or it does not exist: Save Selected writes to the daemon, it is
   not a form-only re-render.
 
 - **Navigation**: Tools stays available without a selected VM; only VM-specific
@@ -124,12 +117,10 @@ Targets VMware (vSphere/Workstation) admin conventions.
 - **Library search**: list redraws preserve the search input's current query.
 - **VM uptime**: display the daemon's monotonic `uptime_sec`, including zero.
   Never subtract `started` from the browser clock; omit unavailable durations.
-- **Network saving**: Save All validates and includes the selected network's current
-  form values without requiring Save Selected first. Invalid values leave the editor
-  open and do not send a save request.
+- **Network saving**: edits live in the editor until saved, across selection changes. Save Selected and Save All both validate every network (name 1-15 characters, IPv4 fields without leading zeros, a contiguous netmask), write the whole set, and reset the dirty state; only Save All closes. Invalid values select the first bad network, show the message under the field (`err_vn_*`), focus it, leave the editor open and send no request. The editor opens only if `/api/networks` loaded, so a failed load can never be saved back as an empty set.
 - **Topology loading**: `/elk.js` loads only when the topology opens, never from
   `index.html`. Concurrent opens share the pending load. Loading is visible; failed,
-  invalid, or timed-out loads expose Retry and clear the pending promise.
+  invalid, or timed-out loads expose Retry (`data-action="openTopology"`, also on Refresh) and clear the pending promise. Nodes are drawn by the dialog as SVG from the typed layout; VM and network nodes are focusable buttons, the host and NIC-mode nodes are not.
 - **On-demand bundles**: `index.html` loads only `app.css`, `van.js` and `app.js`.
   `ensureAsset(src, isReady)` is the single loader for every other bundle
   (`/novnc.js`, `/spice.js`, `/elk.js`, `/xterm.js`, `/xterm-fit.js`,
@@ -152,20 +143,20 @@ Targets VMware (vSphere/Workstation) admin conventions.
   the delegated body click → `el.closest('[data-action]')` → `actionHandlers[action](el)`.
   Keyboard activation for `role=button`/`th[data-action]` is the global keydown delegator.
 - **XSS:** every user string passes `escHtml()` before `innerHTML`, including SVG text
-  AND attribute values (the topology builds `data-*` from VM/network names). No exceptions.
+  AND attribute values. No exceptions. Preact text and attribute values are escaped by the renderer, so the dialogs pass raw strings.
 - **Index-after-await is stale:** the 5s `refresh()` replaces `vms[]` wholesale. Any
   action that resolves a VM after an `await` must re-resolve by stable id (`idxById`,
   survives rename) or name (`idxByName`), never a frozen index. Multi-select keeps
   `checkedIds`; migration tracks `migId`.
 - **Preact dialogs are removed from the DOM when closed**, so `#confirmdlg`, `#promptdlg`,
-  `#aboutdlg`, `#shortcutsdlg`, `#logdlg`, `#prefsdlg`, `#newdlg`, `#importdlg`, `#clonedlg`, `#snapdlg` and `#migratedlg` exist only while open (a test asserts
+  `#aboutdlg`, `#shortcutsdlg`, `#logdlg`, `#prefsdlg`, `#newdlg`, `#importdlg`, `#clonedlg`, `#snapdlg`, `#migratedlg`, `#vnetdlg`, `#topodlg` and `#catalogdlg` exist only while open (a test asserts
   `toHaveCount(0)`, not hidden). `dlg.close()` on one still works: the `Dialog` replaces it with
   the guarded, animated close, which is what the `closeDlg` action and the Escape sweep call.
   Preferences applies the theme as it is picked and puts the original back on every close except a
   save; that state is in the component, not in `app.js`.
   New VM, Import and Migrate validate inline (`aria-invalid` on the control, message in `#err_<field id>`),
   focus the first bad field on submit, and disable the submit button while the request is pending;
-  none has a dirty guard. The Snapshot Manager reverts only with the VM powered off, and a
+  none has a dirty guard. The buttons of the VNet editor keep their `data-action` names (`vnetAdd`, `vnetRemove`, `vnetDefaults`, `vnetSaveCurrent`, `vnetSaveAll`) as hooks for tests; the component handles the click and `actionHandlers` has no entry for them. The network list is a `role="listbox"` with a roving tab stop and Arrow/Home/End. The Snapshot Manager reverts only with the VM powered off, and a
   successful revert closes it.
 - **Vendored-bundle globals are not their class:** `noVNC` exposes the RFB class as
   `noVNC.default` (NOT `noVNC.RFB`); SPICE uses `SpiceHtml5.SpiceMainConn`; elk is `ELK`.
