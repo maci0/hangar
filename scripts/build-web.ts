@@ -28,4 +28,5 @@ const bundle = await Bun.build({
 if (!bundle.success) {
   throw new AggregateError(bundle.logs, "ui.js bundle failed");
 }
+await Bun.$`bun ${root}/scripts/build-icons.ts`.quiet();
 await Bun.$`bunx tailwindcss -i ${root}/src/web/ui/styles.css -o ${dist}/ui.css --minify`.quiet();

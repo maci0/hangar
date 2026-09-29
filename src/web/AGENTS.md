@@ -37,13 +37,16 @@ Targets VMware (vSphere/Workstation) admin conventions.
 
 ## Local Contracts
 - **Tokens are the only place a visual value is written.** `:root` and
-  `:root.light` each declare the full set: surfaces, `--inset` (the recessed
-  fill behind capacity bars, spec chips, and disabled controls), `--font-sans` /
-  `--font-mono`, and the 5/8/11px `--radius-sm` / `--radius` / `--radius-lg`
-  scale. Never hardcode a radius, an inset gray, or a font stack in a rule or a
-  `style=` attribute, and never write a fallback like
-  `var(--inset,rgba(127,127,127,.18))` for a token `:root` already owns, and never
+  `:root.light` each declare the color set: surfaces, `--inset` (the recessed
+  fill behind capacity bars, spec chips, and disabled controls). The 5/8/11px
+  `--radius-sm` / `--radius-md` / `--radius-lg` scale and `--font-sans` /
+  `--font-mono` are declared once in `ui/styles.css` (`@theme static`) and read
+  by both sheets. Never hardcode a radius, an inset gray, or a font stack in a
+  rule or a `style=` attribute, and never write a fallback like
+  `var(--inset,rgba(127,127,127,.18))` for a token that is already declared, and never
   name a token that does not exist (`--mono` is not `--font-mono`).
+- **`app.css` is wrapped in `@layer legacy`** so Tailwind utilities from `ui.css`
+  outrank it. Do not add unlayered rules to it; an unlayered rule beats every utility.
 - **`--text` / `--text-muted` / `--text-dim` are three distinct steps**, not one
   color spelled twice. Keep them ordered by emphasis and at least 4.5:1 against
   every surface the step lands on (`--bg`, `--bg-alt`, `--surface`, `--surface-2`;
@@ -53,13 +56,16 @@ Targets VMware (vSphere/Workstation) admin conventions.
 - **The sans is the platform UI stack on purpose**: this is a desktop-style
   operator console, not a document surface, and a webfont would render unlike the
   surrounding desktop.
-- **Iconography is the inline sprite set.** Every control uses a `#i-*` symbol
-  via `<svg class="ico"><use href="#..."/></svg>`. A control that shows state
+- **Iconography is the sprite served at `/icons.svg`.** The source of truth is one
+  file per icon in `assets/icons/` (24px grid, 2px round stroke, kebab-case name);
+  `scripts/build-icons.ts` validates them and writes `dist/icons.svg` plus the browsable
+  `docs/brand/icons.html`. Every control uses a symbol via
+  `<svg class="ico"><use href="/icons.svg#i-name"/></svg>`. A control that shows state
   (the theme toggle) swaps the `<use href>` between symbols; it never replaces
   the button contents with text. A platform emoji in a control is a defect: it
   ignores the accent and radius tokens and renders at the platform's whim.
 - **Emblem radius follows emblem size**: 20px `.os-badge` -> `--radius-sm`,
-  30px `.vm-emblem` and 34px `.snap-emblem` -> `--radius`, 44px `.cat-emblem` ->
+  30px `.vm-emblem` and 34px `.snap-emblem` -> `--radius-md`, 44px `.cat-emblem` ->
   `--radius-lg`. The four read as one family; never round them independently.
 - **Dialog chrome comes from the `dialog h3` / `.dialog-body` rules**, not from
   a per-dialog inline style. Do not add `!important` to the dialog rules to win

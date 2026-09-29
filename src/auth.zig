@@ -90,6 +90,7 @@ pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/app.js")) return true;
     if (std.mem.eql(u8, path, "/ui.js")) return true;
     if (std.mem.eql(u8, path, "/ui.css")) return true;
+    if (std.mem.eql(u8, path, "/icons.svg")) return true;
     if (std.mem.eql(u8, path, "/novnc.js")) return true;
     if (std.mem.eql(u8, path, "/spice.js")) return true;
     if (std.mem.eql(u8, path, "/elk.js")) return true;

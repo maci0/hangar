@@ -1,0 +1,10 @@
+/* Layout for the generated brand pages. Colors, radii, and fonts come from the tokens in src/web/app.css. */
+.brand-page { background: var(--bg); color: var(--text); font-family: var(--font-sans); padding: 32px 16px; }
+.brand-page main { max-width: 960px; margin: 0 auto; }
+.brand-page h1 { font-size: 28px; margin-bottom: 8px; }
+.brand-page p { color: var(--text-muted); margin-bottom: 24px; }
+.brand-page code { font-family: var(--font-mono); }
+.icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; list-style: none; }
+.icon-cell { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 8px; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius); }
+.icon-glyph { width: 24px; height: 24px; }
+.sprite { display: none; }

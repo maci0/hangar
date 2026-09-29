@@ -22,7 +22,7 @@ window.applyTheme(saved);
 // The toggle shows which theme is active through the sprite set (moon / sun /
 // display), not a color emoji: every other toolbar control is a sprite, and a
 // platform emoji is the one glyph that ignores the accent and radius tokens.
-var themeIcons={system:'#i-monitor',light:'#i-sun',dark:'#i-theme'};
+var themeIcons={system:'/icons.svg#i-monitor',light:'/icons.svg#i-sun',dark:'/icons.svg#i-theme'};
 function syncThemeButtons(theme){
  var btns=document.querySelectorAll('.theme-toggle-btn');
  var label='Theme: '+theme.charAt(0).toUpperCase()+theme.slice(1)+' (click to change)';
@@ -181,7 +181,7 @@ function vmBars(v){var cpu=Number(v.cpu)||1;var ramTxt=memText(v.mem);return '<d
 function vmItemHtml(x){
  const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
  const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
- const star=x.fav?'<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></button>':'<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></button>';
+ const star=x.fav?'<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-star"/></svg></button>':'<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-star"/></svg></button>';
  const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-id="'+escHtml(x.v.id)+'"'+(checkedIds.has(x.v.id)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
  // Roving tabindex: the listbox is one tab stop. The selected row is that stop;
  // with nothing selected the first rendered row takes it so Tab still reaches the list.
@@ -198,7 +198,7 @@ for(const fld of order){const open=folderOpen(fld);
  h+='<div class="folder-hdr'+(open?' open':'')+'" data-action="toggleFolder" data-folder="'+escHtml(fld)+'" role="button" tabindex="0" aria-expanded="'+open+'"><span class="folder-caret" aria-hidden="true">▸</span><span class="folder-name">'+escHtml(fld)+'</span><span class="folder-count">'+groups[fld].length+'</span></div>';
  if(open){h+='<div class="folder-body">';for(const x of groups[fld])h+=vmItemHtml(x);h+='</div>';}}
 for(const x of ungrouped)h+=vmItemHtml(x);
-if(!h){if(f)h='<div class="sidebar-empty"><p>No matching VMs</p><button class="btn" data-action="clearSearch">Clear search</button></div>';else h='<div class="sidebar-empty"><p>No virtual machines yet</p><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>New VM</button></div>';}
+if(!h){if(f)h='<div class="sidebar-empty"><p>No matching VMs</p><button class="btn" data-action="clearSearch">Clear search</button></div>';else h='<div class="sidebar-empty"><p>No virtual machines yet</p><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-plus"/></svg>New VM</button></div>';}
 e.innerHTML=h;
 if(keepIdx!==null){var kr=e.querySelector('.vm-item[data-vm-index="'+keepIdx+'"]');if(kr)kr.focus();}
 else if(keepFolder!==null){var kf=e.querySelector('.folder-hdr[data-folder="'+CSS.escape(keepFolder)+'"]');if(kf)kf.focus();}
@@ -292,8 +292,8 @@ function mountDashboard(host){
 
 // VanJS builds nodes from tag functions, so the sprite glyph for the dashboard
 // action buttons is inserted after mount. Same pattern as the theme toggle:
-// every action button carries its `#i-*` symbol.
-var dashActionIcons={'newVm':'#i-plus','importGuest':'#i-import','openCatalog':'#i-grid'};
+// every action button carries its `/icons.svg#i-*` symbol.
+var dashActionIcons={'newVm':'/icons.svg#i-plus','importGuest':'/icons.svg#i-import','openCatalog':'/icons.svg#i-grid'};
 function addActionIcons(root){const btns=root.querySelectorAll('.empty-actions [data-action]');
  for(let i=0;i<btns.length;i++){const b=btns[i];const href=dashActionIcons[b.getAttribute('data-action')];if(!href||b.querySelector('svg'))continue;
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('class','ico');svg.setAttribute('aria-hidden','true');
@@ -328,7 +328,7 @@ h+='<td class="muted">'+escHtml(v.folder||'')+'</td>';
     h+='<td>'+visibleTags(v.tags).map(function(t){return '<span class="tag-chip sm">'+escHtml(t)+'</span>';}).join('')+'</td>';
     h+='</tr>';});
   h+='</tbody></table></div>';
-  h+='<div class="empty-actions" style="justify-content:flex-start;margin-top:18px"><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
+  h+='<div class="empty-actions" style="justify-content:flex-start;margin-top:18px"><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-plus"/></svg>New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
   return h;
 }
 function showEmptyState(){const t=document.getElementById('tabSummary');const s=document.getElementById('tabSettings');
@@ -337,11 +337,11 @@ if(!t||!s||!nm||!tb)return;
 nm.textContent=vms.length?'Overview':'Welcome to Hangar';document.title='Hangar, VM Manager';tb.style.display='none';syncTabPanels();
 t.style.display='block';s.style.display='none';if(c)c.style.display='none';activeTab='summary';
 t.setAttribute('aria-hidden','false');s.setAttribute('aria-hidden','true');if(c)c.setAttribute('aria-hidden','true');
-if(vms.length&&window.van){mountDashboard(t);publishVms();s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';var chv=document.getElementById('consoleHint');if(chv)chv.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';updateCommandState();return;}
+if(vms.length&&window.van){mountDashboard(t);publishVms();s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="/icons.svg#i-gear"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';var chv=document.getElementById('consoleHint');if(chv)chv.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';updateCommandState();return;}
 dashMounted=false;
-var empty=vms.length?hostDashboardHtml():'<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-monitor"/></svg><h3>No Virtual Machines Yet</h3><p>Create your first virtual machine, import an existing disk image, or start from a catalog template.</p><div class="empty-actions"><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
+var empty=vms.length?hostDashboardHtml():'<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="/icons.svg#i-monitor"/></svg><h3>No Virtual Machines Yet</h3><p>Create your first virtual machine, import an existing disk image, or start from a catalog template.</p><div class="empty-actions"><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-plus"/></svg>New VM</button><button class="btn" data-action="importGuest">Import VM</button><button class="btn" data-action="openCatalog">Catalog</button></div></div>';
 t.innerHTML=empty;
-s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="#icon-settings"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';
+s.innerHTML='<div class="empty-state"><svg class="empty-icon" aria-hidden="true"><use href="/icons.svg#i-gear"/></svg><h3>No Virtual Machine Selected</h3><p>Select a VM from the sidebar to edit its settings.</p></div>';
 var ch0=document.getElementById('consoleHint');if(ch0)ch0.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';
 updateCommandState();}
 function renderDetails(){if(sel===null||sel>=vms.length){showEmptyState();return;}
@@ -358,7 +358,7 @@ var videoMeta=escHtml(info.embedLabel+' '+info.displayLabel)+' · '+escHtml(info
 var ch=document.getElementById('consoleHint');
 if(ch){if(embeddedDisplayCapable(v)){ch.innerHTML=v.status==='running'?'':'<div class="console-empty"><strong>'+escHtml(v.name)+' is powered off.</strong><span>Power on the VM to open its console here.</span></div>';}
 else{ch.innerHTML='<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}}
-function row(l,vv,ic){var icon=ic?'<svg class="srow-ico" aria-hidden="true"><use href="#'+ic+'"/></svg>':'';return '<div class="srow"><dt>'+icon+l+'</dt><dd>'+vv+'</dd></div>';}
+function row(l,vv,ic){var icon=ic?'<svg class="srow-ico" aria-hidden="true"><use href="/icons.svg#'+ic+'"/></svg>':'';return '<div class="srow"><dt>'+icon+l+'</dt><dd>'+vv+'</dd></div>';}
 const memTxt=escHtml(memText(v.mem));
 let h='<div class="vm-facts">';
 h+='<span class="fact-badge '+sc+'">'+escHtml(statusLabel(v.status))+'</span>';
@@ -463,7 +463,7 @@ var v=selectedVm();var meta=document.getElementById('snapMeta');var running=v&&(
 try{const r=await fetch('/api/vms/'+sel+'/snapshots');if(!r.ok){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';return;}const t=(await r.text()).trim();
 if(!t||t==='(none)'){el.innerHTML='<div class="snapshot-empty">No snapshots yet. Take one above to capture this VM\'s disk state, you can revert to or delete it here later.</div>';return;}
 const lines=t.split('\n');let h='';for(const ln of lines){const parts=ln.split('\t');const tag=(parts[0]||'').trim();if(!tag)continue;const when=(parts[1]||'').trim();
-h+=`<div class="snapshot-row"><span class="snap-emblem" aria-hidden="true"><svg class="ico"><use href="#i-snapshot"/></svg></span><div class="snap-info"><strong>${escHtml(tag)}</strong><small title="${when?escHtml(relAge(when)):''}">${when?'Taken '+escHtml(when):'Saved state'}</small></div><div class="snapshot-actions"><button class="btn" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Revert to snapshot ${escHtml(tag)}"${running?' disabled title="Power off the VM before reverting"':''}>Revert</button><button class="btn danger" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Delete snapshot ${escHtml(tag)}">Delete</button></div></div>`;}
+h+=`<div class="snapshot-row"><span class="snap-emblem" aria-hidden="true"><svg class="ico"><use href="/icons.svg#i-snapshot"/></svg></span><div class="snap-info"><strong>${escHtml(tag)}</strong><small title="${when?escHtml(relAge(when)):''}">${when?'Taken '+escHtml(when):'Saved state'}</small></div><div class="snapshot-actions"><button class="btn" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Revert to snapshot ${escHtml(tag)}"${running?' disabled title="Power off the VM before reverting"':''}>Revert</button><button class="btn danger" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Delete snapshot ${escHtml(tag)}">Delete</button></div></div>`;}
 el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
 async function revertSnapshot(tag){if(sel===null||!tag)return;if(!(await showConfirmDialog('Revert to snapshot "'+tag+'"? This will discard current state.',{danger:true,okLabel:'Revert'})))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
 const r=await apiPost('/api/vms/'+sel+'/snapshots/revert','tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);var sd=document.getElementById('snapdlg');if(sd)sd.close();}else{loadSnapshots();}}
@@ -517,7 +517,7 @@ case'batch-start':return vms.some(function(x){return x.status==='stopped'||x.sta
 case'batch-stop':return vms.some(function(x){return x.status==='running'||x.status==='paused';});
 default:return true;}}
 function disabledReason(name,v){if(!v&&name!=='batch-start'&&name!=='batch-stop')return 'Select a VM first';if(name==='display')return 'Requires a running VM with embedded VNC or SPICE display';if(name==='serial')return 'Requires a running VM with serial enabled';if(name==='resume')return 'Only paused or suspended VMs can resume';if(name==='shutdown'||name==='reset'||name==='pause'||name==='suspend'||name==='cad'||name==='migrate')return 'Requires a running VM';if(name==='hard-power')return 'Requires a running or paused VM';if(name==='power-on')return 'VM is already running';if(name==='batch-start')return 'No stopped VMs';if(name==='batch-stop')return 'No running VMs';return 'Unavailable';}
-function updatePowerBtn(){const b=document.getElementById('powerbtn');if(!b)return;const v=selectedVm();b.removeAttribute('aria-busy');b.disabled=!v;var pi='<svg class="ico" aria-hidden="true"><use href="#i-power"/></svg>';if(!v){b.innerHTML=pi+'Power On';b.className='btn primary keep-mobile';b.title='Select a VM first';return;}
+function updatePowerBtn(){const b=document.getElementById('powerbtn');if(!b)return;const v=selectedVm();b.removeAttribute('aria-busy');b.disabled=!v;var pi='<svg class="ico" aria-hidden="true"><use href="/icons.svg#i-power"/></svg>';if(!v){b.innerHTML=pi+'Power On';b.className='btn primary keep-mobile';b.title='Select a VM first';return;}
 if(v.status==='running'||v.status==='paused'){b.innerHTML=pi+'Power Off';b.className='btn danger keep-mobile';b.title='Hard power off selected VM';}else{b.innerHTML=pi+'Power On';b.className='btn primary keep-mobile';b.title='Power on selected VM';}}
 function updateCommandState(){updatePowerBtn();var v=selectedVm();var nodes=document.querySelectorAll('[data-vm-action]');for(var i=0;i<nodes.length;i++){var n=nodes[i];var name=n.getAttribute('data-vm-action');var ok=actionAllowed(name,v);n.disabled=!ok;n.setAttribute('aria-disabled',ok?'false':'true');if(!ok){n.title=disabledReason(name,v);n.setAttribute('data-disabled-title','1');}else if(n.getAttribute('data-disabled-title')==='1'){n.removeAttribute('title');n.removeAttribute('data-disabled-title');}}
 // VM-scoped dropdown triggers gray out with no selection, like Power On/Settings.
@@ -893,7 +893,7 @@ function openCtxMenu(idx,x,y){
     {label:'Reset',icon:'i-refresh',action:'reset',danger:true,fn:resetGuest},
     {label:'Delete',icon:'i-trash',action:'delete',danger:true,fn:deleteVm}
   ];
-  items.forEach(function(item){if(item.sep){var sep=document.createElement('div');sep.className='ctx-sep';sep.setAttribute('role','separator');ctxMenu.appendChild(sep);return;}var mi=document.createElement('button');mi.type='button';mi.className='ctx-item'+(item.danger?' danger':'');mi.setAttribute('role','menuitem');mi.tabIndex=-1;var ok=actionAllowed(item.action,vmForMenu);mi.disabled=!ok;mi.title=ok?'':disabledReason(item.action,vmForMenu);if(item.icon){mi.innerHTML='<svg class="ico" aria-hidden="true"><use href="#'+item.icon+'"/></svg>'+escHtml(item.label);}else{mi.textContent=item.label;}
+  items.forEach(function(item){if(item.sep){var sep=document.createElement('div');sep.className='ctx-sep';sep.setAttribute('role','separator');ctxMenu.appendChild(sep);return;}var mi=document.createElement('button');mi.type='button';mi.className='ctx-item'+(item.danger?' danger':'');mi.setAttribute('role','menuitem');mi.tabIndex=-1;var ok=actionAllowed(item.action,vmForMenu);mi.disabled=!ok;mi.title=ok?'':disabledReason(item.action,vmForMenu);if(item.icon){mi.innerHTML='<svg class="ico" aria-hidden="true"><use href="/icons.svg#'+item.icon+'"/></svg>'+escHtml(item.label);}else{mi.textContent=item.label;}
     mi.addEventListener('click',function(){if(mi.disabled)return;var target=ctxVmIdx;Promise.resolve(select(target)).then(function(){if(sel===target)item.fn(target);});hideCtxMenu();});
     ctxMenu.appendChild(mi);});
   var first=ctxMenu.querySelector('.ctx-item:not([disabled])');if(first){first.tabIndex=0;first.focus();}
@@ -955,7 +955,7 @@ function ensurePalette(){
 }
 function openPalette(){ensurePalette();palettePrevFocus=document.activeElement;var o=document.getElementById('palette');var inp=o.querySelector('#paletteInput');o.hidden=false;inp.value='';renderPalette('');inp.focus();}
 function closePalette(){var o=document.getElementById('palette');if(o)o.hidden=true;if(palettePrevFocus&&palettePrevFocus.focus)palettePrevFocus.focus();}
-function renderPalette(filter){var all=paletteCommands();var f=(filter||'').toLowerCase().trim();paletteItems=f?all.filter(function(it){return it.label.toLowerCase().indexOf(f)>=0;}):all;paletteSel=0;var ul=document.getElementById('paletteList');if(!ul)return;var h='';for(var i=0;i<paletteItems.length;i++)h+='<li role="option" id="paletteOpt'+i+'" data-pidx="'+i+'" aria-selected="'+(i===0?'true':'false')+'" class="'+(i===0?'sel':'')+'">'+(paletteItems[i].icon?'<svg class="ico" aria-hidden="true"><use href="#'+paletteItems[i].icon+'"/></svg>':'')+escHtml(paletteItems[i].label)+'</li>';ul.innerHTML=h||'<li class="palette-empty">No matches</li>';var pi=document.getElementById('paletteInput');if(pi){if(paletteItems.length)pi.setAttribute('aria-activedescendant','paletteOpt0');else pi.removeAttribute('aria-activedescendant');}}
+function renderPalette(filter){var all=paletteCommands();var f=(filter||'').toLowerCase().trim();paletteItems=f?all.filter(function(it){return it.label.toLowerCase().indexOf(f)>=0;}):all;paletteSel=0;var ul=document.getElementById('paletteList');if(!ul)return;var h='';for(var i=0;i<paletteItems.length;i++)h+='<li role="option" id="paletteOpt'+i+'" data-pidx="'+i+'" aria-selected="'+(i===0?'true':'false')+'" class="'+(i===0?'sel':'')+'">'+(paletteItems[i].icon?'<svg class="ico" aria-hidden="true"><use href="/icons.svg#'+paletteItems[i].icon+'"/></svg>':'')+escHtml(paletteItems[i].label)+'</li>';ul.innerHTML=h||'<li class="palette-empty">No matches</li>';var pi=document.getElementById('paletteInput');if(pi){if(paletteItems.length)pi.setAttribute('aria-activedescendant','paletteOpt0');else pi.removeAttribute('aria-activedescendant');}}
 function movePalette(d){if(!paletteItems.length)return;paletteSel=(paletteSel+d+paletteItems.length)%paletteItems.length;var lis=document.querySelectorAll('#paletteList li[data-pidx]');for(var i=0;i<lis.length;i++){lis[i].classList.toggle('sel',i===paletteSel);lis[i].setAttribute('aria-selected',i===paletteSel?'true':'false');}if(lis[paletteSel]){lis[paletteSel].scrollIntoView({block:'nearest'});document.getElementById('paletteInput').setAttribute('aria-activedescendant','paletteOpt'+paletteSel);}}
 function runPalette(i){var it=paletteItems[i];if(!it)return;closePalette();if(it.run){it.run();}else if(it.vm){var idx=idxByName(it.vm);if(idx>=0)select(idx);}}
 
@@ -1876,7 +1876,7 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
       if(Math.abs(e.clientY-touchDrag.startY)<8)return; // threshold
       touchDrag.active=true;
       touchDrag.ghost=touchDrag.item.cloneNode(true);
-      touchDrag.ghost.style.cssText='position:fixed;z-index:9999;pointer-events:none;opacity:0.85;width:'+touchDrag.item.offsetWidth+'px;box-shadow:var(--shadow-lg);background:var(--surface);border-radius:var(--radius)';
+      touchDrag.ghost.style.cssText='position:fixed;z-index:9999;pointer-events:none;opacity:0.85;width:'+touchDrag.item.offsetWidth+'px;box-shadow:var(--shadow-lg);background:var(--surface);border-radius:var(--radius-md)';
       document.body.appendChild(touchDrag.ghost);
       touchDrag.item.classList.add('dragging');
     }
