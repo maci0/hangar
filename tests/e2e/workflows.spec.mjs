@@ -826,3 +826,133 @@ test('toolbar dropdown is keyboard-operable: opens, focuses an item, Escape retu
     await expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(await page.evaluate(() => document.activeElement?.getAttribute('data-menu'))).toBe('toolsMenu');
 });
+
+// Call a window-scoped dialog function and record its eventual answer on window.
+async function ask(page, fn, ...args) {
+    await page.evaluate(([name, a]) => {
+        window.__answer = 'pending';
+        window[name](...a).then((v) => { window.__answer = v; });
+    }, [fn, args]);
+}
+
+async function invoke(page, fn, ...args) {
+    await page.evaluate(([name, a]) => window[name](...a), [fn, args]);
+}
+
+const answer = (page) => page.evaluate(() => window.__answer);
+
+for (const [how, expected] of [['OK button', true], ['Cancel button', false], ['Escape', false], ['backdrop click', false]]) {
+    test(`confirm dialog resolves ${expected} on ${how} and returns focus`, async ({ page }) => {
+        await page.locator('#search').focus();
+        await ask(page, 'showConfirmDialog', 'Really?\nSecond line', { danger: true, okLabel: 'Delete' });
+        const dlg = page.locator('#confirmdlg');
+        await expect(dlg).toBeVisible();
+        await expect(dlg).toHaveAttribute('aria-labelledby', 'confirmmsg');
+        await expect(page.locator('#confirmmsg')).toContainText('Second line');
+        await expect(page.locator('#confirmOkBtn')).toHaveText('Delete');
+        await expect(page.locator('#confirmOkBtn')).toHaveClass(/text-danger-text/);
+        await expect(page.locator('#confirmCancelBtn')).toBeFocused();
+        if (how === 'OK button') await page.locator('#confirmOkBtn').click();
+        else if (how === 'Cancel button') await page.locator('#confirmCancelBtn').click();
+        else if (how === 'Escape') await page.keyboard.press('Escape');
+        else await page.mouse.click(4, 4);
+        await expect(dlg).toHaveCount(0);
+        expect(await answer(page)).toBe(expected);
+        await expect(page.locator('#search')).toBeFocused();
+    });
+}
+
+test('confirm dialog without danger uses the primary button and OK label', async ({ page }) => {
+    await ask(page, 'showConfirmDialog', 'Proceed?');
+    await expect(page.locator('#confirmOkBtn')).toHaveText('OK');
+    await expect(page.locator('#confirmOkBtn')).not.toHaveClass(/text-danger-text/);
+    await page.locator('#confirmOkBtn').click();
+    await expect(page.locator('#confirmdlg')).toHaveCount(0);
+    expect(await answer(page)).toBe(true);
+});
+
+test('prompt dialog offers suggestions, submits on Enter and cancels with Escape', async ({ page }) => {
+    await ask(page, 'showPromptDialog', 'Move to folder:', 'start', ['alpha', 'beta']);
+    await expect(page.locator('#promptdlg')).toBeVisible();
+    await expect(page.locator('#promptLabel')).toHaveText('Move to folder:');
+    await expect(page.locator('#promptInput')).toHaveValue('start');
+    await expect(page.locator('#promptInput')).toBeFocused();
+    await expect(page.locator('#promptOptions option')).toHaveCount(2);
+    await page.locator('#promptInput').fill('gamma');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#promptdlg')).toHaveCount(0);
+    expect(await answer(page)).toBe('gamma');
+
+    await ask(page, 'showPromptDialog', 'Name:', 'x');
+    await expect(page.locator('#promptInput')).toBeFocused();
+    await expect(page.locator('#promptInput')).not.toHaveAttribute('list', /.+/);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#promptdlg')).toHaveCount(0);
+    expect(await answer(page)).toBeNull();
+});
+
+test('preferences preview the theme, revert it on cancel and keep it on save', async ({ page }) => {
+    const before = await api(page, 'GET', '/api/config', null);
+    expect(before.ok).toBe(true);
+    const original = JSON.parse(before.text);
+    try {
+        await invoke(page, 'applyTheme', 'light');
+        await invoke(page, 'openPrefs');
+        await expect(page.locator('#prefsdlg')).toBeVisible();
+        await page.locator('#p_theme').selectOption('dark');
+        await expect(page.locator('html')).not.toHaveClass(/light/);
+        await page.locator('#prefsdlg [data-action="closeDlg"]').click();
+        await expect(page.locator('#prefsdlg')).toHaveCount(0);
+        await expect(page.locator('html')).toHaveClass(/light/);
+
+        await invoke(page, 'openPrefs');
+        await page.locator('#p_theme').selectOption('dark');
+        await page.locator('#p_default_memory_mb').fill('3072');
+        await page.locator('#p_default_cpu_cores').fill('3');
+        await page.locator('#p_autoprotect_enabled').selectOption('1');
+        await page.locator('#prefsdlg button[type="submit"]').click();
+        await expect(page.locator('#prefsdlg')).toHaveCount(0);
+        await expect(page.locator('html')).not.toHaveClass(/light/);
+        const saved = JSON.parse((await api(page, 'GET', '/api/config', null)).text);
+        expect(saved.theme).toBe('dark');
+        expect(saved.prefs.default_memory_mb).toBe(3072);
+        expect(saved.prefs.default_cpu_cores).toBe(3);
+        expect(saved.prefs.autoprotect_enabled_default).toBe(true);
+
+        // Reopening shows the saved values.
+        await invoke(page, 'openPrefs');
+        await expect(page.locator('#p_default_memory_mb')).toHaveValue('3072');
+        await expect(page.locator('#p_theme')).toHaveValue('dark');
+        // Enter in a field submits the form.
+        await page.locator('#p_default_cpu_cores').press('Enter');
+        await expect(page.locator('#prefsdlg')).toHaveCount(0);
+    } finally {
+        // A fresh daemon has no saved config yet, so fall back to the built-in defaults.
+        const prefs = original.prefs ?? {};
+        const body = `theme=${original.theme ?? 'system'}&default_vm_dir=${encodeURIComponent(prefs.default_vm_dir ?? '')}`
+            + `&default_memory_mb=${prefs.default_memory_mb ?? 2048}&default_cpu_cores=${prefs.default_cpu_cores ?? 2}`
+            + `&autoprotect_enabled=${prefs.autoprotect_enabled_default ? 1 : 0}`
+            + `&autoprotect_interval=${prefs.autoprotect_interval_min_default ?? 60}&autoprotect_max=${prefs.autoprotect_max_default ?? 10}`;
+        expect((await api(page, 'POST', '/api/config', body)).ok).toBe(true);
+    }
+});
+
+test('about dialog shows the daemon version and closes with its button', async ({ page }) => {
+    await page.evaluate(() => actionHandlers.openAbout(document.body));
+    await expect(page.locator('#aboutdlg')).toBeVisible();
+    await expect(page.locator('#aboutVersion')).toContainText('Version');
+    await page.locator('#aboutdlg [data-action="closeDlg"]').click();
+    await expect(page.locator('#aboutdlg')).toHaveCount(0);
+});
+
+test('QEMU log dialog refreshes in place and closes with Escape', async ({ page }) => {
+    await createVm(page, 'wf-log');
+    await page.locator('.vm-item', { hasText: 'wf-log' }).click();
+    await page.evaluate(() => viewLog());
+    await expect(page.locator('#log_vmname')).toHaveText('wf-log');
+    await expect(page.locator('#logbody')).toContainText(/No log output yet/);
+    await page.locator('#logdlg [data-action="refreshLog"]').click();
+    await expect(page.locator('#logbody')).toContainText(/No log output yet/);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#logdlg')).toHaveCount(0);
+});

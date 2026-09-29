@@ -257,64 +257,6 @@
   </div>
 </dialog>
 
-<!-- Preferences Dialog -->
-<dialog id="prefsdlg" aria-label="Preferences">
-  <h3>Preferences</h3>
-  <div style="padding:16px 20px">
-    <label for="p_theme">Theme</label>
-    <select id="p_theme" data-action="applyTheme" style="width:100%;margin:4px 0 12px">
-      <option value="system">System</option>
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
-    </select>
-    <label for="p_default_vm_dir">Default VM Directory</label>
-    <input id="p_default_vm_dir" type="text" placeholder="~/.local/share/hangar" style="width:100%;margin:4px 0 12px">
-    <label for="p_default_memory_mb">Default Memory (MB)</label>
-    <input id="p_default_memory_mb" type="number" value="2048" min="128" max="65536" step="1" style="width:100%;margin:4px 0 12px">
-    <label for="p_default_cpu_cores">Default CPU Cores</label>
-    <input id="p_default_cpu_cores" type="number" value="2" min="1" max="256" step="1" style="width:100%;margin:4px 0 12px">
-    <label for="p_autoprotect_enabled">AutoProtect Default</label>
-    <select id="p_autoprotect_enabled" style="width:100%;margin:4px 0 12px">
-      <option value="0">Off</option><option value="1">On</option>
-    </select>
-    <label for="p_autoprotect_interval">AutoProtect Interval (min)</label>
-    <input id="p_autoprotect_interval" type="number" value="60" min="1" max="1440" step="1" style="width:100%;margin:4px 0 12px">
-    <label for="p_autoprotect_max">AutoProtect Max Snapshots</label>
-    <input id="p_autoprotect_max" type="number" value="10" min="1" max="100" step="1" style="width:100%;margin:4px 0 12px">
-  </div>
-  <div class="btn-row">
-    <button type="button" class="btn" data-action="closeDlg" data-dialog="prefsdlg">Cancel</button>
-    <button type="button" class="btn primary" data-action="savePrefs">Save</button>
-  </div>
-</dialog>
-
-<!-- About Dialog -->
-<dialog id="aboutdlg" aria-label="About Hangar">
-  <h3>About Hangar</h3>
-  <div style="padding:16px 20px;text-align:center">
-    <div style="width:48px;height:48px;background:var(--accent);border-radius:var(--radius-lg);display:inline-flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--text-on-accent);margin-bottom:12px">H</div>
-    <p style="font-weight:600;font-size:15px">Hangar VM Manager</p>
-    <p style="color:var(--text-muted);font-size:13px;margin-top:4px">Lightweight QEMU VM manager</p>
-    <p style="color:var(--text-dim);font-size:12px;margin-top:8px">Zig + QEMU + noVNC/SPICE web UI</p>
-      <p class="muted" style="margin:8px 0 0;font-size:11px" id="aboutVersion"></p>
-  </div>
-  <div class="btn-row">
-    <button type="button" class="btn" data-action="closeDlg" data-dialog="aboutdlg">Close</button>
-  </div>
-</dialog>
-
-<!-- QEMU Log Dialog -->
-<dialog id="logdlg" aria-label="QEMU Log">
-  <h3>QEMU Log, <span id="log_vmname"></span></h3>
-  <div style="padding:12px 24px">
-    <pre id="logbody" style="margin:0;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono);font-size:12px;background:var(--bg);color:var(--text);padding:12px;border-radius:var(--radius-md);border:1px solid var(--border)">Loading…</pre>
-  </div>
-  <div class="btn-row">
-    <button type="button" class="btn" data-action="refreshLog">Refresh</button>
-    <button type="button" class="btn" data-action="closeDlg" data-dialog="logdlg">Close</button>
-  </div>
-</dialog>
-
 <!-- Migrate Dialog -->
 <dialog id="migratedlg" aria-label="Migrate VM">
   <h3>Migrate Virtual Machine</h3>
@@ -330,37 +272,6 @@
   <div class="btn-row">
     <button type="button" class="btn" data-action="closeDlg" data-dialog="migratedlg">Cancel</button>
     <button type="button" class="btn primary" data-action="doMigrate">Migrate</button>
-  </div>
-</dialog>
-
-<!-- Keyboard Shortcuts Dialog -->
-<dialog id="shortcutsdlg" aria-label="Keyboard Shortcuts">
-  <h3>Keyboard Shortcuts</h3>
-  <div style="padding:16px 20px">
-    <table style="width:100%;font-size:13px;border-collapse:collapse">
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>↑↓</kbd></td><td>Navigate VM list</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Enter</kbd></td><td>Power On/Off selected VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Delete</kbd></td><td>Delete selected VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Esc</kbd></td><td>Close dialog / Deselect VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>F5</kbd></td><td>Refresh VM list</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>F11</kbd></td><td>Fullscreen / Display-only mode</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+F</kbd></td><td>Focus search</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+K</kbd></td><td>Command palette (run a command or jump to a VM)</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+S</kbd></td><td>Save settings (Settings tab) · Suspend VM otherwise</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+Enter</kbd></td><td>Edit VM settings</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Alt+↑↓</kbd></td><td>Reorder VM in list</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>←→</kbd></td><td>Switch between VM tabs</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+N</kbd></td><td>New VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+Shift+N</kbd></td><td>Clone VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+E</kbd> / <kbd>F2</kbd></td><td>Edit VM settings</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+I</kbd></td><td>Import VM</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+P</kbd></td><td>Open Preferences</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>Ctrl+W</kbd></td><td>Home (deselect VM)</td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:var(--text-muted);white-space:nowrap"><kbd>?</kbd></td><td>Show this shortcuts list</td></tr>
-    </table>
-  </div>
-  <div class="btn-row">
-    <button type="button" class="btn" data-action="closeDlg" data-dialog="shortcutsdlg">Close</button>
   </div>
 </dialog>
 
@@ -381,29 +292,8 @@
   <button type="button" class="displayonly-exit" data-action="exitDisplayOnly" aria-label="Exit display-only mode">Exit</button>
 </div>
 
-<!-- Confirm dialog -->
-<dialog id="confirmdlg" class="dialog confirm-dialog" aria-labelledby="confirmmsg">
-  <div class="dialog-body">
-    <p id="confirmmsg"></p>
-  </div>
-  <div class="btn-row">
-    <button id="confirmCancelBtn" type="button" class="btn">Cancel</button>
-    <button id="confirmOkBtn" type="button" class="btn primary">OK</button>
-  </div>
-</dialog>
-
-<!-- Prompt dialog (replaces native prompt()) -->
-<dialog id="promptdlg" aria-label="Prompt">
-  <form method="dialog" style="padding:20px 24px">
-    <label for="promptInput" id="promptLabel"></label>
-    <input id="promptInput" type="text" style="width:100%;margin:4px 0 12px">
-    <datalist id="promptOptions"></datalist>
-  </form>
-  <div class="btn-row">
-    <button id="promptCancelBtn" type="button" class="btn">Cancel</button>
-    <button id="promptOkBtn" type="button" class="btn primary">OK</button>
-  </div>
-</dialog>
+<!-- Preact dialogs (confirm, prompt, about, shortcuts, QEMU log, preferences) mount here. -->
+<div id="dialog-root"></div>
 
 <!-- The console clients (noVNC, SPICE) and the xterm serial terminal are
      several hundred KB each and are needed only once a guest console opens,

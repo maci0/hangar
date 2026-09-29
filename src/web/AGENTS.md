@@ -7,9 +7,9 @@ plus the Preact + Tailwind source in `ui/`. Bun bundles `ui/` to `dist/` (gitign
 Targets VMware (vSphere/Workstation) admin conventions.
 
 ## Ownership
-- `index.html`: markup, dialogs, script tags. The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`.
-- `app.js`: refresh poll, render, action dispatch, dialogs,
-  console/serial viewers, command palette, folders, topology.
+- `index.html`: markup, the remaining legacy dialogs, script tags. The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`. Confirm, prompt, About, Keyboard Shortcuts, QEMU log and Preferences are not here either: `#dialog-root` is the mount for the Preact `Dialogs`.
+- `app.js`: refresh poll, render, action dispatch, the remaining legacy dialogs,
+  console/serial viewers, command palette, folders, topology. `showConfirmDialog`, `showPromptDialog`, `openPrefs`, `openAbout`, `showShortcutsModal` and `viewLog` keep their signatures and promise behavior but only call `hangarUi` (`confirm`, `prompt`, `openPrefs`, `openAbout`, `openShortcuts`, `openLog`); the fetches stay in `app.js`.
 - `app.css`: flat slate theme (`:root` dark default + `:root.light`) + components.
   Logo and empty-state emblems use the shared accent and radius tokens, without
   decorative gradients or colored shadows.
@@ -67,10 +67,12 @@ Targets VMware (vSphere/Workstation) admin conventions.
 - **Emblem radius follows emblem size**: 20px `.os-badge` -> `--radius-sm`,
   30px `.vm-emblem` and 34px `.snap-emblem` -> `--radius-md`, 44px `.cat-emblem` ->
   `--radius-lg`. The four read as one family; never round them independently.
-- **Dialog chrome comes from the `dialog h3` / `.dialog-body` rules**, not from
-  a per-dialog inline style. Do not add `!important` to the dialog rules to win
-  a cascade fight; the remaining `!important` in the sheet are `#display`
-  stacking overrides and the reduced-motion block.
+- **Dialog chrome comes from the shared rules**, not from a per-dialog inline style:
+  the `Dialog` primitive for Preact dialogs (`ui/components/ui/dialog.tsx`), the
+  `dialog h3` / `dialog .btn-row` rules in `app.css` for the legacy ones that remain.
+  Do not add `!important` to the dialog rules to win a cascade fight; the remaining
+  `!important` in the sheet are `#display` stacking overrides and the reduced-motion block.
+  The generic `dialog` rules in `app.css` go when the last legacy dialog is ported.
 - **VM list rows are `role="button"` with `aria-current` on the selected one**, and the favorite star is a sibling inside `.vm-row`, never a child of the row: axe rejects a button (or option) that contains another control. `#vmlist` is a `role="group"`.
 - **Stat tiles are not interactive.** `.dash-card` carries no hover transform;
   reserve elevation-on-hover for things that can be pressed.
@@ -96,8 +98,9 @@ Targets VMware (vSphere/Workstation) admin conventions.
   substitute like `✓` or `＋` is a defect. VanJS-built buttons get their sprite
   after mount with `addActionIcons`.
 - **Unsaved state**: a dialog with edits the user has not committed sets its dirty
-  flag on input and registers `_closeGuard`, which the shared `close()` wrapper
-  runs for the button, Escape and backdrop paths; the guard may return a promise
+  flag on input and registers `_closeGuard` (legacy dialogs) or passes `guard` to the
+  Preact `Dialog`; the shared `close()` wrapper (or the `Dialog` itself) runs it for the
+  button, Escape and backdrop paths; the guard may return a promise
   (`settingsDirty`/`vnetsDirty`). A save button either persists (with status
   feedback) or it does not exist: `vnetSaveCurrent` writes to the daemon, it is
   not a form-only re-render.
@@ -154,6 +157,12 @@ Targets VMware (vSphere/Workstation) admin conventions.
   action that resolves a VM after an `await` must re-resolve by stable id (`idxById`,
   survives rename) or name (`idxByName`), never a frozen index. Multi-select keeps
   `checkedIds`; migration tracks `migId`.
+- **Preact dialogs are removed from the DOM when closed**, so `#confirmdlg`, `#promptdlg`,
+  `#aboutdlg`, `#shortcutsdlg`, `#logdlg` and `#prefsdlg` exist only while open (a test asserts
+  `toHaveCount(0)`, not hidden). `dlg.close()` on one still works: the `Dialog` replaces it with
+  the guarded, animated close, which is what the `closeDlg` action and the Escape sweep call.
+  Preferences applies the theme as it is picked and puts the original back on every close except a
+  save; that state is in the component, not in `app.js`.
 - **Vendored-bundle globals are not their class:** `noVNC` exposes the RFB class as
   `noVNC.default` (NOT `noVNC.RFB`); SPICE uses `SpiceHtml5.SpiceMainConn`; elk is `ELK`.
   Resolve `noVNC.default || noVNC.RFB` so a re-vendor can't silently break the console.

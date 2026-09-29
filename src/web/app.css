@@ -784,14 +784,10 @@ dialog h3{
   font-size:15px;
   font-weight:600;
 }
-dialog .dialog-body{max-height:62vh;overflow-y:auto;padding:16px 20px;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
 dialog .btn-row{display:flex;gap:8px;justify-content:flex-end;padding:12px 20px 16px;border-top:1px solid var(--border-soft)}
 .dialog-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:-2px 0 10px;color:var(--text-muted);font-size:12px}
 .dialog-meta strong{color:var(--text)}
 .warn-text{color:var(--warn)}
-.confirm-dialog{text-align:center}
-.confirm-dialog .dialog-body p{margin:0;color:var(--text);line-height:1.55;white-space:pre-line}
-.confirm-dialog .btn-row{justify-content:center;border-top:0}
 
 /* Snapshots */
 .snapshot-list{max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--bg)}

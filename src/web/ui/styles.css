@@ -18,6 +18,38 @@
   --breakpoint-compact: 1100px;
   --breakpoint-phone: 520px;
   --animate-menu-in: menu-in 0.09s ease;
+  --animate-dialog-in: dialog-in 0.12s ease;
+  --animate-dialog-out: dialog-out 0.1s ease forwards;
+  /* Type steps between the stock scale: form fields and dialog titles. */
+  --text-caption: 11px;
+  --text-field: 13px;
+  --text-title: 15px;
+  --blur-dialog: 7px;
+
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes dialog-out {
+    to {
+      opacity: 0;
+      transform: translateY(3px);
+    }
+  }
+}
+
+/* Dimmed text of an empty field. */
+@utility empty-hint {
+  &::placeholder {
+    color: var(--text-dim);
+  }
 }
 
 /* Full-screen console hides the chrome; the body carries the class. */
@@ -45,6 +77,8 @@
   --color-danger-soft: var(--danger-soft);
   --color-danger-text: var(--danger-text);
   --shadow-menu: var(--shadow-pop);
+  --shadow-dialog: var(--shadow-modal);
+  --color-backdrop: var(--backdrop);
   --color-on-accent: var(--text-on-accent);
   --color-on-danger: var(--text-on-danger);
 }

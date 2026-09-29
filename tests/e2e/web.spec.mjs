@@ -120,7 +120,7 @@ test('keyboard shortcut "?" opens the shortcuts dialog', async ({ page }) => {
     for (const theme of ['light', 'dark']) {
         await invoke(page, 'applyTheme', theme);
         await expect.poll(() => page.locator('#shortcutsdlg kbd').evaluateAll((keys) => {
-            const sharedStyle = getComputedStyle(document.querySelector('#shortcutsdlg .btn'));
+            const sharedStyle = getComputedStyle(document.querySelector('#shortcutsdlg button'));
             return keys.length > 0 && keys.every((key) => {
                 const style = getComputedStyle(key);
                 return style.backgroundColor === sharedStyle.backgroundColor
