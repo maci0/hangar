@@ -128,6 +128,15 @@ var active_connections: u32 = 0;
 var vms_spill_mutex: sync.SpinMutex = .{};
 var vms_spill_buf: []u8 = &.{};
 
+/// Grow-only render buffer for `/api/vms/<i>/framebuffer`, sized once to
+/// `framebuffer.BMP_BUF_SIZE` (~2 MB). Same reasoning as `vms_spill_buf`: a
+/// fresh page_allocator buffer per request would mmap, fault in, and unmap 2 MB
+/// on every console poll. Guarded by `fb_spill_mutex`, which must be held from
+/// the render through the response write so the bytes cannot be reallocated
+/// mid-flight.
+var fb_spill_mutex: sync.SpinMutex = .{};
+var fb_spill_buf: []u8 = &.{};
+
 const SIGPIPE: c_int = 13;
 const SIG_IGN: isize = 1;
 
@@ -693,6 +702,8 @@ fn serveHtml(conn: c.fd_t) void {
     // spill buffer, so its bytes cannot be reallocated mid-flight.
     var spill_held = false;
     defer if (spill_held) vms_spill_mutex.unlock();
+    var fb_held = false;
+    defer if (fb_held) fb_spill_mutex.unlock();
 
     // Auth: check X-API-Key for mutating endpoints.
     // Match against the extracted path (not the raw request line) to prevent
@@ -869,10 +880,15 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "text/plain";
         // ── Item sub-action routes (longest suffix first where ambiguous) ──
     } else if (parseVmIdxSuffix(req, "GET /api/vms/", "/framebuffer")) |fb_idx| {
-        if (std.heap.page_allocator.alloc(u8, framebuffer.BMP_BUF_SIZE)) |bytes| {
-            response_alloc = bytes;
-            response = framebuffer.render(fb_idx, bytes);
-        } else |_| {
+        fb_spill_mutex.lock();
+        fb_held = true;
+        if (fb_spill_buf.len < framebuffer.BMP_BUF_SIZE) {
+            if (fb_spill_buf.len > 0) std.heap.page_allocator.free(fb_spill_buf);
+            fb_spill_buf = std.heap.page_allocator.alloc(u8, framebuffer.BMP_BUF_SIZE) catch &.{};
+        }
+        if (fb_spill_buf.len >= framebuffer.BMP_BUF_SIZE) {
+            response = framebuffer.render(fb_idx, fb_spill_buf);
+        } else {
             response = "no fb";
         }
         // renderFramebuffer returns BMP bytes on success or a short error token

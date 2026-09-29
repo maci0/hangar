@@ -224,16 +224,31 @@ pub fn readFramePayload(fd: c.fd_t, buf: []u8, header: FrameHeader) ?usize {
         if (!readFull(fd, &mask_key)) return null;
     }
 
-    // Read and unmask the payload in a single pass.
+    // Read and unmask the payload in a single pass. A masked client frame is
+    // XORed with a repeating 4-byte key, so each 4-byte group is one 32-bit XOR
+    // instead of four byte loads plus a modulo per byte.
     var total_read: usize = 0;
     while (total_read < len) {
         const n = readRetry(fd, buf.ptr + total_read, len - total_read);
         if (n <= 0) return null;
         const chunk_end = total_read + @as(usize, @intCast(n));
         if (header.mask) {
-            for (total_read..chunk_end) |i| {
-                buf[i] ^= mask_key[i % 4];
+            // Word XOR applies the key in the host's byte order, so swap it on a
+            // big-endian target to keep byte i keyed by mask_key[i & 3].
+            const key: u32 = if (@import("builtin").target.cpu.arch.endian() == .little)
+                @bitCast(mask_key)
+            else
+                @byteSwap(@as(u32, @bitCast(mask_key)));
+            // The key phase is the absolute frame offset, so a short read that
+            // splits a 4-byte group must not restart it: scalar-fill up to the
+            // next aligned offset first, and scalar-drain the tail.
+            var i: usize = total_read;
+            while (i < chunk_end and (i & 3) != 0) : (i += 1) buf[i] ^= mask_key[i & 3];
+            while (i + 4 <= chunk_end) : (i += 4) {
+                const word: *align(1) u32 = @ptrCast(&buf[i]);
+                word.* ^= key;
             }
+            while (i < chunk_end) : (i += 1) buf[i] ^= mask_key[i & 3];
         }
         total_read = chunk_end;
     }

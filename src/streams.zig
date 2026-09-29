@@ -241,6 +241,49 @@ pub fn download(conn: c.fd_t, req: []const u8) !void {
     logAudit("disk2 download", name_buf[0..name_len]);
 }
 
+/// Resume cursors for `scanUploadPrefix` across successive socket reads of the
+/// same growing prefix buffer.
+const UploadScan = struct {
+    /// First offset that can still start a not-yet-found boundary.
+    bd_from: usize = 0,
+    /// Cached boundary offset once found, so it is never rediscovered.
+    bd_pos: ?usize = null,
+    /// First offset that can still start the part-header terminator.
+    hdr_from: usize = 0,
+};
+
+const UploadPrefix = struct { data_pos: usize, filename: []const u8 };
+
+/// Locate where the file bytes begin inside the accumulated multipart prefix
+/// `pb` (opening boundary, part headers, then file bytes). `scan` carries the
+/// resume cursors between calls: `pb` only ever grows, so each search picks up
+/// just before the previous search's tail (one byte of overlap, so a needle
+/// split across two reads is still found) instead of rescanning the whole
+/// buffer from offset 0 on every read. Returns null when more bytes are needed.
+fn scanUploadPrefix(pb: []const u8, full_bd: []const u8, scan: *UploadScan) ?UploadPrefix {
+    const HDR_OVERLAP: usize = "\r\n\r\n".len - 1;
+    if (scan.bd_pos == null) {
+        const from = @min(scan.bd_from, pb.len);
+        if (std.mem.indexOf(u8, pb[from..], full_bd)) |off| scan.bd_pos = from + off;
+    }
+    var found: ?UploadPrefix = null;
+    if (scan.bd_pos) |fb| {
+        var p = fb + full_bd.len;
+        if (p < pb.len and pb[p] == '\r') p += 1;
+        if (p < pb.len and pb[p] == '\n') p += 1;
+        const hfrom = @min(@max(scan.hdr_from, p), pb.len);
+        if (std.mem.indexOf(u8, pb[hfrom..], "\r\n\r\n")) |phe| {
+            found = .{ .data_pos = hfrom + phe + 4, .filename = parseUploadFilename(pb[p..][0 .. hfrom + phe - p]) };
+        } else if (std.mem.indexOf(u8, pb[hfrom..], "\n\n")) |phe2| {
+            found = .{ .data_pos = hfrom + phe2 + 2, .filename = parseUploadFilename(pb[p..][0 .. hfrom + phe2 - p]) };
+        } else {
+            scan.hdr_from = pb.len -| HDR_OVERLAP;
+        }
+    }
+    if (found == null) scan.bd_from = pb.len -| (full_bd.len - 1);
+    return found;
+}
+
 /// Accept a multipart/form-data disk2 upload, STREAMING the file body straight
 /// to disk (never buffering the whole multi-GB image in memory). `initial` is the
 /// already-read first chunk (headers + start of body).
@@ -283,21 +326,12 @@ pub fn upload(conn: c.fd_t, initial: []const u8) void {
     }
     var data_pos: usize = 0; // offset in pbuf where the file bytes begin
     var filename: []const u8 = "";
+    var scan: UploadScan = .{};
     while (true) {
-        const pb = pbuf[0..plen];
-        if (std.mem.indexOf(u8, pb, full_bd)) |fb| {
-            var p = fb + full_bd.len;
-            if (p < pb.len and pb[p] == '\r') p += 1;
-            if (p < pb.len and pb[p] == '\n') p += 1;
-            if (std.mem.indexOf(u8, pb[p..], "\r\n\r\n")) |phe| {
-                data_pos = p + phe + 4;
-                filename = parseUploadFilename(pb[p..][0..phe]);
-                break;
-            } else if (std.mem.indexOf(u8, pb[p..], "\n\n")) |phe2| {
-                data_pos = p + phe2 + 2;
-                filename = parseUploadFilename(pb[p..][0..phe2]);
-                break;
-            }
+        if (scanUploadPrefix(pbuf[0..plen], full_bd, &scan)) |found| {
+            data_pos = found.data_pos;
+            filename = found.filename;
+            break;
         }
         if (plen >= pbuf.len or body_seen >= content_length) return uploadErr(conn, "no headers end");
         const want = @min(pbuf.len - plen, content_length - body_seen);
@@ -466,19 +500,16 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
     var cpu_sockets: u32 = 1;
     var memory_mb: u32 = 0;
     var idx: usize = 0;
+    // Parse and validate the form body before taking vms_mutex: the body can be
+    // 64 KB, and scanning it under the global VM lock stalls every other
+    // handler for work that touches no shared state.
+    var name_buf2: [vm.MAX_NAME]u8 = undefined;
+    var name_parsed: usize = 0;
     {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
         idx = parseIdx(req, "POST /api/vms/") orelse {
             writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
             return;
         };
-        if (idx >= appstate.vm_count) {
-            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
-            return;
-        }
-        const v = &appstate.vms[idx];
-
         const body: []const u8 = if (std.mem.indexOf(u8, req, "\r\n\r\n")) |bs| req[bs + 4 ..] else "";
         var raw_name: []const u8 = "";
         var pairs = std.mem.splitScalar(u8, body, '&');
@@ -488,15 +519,25 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
             const val = kv.next() orelse continue;
             if (std.mem.eql(u8, key, "name")) raw_name = val;
         }
-        var name_decode_buf: [vm.MAX_NAME]u8 = undefined;
-        const export_name: []const u8 = if (raw_name.len > 0) blk: {
-            const decoded = urlencode.urlDecode(&name_decode_buf, raw_name);
+        if (raw_name.len > 0) {
+            const decoded = urlencode.urlDecode(&name_buf2, raw_name);
             if (!vm.isValidVmName(decoded) or std.mem.indexOf(u8, decoded, "..") != null) {
                 writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
                 return;
             }
-            break :blk decoded;
-        } else v.getNameSlice();
+            name_parsed = decoded.len;
+        }
+    }
+    {
+        appstate.vms_mutex.lock();
+        defer appstate.vms_mutex.unlock();
+        if (idx >= appstate.vm_count) {
+            writeHttpResponse(conn, HTTP_NOT_FOUND, "application/json; charset=utf-8", "{\"error\":\"no vm\"}");
+            return;
+        }
+        const v = &appstate.vms[idx];
+
+        const export_name: []const u8 = if (name_parsed) name_buf2[0..name_parsed] else v.getNameSlice();
         if (export_name.len > export_name_buf.len) {
             writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
             return;
@@ -688,6 +729,40 @@ test "streams: parseUploadFilename handles quoted + unquoted" {
     try std.testing.expectEqualStrings("a.img", parseUploadFilename("Content-Disposition: form-data; name=\"f\"; filename=\"a.img\"\r\n"));
     try std.testing.expectEqualStrings("b.img", parseUploadFilename("filename=b.img\r\n"));
     try std.testing.expectEqualStrings("", parseUploadFilename("no filename here"));
+}
+
+test "streams: scanUploadPrefix finds data_pos for any read split" {
+    const full = "--ABC123\r\n" ++
+        "Content-Disposition: form-data; name=\"f\"; filename=\"disk2.img\"\r\n" ++
+        "Content-Type: application/octet-stream\r\n\r\n" ++
+        "PAYLOAD-BYTES";
+    // Every prefix length must reach the same answer, so a boundary or
+    // terminator split across two socket reads is still matched.
+    var scan: UploadScan = .{};
+    var first: ?UploadPrefix = null;
+    for (1..full.len + 1) |n| {
+        if (scanUploadPrefix(full[0..n], "--ABC123", &scan)) |got| {
+            if (first == null) first = got;
+            try std.testing.expectEqual(first.?.data_pos, got.data_pos);
+            try std.testing.expectEqualStrings(first.?.filename, got.filename);
+        }
+    }
+    const want = std.mem.indexOf(u8, full, "PAYLOAD-BYTES").?;
+    try std.testing.expectEqual(want, first.?.data_pos);
+    try std.testing.expectEqualStrings("disk2.img", first.?.filename);
+    try std.testing.expectEqualStrings("PAYLOAD-BYTES", full[first.?.data_pos..]);
+}
+
+test "streams: scanUploadPrefix tolerates bare-LF part headers" {
+    const full = "--XY\nContent-Disposition: form-data; filename=\"q.img\"\n\nDATA";
+    var scan: UploadScan = .{};
+    var got: ?UploadPrefix = null;
+    var n: usize = 1;
+    while (n <= full.len) : (n += 1) {
+        if (scanUploadPrefix(full[0..n], "--XY", &scan)) |r| got = r;
+    }
+    try std.testing.expectEqual(std.mem.indexOf(u8, full, "DATA").?, got.?.data_pos);
+    try std.testing.expectEqualStrings("q.img", got.?.filename);
 }
 
 test "streams: uploadErr maps server vs client tokens (pipe fd)" {

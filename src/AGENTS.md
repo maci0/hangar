@@ -118,7 +118,13 @@ globals in `appstate.zig`.
   logging successful GET polling.
 - **Never** touch `appstate.vms`/`vm_count` without `vms_mutex`; never hold a lock during
   QEMU/QMP/filesystem/network I/O (power-on's brief `portInUse` probe is the one
-  bounded exception).
+  bounded exception). Form-body parsing for a request also happens before the lock
+  is taken, not inside it, even though the body is scanned byte by byte.
+- **Grow-only render buffers:** `web_server` keeps `vms_spill_buf` (`/api/vms`) and
+  `fb_spill_buf` (`/api/vms/<i>/framebuffer`) as process-lifetime, grow-only
+  allocations so a polled route does not mmap, fault, and unmap its whole render
+  buffer per request. Each has a mutex that must be held from the render through
+  the response write, or the bytes can be reallocated mid-flight.
 
 ## Work Guidance
 - Every function gets a unit test **and** a fuzz test (deterministic fixed-seed PRNG),
