@@ -15,7 +15,8 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 - Vendored libs: `novnc.js`, `spice.js`, `elk.js`, `van.js` (vanjs-core, ESM export
   converted to `window.van`), `xterm.js`/`xterm.css`/`xterm-fit.js`/`xterm-webgl.js`
   (@xterm UMD builds), `favicon.svg`. Each is `@embedFile`'d, served at `/novnc.js`
-  etc, and listed in `auth.isAuthExempt`.
+  etc, and listed in `auth.isAuthExempt`. All except `van.js` load on demand
+  (see On-demand bundles); none of them is a `<script>` in `index.html`.
   - **Provenance:** every bundle starts with a header comment naming package@version
     + license + vendor date. Versions for `elk`/`van`/`xterm*` are pinned as exact
     devDependencies in `../../package.json` (+ `bun.lock`); re-vendor by bumping there,
@@ -78,6 +79,17 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
 - **Topology loading**: `/elk.js` loads only when the topology opens, never from
   `index.html`. Concurrent opens share the pending load. Loading is visible; failed,
   invalid, or timed-out loads expose Retry and clear the pending promise.
+- **On-demand bundles**: `index.html` loads only `app.css`, `van.js` and `app.js`.
+  `ensureAsset(src, isReady)` is the single loader for every other bundle
+  (`/novnc.js`, `/spice.js`, `/elk.js`, `/xterm.js`, `/xterm-fit.js`,
+  `/xterm-webgl.js`): it caches the pending promise per URL, times out after
+  `ASSET_LOAD_TIMEOUT_MS`, removes the failed tag, and clears the entry so the
+  surface's Retry starts a fresh attempt. `ensureStylesheet` does the same for
+  `/xterm.css`. Console clients load on the first `startFb`; the terminal
+  bundles on the first `startSerial`. A bundle that never arrives must leave a
+  visible Retry (`reconnectDisplay` / `reconnectSerial`), never a dead pane.
+  Adding a bundle means: drop the `<script>` from `index.html`, add an
+  `ensureAsset` call at the point of use, and keep the failure path.
 - **Reactivity**: `GET /api/events` (SSE) pushes a change event whenever the daemon's
   state version bumps; the client refreshes on it (5s poll stays as fallback). The host
   dashboard is a VanJS component driven by `vmsState`/`dashSortState`. Update state,

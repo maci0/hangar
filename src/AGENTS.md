@@ -99,6 +99,10 @@ globals in `appstate.zig`.
 - **Browser asset caching:** unversioned asset URLs use `public, no-cache` on both
   200 and 304 responses. Cache storage and ETag revalidation remain enabled; a
   fresh document must not reuse yesterday's scripts or styles after an upgrade.
+  The embedded app shell is one of them: `writeHttpShellResponse` gives it a
+  strong ETag and `public, no-cache` rather than the `no-store` the dynamic
+  response path gives `text/html`, so a reload costs a 304 instead of the whole
+  document. `no-store` stays for API JSON and error bodies, which carry state.
 - **HTTP header lookup:** `httpreq.findHeader` and `parseContentLength` stop at the
   CRLFCRLF boundary; body bytes must never supply header values.
 - **Logging goes through `wlog`**, never a bare `std.c.write(2, ...)`: one timestamped,

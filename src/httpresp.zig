@@ -181,7 +181,43 @@ pub fn writeHttpAssetResponse(
     etag_storage: *?[]const u8,
     req: []const u8,
 ) void {
+    const etag = assetEtag(body, etag_storage);
+    if (etag) |tag| {
+        if (etagMatches(req, tag)) {
+            write304Response(conn, tag);
+            return;
+        }
+    }
+    writeHttpResponseTagged(conn, status, ct, body, etag);
+}
+
+/// Serve the embedded app shell. Its bytes are the same for every request and
+/// carry no VM state, so they get the same strong ETag and revalidation
+/// policy as the other embedded assets: an unchanged document costs a 304
+/// instead of a full re-download. `text/html` otherwise falls into the
+/// `no-store` branch reserved for auth-gated state, which makes every reload
+/// pull the whole document again.
+pub fn writeHttpShellResponse(
+    conn: c.fd_t,
+    body: []const u8,
+    etag_storage: *?[]const u8,
+    req: []const u8,
+) void {
+    const etag = assetEtag(body, etag_storage);
+    if (etag) |tag| {
+        if (etagMatches(req, tag)) {
+            write304Response(conn, tag);
+            return;
+        }
+    }
+    writeHttpResponseCached(conn, HTTP_OK, "text/html; charset=utf-8", body, etag);
+}
+
+/// Strong content hash of `body`, computed once per process (embedded bytes
+/// never change) and parked in `etag_storage`.
+fn assetEtag(body: []const u8, etag_storage: *?[]const u8) ?[]const u8 {
     etag_mutex.lock();
+    defer etag_mutex.unlock();
     if (etag_storage.* == null) {
         var hash_bytes: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(body, &hash_bytes, .{});
@@ -195,15 +231,7 @@ pub fn writeHttpAssetResponse(
         tag_buf[17] = '"';
         etag_storage.* = std.heap.page_allocator.dupe(u8, &tag_buf) catch null;
     }
-    const etag = etag_storage.*;
-    etag_mutex.unlock();
-    if (etag) |tag| {
-        if (etagMatches(req, tag)) {
-            write304Response(conn, tag);
-            return;
-        }
-    }
-    writeHttpResponseTagged(conn, status, ct, body, etag);
+    return etag_storage.*;
 }
 
 /// True when the request's `If-None-Match` header carries the exact tag.
@@ -265,6 +293,17 @@ pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []cons
 /// (a quoted token, e.g. `"1a2b…"`) adds an `ETag` header; everything else is
 /// identical to `writeHttpResponse`, including logging the wire status.
 pub fn writeHttpResponseTagged(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8, etag: ?[]const u8) void {
+    writeHttp(conn, status, ct, body, etag, null);
+}
+
+/// `writeHttpResponseTagged` with an explicit `Cache-Control` value, for the
+/// few responses that revalidate fine despite a content type the default
+/// policy sends as `no-store` (the embedded app shell).
+fn writeHttpResponseCached(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8, etag: ?[]const u8) void {
+    writeHttp(conn, status, ct, body, etag, "public, no-cache");
+}
+
+fn writeHttp(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8, etag: ?[]const u8, cache: ?[]const u8) void {
     const status_line: []const u8 = switch (status) {
         HTTP_OK => "HTTP/1.1 200 OK\r\n",
         HTTP_CREATED => "HTTP/1.1 201 Created\r\n",
@@ -309,7 +348,10 @@ pub fn writeHttpResponseTagged(conn: c.fd_t, status: u16, ct: []const u8, body: 
     append(&hbuf, &hlen, "Content-Type: ");
     append(&hbuf, &hlen, ct);
     append(&hbuf, &hlen, "\r\nServer: hangar");
-    if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null or std.mem.indexOf(u8, ct, "image/svg+xml") != null) {
+    if (cache) |directive| {
+        append(&hbuf, &hlen, "\r\nCache-Control: ");
+        append(&hbuf, &hlen, directive);
+    } else if (std.mem.indexOf(u8, ct, "text/css") != null or std.mem.indexOf(u8, ct, "application/javascript") != null or std.mem.indexOf(u8, ct, "image/svg+xml") != null) {
         append(&hbuf, &hlen, "\r\nCache-Control: public, no-cache");
     } else {
         // Dynamic responses (API JSON, errors) carry auth-gated VM state, disk
@@ -476,6 +518,38 @@ test "httpresp: writeHttpAssetResponse serves 200 with ETag, then 304 on If-None
     try std.testing.expect(std.mem.endsWith(u8, resp3, body));
 
     if (etag_storage) |allocated| std.heap.page_allocator.free(allocated);
+}
+
+test "httpresp: writeHttpShellResponse revalidates the app shell instead of no-store" {
+    const body = "<!DOCTYPE html><title>shell</title>";
+    var etag_storage: ?[]const u8 = null;
+    defer if (etag_storage) |allocated| std.heap.page_allocator.free(allocated);
+
+    var fds1: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds1));
+    writeHttpShellResponse(fds1[1], body, &etag_storage, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    var resp_buf: [4096]u8 = undefined;
+    _ = c.close(fds1[1]);
+    const resp1 = try drainPipe(fds1[0], &resp_buf);
+    _ = c.close(fds1[0]);
+    const tag = etag_storage.?;
+    try std.testing.expect(std.mem.startsWith(u8, resp1, "HTTP/1.1 200 OK\r\n"));
+    const etag_hdr = std.mem.indexOf(u8, resp1, "ETag: ") orelse return error.MissingEtag;
+    try std.testing.expect(std.mem.startsWith(u8, resp1[etag_hdr + 6 ..], tag));
+    try std.testing.expect(std.mem.indexOf(u8, resp1, "Cache-Control: public, no-cache\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp1, "Cache-Control: no-store") == null);
+    try std.testing.expect(std.mem.endsWith(u8, resp1, body));
+
+    var fds2: [2]c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds2));
+    var req_buf: [256]u8 = undefined;
+    const req2 = try std.fmt.bufPrint(&req_buf, "GET / HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\n", .{tag});
+    writeHttpShellResponse(fds2[1], body, &etag_storage, req2);
+    _ = c.close(fds2[1]);
+    const resp2 = try drainPipe(fds2[0], &resp_buf);
+    _ = c.close(fds2[0]);
+    try std.testing.expect(std.mem.startsWith(u8, resp2, "HTTP/1.1 304 Not Modified\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, resp2, body) == null);
 }
 
 test "httpresp: failed conditional asset send logs correlated wire outcome" {

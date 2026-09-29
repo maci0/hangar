@@ -941,25 +941,41 @@ function topoSvg(res,meta){
  return s+'</svg>';
 }
 async function openTopology(){var d=document.getElementById('topodlg');if(d&&!d.open)d.showModal();await renderTopology();}
-var topoElk=null;
-const TOPO_LOAD_TIMEOUT_MS=15000;
-function ensureElk(){
- if(typeof ELK==='function')return Promise.resolve();
- if(topoElk)return topoElk;
- topoElk=new Promise(function(resolve,reject){
+// On-demand browser bundles. The layout engine, the two console clients and
+// the serial terminal add up to over a megabyte that the VM library never
+// touches, so they are fetched the first time the surface that needs them
+// opens. Concurrent callers share the pending promise; a failed or timed-out
+// load clears it so the surface's Retry button starts a fresh attempt.
+const ASSET_LOAD_TIMEOUT_MS=15000;
+const pendingAssets={};
+function ensureAsset(src,isReady){
+ if(isReady())return Promise.resolve();
+ if(pendingAssets[src])return pendingAssets[src];
+ pendingAssets[src]=new Promise(function(resolve,reject){
   var s=document.createElement('script');
-  var timer=setTimeout(function(){finish(false);},TOPO_LOAD_TIMEOUT_MS);
+  var timer=setTimeout(function(){finish(false);},ASSET_LOAD_TIMEOUT_MS);
   function finish(ok){
    clearTimeout(timer);s.onload=null;s.onerror=null;
-   if(ok){resolve();}else{s.remove();topoElk=null;reject(new Error('Failed to load /elk.js'));}
+   if(ok){resolve();}else{s.remove();delete pendingAssets[src];reject(new Error('Failed to load '+src));}
   }
-  s.src='/elk.js';s.async=true;
-  s.onload=function(){finish(typeof ELK==='function');};
+  s.src=src;s.async=true;
+  s.onload=function(){finish(isReady());};
   s.onerror=function(){finish(false);};
   document.head.appendChild(s);
  });
- return topoElk;
+ return pendingAssets[src];
 }
+function ensureStylesheet(href){
+ if(document.querySelector('link[data-asset="'+href+'"]'))return Promise.resolve();
+ return new Promise(function(resolve,reject){
+  var l=document.createElement('link');
+  l.rel='stylesheet';l.href=href;l.dataset.asset=href;
+  l.onload=function(){l.onload=null;l.onerror=null;resolve();};
+  l.onerror=function(){l.onload=null;l.onerror=null;l.remove();reject(new Error('Failed to load '+href));};
+  document.head.appendChild(l);
+ });
+}
+function ensureElk(){return ensureAsset('/elk.js',function(){return typeof ELK==='function';});}
 async function renderTopology(){
  var wrap=document.getElementById('topoWrap');if(!wrap)return;
  if(typeof ELK!=='function'){
@@ -1397,16 +1413,12 @@ function startVnc(idx, displayEl) {
   // Remove any previously-created canvas.
   var oldCanvases = displayEl.querySelectorAll('canvas');
   for (var ci = 0; ci < oldCanvases.length; ci++) { if (oldCanvases[ci].parentNode === displayEl) displayEl.removeChild(oldCanvases[ci]); }
-
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = proto + '//' + location.host + '/ws/vnc/' + idx;
-
-  try {
+  return connectConsole(idx, displayEl, 'VNC', function(){return ensureAsset('/novnc.js',function(){return !!(window.noVNC&&(noVNC.default||noVNC.RFB));});}, function(url){
     // The vendored noVNC bundle exposes the RFB class as its `default` export
     // (noVNC.default), not noVNC.RFB. Accept either so a bundle update can't
     // silently break the console again.
-    var RFBClass = (typeof noVNC !== 'undefined' && noVNC) ? (noVNC.default || noVNC.RFB) : null;
-    if (typeof RFBClass !== 'function') { showToast('VNC client failed to load','error'); return; }
+    var RFBClass=(window.noVNC&&(noVNC.default||noVNC.RFB))||null;
+    if(typeof RFBClass!=='function')throw new Error('noVNC bundle has no RFB class');
     rfb = new RFBClass(displayEl, url, {});
     rfb.addEventListener('connect', function() {
       fbReconnectDelay=1000;clearFbReconnect();
@@ -1424,9 +1436,7 @@ function startVnc(idx, displayEl) {
     });
     rfb.scaleViewport = true;
     rfb.resizeSession = true;
-  } catch (e) {
-    stopFb();
-  }
+  });
 }
 
 function startSpice(idx, displayEl, v) {
@@ -1434,12 +1444,8 @@ function startSpice(idx, displayEl, v) {
   // Remove any previously-created canvas.
   var oldCanvases = displayEl.querySelectorAll('canvas');
   for (var ci = 0; ci < oldCanvases.length; ci++) { if (oldCanvases[ci].parentNode === displayEl) displayEl.removeChild(oldCanvases[ci]); }
-
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = proto + '//' + location.host + '/ws/spice/' + idx;
-
-  try {
-    if (typeof SpiceHtml5 === 'undefined') { showToast('SPICE client failed to load','error'); return; }
+  return connectConsole(idx, displayEl, 'SPICE', function(){return ensureAsset('/spice.js',function(){return typeof SpiceHtml5!=='undefined';});}, function(url){
+    if(typeof SpiceHtml5==='undefined')throw new Error('SPICE bundle did not register');
     spice = new SpiceHtml5.SpiceMainConn({
       uri: url,
       password: '',
@@ -1455,9 +1461,35 @@ function startSpice(idx, displayEl, v) {
         startDisplayPresenter(displayEl, 'spice');
       }
     });
-  } catch (e) {
+  });
+}
+
+// Shared console-connect path: fetch the client bundle on first use, then open
+// the relay socket. A bundle that fails to load leaves the pane visible with a
+// Retry button (reconnectDisplay) instead of a silently dead display.
+function connectConsole(idx, displayEl, label, ensureClient, connect) {
+  var hint=document.getElementById('displayHint');
+  if(hint)hint.textContent='Loading '+label+' client…';
+  var ready=ensureClient();
+  return ready.then(function(){
+    // The selection may have moved (or the pane closed) while the bundle
+    // downloaded; connecting now would bind the relay to a stale VM.
+    if(sel!==idx)return;
+    if(hint)hint.textContent='';
+    var proto=location.protocol==='https:'?'wss:':'ws:';
+    var url=proto+'//'+location.host+'/ws/'+label.toLowerCase()+'/'+idx;
+    connect(url);
+  },function(){
+    if(sel!==idx)return;
+    displayEl.classList.remove('loading');
+    updateDisplayBadge('disconnected');
+    var h=document.getElementById('displayHint');
+    if(h)h.innerHTML='<strong>'+escHtml(label)+' client failed to load.</strong><button type="button" class="btn" data-action="reconnectDisplay">Retry</button>';
+  }).catch(function(e){
+    if(sel!==idx)return;
+    logDebug(label+' connect failed:',e);
     stopFb();
-  }
+  });
 }
 
 function stopFb() {
@@ -1506,18 +1538,45 @@ function scheduleSerialReconnect(){if(serialReconnectTimeoutId)return;serialReco
 function clearSerialReconnect(){if(serialReconnectTimeoutId){clearTimeout(serialReconnectTimeoutId);serialReconnectTimeoutId=null;}serialReconnectDelay=1000;}
 // xterm.js serial terminal: real ANSI emulation, bidirectional (onData →
 // guest), WebGL renderer when available (canvas/DOM fallback inside xterm).
+// The terminal bundles are ~740 KB of the initial page load for a panel most
+// sessions never open, so they load on the first serial connection.
 var serialTerm=null,serialFit=null,serialBuf='';
+function ensureXterm(){
+ return Promise.all([
+  ensureStylesheet('/xterm.css'),
+  ensureAsset('/xterm.js',function(){return typeof Terminal!=='undefined';}),
+ ]).then(function(){
+  return Promise.all([
+   ensureAsset('/xterm-fit.js',function(){return typeof FitAddon!=='undefined';}),
+   ensureAsset('/xterm-webgl.js',function(){return typeof WebglAddon!=='undefined';}),
+  ]);
+ });
+}
+function setSerialStatus(msg,isError){
+ var st=document.getElementById('serialStatus');
+ if(!st)return;
+ st.textContent=msg||'';
+ st.classList.toggle('error',!!isError);
+ if(msg&&isError)st.innerHTML=escHtml(msg)+' <button type="button" class="btn" data-action="reconnectSerial">Retry</button>';
+}
 function ensureSerialTerm(){
- if(serialTerm)return serialTerm;
- if(typeof Terminal==='undefined')return null;
- var host=document.getElementById('serialterm');if(!host)return null;
- serialTerm=new Terminal({fontSize:12,fontFamily:'ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace',cursorBlink:true,scrollback:5000,convertEol:false,theme:{background:'#101214',foreground:'#b7c5bd',cursor:'#86c89a',cursorAccent:'#101214',selectionBackground:'rgba(77,130,184,.4)'}});
- try{serialFit=new FitAddon.FitAddon();serialTerm.loadAddon(serialFit);}catch(e){}
- serialTerm.open(host);
- try{serialTerm.loadAddon(new WebglAddon.WebglAddon());}catch(e){/* GPU unavailable: xterm falls back to its DOM/canvas renderer */}
- serialTerm.onData(function(d){if(serialWs&&serialWs.readyState===WebSocket.OPEN)serialWs.send(d);});
- if(serialFit){try{serialFit.fit();}catch(e){}}
- return serialTerm;
+ if(serialTerm)return Promise.resolve(serialTerm);
+ var host=document.getElementById('serialterm');if(!host)return Promise.resolve(null);
+ setSerialStatus('Loading terminal…',false);
+ return ensureXterm().then(function(){
+  if(typeof Terminal==='undefined')throw new Error('xterm did not register');
+  serialTerm=new Terminal({fontSize:12,fontFamily:'ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace',cursorBlink:true,scrollback:5000,convertEol:false,theme:{background:'#101214',foreground:'#b7c5bd',cursor:'#86c89a',cursorAccent:'#101214',selectionBackground:'rgba(77,130,184,.4)'}});
+  try{serialFit=new FitAddon.FitAddon();serialTerm.loadAddon(serialFit);}catch(e){}
+  serialTerm.open(host);
+  try{serialTerm.loadAddon(new WebglAddon.WebglAddon());}catch(e){/* GPU unavailable: xterm falls back to its DOM/canvas renderer */}
+  serialTerm.onData(function(d){if(serialWs&&serialWs.readyState===WebSocket.OPEN)serialWs.send(d);});
+  if(serialFit){try{serialFit.fit();}catch(e){}}
+  setSerialStatus('',false);
+  return serialTerm;
+ },function(){
+  setSerialStatus('Serial terminal failed to load.',true);
+  return null;
+ });
 }
 function serialFitNow(){if(serialFit){try{serialFit.fit();}catch(e){}}}
 function startSerial(idx){if(serialManualOff&&serialManualOffVmIdx===idx)return;
@@ -1528,7 +1587,11 @@ const sameVm=(serialIdx===idx);
 stopSerial(!sameVm); /* clear terminal only when switching VMs */
 if(idx===null||idx>=vms.length)return;const v=vms[idx];if(v.status!=='running'||v.hasSerial!=='true')return;
 serialIdx=idx;const sp=document.getElementById('serialpanel');if(!sp)return;sp.style.display='block';sp.classList.add('connected');
-const t=ensureSerialTerm();if(!t)return;if(!sameVm){t.reset();serialBuf='';}
+// The terminal bundle may still be downloading; open the relay socket once it
+// is ready, unless the selection moved on in the meantime.
+ensureSerialTerm().then(function(t){
+if(!t||sel!==idx)return;
+if(!sameVm){t.reset();serialBuf='';}
 const proto=location.protocol==='https:'?'wss:':'ws:';const ws=new WebSocket(proto+'//'+location.host+'/ws/serial/'+idx);
 ws.binaryType='arraybuffer';
 serialWs=ws; // reassign before old onclose fires to avoid closing the new socket
@@ -1538,8 +1601,10 @@ ws.onmessage=e=>{var data=e.data instanceof ArrayBuffer?new Uint8Array(e.data):e
 ws.onopen=()=>{serialReconnectDelay=1000;sp.classList.add('connected');serialFitNow();};
 ws.onclose=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
 ws.onerror=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
+}); /* terminal ready */
 }
-function stopSerial(clearTerm){if(clearTerm===void 0)clearTerm=true;clearSerialReconnect();if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;if(clearTerm){if(serialTerm)serialTerm.reset();serialBuf='';}const sp=document.getElementById('serialpanel');if(sp){sp.style.display='none';sp.classList.remove('connected');}}
+function stopSerial(clearTerm){if(clearTerm===void 0)clearTerm=true;clearSerialReconnect();if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;if(clearTerm){if(serialTerm)serialTerm.reset();serialBuf='';}setSerialStatus('',false);const sp=document.getElementById('serialpanel');if(sp){sp.style.display='none';sp.classList.remove('connected');}}
+function reconnectSerial(){if(sel===null||sel>=vms.length)return;startSerial(sel);}
 function manualDisconnectSerial(){serialManualOff=true;serialManualOffVmIdx=sel!==null?sel:-1;clearSerialReconnect();stopSerial(true);}
 // (keyboard input now flows through xterm's onData)
 // Serial panel resize handle
@@ -1593,7 +1658,7 @@ var actionHandlers={
  deleteVm:function(){deleteVm();},clearSearch:function(){clearSearch();},
  newVm:function(){newVm();},createVm:function(){createVm();},
  takeSnapshotFromDlg:function(){takeSnapshotFromDlg();},
- manualDisconnectSerial:function(){manualDisconnectSerial();},
+ manualDisconnectSerial:function(){manualDisconnectSerial();},reconnectSerial:function(){reconnectSerial();},
  clearSerial:function(){if(serialTerm)serialTerm.reset();serialBuf='';},
  exportSerial:function(){if(!serialBuf)return;var blob=new Blob([serialBuf],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='hangar-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
  savePrefs:function(){savePrefs();},saveVm:function(){saveVm();},

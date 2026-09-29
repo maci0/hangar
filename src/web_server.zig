@@ -97,6 +97,7 @@ const writeAll = httpresp.writeAll;
 const jsonErr = httpresp.jsonErr;
 const writeHttpResponse = httpresp.writeHttpResponse;
 const writeHttpAssetResponse = httpresp.writeHttpAssetResponse;
+const writeHttpShellResponse = httpresp.writeHttpShellResponse;
 const sanitizeHeaderValue = httpresp.sanitizeHeaderValue;
 const isServerErrToken = httpresp.isServerErrToken;
 const jsonEscape = httpresp.jsonEscape;
@@ -704,6 +705,9 @@ fn serveHtml(conn: c.fd_t) void {
     var snap_buf: [4096]u8 = undefined;
     var response_alloc: ?[]u8 = null;
     defer if (response_alloc) |bytes| std.heap.page_allocator.free(bytes);
+    // The app shell is embedded and constant, so it bypasses the dynamic
+    // response path (below) and is written with its own revalidating ETag.
+    var serve_shell = false;
     // Held while a /api/vms poll renders into (and writes from) the shared
     // spill buffer, so its bytes cannot be reallocated mid-flight.
     var spill_held = false;
@@ -979,8 +983,7 @@ fn serveHtml(conn: c.fd_t) void {
         writeHttpAssetResponse(conn, HTTP_OK, asset.ct, asset.body, &asset.etag, req);
         return;
     } else if (std.mem.startsWith(u8, req, "GET / ")) {
-        response = index_html;
-        content_type = "text/html; charset=utf-8";
+        serve_shell = true;
     } else if (std.mem.startsWith(u8, req, "GET /favicon")) {
         content_type = "image/svg+xml";
         response =
@@ -1000,11 +1003,15 @@ fn serveHtml(conn: c.fd_t) void {
         content_type = "application/json; charset=utf-8";
     } else {
         // SPA fallback: serve the app shell for client-side routes.
-        response = index_html;
-        content_type = "text/html; charset=utf-8";
+        serve_shell = true;
     }
 
     var json_err_buf: [256]u8 = undefined;
+
+    if (serve_shell) {
+        writeHttpShellResponse(conn, index_html, &index_html_etag, req);
+        return;
+    }
 
     // Map known error strings to HTTP status codes and JSON error responses.
     // Previously returned plain text; now unified as `{"error":"..."}`.
@@ -2353,6 +2360,8 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
 }
 
 const index_html = @embedFile("web/index.html");
+/// Lazily computed strong ETag for the app shell (see writeHttpShellResponse).
+var index_html_etag: ?[]const u8 = null;
 const app_css = @embedFile("web/app.css");
 const app_js = @embedFile("web/app.js");
 const novnc_js = @embedFile("web/novnc.js");
@@ -2776,6 +2785,16 @@ test "static assets cache ETags across requests" {
         writeHttpAssetResponse(-1, HTTP_OK, asset.ct, asset.body, &asset.etag, req);
         try std.testing.expectEqual(tag.ptr, asset.etag.?.ptr);
     }
+}
+
+test "app shell revalidates with a stable ETag" {
+    const req = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    writeHttpShellResponse(-1, index_html, &index_html_etag, req);
+    const tag = index_html_etag orelse return error.MissingEtag;
+    try std.testing.expectEqual(@as(usize, 18), tag.len);
+    const first = tag.ptr;
+    writeHttpShellResponse(-1, index_html, &index_html_etag, req);
+    try std.testing.expectEqual(first, index_html_etag.?.ptr);
 }
 
 test "nameTaken: detects duplicates and honors the skip index" {
