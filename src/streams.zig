@@ -546,7 +546,7 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
         }
         const v = &appstate.vms[idx];
 
-        const export_name: []const u8 = if (name_parsed) name_buf2[0..name_parsed] else v.getNameSlice();
+        const export_name: []const u8 = if (name_parsed != 0) name_buf2[0..name_parsed] else v.getNameSlice();
         if (export_name.len > export_name_buf.len) {
             writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
             return;

@@ -172,7 +172,7 @@
 
     <!-- Tab: Console -->
     <div id="tabConsole" role="tabpanel" aria-labelledby="tab-btn-console" aria-hidden="true" style="display:none">
-    <div id="display">
+    <div id="display" role="group" aria-label="VM console" aria-describedby="displayHint">
       <div class="display-badge" id="displayBadge" aria-hidden="true"></div>
       <div class="display-toolbar" role="toolbar" aria-label="Display controls">
         <button class="display-tool" data-action="enterDisplayOnly" data-vm-action="display" title="Display only" aria-label="Display only"><svg class="ico" aria-hidden="true"><use href="#i-maximize"/></svg></button>
@@ -193,7 +193,7 @@
         <button class="btn" data-action="manualDisconnectSerial">Disconnect</button>
       </div>
     </div>
-      <div id="consoleHint"></div>
+      <div id="consoleHint" role="status" aria-live="polite"></div>
     </div>
 
     <!-- Tab: Summary -->
@@ -236,9 +236,10 @@
      so the status bar's frequent passive updates (uptime, VM counts) stay silent. -->
 <div id="statusannounce" class="sr-only" role="status" aria-live="polite"></div>
 
-<!-- Toast Container: each toast carries its own role (status/alert) so it announces
-     exactly once with the right urgency; the container itself is not a live region. -->
-<div id="toast-container"></div>
+<!-- Toast Container: the container is the live region. A live region must be in
+     the accessibility tree before its content changes, so a per-toast role set on
+     a node that is created already filled announces nothing. -->
+<div id="toast-container" role="log" aria-live="polite" aria-relevant="additions"></div>
 
 <!-- ═══ Dialogs ═══ -->
 
@@ -294,12 +295,12 @@
 <dialog id="snapdlg" aria-label="Snapshot Manager">
   <h3>Snapshot Manager</h3>
   <div style="padding:16px 20px">
-    <div id="snapMeta" class="dialog-meta"></div>
+    <div id="snapMeta" class="dialog-meta" role="status" aria-live="polite"></div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
       <div style="flex:1"><label for="s_tag">Snapshot name</label><input id="s_tag" type="text" placeholder="e.g. Before update" style="width:100%;margin-top:4px"></div>
       <button type="button" class="btn primary" data-action="takeSnapshotFromDlg">Take</button>
     </div>
-    <div id="snaplist" class="snapshot-list"></div>
+    <div id="snaplist" class="snapshot-list" role="status" aria-live="polite"></div>
   </div>
   <div class="btn-row">
     <button type="button" class="btn" data-action="closeDlg" data-dialog="snapdlg">Close</button>

@@ -230,10 +230,10 @@ aside input#search::-webkit-search-cancel-button{-webkit-appearance:none;appeara
 .search-wrap .clear-btn{
   position:absolute;
   right:12px;
-  top:10px;
+  top:1px;
   display:none;
-  width:22px;
-  height:22px;
+  width:24px;
+  height:24px;
   padding:0;
   border:0;
   border-radius:var(--radius-sm);
@@ -289,7 +289,7 @@ aside .vm-item .dot{
 aside .vm-item .dot.running{background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb,var(--success) 16%,transparent);animation:dot-breathe 2.6s ease-in-out infinite}
 aside .vm-item .dot.paused{background:var(--pause);box-shadow:0 0 0 3px color-mix(in srgb,var(--pause) 16%,transparent)}
 aside .vm-item .dot.suspended{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 16%,transparent)}
-aside .vm-item .star{padding:2px;border:0;background:transparent;font-size:11px;line-height:1;color:var(--text-dim);cursor:pointer;border-radius:var(--radius-sm)}
+aside .vm-item .star{min-width:24px;min-height:24px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;background:transparent;font-size:11px;line-height:1;color:var(--text-dim);cursor:pointer;border-radius:var(--radius-sm)}
 aside .vm-item .star.fav{color:var(--accent-3)}
 aside .vm-item .star .ico{width:12px;height:12px}
 aside .vm-item .star.fav .ico{fill:currentColor;stroke:currentColor}
@@ -929,7 +929,7 @@ main #loadbar{position:absolute}
 }
 .toast .toast-icon{display:inline-flex;align-items:center;justify-content:center}
 .toast .toast-msg{flex:1;overflow-wrap:anywhere}
-.toast .toast-action{padding:3px 9px;border:1px solid var(--accent);border-radius:var(--radius-sm);background:transparent;color:var(--accent);font-size:11px;font-weight:700;text-transform:uppercase}
+.toast .toast-action{min-height:24px;padding:5px 9px;border:1px solid var(--accent);border-radius:var(--radius-sm);background:transparent;color:var(--accent);font-size:11px;font-weight:700;text-transform:uppercase}
 .toast .toast-action:hover{background:var(--accent);color:var(--text-on-accent)}
 .toast.success{border-left-color:var(--success)}.toast.success .toast-icon{color:var(--success)}
 .toast.error{border-left-color:var(--danger)}.toast.error .toast-icon{color:var(--danger)}
@@ -1063,7 +1063,7 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
   #toast-container{right:8px;left:8px}.toast{max-width:none}
 }
 @media(pointer:coarse){
-  .btn,.menu-item,.ctx-item,.toolbar-more-popover .btn,.settings-nav-item,.snapshot-actions .btn,.display-tool,.search-wrap .clear-btn,.sidebar-header .select-toggle{min-height:44px}
+  .btn,.menu-item,.ctx-item,.toolbar-more-popover .btn,.settings-nav-item,.snapshot-actions .btn,.display-tool,.search-wrap .clear-btn,.sidebar-header .select-toggle,.toast .toast-action{min-height:44px}
   .search-wrap .clear-btn,.sidebar-header .select-toggle{min-width:44px}
   .tab-btn{min-height:44px;display:inline-flex;align-items:center}
   .hamburger{min-width:44px;min-height:44px}
