@@ -14,9 +14,14 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   decorative gradients or colored shadows.
 - Vendored libs: `novnc.js`, `spice.js`, `elk.js`, `van.js` (vanjs-core, ESM export
   converted to `window.van`), `xterm.js`/`xterm.css`/`xterm-fit.js`/`xterm-webgl.js`
-  (@xterm UMD builds), `favicon.svg`. Each is `@embedFile`'d, served at `/novnc.js`
+  (@xterm UMD builds). Each is `@embedFile`'d, served at `/novnc.js`
   etc, and listed in `auth.isAuthExempt`. All except `van.js` load on demand
   (see On-demand bundles); none of them is a `<script>` in `index.html`.
+  - `favicon.svg` is hand-written, not vendored: it is the same mark as
+    `.sidebar-header .logo` and the About dialog emblem (flat `--accent` fill,
+    `--radius` corner, one "H"), pinned to a literal color because a favicon
+    resolves no page stylesheet. Keep it that mark; a gradient tile or a letter
+    in a different face breaks the one surface every window shows.
   - **Provenance:** every bundle starts with a header comment naming package@version
     + license + vendor date. Versions for `elk`/`van`/`xterm*` are pinned as exact
     devDependencies in `../../package.json` (+ `bun.lock`); re-vendor by bumping there,
@@ -36,10 +41,17 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   `--font-mono`, and the 5/8/11px `--radius-sm` / `--radius` / `--radius-lg`
   scale. Never hardcode a radius, an inset gray, or a font stack in a rule or a
   `style=` attribute, and never write a fallback like
-  `var(--inset,rgba(127,127,127,.18))` for a token `:root` already owns. The sans
-  is the platform UI stack on purpose: this is a desktop-style operator console,
-  not a document surface, and a webfont would render unlike the surrounding
-  desktop.
+  `var(--inset,rgba(127,127,127,.18))` for a token `:root` already owns, and never
+  name a token that does not exist (`--mono` is not `--font-mono`).
+- **`--text` / `--text-muted` / `--text-dim` are three distinct steps**, not one
+  color spelled twice. Keep them ordered by emphasis and at least 4.5:1 against
+  every surface the step lands on (`--bg`, `--bg-alt`, `--surface`, `--surface-2`;
+  `--surface-3` only ever carries `--text`). Collapsing two steps into the same
+  gray removes the hierarchy the type scale depends on, so a change that merges
+  them is a regression even when nothing looks wrong.
+- **The sans is the platform UI stack on purpose**: this is a desktop-style
+  operator console, not a document surface, and a webfont would render unlike the
+  surrounding desktop.
 - **Iconography is the inline sprite set.** Every control uses a `#i-*` symbol
   via `<svg class="ico"><use href="#..."/></svg>`. A control that shows state
   (the theme toggle) swaps the `<use href>` between symbols; it never replaces

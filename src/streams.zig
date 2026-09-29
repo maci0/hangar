@@ -513,7 +513,7 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
     // 64 KB, and scanning it under the global VM lock stalls every other
     // handler for work that touches no shared state.
     var name_buf2: [vm.MAX_NAME]u8 = undefined;
-    var name_parsed: usize = 0;
+    var parsed_name_len: usize = 0;
     {
         idx = parseIdx(req, "POST /api/vms/") orelse {
             writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad index\"}");
@@ -534,7 +534,7 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
                 writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
                 return;
             }
-            name_parsed = decoded.len;
+            parsed_name_len = decoded.len;
         }
     }
     {
@@ -546,7 +546,7 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
         }
         const v = &appstate.vms[idx];
 
-        const export_name: []const u8 = if (name_parsed > 0) name_buf2[0..name_parsed] else v.getNameSlice();
+        const export_name: []const u8 = if (parsed_name_len > 0) name_buf2[0..parsed_name_len] else v.getNameSlice();
         if (export_name.len > export_name_buf.len) {
             writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"invalid name\"}");
             return;
