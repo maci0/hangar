@@ -48,7 +48,24 @@ fn parseTag(req: []const u8, decode_buf: []u8) error{Token}![]const u8 {
     return decoded;
 }
 
-pub fn take(req: []const u8) ![]const u8 {
+/// What a snapshot mutation is called in the audit log and which token it
+/// returns on failure. `take` predates `delete` in the HTTP API and its token
+/// is `create err`, so the two are not interchangeable.
+const Op = struct {
+    const take: Op = .{ .label = "snapshot take", .err_token = "create err", .live = qmp.QmpClient.saveSnapshot, .offline = qemu.snapshotCreate };
+    const delete: Op = .{ .label = "snapshot delete", .err_token = "delete err", .live = qmp.QmpClient.deleteSnapshot, .offline = qemu.snapshotDelete };
+
+    label: []const u8,
+    err_token: []const u8,
+    /// Applies to a running VM through the QMP monitor (its qcow2 is write-locked).
+    live: *const fn (*qmp.QmpClient, []const u8) anyerror!void,
+    /// Applies to a stopped VM's image with `qemu-img`.
+    offline: *const fn ([]const u8, []const u8, std.mem.Allocator) anyerror!void,
+};
+
+/// Take or delete a snapshot. Captures the tag, name and disk path under
+/// vms_mutex, then runs the (blocking) QMP or qemu-img work with it released.
+fn mutate(op: Op, req: []const u8) ![]const u8 {
     var decode_buf: [MAX_TAG_LEN + 1]u8 = undefined;
     var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
     var name_buf: [vm.MAX_NAME]u8 = undefined;
@@ -64,16 +81,15 @@ pub fn take(req: []const u8) ![]const u8 {
         if (!v.hasDisk()) return "no disk";
         const decoded = parseTag(req, &decode_buf) catch return "no name";
         const nm = v.getNameSlice();
-        if (nm.len > name_buf.len) return "create err";
+        if (nm.len > name_buf.len) return op.err_token;
         @memcpy(name_buf[0..nm.len], nm);
         name_len = nm.len;
         was_alive = v.isAlive();
         if (was_alive) {
-            // Live VM: savevm via the running QMP monitor (qcow2 is write-locked).
-            if (!qmp.isPathSafeName(nm)) return "create err";
+            if (!qmp.isPathSafeName(nm)) return op.err_token;
         } else {
             const dp = v.getDiskPathSlice();
-            if (dp.len == 0 or dp.len >= disk_buf.len) return "create err";
+            if (dp.len == 0 or dp.len >= disk_buf.len) return op.err_token;
             @memcpy(disk_buf[0..dp.len], dp);
             disk_len = dp.len;
         }
@@ -83,24 +99,32 @@ pub fn take(req: []const u8) ![]const u8 {
     if (was_alive) {
         var client = qmp.QmpClient{};
         var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse return "create err";
+        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse return op.err_token;
         client.connect(sock) catch |e| {
-            logOpErr("snapshot take", e, name_buf[0..name_len]);
-            return "create err";
+            logOpErr(op.label, e, name_buf[0..name_len]);
+            return op.err_token;
         };
         defer client.disconnect();
-        client.saveSnapshot(decoded) catch |e| {
-            logOpErr("snapshot take", e, name_buf[0..name_len]);
-            return "create err";
+        op.live(&client, decoded) catch |e| {
+            logOpErr(op.label, e, name_buf[0..name_len]);
+            return op.err_token;
         };
     } else {
-        qemu.snapshotCreate(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot take", e, name_buf[0..name_len]);
-            return "create err";
+        op.offline(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
+            logOpErr(op.label, e, name_buf[0..name_len]);
+            return op.err_token;
         };
     }
-    logAudit("snapshot take", name_buf[0..name_len]);
+    logAudit(op.label, name_buf[0..name_len]);
     return "ok";
+}
+
+pub fn take(req: []const u8) ![]const u8 {
+    return mutate(.take, req);
+}
+
+pub fn delete(req: []const u8) ![]const u8 {
+    return mutate(.delete, req);
 }
 
 pub fn list(req: []const u8, raw_buf: []u8) []const u8 {
@@ -190,60 +214,6 @@ pub fn revert(req: []const u8) ![]const u8 {
         return "apply err";
     };
     logAudit("snapshot revert", name_buf[0..name_len]);
-    return "ok";
-}
-
-pub fn delete(req: []const u8) ![]const u8 {
-    var decode_buf: [MAX_TAG_LEN + 1]u8 = undefined;
-    var disk_buf: [vm.MAX_PATH + 1]u8 = undefined;
-    var name_buf: [vm.MAX_NAME]u8 = undefined;
-    var disk_len: usize = 0;
-    var name_len: usize = 0;
-    var was_alive = false;
-    const decoded = blk: {
-        appstate.vms_mutex.lock();
-        defer appstate.vms_mutex.unlock();
-        const idx = parseIdx(req, "POST /api/vms/") orelse return "invalid";
-        if (idx >= appstate.vm_count) return "invalid idx";
-        const v = &appstate.vms[idx];
-        if (!v.hasDisk()) return "no disk";
-        const decoded = parseTag(req, &decode_buf) catch return "no name";
-        const nm = v.getNameSlice();
-        if (nm.len > name_buf.len) return "delete err";
-        @memcpy(name_buf[0..nm.len], nm);
-        name_len = nm.len;
-        was_alive = v.isAlive();
-        if (was_alive) {
-            if (!qmp.isPathSafeName(nm)) return "delete err"; // delvm via QMP
-        } else {
-            const dp = v.getDiskPathSlice();
-            if (dp.len == 0 or dp.len >= disk_buf.len) return "delete err";
-            @memcpy(disk_buf[0..dp.len], dp);
-            disk_len = dp.len;
-        }
-        break :blk decoded;
-    };
-
-    if (was_alive) {
-        var client = qmp.QmpClient{};
-        var sock_buf: [256]u8 = undefined;
-        const sock = qmp.socketPath(name_buf[0..name_len], &sock_buf) orelse return "delete err";
-        client.connect(sock) catch |e| {
-            logOpErr("snapshot delete", e, name_buf[0..name_len]);
-            return "delete err";
-        };
-        defer client.disconnect();
-        client.deleteSnapshot(decoded) catch |e| {
-            logOpErr("snapshot delete", e, name_buf[0..name_len]);
-            return "delete err";
-        };
-    } else {
-        qemu.snapshotDelete(disk_buf[0..disk_len], decoded, std.heap.page_allocator) catch |e| {
-            logOpErr("snapshot delete", e, name_buf[0..name_len]);
-            return "delete err";
-        };
-    }
-    logAudit("snapshot delete", name_buf[0..name_len]);
     return "ok";
 }
 

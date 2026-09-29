@@ -158,6 +158,44 @@ pub fn screenshot(conn: c.fd_t, req: []const u8) void {
     logAudit("screenshot", name_buf[0..name_len]);
 }
 
+/// Write the `200 OK` attachment headers for `fd`'s size, then copy `fd` to
+/// `conn` until EOF. `filename` is sanitized before it reaches the header, so
+/// a VM name or disk path can never inject a header field. The caller keeps
+/// ownership of `fd`. Returns error.BrokenPipe if a socket write fails; returns
+/// without sending anything if the size or the headers are unavailable.
+fn sendFileAttachment(conn: c.fd_t, fd: c.fd_t, filename: []const u8) !void {
+    const seek_end = c.lseek(fd, 0, 2); // SEEK_END
+    if (seek_end < 0) return;
+    const file_size: u64 = @intCast(seek_end);
+    if (c.lseek(fd, 0, 0) < 0) return; // SEEK_SET
+
+    var fname_buf: [256]u8 = undefined;
+    const safename = sanitizeHeaderValue(&fname_buf, filename);
+    var cd_header: [512]u8 = undefined;
+    const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{safename}) catch return;
+
+    var hdr_buf: [1024]u8 = undefined;
+    const headers = std.fmt.bufPrint(
+        &hdr_buf,
+        "HTTP/1.1 200 OK\r\n" ++
+            "Content-Type: application/octet-stream\r\n" ++
+            "X-Content-Type-Options: nosniff\r\n" ++
+            "Cache-Control: no-store\r\n" ++
+            "Content-Disposition: {s}\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n\r\n",
+        .{ cd, file_size },
+    ) catch return;
+    if (!writeAll(conn, headers.ptr, headers.len)) return error.BrokenPipe;
+
+    var buf: [65536]u8 = undefined;
+    while (true) {
+        const n = c.read(fd, &buf, buf.len);
+        if (n <= 0) break;
+        if (!writeAll(conn, &buf, @intCast(n))) return error.BrokenPipe;
+    }
+}
+
 /// Stream a VM's secondary-disk (disk2) image to the client as a download.
 /// Captures the path + name under the lock, then streams with it released.
 pub fn download(conn: c.fd_t, req: []const u8) !void {
@@ -207,37 +245,8 @@ pub fn download(conn: c.fd_t, req: []const u8) !void {
     }
     defer _ = c.close(fd);
 
-    const seek_end = c.lseek(fd, 0, 2); // SEEK_END
-    if (seek_end < 0) return;
-    const file_size: u64 = @intCast(seek_end);
-    if (c.lseek(fd, 0, 0) < 0) return; // SEEK_SET
-
     const basename = std.fs.path.basename(std.mem.span(disk2_path));
-    var fname_buf: [256]u8 = undefined;
-    const safename = sanitizeHeaderValue(&fname_buf, basename);
-    var cd_header: [512]u8 = undefined;
-    const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{safename}) catch return;
-
-    var hdr_buf: [1024]u8 = undefined;
-    const headers = std.fmt.bufPrint(
-        &hdr_buf,
-        "HTTP/1.1 200 OK\r\n" ++
-            "Content-Type: application/octet-stream\r\n" ++
-            "X-Content-Type-Options: nosniff\r\n" ++
-            "Cache-Control: no-store\r\n" ++
-            "Content-Disposition: {s}\r\n" ++
-            "Content-Length: {d}\r\n" ++
-            "Connection: close\r\n\r\n",
-        .{ cd, file_size },
-    ) catch return;
-    if (!writeAll(conn, headers.ptr, headers.len)) return error.BrokenPipe;
-
-    var buf: [65536]u8 = undefined;
-    while (true) {
-        const n = c.read(fd, &buf, buf.len);
-        if (n <= 0) break;
-        if (!writeAll(conn, &buf, @intCast(n))) return error.BrokenPipe;
-    }
+    try sendFileAttachment(conn, fd, basename);
     logAudit("disk2 download", name_buf[0..name_len]);
 }
 
@@ -682,37 +691,8 @@ pub fn exportOva(conn: c.fd_t, req: []const u8) !void {
     if (tar_fd < 0) return;
     defer _ = c.close(tar_fd);
 
-    const seek_end = c.lseek(tar_fd, 0, 2);
-    if (seek_end < 0) return;
-    const file_size: u64 = @intCast(seek_end);
-    if (c.lseek(tar_fd, 0, 0) < 0) return;
-
     const raw_filename = std.fmt.bufPrint(&path_buf, "{s}.ova", .{export_name}) catch "export.ova";
-    var fname_buf2: [256]u8 = undefined;
-    const filename = sanitizeHeaderValue(&fname_buf2, raw_filename);
-    var cd_header: [512]u8 = undefined;
-    const cd = std.fmt.bufPrint(&cd_header, "attachment; filename=\"{s}\"", .{filename}) catch return;
-
-    var hdr_buf: [1024]u8 = undefined;
-    const headers = std.fmt.bufPrint(
-        &hdr_buf,
-        "HTTP/1.1 200 OK\r\n" ++
-            "Content-Type: application/octet-stream\r\n" ++
-            "X-Content-Type-Options: nosniff\r\n" ++
-            "Cache-Control: no-store\r\n" ++
-            "Content-Disposition: {s}\r\n" ++
-            "Content-Length: {d}\r\n" ++
-            "Connection: close\r\n\r\n",
-        .{ cd, file_size },
-    ) catch return;
-    if (!writeAll(conn, headers.ptr, headers.len)) return error.BrokenPipe;
-
-    var buf: [65536]u8 = undefined;
-    while (true) {
-        const n = c.read(tar_fd, &buf, buf.len);
-        if (n <= 0) break;
-        if (!writeAll(conn, &buf, @intCast(n))) return error.BrokenPipe;
-    }
+    try sendFileAttachment(conn, tar_fd, raw_filename);
 
     std.Io.Dir.cwd().deleteTree(appio.io(), dir_path) catch {
         logErr("export cleanup deleteTree failed");
