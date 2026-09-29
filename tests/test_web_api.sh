@@ -12,11 +12,11 @@ TMP_HOME=""
 TMP_CONFIG=""
 
 cleanup() {
-    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+    if [[ -n "$PID" ]] && kill -0 "$PID" 2>/dev/null; then
         kill "$PID" 2>/dev/null || true
         wait "$PID" 2>/dev/null || true
     fi
-    if [ -n "$TMP_HOME" ]; then
+    if [[ -n "$TMP_HOME" ]]; then
         rm -rf "$TMP_HOME"
     fi
 }
@@ -54,12 +54,12 @@ cd "$(dirname "$0")/.."
 zig build
 
 # Start server on custom port
-if ! [ -x "$BINARY" ]; then
+if ! [[ -x "$BINARY" ]]; then
     echo "FAIL: binary not found: $BINARY"
     exit 1
 fi
 
-if [ -z "$PORT" ]; then
+if [[ -z "$PORT" ]]; then
     PORT="$(pick_port)"
 fi
 TMP_HOME="$(mktemp -d)"
@@ -73,7 +73,7 @@ export HANGAR_CONFIG_HOME="$TMP_CONFIG"
 expect_invalid_startup() {
     local variable="$1" value="$2" binary="${3:-$BINARY}" status=0 output
     output=$(env -u KV_API_KEY KV_PORT=9080 "$variable=$value" timeout 3 "$binary" 2>&1) || status=$?
-    if [ "$status" -eq 1 ] && [[ "$output" == *"$variable"* ]]; then
+    if [[ "$status" -eq 1 && "$output" == *"$variable"* ]]; then
         echo "  PASS: ${binary##*/}: $variable rejected before reading VM configuration"
         PASS=$((PASS + 1))
     else
@@ -91,9 +91,9 @@ for executable in "$BINARY" "${BINARY}ui"; do
     done
 done
 rm "$TMP_CONFIG/.config/hangar/vms.json"
-if [ "${1:-}" = "--startup-only" ]; then
+if [[ "${1:-}" = "--startup-only" ]]; then
     echo "Startup validation: $PASS passed, $FAIL failed"
-    [ "$FAIL" -eq 0 ]
+    [[ "$FAIL" -eq 0 ]]
     exit
 fi
 
@@ -107,7 +107,7 @@ expect_status() {
     local desc="$1" url="$2" expected="$3"
     local actual
     actual=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$url" 2>/dev/null || echo "000")
-    if [ "$actual" = "$expected" ]; then
+    if [[ "$actual" = "$expected" ]]; then
         echo "  PASS: $desc (HTTP $actual)"
         PASS=$((PASS + 1))
     else
@@ -144,7 +144,7 @@ expect_post() {
     resp=$(curl -s -X POST --max-time 3 -w "\n%{http_code}" -H "X-API-Key: hangar" -d "$data" "$url" 2>/dev/null || printf "\n000")
     actual="${resp##*$'\n'}"
     body="${resp%$'\n'*}"
-    if [ "$actual" = "200" ] && echo "$body" | grep -qF "$expected_body"; then
+    if [[ "$actual" = "200" ]] && echo "$body" | grep -qF "$expected_body"; then
         echo "  PASS: $desc"
         PASS=$((PASS + 1))
     else
@@ -229,6 +229,6 @@ echo "============================================"
 
 cleanup
 
-if [ "$FAIL" -gt 0 ]; then
+if [[ "$FAIL" -gt 0 ]]; then
     exit 1
 fi

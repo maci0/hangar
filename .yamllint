@@ -13,4 +13,3 @@ rules:
     max: 120
   # Single-document workflow files; the `---` start marker carries no meaning.
   document-start: disable
-  comments-indentation: disable

@@ -13,11 +13,11 @@ PID=""
 TMP_HOME=""
 
 cleanup() {
-    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+    if [[ -n "$PID" ]] && kill -0 "$PID" 2>/dev/null; then
         kill "$PID" 2>/dev/null || true
         wait "$PID" 2>/dev/null || true
     fi
-    [ -n "$TMP_HOME" ] && rm -rf "$TMP_HOME"
+    [[ -n "$TMP_HOME" ]] && rm -rf "$TMP_HOME"
     rm -f /tmp/hangar-daemon.sock
 }
 trap cleanup EXIT INT TERM
@@ -57,8 +57,8 @@ expect_fails() {
 echo "=== Building ==="
 cd "$(dirname "$0")/.." || exit 1
 zig build || exit 1
-[ -x "$WEB" ] || { echo "FAIL: $WEB not built"; exit 1; }
-[ -x "$VMRUN" ] || { echo "FAIL: $VMRUN not built"; exit 1; }
+[[ -x "$WEB" ]] || { echo "FAIL: $WEB not built"; exit 1; }
+[[ -x "$VMRUN" ]] || { echo "FAIL: $VMRUN not built"; exit 1; }
 
 PORT="$(pick_port)"
 TMP_HOME="$(mktemp -d)"
@@ -123,4 +123,4 @@ echo ""
 echo "============================================"
 echo "Results: $PASS passed, $FAIL failed"
 echo "============================================"
-[ "$FAIL" -eq 0 ]
+[[ "$FAIL" -eq 0 ]]
