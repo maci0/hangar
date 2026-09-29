@@ -51,6 +51,15 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   stacking overrides and the reduced-motion block.
 - **Stat tiles are not interactive.** `.dash-card` carries no hover transform;
   reserve elevation-on-hover for things that can be pressed.
+- **Every composite follows the ARIA keyboard pattern.** `role="menu"`
+  containers hold `role="menuitem"` children (the More popover's clones set the
+  role too) and move focus with Arrow/Home/End, returning it to the trigger on
+  Escape. `role="tablist"` and the VM listbox use a roving `tabindex`: exactly
+  one item is `0` (the selected one, or the first row when nothing is selected),
+  the rest are `-1`. A control that only works by pointer gets a keyboard
+  equivalent too: `#serialResize` is a `role="separator"` with Arrow (16px,
+  Shift 48px) and Home/End. `renderList` restores focus to the row or folder
+  header that had it, because the 5s poll replaces the list wholesale.
 
 - **UI patterns** (keep consistent when adding surfaces): menu items are
   `<button class="menu-item">` with a leading 13px `.ico` sprite svg and trailing `…`

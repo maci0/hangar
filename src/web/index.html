@@ -110,47 +110,47 @@
     <button class="btn toolbar-more" data-action="toggleToolbarMore" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"><svg class="ico" aria-hidden="true"><use href="#i-more"/></svg></button>
     <div class="toolbar-more-popover" role="menu" aria-label="More actions"></div>
     <div id="powerMenu" class="action-menu" role="menu" aria-label="Power actions">
-      <button class="menu-item" data-action="powerToggle" data-vm-action="power-on"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Power On</button>
-      <button class="menu-item" data-action="shutdownGuest" data-vm-action="shutdown"><svg class="ico" aria-hidden="true"><use href="#i-power"/></svg>Shut Down Guest</button>
-      <button class="menu-item" data-action="suspendGuest" data-vm-action="suspend"><svg class="ico" aria-hidden="true"><use href="#i-import"/></svg>Suspend</button>
-      <button class="menu-item" data-action="pauseGuest" data-vm-action="pause"><svg class="ico" aria-hidden="true"><use href="#i-pause"/></svg>Pause</button>
-      <button class="menu-item" data-action="resumeGuest" data-vm-action="resume"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Resume</button>
+      <button role="menuitem" class="menu-item" data-action="powerToggle" data-vm-action="power-on"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Power On</button>
+      <button role="menuitem" class="menu-item" data-action="shutdownGuest" data-vm-action="shutdown"><svg class="ico" aria-hidden="true"><use href="#i-power"/></svg>Shut Down Guest</button>
+      <button role="menuitem" class="menu-item" data-action="suspendGuest" data-vm-action="suspend"><svg class="ico" aria-hidden="true"><use href="#i-import"/></svg>Suspend</button>
+      <button role="menuitem" class="menu-item" data-action="pauseGuest" data-vm-action="pause"><svg class="ico" aria-hidden="true"><use href="#i-pause"/></svg>Pause</button>
+      <button role="menuitem" class="menu-item" data-action="resumeGuest" data-vm-action="resume"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Resume</button>
       <span class="menu-sep" aria-hidden="true"></span>
-      <button class="menu-item danger" data-action="resetGuest" data-vm-action="reset"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>Reset</button>
-      <button class="menu-item danger" data-action="powerToggle" data-vm-action="hard-power"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>Power Off</button>
+      <button role="menuitem" class="menu-item danger" data-action="resetGuest" data-vm-action="reset"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>Reset</button>
+      <button role="menuitem" class="menu-item danger" data-action="powerToggle" data-vm-action="hard-power"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>Power Off</button>
     </div>
     <div id="snapshotMenu" class="action-menu" role="menu" aria-label="Snapshot actions">
-      <button class="menu-item" data-action="takeSnapshot" data-vm-action="snapshot"><svg class="ico" aria-hidden="true"><use href="#i-snapshot"/></svg>Take Snapshot…</button>
-      <button class="menu-item" data-action="openSnapshots" data-vm-action="snapshot"><svg class="ico" aria-hidden="true"><use href="#i-grid"/></svg>Snapshot Manager…</button>
+      <button role="menuitem" class="menu-item" data-action="takeSnapshot" data-vm-action="snapshot"><svg class="ico" aria-hidden="true"><use href="#i-snapshot"/></svg>Take Snapshot…</button>
+      <button role="menuitem" class="menu-item" data-action="openSnapshots" data-vm-action="snapshot"><svg class="ico" aria-hidden="true"><use href="#i-grid"/></svg>Snapshot Manager…</button>
     </div>
     <div id="devicesMenu" class="action-menu" role="menu" aria-label="Device actions">
-      <button class="menu-item" data-action="changeCd" data-vm-action="settings"><svg class="ico" aria-hidden="true"><use href="#i-disc"/></svg>Change CD/DVD ISO…</button>
-      <button class="menu-item" data-action="ejectCd" data-vm-action="settings"><svg class="ico" aria-hidden="true"><use href="#i-eject"/></svg>Eject CD/DVD</button>
+      <button role="menuitem" class="menu-item" data-action="changeCd" data-vm-action="settings"><svg class="ico" aria-hidden="true"><use href="#i-disc"/></svg>Change CD/DVD ISO…</button>
+      <button role="menuitem" class="menu-item" data-action="ejectCd" data-vm-action="settings"><svg class="ico" aria-hidden="true"><use href="#i-eject"/></svg>Eject CD/DVD</button>
       <div class="menu-sep" role="separator"></div>
-      <button class="menu-item" data-action="sendCad" data-vm-action="cad"><svg class="ico" aria-hidden="true"><use href="#i-keyboard"/></svg>Send Ctrl+Alt+Del</button>
-      <button class="menu-item" data-action="reconnectDisplay" data-vm-action="display"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>Reconnect Display</button>
-      <button class="menu-item" data-action="enterDisplayOnly" data-vm-action="display"><svg class="ico" aria-hidden="true"><use href="#i-maximize"/></svg>Display Only</button>
-      <button class="menu-item" data-action="manualDisconnectSerial" data-vm-action="serial"><svg class="ico" aria-hidden="true"><use href="#i-terminal"/></svg>Disconnect Serial</button>
+      <button role="menuitem" class="menu-item" data-action="sendCad" data-vm-action="cad"><svg class="ico" aria-hidden="true"><use href="#i-keyboard"/></svg>Send Ctrl+Alt+Del</button>
+      <button role="menuitem" class="menu-item" data-action="reconnectDisplay" data-vm-action="display"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>Reconnect Display</button>
+      <button role="menuitem" class="menu-item" data-action="enterDisplayOnly" data-vm-action="display"><svg class="ico" aria-hidden="true"><use href="#i-maximize"/></svg>Display Only</button>
+      <button role="menuitem" class="menu-item" data-action="manualDisconnectSerial" data-vm-action="serial"><svg class="ico" aria-hidden="true"><use href="#i-terminal"/></svg>Disconnect Serial</button>
     </div>
     <div id="toolsMenu" class="action-menu" role="menu" aria-label="Tools">
-      <button class="menu-item" data-action="renameGuest" data-vm-action="rename"><svg class="ico" aria-hidden="true"><use href="#i-edit"/></svg>Rename…</button>
-      <button class="menu-item" data-action="moveToFolder" data-vm-action="rename"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg>Move to Folder…</button>
-      <button class="menu-item" data-action="cloneGuest" data-vm-action="clone"><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg>Clone…</button>
-      <button class="menu-item" data-action="migrateGuest" data-vm-action="migrate"><svg class="ico" aria-hidden="true"><use href="#i-migrate"/></svg>Migrate…</button>
-      <button class="menu-item" data-action="exportOvf" data-vm-action="export"><svg class="ico" aria-hidden="true"><use href="#i-export"/></svg>Export to OVF</button>
-      <button class="menu-item" data-action="importGuest"><svg class="ico" aria-hidden="true"><use href="#i-import"/></svg>Import VM…</button>
+      <button role="menuitem" class="menu-item" data-action="renameGuest" data-vm-action="rename"><svg class="ico" aria-hidden="true"><use href="#i-edit"/></svg>Rename…</button>
+      <button role="menuitem" class="menu-item" data-action="moveToFolder" data-vm-action="rename"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg>Move to Folder…</button>
+      <button role="menuitem" class="menu-item" data-action="cloneGuest" data-vm-action="clone"><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg>Clone…</button>
+      <button role="menuitem" class="menu-item" data-action="migrateGuest" data-vm-action="migrate"><svg class="ico" aria-hidden="true"><use href="#i-migrate"/></svg>Migrate…</button>
+      <button role="menuitem" class="menu-item" data-action="exportOvf" data-vm-action="export"><svg class="ico" aria-hidden="true"><use href="#i-export"/></svg>Export to OVF</button>
+      <button role="menuitem" class="menu-item" data-action="importGuest"><svg class="ico" aria-hidden="true"><use href="#i-import"/></svg>Import VM…</button>
       <span class="menu-sep" aria-hidden="true"></span>
-      <button class="menu-item" data-action="openCatalog"><svg class="ico" aria-hidden="true"><use href="#i-grid"/></svg>VM Catalog…</button>
-      <button class="menu-item" data-action="openVnets"><svg class="ico" aria-hidden="true"><use href="#i-net"/></svg>Virtual Network Editor…</button>
-      <button class="menu-item" data-action="openPrefs"><svg class="ico" aria-hidden="true"><use href="#i-gear"/></svg>Preferences…</button>
-      <button class="menu-item" data-action="showShortcutsModal"><svg class="ico" aria-hidden="true"><use href="#i-keyboard"/></svg>Keyboard Shortcuts</button>
-      <button class="menu-item" data-action="openAbout"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>About Hangar</button>
+      <button role="menuitem" class="menu-item" data-action="openCatalog"><svg class="ico" aria-hidden="true"><use href="#i-grid"/></svg>VM Catalog…</button>
+      <button role="menuitem" class="menu-item" data-action="openVnets"><svg class="ico" aria-hidden="true"><use href="#i-net"/></svg>Virtual Network Editor…</button>
+      <button role="menuitem" class="menu-item" data-action="openPrefs"><svg class="ico" aria-hidden="true"><use href="#i-gear"/></svg>Preferences…</button>
+      <button role="menuitem" class="menu-item" data-action="showShortcutsModal"><svg class="ico" aria-hidden="true"><use href="#i-keyboard"/></svg>Keyboard Shortcuts</button>
+      <button role="menuitem" class="menu-item" data-action="openAbout"><svg class="ico" aria-hidden="true"><use href="#i-info"/></svg>About Hangar</button>
     </div>
     <div id="dangerMenu" class="action-menu" role="menu" aria-label="Advanced actions">
-      <button class="menu-item" data-action="batchStart" data-vm-action="batch-start"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Power On All Stopped</button>
-      <button class="menu-item danger" data-action="batchStop" data-vm-action="batch-stop"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>Power Off All Running</button>
+      <button role="menuitem" class="menu-item" data-action="batchStart" data-vm-action="batch-start"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>Power On All Stopped</button>
+      <button role="menuitem" class="menu-item danger" data-action="batchStop" data-vm-action="batch-stop"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>Power Off All Running</button>
       <span class="menu-sep" aria-hidden="true"></span>
-      <button class="menu-item danger" data-action="deleteVm" data-vm-action="delete"><svg class="ico" aria-hidden="true"><use href="#i-trash"/></svg>Delete VM</button>
+      <button role="menuitem" class="menu-item danger" data-action="deleteVm" data-vm-action="delete"><svg class="ico" aria-hidden="true"><use href="#i-trash"/></svg>Delete VM</button>
     </div>
   </div>
 
@@ -162,9 +162,9 @@
       <span id="vmemblem" class="vm-emblem" hidden></span>
       <h1 id="vmname">Select a VM</h1>
       <div id="tabBar" class="tab-bar" role="tablist" aria-label="VM views" style="display:none">
-        <button id="tab-btn-console" class="tab-btn" data-action="switchTab" data-tab="console" role="tab" aria-controls="tabConsole" aria-selected="false">Console</button>
+        <button id="tab-btn-console" class="tab-btn" data-action="switchTab" data-tab="console" role="tab" tabindex="-1" aria-controls="tabConsole" aria-selected="false">Console</button>
         <button id="tab-btn-summary" class="tab-btn active" data-action="switchTab" data-tab="summary" role="tab" aria-controls="tabSummary" aria-selected="true">Summary</button>
-        <button id="tab-btn-settings" class="tab-btn" data-action="switchTab" data-tab="settings" role="tab" aria-controls="tabSettings" aria-selected="false">Settings</button>
+        <button id="tab-btn-settings" class="tab-btn" data-action="switchTab" data-tab="settings" role="tab" tabindex="-1" aria-controls="tabSettings" aria-selected="false">Settings</button>
       </div>
     </div>
 
@@ -183,7 +183,7 @@
     <div id="serialpanel">
       <div id="serialStatus" role="status" aria-live="polite"></div>
       <div id="serialterm" role="group" aria-label="Serial console terminal"></div>
-      <div class="serial-resize-handle" id="serialResize" title="Drag to resize" aria-hidden="true"></div>
+      <div class="serial-resize-handle" id="serialResize" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize serial console" aria-valuemin="60" aria-valuemax="600" aria-valuenow="240" title="Drag to resize"></div>
       <div class="serial-toolbar">
         <button class="btn" data-action="clearSerial">Clear</button>
         <button class="btn" data-action="exportSerial">Export</button>

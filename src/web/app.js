@@ -113,21 +113,21 @@ function isMobileSidebar(){return window.matchMedia('(max-width:900px)').matches
 function syncSidebarButton(){const btn=document.querySelector('.hamburger');const aside=document.querySelector('aside');var expanded=isMobileSidebar()?sidebarOpen:!document.body.classList.contains('sidebar-collapsed');if(btn){btn.setAttribute('aria-expanded',expanded?'true':'false');btn.setAttribute('aria-label',expanded?'Collapse VM Library':'Expand VM Library');}if(aside){aside.toggleAttribute('inert',!expanded);aside.setAttribute('aria-hidden',expanded?'false':'true');}}
 function toggleSidebar(){const aside=document.querySelector('aside');if(isMobileSidebar()){sidebarOpen=!sidebarOpen;if(aside){if(sidebarOpen){aside.classList.add('open');document.body.classList.add('sidebar-overlay');}else{aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}}}else{sidebarOpen=false;if(aside)aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');document.body.classList.toggle('sidebar-collapsed');}syncSidebarButton();}
 function closeSidebar(){if(!isMobileSidebar()){syncSidebarButton();return;}if(!sidebarOpen)return;sidebarOpen=false;const aside=document.querySelector('aside');if(aside){aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}syncSidebarButton();}
-var toolbarMoreOpen=false;
+var toolbarMoreOpen=false,toolbarMoreTrigger=null;
 function toggleToolbarMore(){toolbarMoreOpen=!toolbarMoreOpen;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');
 if(tb){if(toolbarMoreOpen){tb.classList.add('open-more');}else{tb.classList.remove('open-more');}}
 if(btn)btn.setAttribute('aria-expanded',toolbarMoreOpen?'true':'false');
-if(popover){if(toolbarMoreOpen){populateToolbarMore(popover);positionToolbarMore(popover,btn);popover.classList.add('open');}else{popover.classList.remove('open');}}
+if(popover){if(toolbarMoreOpen){populateToolbarMore(popover);positionToolbarMore(popover,btn);popover.classList.add('open');toolbarMoreTrigger=btn;var first=popover.querySelector('.btn:not([disabled])');if(first)first.focus();}else{popover.classList.remove('open');}}
 }
-function populateToolbarMore(popover){popover.innerHTML='';const tb=document.querySelector('.toolbar');if(!tb)return;const children=tb.querySelectorAll('.btn:not(.keep-mobile):not(.toolbar-more):not(.theme-toggle-btn), .sep');children.forEach(function(el){if(el.classList.contains('sep')){const clone=document.createElement('span');clone.className='sep';popover.appendChild(clone);return;}if(!el.matches('.btn:not(.keep-mobile)'))return;const clone=document.createElement('button');clone.className='btn';if(el.classList.contains('danger-menu'))clone.classList.add('danger');clone.innerHTML=el.innerHTML||escHtml(el.getAttribute('title')||el.getAttribute('aria-label')||'');clone.setAttribute('data-action',el.getAttribute('data-action')||'');['data-menu','data-vm-action','aria-haspopup','aria-controls','aria-expanded'].forEach(function(a){var v=el.getAttribute(a);if(v!==null)clone.setAttribute(a,v);});popover.appendChild(clone);});updateCommandState();}
+function populateToolbarMore(popover){popover.innerHTML='';const tb=document.querySelector('.toolbar');if(!tb)return;const children=tb.querySelectorAll('.btn:not(.keep-mobile):not(.toolbar-more):not(.theme-toggle-btn), .sep');children.forEach(function(el){if(el.classList.contains('sep')){const clone=document.createElement('span');clone.className='sep';clone.setAttribute('aria-hidden','true');popover.appendChild(clone);return;}if(!el.matches('.btn:not(.keep-mobile)'))return;const clone=document.createElement('button');clone.className='btn';clone.setAttribute('role','menuitem');if(el.classList.contains('danger-menu'))clone.classList.add('danger');clone.innerHTML=el.innerHTML||escHtml(el.getAttribute('title')||el.getAttribute('aria-label')||'');clone.setAttribute('data-action',el.getAttribute('data-action')||'');['data-menu','data-vm-action','aria-haspopup','aria-controls','aria-expanded'].forEach(function(a){var v=el.getAttribute(a);if(v!==null)clone.setAttribute(a,v);});popover.appendChild(clone);});updateCommandState();}
 function positionToolbarMore(popover,btn){if(!btn)return;var r=btn.getBoundingClientRect();popover.style.top='0px';popover.style.left='0px';popover.style.right='auto';popover.style.bottom='auto';var base=popover.getBoundingClientRect();var top=r.bottom+6-base.top;var pr=popover.getBoundingClientRect();var desiredLeft=Math.max(8,Math.min(r.right-pr.width,window.innerWidth-pr.width-8));popover.style.top=top+'px';popover.style.left=(desiredLeft-base.left)+'px';}
-function closeToolbarMore(){if(!toolbarMoreOpen)return;toolbarMoreOpen=false;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');if(tb)tb.classList.remove('open-more');if(btn)btn.setAttribute('aria-expanded','false');if(popover)popover.classList.remove('open');}
+function closeToolbarMore(returnFocus){if(!toolbarMoreOpen)return;toolbarMoreOpen=false;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');if(tb)tb.classList.remove('open-more');if(btn)btn.setAttribute('aria-expanded','false');if(popover)popover.classList.remove('open');const trig=toolbarMoreTrigger;toolbarMoreTrigger=null;if(returnFocus&&trig)trig.focus();}
 function closeActionMenus(returnFocus){var menus=document.querySelectorAll('.action-menu.open');for(var i=0;i<menus.length;i++)menus[i].classList.remove('open');var btns=document.querySelectorAll('[data-action="toggleActionMenu"]');for(var j=0;j<btns.length;j++)btns[j].setAttribute('aria-expanded','false');openActionMenu=null;var trig=actionMenuTrigger;actionMenuTrigger=null;if(returnFocus&&trig)trig.focus();} // returnFocus: keyboard (Escape) returns focus to the trigger; click-outside callers omit it
 function positionActionMenu(menu,btn){if(!menu||!btn)return;var r=btn.getBoundingClientRect();menu.style.top='0px';menu.style.left='0px';menu.style.right='auto';var base=menu.getBoundingClientRect();var mr=menu.getBoundingClientRect();var desiredLeft=Math.max(8,Math.min(r.left,window.innerWidth-mr.width-8));menu.style.top=(r.bottom+6-base.top)+'px';menu.style.left=(desiredLeft-base.left)+'px';}
 function toggleActionMenu(btn){if(!btn)return;var id=btn.getAttribute('data-menu');var menu=id?document.getElementById(id):null;if(!menu)return;if(openActionMenu===id){closeActionMenus();return;}closeActionMenus();menu.classList.add('open');btn.setAttribute('aria-expanded','true');openActionMenu=id;actionMenuTrigger=btn;positionActionMenu(menu,btn);updateCommandState();var firstItem=menu.querySelector('.menu-item:not([disabled])');if(firstItem)firstItem.focus();}
 function clearSearch(){var s=document.getElementById('search');if(!s)return;s.value='';filterList();}
 var settingsDirty=false;
-function syncTabPanels(){var panelIds={console:'tabConsole',summary:'tabSummary',settings:'tabSettings'};var btns=document.querySelectorAll('.tab-btn');for(var bi=0;bi<btns.length;bi++){var on=btns[bi].getAttribute('data-tab')===activeTab;btns[bi].classList.toggle('active',on);btns[bi].setAttribute('aria-selected',on?'true':'false');}
+function syncTabPanels(){var panelIds={console:'tabConsole',summary:'tabSummary',settings:'tabSettings'};var btns=document.querySelectorAll('.tab-btn');for(var bi=0;bi<btns.length;bi++){var on=btns[bi].getAttribute('data-tab')===activeTab;btns[bi].classList.toggle('active',on);btns[bi].setAttribute('aria-selected',on?'true':'false');btns[bi].setAttribute('tabindex',on?'0':'-1');} // roving tabindex: one tab stop for the tablist
 for(var k in panelIds){var p=document.getElementById(panelIds[k]);if(!p)continue;var show=k===activeTab;p.style.display=show?'block':'none';p.setAttribute('aria-hidden',show?'false':'true');}}
 async function switchTab(tab){if(activeTab===tab)return;
 if(activeTab==='settings'&&tab!=='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}
@@ -135,9 +135,9 @@ var panelIds={console:'tabConsole',summary:'tabSummary',settings:'tabSettings'};
 var oldEl=document.getElementById(panelIds[activeTab]||'tabSummary');
 activeTab=tab;
 var s=document.getElementById('tabSummary');var st=document.getElementById('tabSettings');var co=document.getElementById('tabConsole');
-const btns=document.querySelectorAll('.tab-btn');btns.forEach(b=>{b.classList.remove('active');b.setAttribute('aria-selected','false');});
+const btns=document.querySelectorAll('.tab-btn');btns.forEach(b=>{b.classList.remove('active');b.setAttribute('aria-selected','false');b.setAttribute('tabindex','-1');});
 var newEl=tab==='settings'?st:(tab==='console'?co:s);
-for(var bi=0;bi<btns.length;bi++){if(btns[bi].getAttribute('data-tab')===tab){btns[bi].classList.add('active');btns[bi].setAttribute('aria-selected','true');}}
+for(var bi=0;bi<btns.length;bi++){if(btns[bi].getAttribute('data-tab')===tab){btns[bi].classList.add('active');btns[bi].setAttribute('aria-selected','true');btns[bi].setAttribute('tabindex','0');}}
 if(!newEl)return;
 if(oldEl){oldEl.style.display='none';oldEl.setAttribute('aria-hidden','true');newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
 else{newEl.style.display='block';newEl.setAttribute('aria-hidden','false');}
@@ -167,7 +167,15 @@ async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[se
   var r=await apiPost('/api/vms/'+sel,'folder='+encodeURIComponent(f));
   if(r){await refresh();setStatus(f?('Moved to '+escHtml(f)):'Removed from folder');}}
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const search=document.getElementById('search');const f=(filter===undefined?(search?search.value:''):(filter||'')).toLowerCase();let h='';
+// The list is replaced wholesale by the 5s poll; without this a keyboard user's
+// focus lands on <body> mid-interaction and arrow navigation stops working.
+const act=document.activeElement;
+const keepRow=act&&act.closest?act.closest('#vmlist [data-vm-index],#vmlist .folder-hdr'):null;
+const keepIdx=keepRow&&keepRow.classList.contains('vm-item')?keepRow.getAttribute('data-vm-index'):null;
+const keepFolder=keepRow&&keepRow.classList.contains('folder-hdr')?keepRow.getAttribute('data-folder'):null;
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f)||(v.tags||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
+const firstVisible=viz.find(x=>x.show);
+const rovingIdx=String(sel!==null?sel:(firstVisible?firstVisible.i:-1));
 let hasFavs=false,hasNon=false,maxMem=16384;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;const m=x.v.mem||0;if(m>maxMem)maxMem=m;}
 function vmBars(v){var cpu=Number(v.cpu)||1;var ramTxt=memText(v.mem);return '<div class="vm-meta" aria-hidden="true">'+escHtml(cpu)+' vCPU · '+escHtml(ramTxt)+'</div>';}
 function vmItemHtml(x){
@@ -175,7 +183,10 @@ function vmItemHtml(x){
  const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
  const star=x.fav?'<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></button>':'<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites"><svg class="ico" aria-hidden="true"><use href="#i-star"/></svg></button>';
  const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-id="'+escHtml(x.v.id)+'"'+(checkedIds.has(x.v.id)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
- return '<div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="option" aria-selected="'+(sel===x.i?'true':'false')+'" data-vm-index="'+x.i+'" tabindex="0" data-action="select" draggable="true" title="'+escHtml(x.v.name)+'">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'" title="'+dotLabel+'"></span> '+escHtml(x.v.name)+star+vmBars(x.v)+'</div>';
+ // Roving tabindex: the listbox is one tab stop. The selected row is that stop;
+ // with nothing selected the first rendered row takes it so Tab still reaches the list.
+ const ti=String(x.i)===rovingIdx?'0':'-1';
+ return '<div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="option" aria-selected="'+(sel===x.i?'true':'false')+'" data-vm-index="'+x.i+'" tabindex="'+ti+'" data-action="select" draggable="true" title="'+escHtml(x.v.name)+'">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'" title="'+dotLabel+'"></span> '+escHtml(x.v.name)+star+vmBars(x.v)+'</div>';
 }
 for(const x of viz){if(!x.show||!x.fav)continue;h+=vmItemHtml(x);}
 if(hasFavs&&hasNon)h+='<div role="separator" aria-hidden="true" style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
@@ -189,6 +200,8 @@ for(const fld of order){const open=folderOpen(fld);
 for(const x of ungrouped)h+=vmItemHtml(x);
 if(!h){if(f)h='<div class="sidebar-empty"><p>No matching VMs</p><button class="btn" data-action="clearSearch">Clear search</button></div>';else h='<div class="sidebar-empty"><p>No virtual machines yet</p><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>New VM</button></div>';}
 e.innerHTML=h;
+if(keepIdx!==null){var kr=e.querySelector('.vm-item[data-vm-index="'+keepIdx+'"]');if(kr)kr.focus();}
+else if(keepFolder!==null){var kf=e.querySelector('.folder-hdr[data-folder="'+CSS.escape(keepFolder)+'"]');if(kf)kf.focus();}
 updateBulkBar();
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+(cnt===1?' virtual machine':' virtual machines');if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
@@ -1037,11 +1050,11 @@ document.addEventListener('keydown',async function(e){var shift=e.shiftKey;
 if((e.ctrlKey||e.metaKey)&&e.key==='s'&&activeTab==='settings'&&sel!==null){e.preventDefault();saveVm();return;}
 if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K')){e.preventDefault();openPalette();return;}
 if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
-if(openActionMenu&&(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Home'||e.key==='End')){var om=document.getElementById(openActionMenu);if(om&&om.contains(e.target)){e.preventDefault();var its=Array.prototype.slice.call(om.querySelectorAll('.menu-item:not([disabled])'));if(!its.length)return;var ci=its.indexOf(e.target);var ni;if(e.key==='Home')ni=0;else if(e.key==='End')ni=its.length-1;else if(e.key==='ArrowDown')ni=ci<0?0:(ci+1)%its.length;else ni=ci<=0?its.length-1:ci-1;its[ni].focus();return;}}
+if(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Home'||e.key==='End'){var om=openActionMenu?document.getElementById(openActionMenu):(toolbarMoreOpen?document.querySelector('.toolbar-more-popover'):null);if(om&&om.contains(e.target)){e.preventDefault();var its=Array.prototype.slice.call(om.querySelectorAll('[role="menuitem"]:not([disabled])'));if(!its.length)return;var ci=its.indexOf(e.target);var ni;if(e.key==='Home')ni=0;else if(e.key==='End')ni=its.length-1;else if(e.key==='ArrowDown')ni=ci<0?0:(ci+1)%its.length;else ni=ci<=0?its.length-1:ci-1;its[ni].focus();return;}}
 if(e.key==='ArrowUp'||e.key==='ArrowDown'){var listEl=document.getElementById('vmlist');if(listEl&&listEl.contains(e.target)){e.preventDefault();var dir=e.key==='ArrowUp'?-1:1;var idx=sel===null?(dir<0?vms.length-1:0):Math.max(0,Math.min(vms.length-1,sel+dir));Promise.resolve(select(idx)).then(function(){var ni=document.querySelector('#vmlist .vm-item[data-vm-index="'+idx+'"]');if(ni)ni.focus();});return;}}
 if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&e.target.closest('[role="tablist"]')){var tabs=Array.from(document.querySelectorAll('.tab-btn:not([disabled])'));var cur=tabs.indexOf(e.target);if(cur<0)return;e.preventDefault();var next=cur+(e.key==='ArrowRight'?1:-1);if(next<0)next=tabs.length-1;if(next>=tabs.length)next=0;switchTab(tabs[next].getAttribute('data-tab')||'summary');tabs[next].focus();return;}
 if(e.key==='Escape'){
-  if(openActionMenu||toolbarMoreOpen||ctxMenu){closeActionMenus(true);closeToolbarMore();hideCtxMenu();return;}
+  if(openActionMenu||toolbarMoreOpen||ctxMenu){closeActionMenus(true);closeToolbarMore(true);hideCtxMenu();return;}
   var anyOpen=false;var openDlgs=document.querySelectorAll('dialog[open]');for(var di=0;di<openDlgs.length;di++){openDlgs[di].close();anyOpen=true;}
   if(!anyOpen&&document.body.classList.contains('displayonly')){exitDisplayOnly();return;}
   if(!anyOpen&&sel!==null){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}sel=null;renderList();showEmptyState();}
@@ -1637,6 +1650,31 @@ function manualDisconnectSerial(){serialManualOff=true;serialManualOffVmIdx=sel!
     document.body.style.userSelect = '';
     refit();
   });
+  // Keyboard equivalent for the drag handle: arrows resize in steps, Home/End
+  // jump to the limits. Without it the pane height is pointer-only.
+  function syncHandleValue(){
+    var h=Math.round(term.offsetHeight);
+    if(!handle.getAttribute('aria-valuenow')||Math.abs(Number(handle.getAttribute('aria-valuenow'))-h)>1){
+      handle.setAttribute('aria-valuenow',String(h));
+      handle.setAttribute('aria-valuetext',h+' pixels');
+    }
+  }
+  function setHeight(h){
+    term.style.height=Math.max(60,Math.min(600,h))+'px';
+    syncHandleValue();
+    refit();
+  }
+  handle.addEventListener('keydown', function(e) {
+    var h=term.offsetHeight, step=e.shiftKey?48:16, handled=true;
+    if(e.key==='ArrowUp')setHeight(h-step);
+    else if(e.key==='ArrowDown')setHeight(h+step);
+    else if(e.key==='Home')setHeight(600);
+    else if(e.key==='End')setHeight(60);
+    else handled=false;
+    if(handled)e.preventDefault();
+  });
+  handle.addEventListener('focus',syncHandleValue);
+  syncHandleValue();
 })();
 var filterTimer=null;
 // ── Event Delegation (CSP-safe: no inline handlers) ──
