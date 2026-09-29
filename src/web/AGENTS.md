@@ -40,7 +40,10 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
   never `/power`, so duplicate delivery cannot reverse the requested state. Capture
   the toolbar's intended state before confirmation and re-resolve its VM afterward.
 - **RAM capacity**: compare committed and physical memory in exact MiB; round only
-  display labels, never the quantities used for overcommit or gauge ratios.
+  display labels, never the quantities used for overcommit or gauge ratios. Every
+  memory label goes through `memText(mb)` (or `memGiB(mb)` for a bare number):
+  the daemon sends MiB, the `/1024` step is binary, so a scaled value is `GiB`.
+  Never hand-roll a memory conversion or label a MiB total "GB".
 - **Library search**: list redraws preserve the search input's current query.
 - **VM uptime**: display the daemon's monotonic `uptime_sec`, including zero.
   Never subtract `started` from the browser clock; omit unavailable durations.

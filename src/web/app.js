@@ -162,7 +162,7 @@ async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[se
 function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const search=document.getElementById('search');const f=(filter===undefined?(search?search.value:''):(filter||'')).toLowerCase();let h='';
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f)||(v.tags||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
 let hasFavs=false,hasNon=false,maxMem=16384;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;const m=x.v.mem||0;if(m>maxMem)maxMem=m;}
-function vmBars(v){var cpu=Number(v.cpu)||1;var mb=Number(v.mem)||0;var ramTxt=mb>=1024?(Math.round(mb/102.4)/10+' GB'):(mb+' MB');return '<div class="vm-meta" aria-hidden="true">'+escHtml(cpu)+' vCPU · '+escHtml(ramTxt)+'</div>';}
+function vmBars(v){var cpu=Number(v.cpu)||1;var ramTxt=memText(v.mem);return '<div class="vm-meta" aria-hidden="true">'+escHtml(cpu)+' vCPU · '+escHtml(ramTxt)+'</div>';}
 function vmItemHtml(x){
  const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
  const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
@@ -215,7 +215,7 @@ function publishVms(){if(window.van){if(!vmsState){vmsState=van.state(vms.slice(
 function fetchHost(){if(!window.van)return;if(!hostState)hostState=van.state({cpu_cores:0,ram_mb:0});try{fetch('/api/host').then(function(r){return r.json();}).then(function(h){hostState.val={cpu_cores:h.cpu_cores||0,ram_mb:h.ram_mb||0};}).catch(function(){});}catch(e){}}
 function dashStats(list){var st={running:0,stopped:0,paused:0,suspended:0},vcpu=0,ram=0,disk=0,att=[];
  for(var i=0;i<list.length;i++){var v=list[i];st[v.status]=(st[v.status]||0)+1;vcpu+=Number(v.cpu)||0;ram+=Number(v.mem)||0;disk+=Number(v.disk)||0;if(summaryWarnings(v)!=='')att.push(v.name);}
- return {st:st,vcpu:vcpu,ramMB:ram,ramGB:Math.round(ram/102.4)/10,disk:disk,att:att,count:list.length};}
+ return {st:st,vcpu:vcpu,ramMB:ram,ramGB:memGiB(ram),disk:disk,att:att,count:list.length};}
 var DASH_COLS=[['name','Name'],['status','State'],['os','Guest OS'],['cpu','vCPU'],['mem','RAM'],['disk','Disk'],['folder','Folder'],['tags','Tags']];
 function DashView(){
  var t=van.tags;
@@ -233,7 +233,7 @@ function DashView(){
  return t.div({class:'dash'},
   t.div({class:'dash-head'},t.h2('Inventory'),t.span({class:'muted'},function(){var c=vmsState.val.length;return c+' virtual machine'+(c===1?'':'s');})),
   t.div({class:'cap-panel',style:function(){return (physCpu()||physRamMb())?'':'display:none';}},
-   t.div({class:'cap-panel-head'},t.h3('Host Capacity'),t.span({class:'muted'},function(){return physCpu()+' cores · '+(Math.round(physRamMb()/102.4)/10)+' GiB RAM';})),
+   t.div({class:'cap-panel-head'},t.h3('Host Capacity'),t.span({class:'muted'},function(){return physCpu()+' cores · '+memGiB(physRamMb())+' GiB RAM';})),
    gauge('vCPU committed',function(){return dashStats(vmsState.val).vcpu;},physCpu,'vCPU'),
    gauge('RAM committed',function(){return dashStats(vmsState.val).ramMB;},physRamMb,'MiB')),
   t.div({class:'dash-cards'},
@@ -243,7 +243,7 @@ function DashView(){
    card(function(){return String(dashStats(vmsState.val).st.suspended||0);},'Suspended','suspended')),
   t.div({class:'dash-cards'},
    card(function(){return String(dashStats(vmsState.val).vcpu);},'vCPU allocated',''),
-   card(function(){return dashStats(vmsState.val).ramGB+' GB';},'RAM allocated',''),
+   card(function(){return dashStats(vmsState.val).ramGB+' GiB';},'RAM allocated',''),
    card(function(){return dashStats(vmsState.val).disk+' GB';},'Disk provisioned','')),
   function(){var att=dashStats(vmsState.val).att;
    return att.length?t.div({class:'dash-attention'},t.h3('Needs attention'),t.ul(att.map(function(n){return t.li(n);}))):t.div();},
@@ -253,7 +253,7 @@ function DashView(){
     rows.sort(function(a,b){var c=so.col,d=so.dir,x=a.v[c],y=b.v[c];
      if(c==='cpu'||c==='mem'||c==='disk'){return ((Number(x)||0)-(Number(y)||0))*d;}
      x=(x||'').toString().toLowerCase();y=(y||'').toString().toLowerCase();return x<y?-d:x>y?d:0;});
-    return t.tbody(rows.map(function(r){var v=r.v;var mt=Number(v.mem)>=1024?(Math.round(Number(v.mem)/102.4)/10)+' GB':v.mem+' MB';
+    return t.tbody(rows.map(function(r){var v=r.v;var mt=escHtml(memText(v.mem));
      return t.tr({'data-action':'select','data-vm-index':String(r.i),tabindex:'0'},
       t.td({class:'inv-name'},v.name),
       t.td(t.span({class:'sdot '+v.status}),statusLabel(v.status)),
@@ -275,11 +275,11 @@ function hostDashboardHtml(){
   for(var i=0;i<vms.length;i++){var v=vms[i];st[v.status]=(st[v.status]||0)+1;
     vcpu+=Number(v.cpu)||0;ram+=Number(v.mem)||0;disk+=Number(v.disk)||0;
     if(summaryWarnings(v)!=='')attention.push(v.name);}
-  var ramGB=Math.round(ram/102.4)/10;
+  var ramGB=memGiB(ram);
   function card(n,l,cls){return '<div class="dash-card"><div class="dash-num '+(cls||'')+'">'+n+'</div><div class="dash-lbl">'+l+'</div></div>';}
   var h='<div class="dash"><div class="dash-head"><h2>Inventory</h2><span class="muted">'+vms.length+' virtual machine'+(vms.length===1?'':'s')+'</span></div>';
   h+='<div class="dash-cards">'+card(st.running||0,'Running','running')+card(st.stopped||0,'Stopped','')+card(st.paused||0,'Paused','paused')+card(st.suspended||0,'Suspended','suspended')+'</div>';
-  h+='<div class="dash-cards">'+card(vcpu,'vCPU allocated')+card(ramGB+' GB','RAM allocated')+card(disk+' GB','Disk provisioned')+'</div>';
+  h+='<div class="dash-cards">'+card(vcpu,'vCPU allocated')+card(ramGB+' GiB','RAM allocated')+card(disk+' GB','Disk provisioned')+'</div>';
   if(attention.length){h+='<div class="dash-attention"><h3>Needs attention</h3><ul>';for(var a=0;a<attention.length;a++)h+='<li>'+escHtml(attention[a])+'</li>';h+='</ul></div>';}
   // Sortable inventory table (vSphere "VMs" grid). Rows reuse the select handler.
   var cols=DASH_COLS;
@@ -290,7 +290,7 @@ function hostDashboardHtml(){
   h+='<div class="inv-wrap"><table class="inv"><thead><tr>';
   cols.forEach(function(c){var ar=dashSort.col===c[0]?(dashSort.dir>0?' ▲':' ▼'):'';h+='<th data-action="sortInv" data-col="'+c[0]+'" tabindex="0" role="button">'+c[1]+ar+'</th>';});
   h+='</tr></thead><tbody>';
-  rows.forEach(function(r){var v=r.v;var mt=Number(v.mem)>=1024?(Math.round(Number(v.mem)/102.4)/10)+' GB':(escHtml(v.mem)+' MB');
+  rows.forEach(function(r){var v=r.v;var mt=escHtml(memText(v.mem));
     h+='<tr data-action="select" data-vm-index="'+r.i+'" tabindex="0">';
     h+='<td class="inv-name">'+escHtml(v.name)+'</td>';
     h+='<td><span class="sdot '+v.status+'"></span>'+escHtml(statusLabel(v.status))+'</td>';
@@ -330,7 +330,7 @@ var ch=document.getElementById('consoleHint');
 if(ch){if(embeddedDisplayCapable(v)){ch.innerHTML=v.status==='running'?'':'<div class="console-empty"><strong>'+escHtml(v.name)+' is powered off.</strong><span>Power on the VM to open its console here.</span></div>';}
 else{ch.innerHTML='<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(info.displayLabel)+' QEMU window.</span></div>';}}
 function row(l,vv,ic){var icon=ic?'<svg class="srow-ico" aria-hidden="true"><use href="#'+ic+'"/></svg>':'';return '<div class="srow"><dt>'+icon+l+'</dt><dd>'+vv+'</dd></div>';}
-const memTxt=Number(v.mem)>=1024?(Math.round(Number(v.mem)/102.4)/10)+' GB':escHtml(v.mem)+' MB';
+const memTxt=escHtml(memText(v.mem));
 let h='<div class="vm-facts">';
 h+='<span class="fact-badge '+sc+'">'+escHtml(statusLabel(v.status))+'</span>';
 h+='<span class="fact">'+escHtml(v.os)+'</span>';
@@ -342,7 +342,7 @@ h+='</div><div class="summary-sections">';
 // VM Hardware
 h+='<section class="sum-section"><h3>VM Hardware</h3><dl class="sum-dl">';
 h+=row('CPU',escHtml(v.cpu)+(Number(v.cpu)===1?' core':' cores')+(Number(v.cpu_sockets)>1?' · '+escHtml(v.cpu_sockets)+' sockets':''),'i-cpu');
-h+=row('Memory',escHtml(v.mem)+' MB','i-ram');
+h+=row('Memory',escHtml(memText(v.mem)),'i-ram');
 h+=row('Hard Disk',escHtml(v.disk)+' GB'+(v.hasDisk==='true'?'<div class="usage" id="diskUsageVal">…</div>':''),'i-hdd');
 if(v.hasDisk2==='true')h+=row('Disk 2',escHtml(v.disk2_size)+' GB');
 ['extra0','extra1','extra2','extra3'].forEach(function(k,i){if(v[k+'_path'])h+=row('Extra Disk '+(i+1),escHtml(v[k+'_size'])+' GB');});
@@ -680,6 +680,11 @@ async function uploadDisk2(){const idx=sel;if(idx===null)return;const inp=docume
 if(!file)return;const fd=new FormData();fd.append('disk2',file);setStatus('Uploading Disk 2 for "'+vms[idx].name+'"...');try{const r=await fetch('/api/vms/'+idx+'/disk2',{method:'POST',body:fd,headers:{'X-API-Key':API_KEY}});if(!r.ok){var em=await r.text().catch(function(){return'';});try{var j=JSON.parse(em);if(j.error)em=j.error;}catch(e){}throw new Error(em||'HTTP '+r.status);}await refresh();setStatus('Disk 2 uploaded successfully.');if(sel===idx)editVm();}catch(e){setStatus('Upload failed: '+e.message);showToast('Disk 2 upload failed: '+e.message,'error');}};inp.click();}
 function downloadDisk2(){if(sel===null)return;const a=document.createElement('a');a.href='/api/vms/'+sel+'/disk2/download';a.download=vms[sel].name+'_disk2.qcow2';document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);},1000);}
 function fmtBytes(n){if(!Number.isFinite(n)||n<0)return'?';const u=['B','KiB','MiB','GiB','TiB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++;}return(i===0?x:x.toFixed(1))+' '+u[i];}
+// Memory arrives from the daemon in MiB. Every memory label goes through these
+// two helpers: the /1024 step is a binary multiple, so a scaled value is GiB,
+// never a decimal "GB" (same convention as fmtBytes).
+function memGiB(mb){return Math.round((Number(mb)||0)/1024*10)/10;}
+function memText(mb){var n=Number(mb)||0;return n>=1024?memGiB(n)+' GiB':n+' MiB';}
 async function loadGuestInfo(idx){const el=document.getElementById('guestIpVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/guestinfo',{headers:{'X-API-Key':API_KEY}});if(!r.ok)throw 0;const j=await r.json();if(sel===idx&&document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent=(j.ips&&j.ips.length)?j.ips:'unavailable, guest agent not running';}catch(e){if(document.getElementById('guestIpVal'))document.getElementById('guestIpVal').textContent='unavailable';}}
 async function loadDiskInfo(idx){const el=document.getElementById('diskUsageVal');if(!el)return;try{const r=await fetch('/api/vms/'+idx+'/diskinfo');if(!r.ok)throw 0;const j=await r.json();if(j.error)throw 0;if(sel===idx&&document.getElementById('diskUsageVal')){var pct=j.virtual_bytes>0?Math.min(100,Math.round(j.actual_bytes/j.virtual_bytes*100)):0;document.getElementById('diskUsageVal').innerHTML='<div class="ubar"><span style="width:'+pct+'%"></span></div><div class="ubar-txt">'+fmtBytes(j.actual_bytes)+' used / '+fmtBytes(j.virtual_bytes)+' ('+pct+'%)</div>';}}catch(e){if(document.getElementById('diskUsageVal'))document.getElementById('diskUsageVal').textContent='unavailable';}}
 async function takeScreenshot(){if(sel===null)return;try{const r=await fetch('/api/vms/'+sel+'/screenshot',{headers:{'X-API-Key':API_KEY}});if(!r.ok){let t='';try{const j=await r.json();t=j.error||'';}catch(e){}showToast('Screenshot failed: '+(t||('HTTP '+r.status)),'error');return;}const b=await r.blob();const u=URL.createObjectURL(b);window.open(u,'_blank');setTimeout(function(){URL.revokeObjectURL(u);},10000);}catch(e){showToast('Screenshot failed','error');}}
@@ -691,7 +696,7 @@ async function resizeDisk(){if(sel===null)return;const v=vms[sel];if(v.status!==
 let vnetsData=[],vnetIdx=-1;
 async function openVnets(){await loadVnets();var vd=document.getElementById('vnetdlg');if(vd)vd.showModal();}
 async function loadVnets(){try{const r=await fetch('/api/networks');if(r.ok){vnetsData=await r.json();}else{vnetsData={networks:[]};logDebug('Failed to load VNets:',r.status);}}catch(e){vnetsData={networks:[]};logDebug('Failed to load VNets:',e);}renderVnetList();}
-function netAccent(type){t=(type||'').toLowerCase();
+function netAccent(type){var t=(type||'').toLowerCase();
  if(t==='nat')return 'var(--network-nat)';
  if(t==='bridged')return 'var(--network-bridged)';
  if(t==='host_only'||t==='host-only')return 'var(--network-host-only)';
@@ -775,7 +780,6 @@ function openAbout(){var ad=document.getElementById('aboutdlg');if(ad)ad.showMod
 async function openCatalog(){var cd=document.getElementById('catalogdlg');if(!cd)return;var list=document.getElementById('catalogList');if(list)list.innerHTML='<div class="spinner" style="padding:20px;text-align:center">Loading catalog…</div>';cd.showModal();try{var r=await fetch('/api/catalog');if(!r.ok){if(list)list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">Failed to load catalog.</p>';return;}var entries=await r.json();if(!list)return;if(!entries||!entries.length){list.innerHTML='<p style="color:var(--text-muted);padding:20px;text-align:center">No templates available.</p>';return;}var guestOsLabels=['Linux','Windows','FreeBSD','macOS','Other'];
 // Distro/OS visual identity: accent color + monogram for the card emblem.
 function catalogBrand(e){var fam=['Linux','Windows','FreeBSD','macOS','Other'][e.guest_os]||'';return osBrand((e.name||'')+' '+(e.id||''),fam);}
-function gb(mb){return Number(mb)>=1024?(Math.round(Number(mb)/102.4)/10+' GB'):(Number(mb)+' MB');}
 var h='';for(var i=0;i<entries.length;i++){var e=entries[i];var osLabel=guestOsLabels[e.guest_os]||'Other';var br=catalogBrand(e);
  h+='<div class="cat-card">'
   +'<div class="cat-emblem" style="background:'+br.c+'" aria-hidden="true">'+escHtml(br.m)+'</div>'
@@ -783,7 +787,7 @@ var h='';for(var i=0;i<entries.length;i++){var e=entries[i];var osLabel=guestOsL
    +'<div class="cat-name">'+escHtml(e.name)+'</div>'
    +'<div class="cat-os">'+escHtml(osLabel)+'</div>'
    +'<div class="cat-desc">'+escHtml(e.description||'')+'</div>'
-   +'<div class="cat-specs"><span class="cat-spec">'+e.cpu_cores+' vCPU</span><span class="cat-spec">'+gb(e.memory_mb)+' RAM</span><span class="cat-spec">'+e.disk_size_gb+' GB disk</span></div>'
+   +'<div class="cat-specs"><span class="cat-spec">'+e.cpu_cores+' vCPU</span><span class="cat-spec">'+memText(e.memory_mb)+' RAM</span><span class="cat-spec">'+e.disk_size_gb+' GB disk</span></div>'
   +'</div>'
   +'<button class="btn primary cat-create" data-action="quickstartVm" data-catalog-id="'+escHtml(e.id)+'" aria-label="Create VM from '+escHtml(e.name)+'">Create</button>'
   +'</div>';}

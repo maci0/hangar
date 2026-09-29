@@ -673,7 +673,10 @@ fn applyUpdate(sess: *Session, body: []const u8) void {
     sess.fb_mutex.lock();
     defer sess.fb_mutex.unlock();
     const fb = sess.fb orelse return;
-    if (x + w > sess.fb_w or y + h > sess.fb_h) return;
+    // Bound the rectangle with subtraction, not `x + w > fb_w`: x and w are
+    // untrusted u32s whose sum overflows (wraps to a small value in release,
+    // traps in debug), which would let a bogus rectangle through the check.
+    if (x > sess.fb_w or w > sess.fb_w - x or y > sess.fb_h or h > sess.fb_h - y) return;
     const data = body[28 .. 28 + arr_len];
     var row: usize = 0;
     while (row < h) : (row += 1) {
@@ -1103,6 +1106,45 @@ fn nowMs() u64 {
 // ── Tests ───────────────────────────────────────────────────────────
 
 const t = std.testing;
+
+/// Build an Update body (28-byte header + `pixels` bytes of BGRX payload).
+fn updateBody(buf: []u8, x: u32, y: u32, w: u32, h: u32, stride: u32, fill: u8) []const u8 {
+    const arr_len = stride * h;
+    const body = buf[0 .. 28 + arr_len];
+    @memset(body, fill);
+    std.mem.writeInt(u32, body[0..4], x, .little);
+    std.mem.writeInt(u32, body[4..8], y, .little);
+    std.mem.writeInt(u32, body[8..12], w, .little);
+    std.mem.writeInt(u32, body[12..16], h, .little);
+    std.mem.writeInt(u32, body[16..20], stride, .little);
+    std.mem.writeInt(u32, body[20..24], 0, .little); // pixman_format
+    std.mem.writeInt(u32, body[24..28], arr_len, .little);
+    return body;
+}
+
+test "dbus: applyUpdate writes in-bounds rects and rejects the rest" {
+    var sess = Session{};
+    var storage: [4 * 4 * 4]u8 = @splat(0);
+    sess.fb = &storage;
+    sess.fb_w = 4;
+    sess.fb_h = 4;
+
+    var body_buf: [28 + 256]u8 = undefined;
+    applyUpdate(&sess, updateBody(&body_buf, 1, 2, 2, 1, 8, 0xAB));
+    try t.expectEqual(@as(u8, 0xAB), storage[((2 * 4) + 1) * 4]); // row y=2, x=1
+    try t.expectEqual(@as(u8, 0x00), storage[0]);
+
+    // Rectangle whose x+w overflows u32: must be rejected, not wrapped through.
+    const sentinel = storage;
+    applyUpdate(&sess, updateBody(&body_buf, 0xFFFF_FFF0, 0, 64, 1, 256, 0xCD));
+    try t.expectEqualSlices(u8, &sentinel, &storage);
+    applyUpdate(&sess, updateBody(&body_buf, 0, 0xFFFF_FFF0, 1, 1, 256, 0xCD));
+    try t.expectEqualSlices(u8, &sentinel, &storage);
+    // Past the right/bottom edge without any overflow.
+    applyUpdate(&sess, updateBody(&body_buf, 3, 0, 2, 1, 8, 0xCD));
+    applyUpdate(&sess, updateBody(&body_buf, 0, 3, 1, 2, 4, 0xCD));
+    try t.expectEqualSlices(u8, &sentinel, &storage);
+}
 
 test "dbus: marshalReturn round-trips through parseHead/parseFields" {
     var buf: [128]u8 = undefined;
