@@ -25,7 +25,7 @@ under `zig build test`).
 - These are **standalone** steps, NOT part of `zig build test`. They spawn real
   daemons / launch Chromium. The unit/fuzz suite uses local sockets and optional
   QEMU subprocesses, but no browser.
-- One-time setup before first Playwright run: `bun install --frozen-lockfile` + `bun run e2e:install` (Chromium). The build requires the repository-local Playwright CLI; it never downloads a fallback runner.
+- One-time setup before first Playwright run: `bun install --frozen-lockfile` + `bun run e2e:install` (Chromium). The build requires the repository-local Playwright CLI; it never downloads a fallback runner. The `web-e2e` step preflights `node_modules/@playwright/test/cli.js` and names those two commands instead of failing with a bare module-not-found.
 - **Every user-facing web workflow gets an e2e here** (project rule). Add it with the feature.
 - When reading results, check the **failed** line, not only the trailing `N passed`
   (a "1 failed" line prints above the pass count).

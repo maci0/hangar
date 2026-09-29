@@ -80,6 +80,7 @@ libraries, and module imports:
 ```bash
 zig build test-unit-persist
 zig build test-unit-vnc_client
+zig build test -Dtest-filter="secondary NIC modes"   # one test by name substring
 ```
 
 Every registered module has a `test-unit-<module>` step. `test-unit-vmrun` runs

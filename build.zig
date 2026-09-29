@@ -68,6 +68,10 @@ pub fn build(b: *std.Build) !void {
 
     // ── Unit tests ──
     const test_step = b.step("test", "Run the hermetic unit + fuzz test suite");
+    // -Dtest-filter=<substring> narrows `test` and every `test-unit-<module>`
+    // step to the matching test names, for a single-test edit loop.
+    const test_filter = b.option([]const u8, "test-filter", "Only run tests whose name contains this substring");
+    const test_filters: []const []const u8 = if (test_filter) |f| &.{f} else &.{};
     const test_mods = [_][]const u8{ "vm", "persist", "qmp", "qemu", "vnet", "fbmath", "snapparse", "ovf", "autoprotect", "sync", "usock", "appio", "transport", "ws", "web_server", "vmrun", "urlencode", "vnc_client", "hv_qemu_backend_test", "hv_interface_test", "form_parsers", "path_helpers", "appstate", "appstate_test", "catalog", "framebuffer", "httpreq", "wlog", "snapshots", "migrate", "disk", "cdrom", "guestagent", "httpresp", "streams", "auth", "netutil", "wsproxy", "vmrender", "webui_app", "dbusdisplay", "hostinfo" };
     for (test_mods) |mod| {
         const src_path = b.fmt("src/{s}.zig", .{mod});
@@ -79,7 +83,7 @@ pub fn build(b: *std.Build) !void {
         if (std.mem.eql(u8, mod, "webui_app")) {
             tm.addImport("webui", webui_mod);
         }
-        const tests = b.addTest(.{ .root_module = tm, .use_llvm = true, .use_lld = true });
+        const tests = b.addTest(.{ .root_module = tm, .use_llvm = true, .use_lld = true, .filters = test_filters });
         const run_tests = b.addRunArtifact(tests);
         const module_test = b.step(b.fmt("test-unit-{s}", .{mod}), b.fmt("Run {s} module tests (including imported tests)", .{mod}));
         module_test.dependOn(&run_tests.step);
@@ -100,6 +104,16 @@ pub fn build(b: *std.Build) !void {
     // canonical `zig build test` non-hermetic and fail on a clean checkout. Keep
     // `zig build test` to the hermetic unit + fuzz suite; run e2e explicitly.
     const web_e2e = b.step("web-e2e", "Web UI end-to-end tests (Playwright)");
+    const e2e_prereq = b.addSystemCommand(&.{
+        "bash",           "-euo", "pipefail", "-c",
+        \\test -f node_modules/@playwright/test/cli.js || {
+        \\  echo "web-e2e needs the repo-local Playwright runner; run 'bun install --frozen-lockfile' (and 'bun run e2e:install' for Chromium) first." >&2
+        \\  exit 1
+        \\}
+        ,
+        "web-e2e-prereq",
+    });
+    web_e2e.dependOn(&e2e_prereq.step);
     const web_e2e_cmd = b.addSystemCommand(&.{ "bun", "./node_modules/@playwright/test/cli.js", "test" });
     web_e2e_cmd.step.dependOn(&install_web_exe.step);
     web_e2e.dependOn(&web_e2e_cmd.step);

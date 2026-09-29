@@ -48,12 +48,15 @@ so machine-local ShellCheck configuration cannot change the blocking rule set.
 ### Running a single test module
 
 Each test module registered in `build.zig` has a `test-unit-<module>` step,
-which reuses the full suite's linker flags, libraries, and module imports:
+which reuses the full suite's linker flags, libraries, and module imports.
+`-Dtest-filter=<substring>` narrows `test` and every `test-unit-<module>` step to
+the matching test names:
 
 ```bash
 zig build test-unit-persist
 zig build test-unit-qmp
 zig build test-unit-vnc_client
+zig build test -Dtest-filter="secondary NIC modes"
 ```
 
 Imported tests run too. `test-unit-vmrun` is the unit module; `test-vmrun` remains
