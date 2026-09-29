@@ -211,11 +211,6 @@ fn sanitizeSlug(name: []const u8, out: []u8) []const u8 {
     return out[0..n];
 }
 
-/// Copy the HTTP request line (method + path, up to the first CR/LF) into
-/// `out`, replacing every non-printable byte with '?'. Request data is
-/// client-controlled, so sanitizing here lets error logs carry route context
-/// (which VM / operation failed) without risking log-line injection.
-/// Write exactly `len` bytes to fd, retrying on short writes. Returns false on failure.
 /// True if `s` exactly equals any token in `set`.
 fn anyEql(s: []const u8, set: []const []const u8) bool {
     for (set) |t| {
@@ -224,21 +219,6 @@ fn anyEql(s: []const u8, set: []const []const u8) bool {
     return false;
 }
 
-/// Dynamic server-side failure tokens that handlers return as their response
-/// body (e.g. `qemu-img`/QMP failures). These map to HTTP 500. Matched exactly
-/// rather than by substring: a substring test for "err" misclassifies legitimate
-/// `text/plain` data: e.g. a snapshot named `fix-error` in the snapshot list,
-/// as a server error.
-/// Write an HTTP response with status code, content type, security headers, and
-/// body. The shared security headers are emitted inline below.
-///
-/// No `Access-Control-Allow-Origin` is emitted: the web UI is served from the
-/// same origin as this daemon, so it never needs CORS. Sending a wildcard ACAO
-/// (together with the publicly known default `KV_API_KEY`) would let any website
-/// the victim visits drive the local daemon, read the VM inventory/config and,
-/// via a CORS-permitted `X-API-Key` preflight, issue state-changing POSTs
-/// (delete/create/power) cross-origin. Omitting it makes the browser block all
-/// cross-origin reads and the preflight, closing that CSRF/exfiltration path.
 /// Signal the server to shut down by closing/halting its listen sockets.
 /// Safe to call from any thread, unblocks blocking accept() calls.
 pub fn shutdownSignal() void {
@@ -303,8 +283,9 @@ fn acceptLoop(fd: c.fd_t) void {
 }
 
 /// Boolean VmConfig form fields whose key equals the field name and whose value
-/// is "1" (true) / else (false). Driven by @field so create + save share one
-/// definition (autoprotect is excluded, create also sets a has_* sentinel).
+/// is "1" or "true" (anything else is false). Driven by @field so create + save
+/// share one definition (autoprotect is handled in applyFormField, which records
+/// its presence in FormFlags).
 const bool_form_fields = [_][]const u8{
     "guest_tools",    "enable_3d",             "embed_display", "enable_serial",
     "virtio_rng",     "favorite",              "guest_agent",   "tpm",
@@ -785,8 +766,8 @@ fn serveHtml(conn: c.fd_t) void {
 
     if (routeExact(req, "GET /api/vms")) {
         content_type = "application/json; charset=utf-8";
-        // Typical fleets fit the 32KB stack json_buf (~25 VMs at the per-VM
-        // budget below), so the common /api/vms poll allocates nothing. Only
+        // Small fleets fit the 32KB stack json_buf (7 VMs at the 4KB per-VM
+        // budget below), so a small /api/vms poll allocates nothing. Only
         // large libraries spill to a persistent grow-only buffer reused across
         // polls: the UI refreshes every 5 seconds per tab, and mmapping fresh
         // pages (then faulting them in and munmapping) on every poll is pure
@@ -1422,9 +1403,9 @@ fn handleVmLog(conn: c.fd_t, req: []const u8) !void {
             return;
         }
         const name = appstate.vms[idx].getNameSlice();
-        // qmp.isPathSafeName rejects '/', '.', and control bytes, the same guard
-        // QMP uses before building socket paths, so a hostile config name cannot
-        // escape /var/tmp via traversal even if it slipped past creation checks.
+        // qmp.isPathSafeName rejects '/', '\\', and NUL, the same guard QMP uses
+        // before building socket paths, so a name with a path separator cannot
+        // escape /var/tmp even if it slipped past creation checks.
         if (name.len == 0 or name.len > name_buf.len or !qmp.isPathSafeName(name)) {
             writeHttpResponse(conn, HTTP_BAD_REQUEST, "application/json; charset=utf-8", "{\"error\":\"bad name\"}");
             return;
@@ -1965,9 +1946,8 @@ fn handleSave(req: []const u8) ![]const u8 {
     return "ok";
 }
 
-/// Exact route match: checks that req starts with `prefix` and the character
-/// immediately following is a space (HTTP line delimiter) or `?` (query string).
-/// Prevents e.g. `GET /api/vms` from matching `GET /api/vms/3` or `GET /api/vmsblah`.
+/// Suspend a running VM over QMP (migrate to a state file under /tmp), then
+/// stop the QEMU process and record the VM as suspended.
 fn handleSuspend(req: []const u8) ![]const u8 {
     // Lock only long enough to validate idx, copy the VM name, and check liveness.
     // The QMP migration I/O below can take many seconds, we must not hold the
@@ -2288,8 +2268,7 @@ fn bodyVal(body: []const u8, key: []const u8) []const u8 {
     return "";
 }
 
-/// Strip dangerous characters from an HTTP header value.
-/// Replaces double-quote with single-quote and removes CR/LF.
+/// Persist the posted virtual-network JSON to networks.json.
 fn handleVnetsSave(req: []const u8) ![]const u8 {
     const body = getBody(req) orelse return "no body";
     // Body is raw JSON: parse and save
@@ -4310,9 +4289,9 @@ const daemon_usage =
     \\Usage: hangar-web [--help] [--version]
     \\
     \\Runs the HTTP server and web UI, and serves remote clients such as vmrun.
-    \\All configuration is via environment variables, there are no positional
-    \\arguments or runtime flags beyond the two below; an unrecognized option
-    \\is rejected with exit code 2.
+    \\All configuration is via environment variables; the only flags are the two
+    \\below, and a bare `help` word is accepted as --help (matching vmrun). An
+    \\unrecognized dash-prefixed option is rejected with exit code 2.
     \\
     \\Options:
     \\  -h, --help     Show this help and exit

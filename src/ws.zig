@@ -31,9 +31,6 @@ pub const FrameHeader = struct {
     payload_len: u64,
 };
 
-/// Parse the WebSocket upgrade request, returning the accept key.
-/// Caller must write the 101 response using the returned key.
-/// Returns null if the request is not a valid WebSocket upgrade.
 /// Case-insensitive check that a header line `name` exists and its value
 /// contains `token` (comma/space tolerant). Used for the upgrade handshake,
 /// where clients vary header casing and combine Connection tokens.
@@ -56,6 +53,9 @@ fn headerValueContains(req: []const u8, name: []const u8, token: []const u8) boo
     }
 }
 
+/// Parse the WebSocket upgrade request, returning the accept key.
+/// Caller must write the 101 response using the returned key.
+/// Returns null if the request is not a valid WebSocket upgrade.
 pub fn parseUpgrade(req: []const u8) ?[29]u8 {
     // Find the Sec-WebSocket-Key header.
     const key_marker = "Sec-WebSocket-Key: ";
@@ -139,13 +139,6 @@ pub fn writeUpgradeResponse(fd: c.fd_t, accept_key: [29]u8, req: []const u8) !vo
     _ = c.write(fd, resp.ptr, resp.len);
 }
 
-/// Read exactly `dst.len` bytes from `fd`, looping on partial reads.
-/// Returns false on EOF or error before the buffer is filled. A single
-/// `c.read` may return fewer bytes than requested on a fragmented TCP
-/// stream (the VNC proxy serves possibly-remote browser clients), so the
-/// fixed-size header reads below must accumulate rather than demand the
-/// full count in one syscall: otherwise a split header is misread as a
-/// protocol error and the connection is dropped spuriously.
 /// read() that retries on EINTR and on a recv timeout (EAGAIN). The WebSocket
 /// fd inherits the HTTP connection's 30s SO_RCVTIMEO, but an idle viewer that
 /// sends no frames is healthy, a timeout must not be mistaken for EOF and tear
@@ -161,6 +154,13 @@ fn readRetry(fd: c.fd_t, dst: [*]u8, len: usize) isize {
     }
 }
 
+/// Read exactly `dst.len` bytes from `fd`, looping on partial reads. Returns
+/// false on EOF or error before the buffer is filled. A single `c.read` may
+/// return fewer bytes than requested on a fragmented TCP stream (the VNC proxy
+/// serves possibly-remote browser clients), so the fixed-size header reads must
+/// accumulate rather than demand the full count in one syscall: otherwise a
+/// split header is misread as a protocol error and the connection is dropped
+/// spuriously.
 fn readFull(fd: c.fd_t, dst: []u8) bool {
     var got: usize = 0;
     while (got < dst.len) {

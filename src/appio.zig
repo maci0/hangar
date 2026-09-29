@@ -46,8 +46,7 @@ pub fn getenv(name: [*:0]const u8) ?[]const u8 {
 
 /// Sleep for `ms` milliseconds. Replaces `std.Thread.sleep`, which 0.16
 /// moved behind the `Io` interface. Backed by the shared `Io`'s clock
-/// (`Clock.awake` = CLOCK_MONOTONIC), so the timing behavior is injectable
-/// through the `Io` vtable: a test `Io` implementation can simulate time.
+/// (`Clock.awake` = CLOCK_MONOTONIC).
 pub fn sleepMs(ms: u64) void {
     io().sleep(.fromMilliseconds(@intCast(ms)), .awake) catch {};
 }
@@ -55,8 +54,7 @@ pub fn sleepMs(ms: u64) void {
 /// Seconds since an arbitrary fixed point, from CLOCK.MONOTONIC. Immune to
 /// wall-clock steps (NTP corrections, manual changes): use for elapsed-time
 /// measurement and uptime; never compare across processes or machines. Reads
-/// the clock through the shared `Io` vtable, so a test `Io` implementation can
-/// provide a deterministic value.
+/// the clock through the shared `Io` vtable.
 pub fn monoSecs() u64 {
     const now = std.Io.Clock.awake.now(io());
     return @intCast(@max(0, @divFloor(now.nanoseconds, std.time.ns_per_s)));

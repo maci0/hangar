@@ -5,7 +5,7 @@
 //! socketpair to QEMU via QMP `getfd` + `add_client` (SCM_RIGHTS), performs the
 //! client side of the D-Bus AUTH EXTERNAL handshake, registers a Listener via
 //! `org.qemu.Display1.Console.RegisterListener(fd)`, then serves the listener
-//! connection: parses incoming method calls (Scanout/Update/ScanoutMap/...),
+//! connection: parses incoming method calls (Scanout and Update),
 //! replies METHOD_RETURN, harvests+closes any passed fds, and logs frame
 //! cadence. The hand-rolled D-Bus marshal/parse below covers exactly the
 //! subset this needs, no libdbus/glib (project constraint).
@@ -426,7 +426,7 @@ pub const Session = struct {
     }
 };
 
-const MAX_FB_BYTES: usize = 32 * 1024 * 1024; // 2900x2900 BGRX ceiling
+const MAX_FB_BYTES: usize = 32 * 1024 * 1024; // 2896x2896 BGRX ceiling
 pub const MAX_VIDEO_CLIENTS: usize = 8;
 
 var sessions_mutex: sync.SpinMutex = .{};

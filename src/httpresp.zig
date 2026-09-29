@@ -285,6 +285,14 @@ pub fn sanitizeHeaderValue(buf: []u8, s: []const u8) []const u8 {
 
 /// Write a full HTTP/1.1 response (status line + security headers + content-type
 /// + caching policy + body) to the connection in two writes.
+///
+/// No `Access-Control-Allow-Origin` is emitted: the web UI is served from the
+/// same origin as this daemon, so it never needs CORS. A wildcard ACAO (together
+/// with the publicly known default `KV_API_KEY`) would let any website the
+/// victim visits drive the local daemon, read the VM inventory/config and, via a
+/// CORS-permitted `X-API-Key` preflight, issue state-changing POSTs
+/// (delete/create/power) cross-origin. Omitting it makes the browser block all
+/// cross-origin reads and the preflight, closing that CSRF/exfiltration path.
 pub fn writeHttpResponse(conn: c.fd_t, status: u16, ct: []const u8, body: []const u8) void {
     writeHttpResponseTagged(conn, status, ct, body, null);
 }

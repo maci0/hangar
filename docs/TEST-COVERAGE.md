@@ -38,7 +38,7 @@ commit; run `zig build test` for the authoritative result.
 | `ws.zig` | WebSocket protocol (RFC 6455) |
 | `transport.zig` | HTTP transport, URL parsing, IPv6 |
 | `vnc_client.zig` | VNC client wrappers |
-| `appstate.zig` | Shared global state, config path helpers |
+| `appstate.zig` | Shared global state (VM array, prefs, VMM handles, undo) |
 | `appstate_test.zig` | App-state wiring (test wrapper) |
 | `webui_app.zig` | Native WebView desktop wrapper |
 

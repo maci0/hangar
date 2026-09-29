@@ -285,7 +285,7 @@ fn forkExec(argv: []const []const u8, allocator: std.mem.Allocator, err_path: ?[
             // 0o600: the VM stderr log lands in shared /var/tmp and can contain
             // disk paths, MAC/network config, and guest console output. Owner-only
             // perms keep other local users from reading it (matches the 0o600 used
-            // for sockets in transport.zig).
+            // for sockets in web_server.zig).
             const errfd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
             if (errfd >= 0) {
                 _ = std.c.dup2(errfd, 2);

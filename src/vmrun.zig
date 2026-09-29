@@ -666,7 +666,7 @@ fn cmdResize(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usi
     fdWrite(c.STDOUT_FILENO, line);
 }
 
-/// GET /api/vms/<idx><suffix-fmt> and print "<label> VM [idx]: <resp>".
+/// GET /api/vms/<idx><suffix-fmt> and print "<label> [<idx>]: <resp>".
 fn cmdSimpleGet(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usize, comptime path_fmt: []const u8, label: []const u8) !void {
     var path_buf: [48]u8 = undefined;
     const url = try std.fmt.bufPrint(&path_buf, path_fmt, .{idx});

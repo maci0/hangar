@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! Pure parser for the snapshot tables printed by `qemu-img snapshot -l` and
-//! QMP `info snapshots`. No IO; deterministic.
+//! Pure parser for the snapshot tables printed by `qemu-img snapshot -l` and by
+//! HMP `info snapshots` (tunneled through QMP's human-monitor-command).
+//! No IO; deterministic.
 
 const std = @import("std");
 
@@ -187,7 +188,7 @@ test "fuzz: snapparse never panics and stays bounded" {
 }
 
 test "snapparse: HMP info snapshots format" {
-    // QMP `info snapshots` returns slightly different format than qemu-img.
+    // HMP `info snapshots` returns a slightly different table than qemu-img.
     const out =
         \\1         Base               0 B 2024-01-01 00:00:00   00:00:00.000
         \\2         After Update       0 B 2024-06-15 12:30:00   00:00:00.000

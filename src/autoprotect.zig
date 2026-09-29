@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! AutoProtect: scheduled automatic snapshots (VMware Workstation feature).
 //!
-//! Pure scheduling/naming/pruning logic, separated from the timer + qemu-img/QMP
-//! IO so it can be unit-tested + fuzzed. The background ticker in `web_server.zig`
+//! Pure scheduling/naming/pruning logic, separated from the timer + QMP IO so it
+//! can be unit-tested + fuzzed. The background ticker in `web_server.zig`
 //! calls `runtimeDue()` each tick; when true it takes a snapshot named by `snapName()`
 //! and prunes the oldest
 //! AutoProtect snapshots beyond the configured maximum (see `pruneExcess`).
@@ -211,7 +211,8 @@ test "due: interval zero disables" {
 test "fuzz: snapName/isAutoName never panic and stay bounded" {
     // snapName writes into caller buffers of any size (the buf-too-small branch
     // returns an empty slice) and isAutoName classifies untrusted snapshot tags
-    // parsed out of `qemu-img snapshot -l` output. Neither had a fuzz harness.
+    // parsed out of the HMP `info snapshots` table (see `snapparse.zig`). Neither
+    // had a fuzz harness.
     var prng = std.Random.DefaultPrng.init(0xA070_5EED);
     const rnd = prng.random();
     var i: usize = 0;

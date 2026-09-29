@@ -482,9 +482,8 @@ pub const GuestOs = enum(u8) {
     }
 };
 
-// ── Boot Order ───────────────────────────────────────────────────────
+// ── RTC Base ─────────────────────────────────────────────────────────
 
-/// Boot device priority order for the VM.
 /// Hardware clock base for `-rtc`. `utc` is correct for most modern guests;
 /// `localtime` is what Windows expects (else the guest clock is off by the TZ
 /// offset).
@@ -529,6 +528,7 @@ pub const RtcBase = enum(u8) {
     }
 };
 
+/// Boot device priority order for the VM.
 pub const BootOrder = enum(u8) {
     disk_first = 0,
     cdrom_first = 1,
@@ -785,7 +785,7 @@ pub const BootFirmware = enum(u8) {
 
 /// UI theme preference (application-wide setting, not per-VM).
 pub const Theme = enum(u8) {
-    system = 0, // follow the host GTK theme, no override
+    system = 0, // follow the browser's prefers-color-scheme, no override
     light = 1,
     dark = 2,
 
@@ -1711,7 +1711,7 @@ pub const VmConfig = struct {
     }
 };
 
-/// Generates a random unicast, locally-administered MAC address.
+/// Counter mixed into the id seed so same-clock ids stay distinct.
 var id_counter: u64 = 0;
 /// Generate a 16-hex-char stable VM id into `buf` (8 random bytes). Seeded from
 /// the monotonic clock XOR a process-monotonic counter so same-nanosecond
@@ -1730,6 +1730,7 @@ pub fn generateId(buf: *[16]u8) []const u8 {
     return std.fmt.bufPrint(buf, "{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7] }) catch "0000000000000000";
 }
 
+/// Generates a random unicast, locally-administered MAC address.
 pub fn generateMacAddress(buf: *[18]u8) [*:0]const u8 {
     // Seed from the monotonic clock. 0.16 moved `std.time.milliTimestamp`
     // behind the `Io` interface, so we read the clock via libc directly.

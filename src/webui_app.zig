@@ -55,8 +55,6 @@ fn findBackendBinary(buf: []u8) ![:0]const u8 {
     return error.BackendBinaryNotFound;
 }
 
-/// Spawn the hangar-web backend process and wait until it accepts connections
-/// on `port` (the port the child binds via inherited KV_PORT).
 /// Open `url` in the system default browser via xdg-open (fire-and-forget).
 /// Used when the native WebView backend is unavailable, instead of webui's own
 /// browser-show path, which drives the GTK/webkit loop and crashes on some hosts.
@@ -81,6 +79,8 @@ fn waitForBackend() void {
     g_child_pid = -1;
 }
 
+/// Spawn the hangar-web backend process and wait until it accepts connections
+/// on `port` (the port the child binds via inherited KV_PORT).
 fn spawnBackend(port: u16) !void {
     const pid = std.c.fork();
     if (pid < 0) return error.ForkFailed;

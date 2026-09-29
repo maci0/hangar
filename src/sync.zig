@@ -3,8 +3,8 @@
 //!
 //! Zig 0.16 removed `std.Thread.Mutex`; the blocking mutex now lives at
 //! `std.Io.Mutex` and requires an `Io` instance threaded through every
-//! lock/unlock. The framebuffer and serial-buffer critical sections here are
-//! tiny memcpys, so a spin lock built on the io-free `std.atomic.Mutex` is
+//! lock/unlock. The critical sections guarded here are short and never held
+//! across I/O, so a spin lock built on the io-free `std.atomic.Mutex` is
 //! sufficient and keeps the call sites unchanged.
 
 const std = @import("std");

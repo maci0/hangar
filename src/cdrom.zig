@@ -17,7 +17,7 @@ const logAudit = wlog.logAudit;
 const logSaveErr = wlog.logSaveErr;
 
 /// Reject a CD/ISO path that could inject `-drive` options (comma) or carry
-/// control bytes; `..` is rejected too. Empty is the caller's "eject" signal.
+/// control bytes; `..` is rejected too.
 pub fn isSafePath(p: []const u8) bool {
     if (std.mem.indexOf(u8, p, "..") != null) return false;
     for (p) |ch| {

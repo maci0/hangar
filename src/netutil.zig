@@ -1,6 +1,5 @@
-//! POSIX networking constants (not exposed by std.c in Zig 0.16) + small socket
-//! helpers, shared by the listener setup, accept loop, WebSocket relays, and the
-//! guest-agent client.
+//! POSIX networking constants + small socket helpers, shared by the listener
+//! setup, the accept loop, and the WebSocket relays.
 
 const std = @import("std");
 const c = std.c;

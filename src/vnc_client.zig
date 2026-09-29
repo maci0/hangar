@@ -383,10 +383,11 @@ test "vnc: onMallocFb size math rejects overflowing dimensions" {
 // ── Fuzz: VNC client against a minimal, fuzzable RFB server ──────────
 // Brings connect/pollThread/onMallocFb/onFbUpdate under test by speaking just
 // enough RFB 3.8 (None security) for libvncclient to connect, then varying the
-// ServerInit width/height (incl. hostile 65535×65535, which must hit the
-// fbmath.fbFits guard in onMallocFb via the REAL path, not crash) and streaming
-// random bytes to fuzz the message loop. Same garbage-peer pattern as the QMP
-// fuzz. Skips if a socket can't be bound.
+// ServerInit width/height (benign only; the hostile overflowing dimensions are
+// fuzzed through fbmath.fbFits directly, a real 65535² here would calloc
+// ~17 GB under overcommit and stall) and streaming random bytes to fuzz the
+// message loop. Same garbage-peer pattern as the QMP fuzz. Skips if a socket
+// can't be bound.
 
 const cc = std.c;
 

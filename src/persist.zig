@@ -781,7 +781,7 @@ fn parseJsonInt(s: []const u8) ?struct { value: u32, rest: []const u8 } {
     return .{ .value = r.value, .rest = r.rest };
 }
 
-/// Parse a JSON integer value as u64 for wide fields (disk_bps_throttle, autoprotect_last_epoch).
+/// Parse a JSON integer value as u64 for wide unsigned fields (e.g. disk_bps_throttle).
 fn parseJsonInt64(s: []const u8) ?struct { value: u64, rest: []const u8 } {
     const r = parseJsonIntGeneric(u64, s) orelse return null;
     return .{ .value = r.value, .rest = r.rest };

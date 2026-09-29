@@ -180,7 +180,7 @@ pub const VirtualNetwork = struct {
 
 // ── The full set of switches ─────────────────────────────────────────
 
-/// Fixed-capacity collection of virtual switches, mirroring `App`'s VM array.
+/// Fixed-capacity collection of virtual switches, mirroring appstate's fixed VM array.
 pub const NetworkSet = struct {
     nets: [MAX_VNETS]VirtualNetwork = [_]VirtualNetwork{.{}} ** MAX_VNETS,
     count: usize = 0,

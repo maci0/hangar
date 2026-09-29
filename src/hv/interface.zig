@@ -57,7 +57,8 @@ pub const Accelerator = struct {
     hardware: bool,
 };
 
-/// Returns the best available accelerator for this platform.
+/// Returns the platform's preferred hardware accelerator. Availability is not
+/// checked here; `resolveAccel` applies the check and falls back to TCG.
 pub fn bestAccelerator() Accelerator {
     return switch (builtin.os.tag) {
         .linux => .{ .flag = "kvm", .name = "KVM", .hardware = true },

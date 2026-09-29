@@ -10,9 +10,10 @@
 const std = @import("std");
 const c = std.c;
 
-/// Linux AF_UNIX connect() waits for accept(). Bound so a listening but
-/// never-accepted peer (wedged QEMU, a lost test server thread) cannot hang
-/// the caller for the kernel's default (~127s).
+/// Linux can complete an AF_UNIX connect from the listen backlog, or leave it
+/// waiting effectively forever. This bounds both the connect poll and the
+/// socket's I/O timeout, so a peer that stops reading (wedged QEMU, a lost test
+/// server thread) cannot stall the caller.
 const CONNECT_TIMEOUT_MS: u31 = 3_000;
 
 const F_GETFL: c_int = 3;

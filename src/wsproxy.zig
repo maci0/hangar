@@ -26,10 +26,9 @@ const SHUT_RDWR = netutil.SHUT_RDWR;
 
 /// Shared relay state: one WebSocket fd, one peer fd (VNC/SPICE TCP or serial
 /// Unix socket), and `wmtx`, which serializes writes to `ws_fd`: both the
-/// data-relay thread (writeFrame) and the control path (writePong) write to
-/// the same socket, and writeFrame emits the frame header and payload as two
-/// separate write() calls, without the lock a concurrent pong can interleave
-/// between them and corrupt the WebSocket frame stream.
+/// data-relay thread (writeFrame) and the control path (writePong) write frames
+/// to the same socket, and without the lock a pong can land between a relayed
+/// frame and the next, corrupting the WebSocket frame stream.
 const RelayCtx = struct {
     ws_fd: c.fd_t,
     peer_fd: c.fd_t,
