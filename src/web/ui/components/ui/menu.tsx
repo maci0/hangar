@@ -11,12 +11,15 @@ const NAV_KEYS: ReadonlySet<string> = new Set(["ArrowDown", "ArrowUp", "Home", "
 
 type Position = { readonly top: number; readonly left: number };
 
+/** A viewport coordinate a menu opens at, such as the pointer of a right click. */
+export type MenuPoint = { readonly x: number; readonly y: number };
+
 export type MenuProps = {
   readonly id?: string;
   readonly label: string;
   readonly open: boolean;
-  /** Element the menu hangs from; a closed menu needs none. */
-  readonly anchor: HTMLElement | null;
+  /** Element or viewport point the menu hangs from; a closed menu needs none. */
+  readonly anchor: HTMLElement | MenuPoint | null;
   /** `start` lines the menu's left edge up with the anchor, `end` its right edge. */
   readonly align?: "start" | "end";
   readonly class?: string;
@@ -25,7 +28,15 @@ export type MenuProps = {
   readonly children: ComponentChildren;
 };
 
-const place = (menu: HTMLElement, anchor: HTMLElement, align: "start" | "end"): Position => {
+const place = (menu: HTMLElement, anchor: HTMLElement | MenuPoint, align: "start" | "end"): Position => {
+  if (!(anchor instanceof HTMLElement)) {
+    const lowest = window.innerHeight - menu.offsetHeight - VIEWPORT_MARGIN;
+    const widest = window.innerWidth - menu.offsetWidth - VIEWPORT_MARGIN;
+    return {
+      top: Math.max(VIEWPORT_MARGIN, Math.min(anchor.y, lowest)),
+      left: Math.max(VIEWPORT_MARGIN, Math.min(anchor.x, widest)),
+    };
+  }
   const box = anchor.getBoundingClientRect();
   const wanted = align === "end" ? box.right - menu.offsetWidth : box.left;
   const widest = window.innerWidth - menu.offsetWidth - VIEWPORT_MARGIN;

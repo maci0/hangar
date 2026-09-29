@@ -1254,3 +1254,210 @@ test('migrate dialog builds the URI live and validates the target', async ({ pag
     await page.keyboard.press('Escape');
     await expect(page.locator('#migratedlg')).toHaveCount(0);
 });
+
+// ── App shell chrome: sidebar head, VM header and tabs, status bar, toasts, context menu, palette ──
+
+// These tests create wf-shell-* VMs; remove them so the daemon's VM limit is not reached by later tests.
+test.afterEach(async ({ page }) => {
+    const vms = await list(page);
+    for (let i = vms.length - 1; i >= 0; i--) {
+        if (vms[i].name.startsWith('wf-shell-')) await api(page, 'POST', `/api/vms/${i}/delete`, '');
+    }
+});
+
+test('VM header follows the selection and the tab bar roves with the arrow keys', async ({ page }) => {
+    await createVm(page, 'wf-shell-tabs');
+    await page.reload();
+    await expect(page.locator('#tabBar')).toHaveCount(0);
+    await expect(page.locator('#vmemblem')).toHaveCount(0);
+    await page.locator('.vm-item', { hasText: 'wf-shell-tabs' }).first().click();
+    await expect(page.locator('#vmname')).toHaveText('wf-shell-tabs');
+    await expect(page.locator('#vmemblem')).toBeVisible();
+    const tablist = page.getByRole('tablist', { name: 'VM views' });
+    await expect(tablist).toBeVisible();
+    // A stopped VM has no console: that tab is disabled and skipped by the keys.
+    const consoleTab = page.locator('#tab-btn-console');
+    await expect(consoleTab).toBeDisabled();
+    await expect(consoleTab).toHaveAttribute('title', /running embedded VNC or SPICE display/);
+    const summary = page.locator('#tab-btn-summary');
+    const settings = page.locator('#tab-btn-settings');
+    await expect(summary).toHaveAttribute('aria-selected', 'true');
+    await expect(summary).toHaveAttribute('tabindex', '0');
+    await expect(settings).toHaveAttribute('tabindex', '-1');
+    await summary.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(settings).toBeFocused();
+    await expect(settings).toHaveAttribute('aria-selected', 'true');
+    await expect(settings).toHaveAttribute('tabindex', '0');
+    await expect(summary).toHaveAttribute('tabindex', '-1');
+    await expect(page.locator('#tabSettings')).toBeVisible();
+    await page.keyboard.press('ArrowRight'); // wraps past the disabled console tab
+    await expect(summary).toBeFocused();
+    await expect(page.locator('#tabSummary')).toBeVisible();
+    await page.keyboard.press('End');
+    await expect(settings).toBeFocused();
+    await page.keyboard.press('Home');
+    await expect(summary).toBeFocused();
+    await expect(summary).toHaveAttribute('aria-selected', 'true');
+    // Home in the toolbar returns to the overview and hides the VM-only parts.
+    await page.locator('.toolbar [data-action="deselectVm"]').click();
+    await expect(page.locator('#vmname')).toHaveText(/Overview|Welcome to Hangar/);
+    await expect(page.locator('#tabBar')).toHaveCount(0);
+    await expect(page.locator('#vmemblem')).toHaveCount(0);
+});
+
+test('sidebar search shows a clear button only while it holds text', async ({ page }) => {
+    await createVm(page, 'wf-shell-clear-a');
+    await createVm(page, 'wf-shell-clear-b');
+    await page.reload();
+    await expect(page.locator('#searchClear')).toHaveCount(0);
+    await page.locator('#search').fill('wf-shell-clear-a');
+    await expect(page.locator('#searchClear')).toBeVisible();
+    await expect(page.locator('#vmlist .vm-item')).toHaveCount(1);
+    await page.locator('#searchClear').click();
+    await expect(page.locator('#search')).toHaveValue('');
+    await expect(page.locator('#searchClear')).toHaveCount(0);
+    await expect(page.locator('#vmlist .vm-item', { hasText: 'wf-shell-clear-b' })).toBeVisible();
+    await page.locator('#search').fill('nothing-matches-this');
+    await page.getByRole('button', { name: 'Clear search' }).last().click(); // the empty-list button
+    await expect(page.locator('#search')).toHaveValue('');
+});
+
+test('select mode toggles the bulk bar and its pressed state', async ({ page }) => {
+    await createVm(page, 'wf-shell-select-mode');
+    await page.reload();
+    const toggle = page.locator('#selectToggle');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#bulkBar')).toHaveCount(0);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('toolbar', { name: 'Bulk actions' })).toBeVisible();
+    await expect(page.locator('#bulkCount')).toHaveText('0 selected');
+    await page.locator('.vm-item', { hasText: 'wf-shell-select-mode' }).locator('.vm-check').check();
+    await expect(page.locator('#bulkCount')).toHaveText('1 selected');
+    await page.locator('#bulkBar [data-action="toggleSelectMode"]').click(); // Done
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#bulkBar')).toHaveCount(0);
+});
+
+test('status bar shows the message, pulses while working and announces only intentional text', async ({ page }) => {
+    await expect(page.locator('#statusannounce')).toHaveAttribute('role', 'status');
+    await expect(page.locator('#livebadge')).toBeVisible(); // the event stream connected
+    await invoke(page, 'setStatusLoading', 'Crunching');
+    await expect(page.locator('#statusmsg')).toHaveText('Crunching…');
+    await expect(page.locator('#statusmsg')).toHaveClass(/loading/);
+    await expect(page.locator('#statusannounce')).toHaveText('Crunching');
+    await invoke(page, 'setStatus', 'All done');
+    await expect(page.locator('#statusmsg')).toHaveText('All done');
+    await expect(page.locator('#statusmsg')).not.toHaveClass(/loading/);
+    await expect(page.locator('#statusannounce')).toHaveText('All done');
+    // A passive redraw (list render) rewrites the bar but leaves the announcer alone.
+    await page.evaluate(() => refresh());
+    await expect(page.locator('#statusmsg')).toContainText('virtual machine');
+    await expect(page.locator('#statusannounce')).toHaveText('All done');
+});
+
+test('connection banner alerts while the server is down and Dismiss hides it', async ({ page }) => {
+    const banner = page.locator('#connbanner');
+    await expect(banner).toHaveAttribute('role', 'alert');
+    await expect(banner).toBeHidden();
+    await page.evaluate(() => setServerDown(true));
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText('Connection lost');
+    await banner.getByRole('button', { name: 'Dismiss' }).click();
+    await expect(banner).toBeHidden();
+});
+
+test('toasts live in one log region, cap at five, expire, and Undo runs its callback', async ({ page }) => {
+    const region = page.locator('#toast-container');
+    await expect(region).toHaveAttribute('role', 'log');
+    await expect(region).toHaveAttribute('aria-live', 'polite');
+    await page.evaluate(() => {
+        window.__undone = 0;
+        showToast('saved fine', 'success');
+        showToast('it broke', 'error');
+        showToast('mind the gap', 'warn');
+    });
+    await expect(region.locator('.toast')).toHaveCount(3);
+    await expect(region.locator('.toast', { hasText: 'saved fine' })).toHaveAttribute('role', 'status');
+    await expect(region.locator('.toast', { hasText: 'it broke' })).toHaveAttribute('role', 'alert');
+    await expect(region.locator('.toast', { hasText: 'mind the gap' })).toHaveAttribute('role', 'alert');
+    await expect(region.locator('.toast svg use').first()).toHaveAttribute('href', /icons\.svg#i-/);
+    await page.evaluate(() => {
+        for (let i = 0; i < 4; i++) showToast(`filler ${i}`, 'info', { duration: 60000 });
+    });
+    await expect(region.locator('.toast')).toHaveCount(5);
+    await expect(region.locator('.toast', { hasText: 'saved fine' })).toHaveCount(0); // oldest dropped
+    await page.evaluate(() => toastUndo('Deleted "x"', () => { window.__undone += 1; }));
+    const undo = region.locator('.toast', { hasText: 'Deleted "x"' });
+    await undo.getByRole('button', { name: 'Undo' }).click();
+    await expect(undo).toHaveCount(0);
+    expect(await page.evaluate(() => window.__undone)).toBe(1);
+    await page.evaluate(() => showToast('short lived', 'info', { duration: 200 }));
+    await expect(region.locator('.toast', { hasText: 'short lived' })).toHaveCount(0);
+});
+
+test('context menu opens from the keyboard, roves, and Escape returns focus to the row', async ({ page }) => {
+    await createVm(page, 'wf-shell-ctx-kbd');
+    await page.reload();
+    const row = page.locator('.vm-item', { hasText: 'wf-shell-ctx-kbd' }).first();
+    await row.focus();
+    await page.keyboard.press('Shift+F10');
+    const menu = page.getByRole('menu', { name: 'VM actions' });
+    await expect(menu).toBeVisible();
+    const items = menu.getByRole('menuitem');
+    await expect(items.first()).toBeFocused(); // Power On, the first enabled item
+    await expect(items.first()).toHaveText('Power On');
+    await expect(menu.getByRole('menuitem', { name: 'Shut Down Guest' })).toBeDisabled();
+    await expect(menu.getByRole('menuitem', { name: 'Shut Down Guest' })).toHaveAttribute('title', /running/);
+    await page.keyboard.press('ArrowDown');
+    await expect(menu.getByRole('menuitem', { name: 'Take Snapshot…' })).toBeFocused(); // skips disabled items
+    await page.keyboard.press('End');
+    await expect(menu.getByRole('menuitem', { name: 'Delete' })).toBeFocused();
+    await page.keyboard.press('Home');
+    await expect(items.first()).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(row).toBeFocused();
+    await expect(page.locator('.vm-item.active')).toHaveCount(0); // Escape only closed the menu
+    await row.click({ button: 'right' });
+    await expect(menu).toBeVisible();
+    await page.mouse.click(700, 500); // outside
+    await expect(menu).toHaveCount(0);
+});
+
+test('command palette navigates with the arrow keys, filters, and jumps to a VM', async ({ page }) => {
+    await createVm(page, 'wf-shell-pal-jump');
+    await page.reload();
+    await page.keyboard.press('Control+k');
+    const input = page.locator('#paletteInput');
+    await expect(input).toBeFocused();
+    await expect(input).toHaveAttribute('role', 'combobox');
+    await expect(input).toHaveAttribute('aria-activedescendant', 'paletteOpt0');
+    await expect(page.locator('#paletteOpt0')).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('ArrowDown');
+    await expect(input).toHaveAttribute('aria-activedescendant', 'paletteOpt1');
+    await expect(page.locator('#paletteOpt1')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#paletteOpt0')).toHaveAttribute('aria-selected', 'false');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('ArrowUp'); // wraps to the last option
+    const count = await page.locator('#paletteList li[data-pidx]').count();
+    await expect(input).toHaveAttribute('aria-activedescendant', `paletteOpt${count - 1}`);
+    await page.fill('#paletteInput', 'zzzz-no-such-command');
+    await expect(page.locator('#paletteList')).toContainText('No matches');
+    await expect(input).not.toHaveAttribute('aria-activedescendant', /.+/);
+    await page.keyboard.press('Enter'); // nothing to run, stays open
+    await expect(page.locator('#palette')).toBeVisible();
+    await page.fill('#paletteInput', 'go to wf-shell-pal-jump');
+    await expect(page.locator('#paletteList li[data-pidx]')).toHaveCount(1);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#palette')).toHaveCount(0);
+    await expect(page.locator('#vmname')).toHaveText('wf-shell-pal-jump');
+    // Backdrop click closes without running anything and gives focus back.
+    await page.locator('.vm-item.active').focus();
+    await page.keyboard.press('Control+k');
+    await expect(page.locator('#palette')).toBeVisible();
+    await page.mouse.click(4, 4);
+    await expect(page.locator('#palette')).toHaveCount(0);
+    await expect(page.locator('.vm-item.active')).toBeFocused();
+});

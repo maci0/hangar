@@ -12,57 +12,30 @@
 <a id="skip-link" href="#main-content">Skip to main content</a>
 
 
-<div id="connbanner" class="hidden" role="alert" aria-live="assertive">
-  <span>Connection lost: retrying automatically</span>
-  <button class="btn" data-action="dismissBanner">Dismiss</button>
-</div>
+<!-- Connection-lost banner, sidebar head, bulk bar, VM header, status bar and toasts are Preact. -->
+<div id="banner-root" class="contents"></div>
 
 <!-- ═══ Sidebar ═══ -->
 <aside id="sidebar" aria-label="VM Library">
-  <div class="sidebar-header">
-    <div class="logo" aria-hidden="true">H</div>
-    <h2>Hangar</h2>
-    <button id="selectToggle" class="select-toggle" data-action="toggleSelectMode" aria-pressed="false" title="Select multiple VMs (bulk actions)" aria-label="Select multiple VMs"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-check"/></svg></button>
-  </div>
-  <div class="search-wrap">
-    <input id="search" type="search" placeholder="Search VMs…" data-action="filterList" aria-label="Search VMs" autocomplete="off">
-    <button id="searchClear" class="clear-btn" data-action="clearSearch" aria-label="Clear search"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-x"/></svg></button>
-  </div>
+  <div id="sidebar-head-root" class="contents"></div>
   <div id="vmlist" role="group" aria-label="VM Library">
     <div class="empty-state px-5 py-10 text-center">
       <p class="text-xs text-fg-dim">No VMs</p>
     </div>
   </div>
-  <div id="bulkBar" class="bulk-bar" hidden role="toolbar" aria-label="Bulk actions">
-    <span id="bulkCount" class="bulk-count">0 selected</span>
-    <div class="bulk-actions">
-      <button class="btn" data-action="bulkPower" data-on="1" title="Power on selected"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-power"/></svg>On</button>
-      <button class="btn" data-action="bulkPower" data-on="0" title="Power off selected"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-power"/></svg>Off</button>
-      <button class="btn" data-action="bulkSnapshot" title="Snapshot selected"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-snapshot"/></svg>Snapshot</button>
-      <button class="btn danger" data-action="bulkDelete" title="Delete selected"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-trash"/></svg>Delete</button>
-    </div>
-    <button class="btn" data-action="toggleSelectMode" title="Exit select mode">Done</button>
-  </div>
+  <div id="bulk-root" class="contents"></div>
 </aside>
 
 <!-- ═══ Main Content ═══ -->
 <main id="main-content" tabindex="-1">
+  <h1 class="sr-only">Hangar VM Manager</h1>
   <!-- Toolbar -->
   <div id="toolbar-root" class="contents"></div>
 
   <!-- Content Area -->
   <div class="content-area">
-    <!-- Display panel (VNC/SPICE framebuffer) -->
-    <!-- VM Header + Tabs -->
-    <div class="vm-header">
-      <span id="vmemblem" class="vm-emblem" hidden></span>
-      <h1 id="vmname">Select a VM</h1>
-      <div id="tabBar" class="tab-bar hidden" role="tablist" aria-label="VM views">
-        <button id="tab-btn-console" class="tab-btn" data-action="switchTab" data-tab="console" role="tab" tabindex="-1" aria-controls="tabConsole" aria-selected="false">Console</button>
-        <button id="tab-btn-summary" class="tab-btn active" data-action="switchTab" data-tab="summary" role="tab" aria-controls="tabSummary" aria-selected="true">Summary</button>
-        <button id="tab-btn-settings" class="tab-btn" data-action="switchTab" data-tab="settings" role="tab" tabindex="-1" aria-controls="tabSettings" aria-selected="false">Settings</button>
-      </div>
-    </div>
+    <!-- VM header + tab bar -->
+    <div id="vmheader-root" class="contents"></div>
 
     <!-- Tab: Console -->
     <div id="tabConsole" class="hidden" role="tabpanel" aria-labelledby="tab-btn-console" aria-hidden="true">
@@ -124,16 +97,11 @@
   </div>
 </main>
 
-<!-- Status Bar -->
-<div id="statusbar"><span id="statusmsg">Ready</span><span id="livebadge" hidden><span class="live-dot" aria-hidden="true"></span>Live</span></div>
-<!-- Screen-reader announcer: only intentional status messages are announced here,
-     so the status bar's frequent passive updates (uptime, VM counts) stay silent. -->
-<div id="statusannounce" class="sr-only" role="status" aria-live="polite"></div>
+<!-- Status bar and its screen-reader announcer -->
+<div id="statusbar-root" class="contents"></div>
 
-<!-- Toast Container: the container is the live region. A live region must be in
-     the accessibility tree before its content changes, so a per-toast role set on
-     a node that is created already filled announces nothing. -->
-<div id="toast-container" role="log" aria-live="polite" aria-relevant="additions"></div>
+<!-- Toasts and the context menu. The toast container is the live region and mounts before any toast. -->
+<div id="overlay-root"></div>
 
 <!-- Display-only overlay bar -->
 <div class="displayonly-bar">

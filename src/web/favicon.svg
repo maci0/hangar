@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- Same mark as .sidebar-header .logo and the About dialog emblem: flat
+  <!-- Same mark as the sidebar logo and the About dialog emblem: flat
        --accent fill, --radius corner, one accent-colored "H". Static, so the
        token is pinned to its light-theme value (reads on light and dark tab
        chrome alike) rather than resolved from a stylesheet. -->

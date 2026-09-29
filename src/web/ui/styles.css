@@ -17,13 +17,20 @@
      popover; below phone the toolbar tightens its padding. */
   --breakpoint-compact: 1100px;
   --breakpoint-phone: 520px;
+  /* Below narrow the sidebar becomes an overlay and the VM header stacks. */
+  --breakpoint-narrow: 900px;
   --animate-menu-in: menu-in 0.09s ease;
   --animate-dialog-in: dialog-in 0.12s ease;
   --animate-dialog-out: dialog-out 0.1s ease forwards;
+  --animate-toast-in: toast-in 0.14s cubic-bezier(0.2, 0.6, 0.3, 1);
+  --animate-toast-out: toast-out 0.14s ease forwards;
+  --animate-status-pulse: status-pulse 0.9s ease-in-out infinite;
+  --animate-live-pulse: status-pulse 2.4s ease-in-out infinite;
   /* Type steps between the stock scale: form fields and dialog titles. */
   --text-caption: 11px;
   --text-field: 13px;
   --text-title: 15px;
+  --text-heading: 17px;
   --blur-dialog: 7px;
 
   @keyframes dialog-in {
@@ -43,12 +50,47 @@
       transform: translateY(3px);
     }
   }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes toast-out {
+    to {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+  }
+
+  @keyframes status-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
 }
 
 /* Dimmed text of an empty field. */
 @utility empty-hint {
   &::placeholder {
     color: var(--text-dim);
+  }
+}
+
+/* The search input draws its own clear button; hide the browser's. */
+@utility no-search-cancel {
+  &::-webkit-search-cancel-button {
+    appearance: none;
   }
 }
 
@@ -86,6 +128,7 @@
   --color-backdrop: var(--backdrop);
   --color-on-accent: var(--text-on-accent);
   --color-on-danger: var(--text-on-danger);
+  --color-on-warn: var(--text-on-warn);
 }
 
 /* Catalog cards: as many 360px-wide columns as fit, one on a narrow dialog. */

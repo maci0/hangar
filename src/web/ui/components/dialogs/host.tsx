@@ -6,6 +6,7 @@ import { ImportDialog, type ImportRequest } from "@/components/dialogs/import";
 import { LogDialog, type LogState } from "@/components/dialogs/log";
 import { MigrateDialog, type MigrateRequest } from "@/components/dialogs/migrate";
 import { NewVmDialog, type NewVmRequest } from "@/components/dialogs/new-vm";
+import { PaletteDialog, type PaletteRequest } from "@/components/dialogs/palette";
 import { PrefsDialog, type PrefsRequest } from "@/components/dialogs/prefs";
 import { PromptDialog, type PromptRequest } from "@/components/dialogs/prompt";
 import { ShortcutsDialog } from "@/components/dialogs/shortcuts";
@@ -30,6 +31,7 @@ export type DialogsState = {
   readonly vnets: VnetsRequest | null;
   readonly topology: TopologyState | null;
   readonly catalog: CatalogState | null;
+  readonly palette: PaletteRequest | null;
 };
 
 export type DialogsProps = DialogsState & {
@@ -53,6 +55,7 @@ export const Dialogs = ({
   vnets,
   topology,
   catalog,
+  palette,
   onClose,
 }: DialogsProps) => (
   <>
@@ -68,6 +71,7 @@ export const Dialogs = ({
     {about && <AboutDialog version={about.version} onClose={() => onClose("about", about)} />}
     {shortcuts && <ShortcutsDialog onClose={() => onClose("shortcuts", shortcuts)} />}
     {log && <LogDialog {...log} onClose={() => onClose("log", log)} />}
+    {palette && <PaletteDialog request={palette} onClose={() => onClose("palette", palette)} />}
     {prompt && <PromptDialog request={prompt} onClose={() => onClose("prompt", prompt)} />}
     {confirm && <ConfirmDialog request={confirm} onClose={() => onClose("confirm", confirm)} />}
   </>

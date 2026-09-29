@@ -117,7 +117,7 @@ button,input,select,textarea{font:inherit}
 button{cursor:pointer}
 ::selection{background:color-mix(in srgb,var(--accent) 28%,transparent)}
 /* Numeric columns and stats read aligned and calm with tabular figures. */
-.dash-num,.inv td,.srow dd,.vm-bar-mem-label,#statusbar,.ubar-txt{font-variant-numeric:tabular-nums}
+.dash-num,.inv td,.srow dd,.vm-bar-mem-label,.ubar-txt{font-variant-numeric:tabular-nums}
 /* Chromium scrollbars: slim, quiet, rounded. */
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -125,20 +125,6 @@ button{cursor:pointer}
 ::-webkit-scrollbar-thumb:hover{background:var(--border-hover);border:2px solid transparent;background-clip:content-box}
 ::-webkit-scrollbar-corner{background:transparent}
 
-#connbanner{
-  grid-column:1/-1;
-  width:100%;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  gap:12px;
-  padding:6px 16px;
-  background:var(--warn);
-  color:var(--text-on-warn);
-  font-size:12px;
-  font-weight:600;
-  z-index:200;
-}
 
 /* ── Sidebar ─────────────────────────────────────────────────────── */
 aside{
@@ -159,86 +145,7 @@ body.sidebar-collapsed aside{
   pointer-events:none;
   transform:translateX(-100%);
 }
-.sidebar-header{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  min-height:40px;
-  padding:8px 12px;
-  border-bottom:1px solid var(--border-soft);
-}
-.sidebar-header .logo{
-  width:22px;
-  height:22px;
-  border-radius:var(--radius-sm);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  color:var(--text-on-accent);
-  background:var(--accent);
-  font-size:12px;
-  font-weight:700;
-}
-.sidebar-header h2{font-size:13px;font-weight:600;letter-spacing:.03em;color:var(--text)}
-.sidebar-header .select-toggle{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;background:transparent;border:1px solid transparent;color:var(--text-dim);border-radius:var(--radius-sm);width:24px;height:24px;cursor:pointer;line-height:1}
-.sidebar-header .select-toggle[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
-.sidebar-header .select-toggle:hover{border-color:var(--border-hover);color:var(--text)}
 
-aside .search-wrap{position:relative;padding:8px 10px}
-aside .search-wrap::before{
-  content:"";
-  position:absolute;
-  left:19px;
-  top:15px;
-  width:10px;
-  height:10px;
-  border:1.5px solid var(--text-dim);
-  border-radius:50%;
-}
-aside .search-wrap::after{
-  content:"";
-  position:absolute;
-  left:28px;
-  top:24px;
-  width:5px;
-  height:1.5px;
-  background:var(--text-dim);
-  transform:rotate(45deg);
-}
-aside input#search{
-  width:100%;
-  height:26px;
-  padding:0 26px 0 26px;
-  color:var(--text);
-  background:var(--bg);
-  border:1px solid var(--border);
-  border-radius:var(--radius-md);
-  outline:none;
-  font-size:12px;
-}
-aside input#search:hover{border-color:var(--border-hover)}
-aside input#search:focus-visible{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
-aside input#search::placeholder{color:var(--text-dim)}
-aside input#search::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}
-.search-wrap .clear-btn{
-  position:absolute;
-  right:12px;
-  top:1px;
-  display:none;
-  width:24px;
-  height:24px;
-  padding:0;
-  border:0;
-  border-radius:var(--radius-sm);
-  background:transparent;
-  color:var(--text-dim);
-  line-height:1;
-  font-size:11px;
-  align-items:center;
-  justify-content:center;
-}
-.search-wrap .clear-btn:hover{background:var(--surface-2);color:var(--text)}
-.search-wrap .clear-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
 aside #vmlist{
   flex:1;
@@ -305,15 +212,9 @@ aside .vm-item .vm-bar-fill{height:2px;min-width:1px;background:var(--accent-2)}
 aside .vm-item .vm-bar-mem-label{font-size:10px;color:var(--text-dim);white-space:nowrap}
 aside .vm-item.dragging{opacity:.35}
 aside .vm-item.drag-over{border-top-color:var(--accent)}
-.vm-item.selectable{padding-left:6px}
+.vm-item.selectable{padding-left:6px;grid-template-columns:auto 8px minmax(0,1fr) auto}
 .vm-check{margin-right:6px;cursor:pointer;flex:0 0 auto;accent-color:var(--accent)}
 
-.bulk-bar{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-top:1px solid var(--border);background:var(--bg-alt)}
-.bulk-bar[hidden]{display:none}
-.bulk-count{font-size:11px;color:var(--text-muted);font-weight:600}
-.bulk-actions{display:flex;flex-wrap:wrap;gap:4px}
-.bulk-actions .btn{min-height:22px;padding:2px 7px;font-size:11px}
-.bulk-actions .btn .ico{width:12px;height:12px;margin:0}
 
 /* Folder tree */
 .folder-hdr{transition:background-color var(--transition),color var(--transition);display:flex;align-items:center;gap:6px;min-height:26px;padding:3px 8px;cursor:pointer;color:var(--text-dim);font-size:11px;border-radius:var(--radius-sm);user-select:none;text-transform:uppercase;letter-spacing:.05em}
@@ -371,18 +272,7 @@ main{
 .btn.danger:hover{background:var(--danger);border-color:var(--danger);color:var(--text-on-danger)}
 .ico{width:14px;height:14px;flex:0 0 auto;display:inline-block;vertical-align:-2px}
 .btn .ico{width:13px;height:13px}
-.select-toggle .ico{width:15px;height:15px;margin:0}
 
-.ctx-menu{animation:menu-in .09s ease;min-width:200px;padding:4px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);box-shadow:var(--shadow-pop);z-index:9999}
-.ctx-item{transition:background-color var(--transition);display:flex;align-items:center;gap:8px;width:100%;padding:5px 10px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--text);font-size:12px;text-align:left}
-.ctx-item .ico{width:13px;height:13px;color:var(--text-dim);flex:0 0 auto}
-.ctx-item:hover .ico{color:var(--text-muted)}
-.ctx-item.danger .ico{color:var(--danger-text)}
-.ctx-item:hover{background:var(--accent-soft)}
-.ctx-item.danger{color:var(--danger-text)}
-.ctx-item:disabled{opacity:.45;cursor:not-allowed}
-.ctx-sep{height:1px;margin:4px 6px;background:var(--border-soft)}
-.ctx-item:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
 /* ── Content / VM header / tabs ──────────────────────────────────── */
 .content-area{
@@ -393,39 +283,6 @@ main{
   scrollbar-width:thin;
   scrollbar-color:var(--border) transparent;
 }
-.vm-header{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:16px;
-  margin-bottom:12px;
-}
-#vmname{
-  margin:0 auto 0 0;
-  color:var(--text);
-  letter-spacing:-.01em;
-  font-size:17px;
-  line-height:1.25;
-  font-weight:600;
-  overflow-wrap:anywhere;
-}
-.tab-bar{display:flex;gap:2px;border-bottom:1px solid var(--border)}
-.tab-btn{
-  transition:color var(--transition),border-color var(--transition);
-  position:relative;
-  padding:6px 14px;
-  border:0;
-  border-bottom:2px solid transparent;
-  margin-bottom:-1px;
-  background:transparent;
-  color:var(--text-muted);
-  font-size:13px;
-  font-weight:500;
-}
-.tab-btn:hover{color:var(--text);border-bottom-color:var(--border-hover)}
-.tab-btn.active{color:var(--text);border-bottom-color:var(--accent);font-weight:600}
-.tab-btn:disabled{opacity:.42;cursor:not-allowed}
-.tab-btn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 
 #tabConsole,#tabSummary,#tabSettings{animation:panel-in .08s ease}
 
@@ -757,60 +614,11 @@ input.invalid,select.invalid{border-color:var(--danger-text)!important;box-shado
 
 
 /* ── Status bar / loadbar ────────────────────────────────────────── */
-#statusbar{
-  position:relative;
-  grid-column:1/-1;
-  grid-row:3;
-  z-index:100;
-  display:flex;
-  align-items:center;
-  gap:12px;
-  min-height:24px;
-  padding:3px 12px;
-  border-top:1px solid var(--border);
-  background:var(--bg-alt);
-  color:var(--text-muted);
-  font-size:12px;
-}
-#statusbar .loading,#statusmsg.loading{animation:status-pulse .9s ease-in-out infinite}
-#statusmsg{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#livebadge{display:inline-flex;align-items:center;gap:5px;color:var(--text-dim);font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
-#livebadge[hidden]{display:none}
-.live-dot{width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 2px color-mix(in srgb,var(--success) 18%,transparent);animation:status-pulse 2.4s ease-in-out infinite}
 #loadbar{position:fixed;top:0;left:0;right:0;height:2px;z-index:300;pointer-events:none;opacity:0;transition:opacity var(--transition)}
 main #loadbar{position:absolute}
 #loadbar.active{opacity:1}
 #loadbar::after{content:"";display:block;width:32%;height:100%;background:var(--accent);animation:loadbar-slide .95s ease-in-out infinite}
 
-/* ── Toasts ──────────────────────────────────────────────────────── */
-#toast-container{position:fixed;right:14px;top:52px;z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none}
-.toast{
-  display:flex;
-  align-items:center;
-  gap:9px;
-  max-width:min(380px,calc(100vw - 28px));
-  max-height:130px;
-  overflow:hidden;
-  pointer-events:auto;
-  padding:9px 12px;
-  border:1px solid var(--border);
-  border-left:3px solid var(--accent);
-  border-radius:var(--radius-md);
-  background:var(--surface);
-  color:var(--text);
-  box-shadow:var(--shadow-pop);
-  font-size:13px;
-  animation:toast-in .14s cubic-bezier(.2,.6,.3,1);
-}
-.toast .toast-icon{display:inline-flex;align-items:center;justify-content:center}
-.toast .toast-msg{flex:1;overflow-wrap:anywhere}
-.toast .toast-action{min-height:24px;padding:5px 9px;border:1px solid var(--accent);border-radius:var(--radius-sm);background:transparent;color:var(--accent);font-size:11px;font-weight:700;text-transform:uppercase}
-.toast .toast-action:hover{background:var(--accent);color:var(--text-on-accent)}
-.toast.success{border-left-color:var(--success)}.toast.success .toast-icon{color:var(--success)}
-.toast.error{border-left-color:var(--danger)}.toast.error .toast-icon{color:var(--danger)}
-.toast.warn{border-left-color:var(--warn)}.toast.warn .toast-icon{color:var(--warn)}
-.toast.info{border-left-color:var(--accent)}.toast.info .toast-icon{color:var(--accent)}
-.toast.exit{animation:toast-out .14s ease forwards}
 
 kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2);color:var(--text-muted);font:500 11px/1.2 var(--font-mono)}
 #skip-link{position:absolute;left:0;top:0;z-index:999;padding:7px 14px;background:var(--accent);color:var(--text-on-accent);font-size:12px;font-weight:600;text-decoration:none;transform:translateY(-100%);transition:transform var(--transition)}
@@ -845,17 +653,6 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
 .sdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;background:var(--text-dim);vertical-align:middle}
 .sdot.running{background:var(--success);box-shadow:0 0 0 2px color-mix(in srgb,var(--success) 16%,transparent)} .sdot.paused{background:var(--pause)} .sdot.suspended{background:var(--warn)}
 
-/* ── Command palette ─────────────────────────────────────────────── */
-.palette-overlay{position:fixed;inset:0;background:var(--backdrop-overlay);display:flex;align-items:flex-start;justify-content:center;padding-top:12vh;z-index:1000}
-.palette-overlay[hidden]{display:none}
-.palette{width:min(540px,92vw);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-modal);overflow:hidden}
-#paletteInput{width:100%;box-sizing:border-box;border:0;border-bottom:1px solid var(--border);background:transparent;color:var(--text);font-size:15px;padding:12px 14px;outline:none}
-#paletteInput:focus-visible{outline:2px solid var(--text);outline-offset:-3px}
-#paletteList{list-style:none;margin:0;padding:4px;max-height:52vh;overflow:auto}
-#paletteList li{display:flex;align-items:center;gap:8px;padding:6px 11px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;color:var(--text-muted)}
-#paletteList li{transition:background-color var(--transition)}
-#paletteList li.sel{background:var(--accent-soft);color:var(--text);box-shadow:inset 2px 0 0 var(--accent)}
-#paletteList li.palette-empty{color:var(--text-dim);cursor:default}
 
 
 /* ── Animations ──────────────────────────────────────────────────── */
@@ -863,9 +660,6 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
 @keyframes menu-in{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:translateY(0)}}
 @keyframes panel-in{from{opacity:.4}to{opacity:1}}
 @keyframes loadbar-slide{0%{margin-left:-35%}60%,100%{margin-left:100%}}
-@keyframes toast-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
-@keyframes toast-out{to{opacity:0;transform:translateY(-3px)}}
-@keyframes status-pulse{0%,100%{opacity:1}50%{opacity:.45}}
 @keyframes dot-breathe{0%,100%{box-shadow:0 0 0 2px color-mix(in srgb,var(--success) 22%,transparent)}50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--success) 6%,transparent)}}
 
 /* ── Responsive ──────────────────────────────────────────────────── */
@@ -873,7 +667,6 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
   body{grid-template-columns:minmax(0,1fr)}
   body.sidebar-collapsed{grid-template-columns:minmax(0,1fr)}
   main{grid-column:1}
-  #statusbar{grid-column:1}
   aside{
     position:fixed;
     left:0;
@@ -890,10 +683,6 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
   aside.open{transform:translateX(0)}
   body.sidebar-overlay::after{content:"";position:fixed;inset:0;background:var(--backdrop-overlay);z-index:140}
   .content-area{padding:14px 14px 70px}
-  .vm-header{align-items:stretch;flex-direction:column;gap:8px}
-  #vmname{font-size:15px}
-  .tab-bar{overflow-x:auto;scrollbar-width:none}
-  .tab-bar::-webkit-scrollbar{display:none}
   .summary-grid{grid-template-columns:1fr}
   .settings-shell{grid-template-columns:1fr}
   .settings-nav{position:relative;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
@@ -904,12 +693,9 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
   .empty-state{min-height:340px;padding:40px 16px}
   .settings-panel{padding:10px}
   .settings-form{grid-template-columns:1fr}
-  #toast-container{right:8px;left:8px}.toast{max-width:none}
 }
 @media(pointer:coarse){
-  .btn,.ctx-item,.settings-nav-item,.display-tool,.search-wrap .clear-btn,.sidebar-header .select-toggle,.toast .toast-action{min-height:44px}
-  .search-wrap .clear-btn,.sidebar-header .select-toggle{min-width:44px}
-  .tab-btn{min-height:44px;display:inline-flex;align-items:center}
+  .btn,.settings-nav-item,.display-tool{min-height:44px}
   aside .vm-row .star{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;padding:0}
   aside .vm-item{padding-right:52px}
   aside .vm-row .star{top:2px}
@@ -923,12 +709,10 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
 
 /* ── Display-only (fullscreen console) ───────────────────────────── */
 body.displayonly aside,
-body.displayonly .vm-header,
 body.displayonly #tabSummary,
 body.displayonly #tabSettings,
 body.displayonly #serialpanel,
 body.displayonly #consoleHint,
-body.displayonly #statusbar,
 body.displayonly #mig_bar_container,
 body.displayonly #mig_pct,
 body.displayonly #mig_cancel{display:none!important}
@@ -984,8 +768,6 @@ aside .vm-item .vm-meta{flex-basis:100%;padding-left:18px}
 /* ── OS emblems (shared visual identity: catalog, summary, inventory) ──
    Radius follows size on the 5/8/11px scale, so the four emblem sizes read
    as one family instead of four unrelated roundings. */
-.vm-emblem{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:var(--radius-md);color:#fff;font-weight:700;font-size:15px;line-height:1;flex:none;vertical-align:middle;margin-right:10px}
-.vm-emblem[hidden]{display:none}
 .os-cell{display:inline-flex;align-items:center;gap:8px}
 .os-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:var(--radius-sm);color:#fff;font-weight:700;font-size:11px;line-height:1;flex:none}
 

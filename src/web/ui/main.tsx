@@ -9,7 +9,9 @@ import type { CatalogState } from "@/components/dialogs/catalog";
 import type { SnapshotsState } from "@/components/dialogs/snapshots";
 import type { TopologyState } from "@/components/dialogs/topology";
 import type { VnetsRequest } from "@/components/dialogs/vnets";
+import type { PaletteCommand } from "@/components/dialogs/palette";
 import { netKindOf, type NetKind } from "@/lib/network";
+import { createOverlayBridge, createShellBridge, type OverlayBridge, type ShellBridge } from "@/shell";
 import { Toolbar, toolbarControl, type ToolbarProps } from "@/components/toolbar";
 import { VmList, type VmListProps } from "@/components/vm-list";
 
@@ -60,7 +62,10 @@ type HangarUi = {
   readonly openCatalog: (state: CatalogState) => void;
   /** Merges the fields into the open catalog; ignored while it is closed. */
   readonly setCatalog: (patch: Partial<CatalogState>) => void;
-};
+  /** Opens the command palette over the given commands; ignored while it is open. */
+  readonly openPalette: (commands: ReadonlyArray<PaletteCommand>) => void;
+} & ShellBridge &
+  OverlayBridge;
 
 declare global {
   // Bridge for the legacy app.js, which computes state and hands it over for rendering.
@@ -68,6 +73,7 @@ declare global {
   var renderList: (() => void) | undefined;
   var syncToolbar: (() => void) | undefined;
   var syncSidebarButton: (() => void) | undefined;
+  var syncShell: (() => void) | undefined;
 }
 
 const CLOSED_DIALOGS: DialogsState = {
@@ -85,9 +91,10 @@ const CLOSED_DIALOGS: DialogsState = {
   vnets: null,
   topology: null,
   catalog: null,
+  palette: null,
 };
 
-type DialogBridge = Omit<HangarUi, "renderVmList" | "setToolbar" | "closeToolbarMenus">;
+type DialogBridge = Omit<HangarUi, "renderVmList" | "setToolbar" | "closeToolbarMenus" | keyof ShellBridge | keyof OverlayBridge>;
 
 /** Dialog state lives here; `#dialog-root` is redrawn from it after every change. */
 type DialogStore = {
@@ -199,9 +206,25 @@ const createNetworkDialogs = ({ get, set }: DialogStore) => ({
   },
 });
 
+const createPalette = ({ get, set }: DialogStore) => {
+  let paletteId = 0;
+  return {
+    openPalette: (commands: ReadonlyArray<PaletteCommand>) => {
+      paletteId += 1;
+      set({ palette: get().palette ?? { id: paletteId, commands } });
+    },
+  };
+};
+
 const createDialogBridge = (): DialogBridge => {
   const store = createDialogStore();
-  return { ...createAnswerDialogs(store), ...createInfoDialogs(store), ...createVmDialogs(store), ...createNetworkDialogs(store) };
+  return {
+    ...createAnswerDialogs(store),
+    ...createInfoDialogs(store),
+    ...createVmDialogs(store),
+    ...createNetworkDialogs(store),
+    ...createPalette(store),
+  };
 };
 
 const createBridge = (): HangarUi => {
@@ -214,6 +237,8 @@ const createBridge = (): HangarUi => {
   };
   return {
     ...createDialogBridge(),
+    ...createShellBridge(),
+    ...createOverlayBridge(),
     renderVmList: (props) => {
       const list = document.querySelector("#vmlist");
       if (list) {
@@ -236,3 +261,4 @@ globalThis.hangarUi = createBridge();
 globalThis.renderList?.();
 globalThis.syncToolbar?.();
 globalThis.syncSidebarButton?.();
+globalThis.syncShell?.();

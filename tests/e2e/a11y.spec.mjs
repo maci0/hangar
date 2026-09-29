@@ -20,12 +20,31 @@ for (const theme of ['dark', 'light']) {
         const row = page.locator('#vmlist .vm-item', { hasText: 'a11y-vm' });
         await row.waitFor();
         try {
-            for (const step of ['dashboard', 'summary', 'settings']) {
+            for (const step of ['dashboard', 'summary', 'settings', 'palette', 'context menu', 'toasts']) {
                 if (step === 'summary') await row.click();
                 if (step === 'settings') await page.locator('#tab-btn-settings').click();
+                if (step === 'palette') {
+                    await page.keyboard.press('Control+k');
+                    await page.locator('#palette').waitFor();
+                }
+                if (step === 'context menu') await row.click({ button: 'right' });
+                if (step === 'toasts') {
+                    await page.evaluate(() => {
+                        for (const type of ['success', 'error', 'warn', 'info']) showToast(`${type} toast`, type, { duration: 60000 });
+                        toastUndo('Deleted "a11y-vm"', () => {});
+                    });
+                }
                 await page.waitForTimeout(SETTLE_MS);
                 const { violations } = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
                 expect(violations.map((v) => `${step}: ${v.id} ${v.nodes[0].target}`)).toEqual([]);
+                if (step === 'palette') {
+                    await page.keyboard.press('Escape');
+                    await expect(page.locator('#palette')).toHaveCount(0);
+                }
+                if (step === 'context menu') {
+                    await page.keyboard.press('Escape');
+                    await expect(page.locator('.ctx-menu')).toHaveCount(0);
+                }
             }
         } finally {
             const idx = await page.evaluate(() => vms.findIndex((v) => v.name === 'a11y-vm'));

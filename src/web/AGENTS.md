@@ -7,8 +7,10 @@ plus the Preact + Tailwind source in `ui/`. Bun bundles `ui/` to `dist/` (gitign
 Targets VMware (vSphere/Workstation) admin conventions.
 
 ## Ownership
-- `index.html`: page markup and script tags. It holds no dialog and no `style=` attribute (a Tailwind utility or token replaces one; an initially hidden element carries the `hidden` class and app.js toggles its inline `style.display`). The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`. Every dialog is Preact: `#dialog-root` is the mount for `Dialogs`. The migration progress bar (`#mig_progress`, `#mig_pct`, `#mig_cancel`) is page markup below the tabs, not part of the Migrate dialog.
-- `app.js`: refresh poll, render, action dispatch, console/serial viewers, command palette, folders. `showConfirmDialog`, `showPromptDialog`, `openPrefs`, `openAbout`, `showShortcutsModal` and `viewLog` keep their signatures and promise behavior but only call `hangarUi` (`confirm`, `prompt`, `openPrefs`, `openAbout`, `openShortcuts`, `openLog`); the fetches stay in `app.js`. `newVm`, `importGuest`, `cloneGuest`, `openSnapshots` (also `takeSnapshot`) and `migrateGuest` open their dialog through `hangarUi` and hand it the action callbacks: `createVm(values)`, `importConfirm(path, name)`, `doClone(linked)`, `takeSnapshotFromDlg(tag)`, `revertSnapshot(tag)`, `deleteSnapshot(tag)` and `doMigrate(host, port)`. Each takes typed, already validated values and resolves whether the dialog may close; `loadSnapshots` pushes the list with `hangarUi.setSnapshots`. The dialogs own their form state and field validation. `openVnets(select?)` loads `/api/networks` and opens the editor with `save(networks, saved)` and `confirmDiscard`; `openCatalog` opens the catalog as `loading` and pushes the templates with `hangarUi.setCatalog`, its `create` callback is `quickstartVm`; `openTopology` opens the topology and `renderTopology` pushes each step (`loading`, `failed`, `empty`, `ready` with the ELK result as a typed layout) with `hangarUi.setTopology`. Data, fetches and the ELK layout stay in `app.js`.
+- `index.html`: page markup and script tags. It holds no dialog and no `style=` attribute (a Tailwind utility or token replaces one; an initially hidden element carries the `hidden` class and app.js toggles its inline `style.display`). The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`. The page chrome is Preact too and only its mounts are here: `#banner-root` (connection banner), `#sidebar-head-root` (logo, select toggle, search), `#bulk-root` (bulk bar), `#vmheader-root` (VM emblem, name, tab bar), `#statusbar-root` (status bar and announcer) and `#overlay-root` (toasts and the context menu). Every dialog is Preact, the command palette included: `#dialog-root` is the mount for `Dialogs`. The tab panels (`#tabConsole`, `#tabSummary`, `#tabSettings`) and the display-only bar are still static markup. The migration progress bar (`#mig_progress`, `#mig_pct`, `#mig_cancel`) is page markup below the tabs, not part of the Migrate dialog.
+- `app.js`: refresh poll, render, action dispatch, console/serial viewers, folders. `showConfirmDialog`, `showPromptDialog`, `openPrefs`, `openAbout`, `showShortcutsModal` and `viewLog` keep their signatures and promise behavior but only call `hangarUi` (`confirm`, `prompt`, `openPrefs`, `openAbout`, `openShortcuts`, `openLog`); the fetches stay in `app.js`. `newVm`, `importGuest`, `cloneGuest`, `openSnapshots` (also `takeSnapshot`) and `migrateGuest` open their dialog through `hangarUi` and hand it the action callbacks: `createVm(values)`, `importConfirm(path, name)`, `doClone(linked)`, `takeSnapshotFromDlg(tag)`, `revertSnapshot(tag)`, `deleteSnapshot(tag)` and `doMigrate(host, port)`. Each takes typed, already validated values and resolves whether the dialog may close; `loadSnapshots` pushes the list with `hangarUi.setSnapshots`. The dialogs own their form state and field validation. `openVnets(select?)` loads `/api/networks` and opens the editor with `save(networks, saved)` and `confirmDiscard`; `openCatalog` opens the catalog as `loading` and pushes the templates with `hangarUi.setCatalog`, its `create` callback is `quickstartVm`; `openTopology` opens the topology and `renderTopology` pushes each step (`loading`, `failed`, `empty`, `ready` with the ELK result as a typed layout) with `hangarUi.setTopology`. Data, fetches and the ELK layout stay in `app.js`.
+
+  Page chrome state is derived in `app.js` and pushed whole: `syncShell()` builds `hangarUi.setShell({selectMode, checkedCount, searchActive, bannerVisible, header, status, live, announcement})` from `sel`, `activeTab`, `selectMode`, `checkedIds`, `serverDown`, the status text and the event-stream flag, and every code path that changes one of them calls it (`syncTabPanels`, `switchTab`, `updateCommandState`, `updateBulkBar`, `setServerDown`, `setStatus*`). `setStatus(s)` sets the text and announces it; `setStatusLoading(s)` does the same with a pulsing `s…`; the passive list summary goes through `setStatusText` and is never announced. Nothing writes to `#statusmsg`, `#vmname`, `#tabBar` or `#bulkCount` directly. `showToast(msg, type, {duration})` and `toastUndo(msg, onUndo)` call `hangarUi.showToast`. `openCtxMenu(idx, x, y)` builds the entries (label, sprite name, danger, disabled reason, `run`) for `hangarUi.openContextMenu`; Escape goes through `closeCtxMenu(returnFocus)`. `openPalette()` hands `paletteCommands()` (label, optional sprite name, `run`) to `hangarUi.openPalette`. `syncShell` skips until `hangarUi` exists and `ui.js` calls it once on load.
 - `app.css`: flat slate theme (`:root` dark default + `:root.light`) + components.
   Logo and empty-state emblems use the shared accent and radius tokens, without
   decorative gradients or colored shadows.
@@ -18,7 +20,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
   etc, and listed in `auth.isAuthExempt`. All except `van.js` load on demand
   (see On-demand bundles); none of them is a `<script>` in `index.html`.
   - `favicon.svg` is hand-written, not vendored: it is the same mark as
-    `.sidebar-header .logo` and the About dialog emblem (flat `--accent` fill,
+    the sidebar logo and the About dialog emblem (flat `--accent` fill,
     `--radius-md` corner, one "H"), pinned to a literal color because a favicon
     resolves no page stylesheet. Keep it that mark; a gradient tile or a letter
     in a different face breaks the one surface every window shows.
@@ -64,7 +66,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
   the button contents with text. A platform emoji in a control is a defect: it
   ignores the accent and radius tokens and renders at the platform's whim.
 - **Emblem radius follows emblem size**: 20px `.os-badge` -> `--radius-sm`,
-  30px `.vm-emblem` and the 34px snapshot row emblem (Preact, `rounded-md`) -> `--radius-md`, 44px `.cat-emblem` ->
+  the 30px VM header emblem (`#vmemblem`, Preact, `rounded-md`) and the 34px snapshot row emblem (Preact, `rounded-md`) -> `--radius-md`, 44px `.cat-emblem` ->
   `--radius-lg`. The four read as one family; never round them independently.
 - **Dialog chrome comes from the `Dialog` primitive** (`ui/components/ui/dialog.tsx`), not from a per-dialog inline style. `app.css` has no `dialog` rule. The
   `!important` in the sheet are `#display` stacking overrides and the reduced-motion block; do not add one to win a cascade fight.
@@ -75,7 +77,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
   containers hold `role="menuitem"` children (the toolbar's More popover rows too) and
   move focus with Arrow/Home/End, returning it to the trigger on Escape. The toolbar
   menus are Preact (`ui/components/toolbar.tsx`); `app.js` only calls
-  `hangarUi.closeToolbarMenus(returnFocus)` from its Escape handler and `select()`. `role="tablist"` and the VM listbox use a roving `tabindex`: exactly
+  `hangarUi.closeToolbarMenus(returnFocus)` from its Escape handler and `select()`. `role="tablist"` (`#tabBar`; Arrow/Home/End move to the next enabled tab and activate it) and the VM listbox use a roving `tabindex`: exactly
   one item is `0` (the selected one, or the first row when nothing is selected),
   the rest are `-1`. A control that only works by pointer gets a keyboard
   equivalent too: `#serialResize` is a `role="separator"` with Arrow (16px,
@@ -88,8 +90,8 @@ Targets VMware (vSphere/Workstation) admin conventions.
   destructive `.btn.danger` grouped left when present). Destructive-action rule:
   recoverable deletes use the undo toast (`toastUndo`), irreversible operations
   (snapshot revert and delete, disk ops) use `showConfirmDialog({danger:true})`. Don't mix.
-  Status and notification glyphs come from the sprite too (`toastIcons` maps
-  success/error/info/warn to `i-check`/`i-x`/`i-info`/`i-alert`); a text
+  Status and notification glyphs come from the sprite too (a toast maps
+  success/error/info/warn to `check`/`x`/`info`/`alert`); a text
   substitute like `✓` or `＋` is a defect. VanJS-built buttons get their sprite
   after mount with `addActionIcons`.
 - **Unsaved state**: a dialog with edits the user has not committed passes `guard` to the
@@ -148,8 +150,9 @@ Targets VMware (vSphere/Workstation) admin conventions.
   action that resolves a VM after an `await` must re-resolve by stable id (`idxById`,
   survives rename) or name (`idxByName`), never a frozen index. Multi-select keeps
   `checkedIds`; migration tracks `migId`.
+- **Toasts, the context menu and the palette.** `#toast-container` is the one live region (`role="log"`, `aria-live="polite"`, additions only) and stays mounted while empty; a toast keeps its own `role` (`alert` for error and warn, `status` otherwise), holds five at most and drops the oldest. The context menu (`.ctx-menu`, `role="menu"` `aria-label="VM actions"`) opens at the pointer or under the focused row (Shift+F10 or the Menu key), focuses its first enabled item, moves with Arrow/Home/End, closes on Escape (focus returns to the row without deselecting the VM), on an outside click and after an item runs. The palette (`#palette`, `#paletteInput` combobox, `#paletteList` listbox of `li[data-pidx]` with `aria-activedescendant`) is a modal `Dialog`; Enter or a click runs the chosen command after the palette has closed, so a dialog it opens keeps focus.
 - **Preact dialogs are removed from the DOM when closed**, so `#confirmdlg`, `#promptdlg`,
-  `#aboutdlg`, `#shortcutsdlg`, `#logdlg`, `#prefsdlg`, `#newdlg`, `#importdlg`, `#clonedlg`, `#snapdlg`, `#migratedlg`, `#vnetdlg`, `#topodlg` and `#catalogdlg` exist only while open (a test asserts
+  `#aboutdlg`, `#shortcutsdlg`, `#logdlg`, `#prefsdlg`, `#newdlg`, `#importdlg`, `#clonedlg`, `#snapdlg`, `#migratedlg`, `#vnetdlg`, `#topodlg`, `#catalogdlg` and `#palette` exist only while open (a test asserts
   `toHaveCount(0)`, not hidden). `dlg.close()` on one still works: the `Dialog` replaces it with
   the guarded, animated close, which is what the `closeDlg` action and the Escape sweep call.
   Preferences applies the theme as it is picked and puts the original back on every close except a
