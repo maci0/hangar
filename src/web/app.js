@@ -181,12 +181,12 @@ function vmBars(v){var cpu=Number(v.cpu)||1;var ramTxt=memText(v.mem);return '<d
 function vmItemHtml(x){
  const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
  const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
- const star=x.fav?'<button type="button" class="star fav" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-star"/></svg></button>':'<button type="button" class="star" style="margin-left:auto" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-star"/></svg></button>';
+ const star=x.fav?'<button type="button" class="star fav" data-vm-index="'+x.i+'" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-star"/></svg></button>':'<button type="button" class="star" data-vm-index="'+x.i+'" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-star"/></svg></button>';
  const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-id="'+escHtml(x.v.id)+'"'+(checkedIds.has(x.v.id)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
- // Roving tabindex: the listbox is one tab stop. The selected row is that stop;
+ // Roving tabindex: the list is one tab stop. The selected row is that stop;
  // with nothing selected the first rendered row takes it so Tab still reaches the list.
  const ti=String(x.i)===rovingIdx?'0':'-1';
- return '<div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="option" aria-selected="'+(sel===x.i?'true':'false')+'" data-vm-index="'+x.i+'" tabindex="'+ti+'" data-action="select" draggable="true" title="'+escHtml(x.v.name)+'">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'" title="'+dotLabel+'"></span> '+escHtml(x.v.name)+star+vmBars(x.v)+'</div>';
+ return '<div class="vm-row"><div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="button"'+(sel===x.i?' aria-current="true"':'')+' data-vm-index="'+x.i+'" tabindex="'+ti+'" data-action="select" draggable="true" title="'+escHtml(x.v.name)+'">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'" title="'+dotLabel+'"></span> '+escHtml(x.v.name)+vmBars(x.v)+'</div>'+star+'</div>';
 }
 for(const x of viz){if(!x.show||!x.fav)continue;h+=vmItemHtml(x);}
 if(hasFavs&&hasNon)h+='<div role="separator" aria-hidden="true" style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
@@ -1753,7 +1753,7 @@ var actionHandlers={
 	 openTopology:function(){openTopology();},
 	 topoSelectVm:function(el){topoSelectVm(el.getAttribute('data-vm-name'));},
 	 topoEditNet:function(el){topoEditNet(el.getAttribute('data-net-name'));},
- toggleFavorite:function(el){var parent=el.closest('.vm-item');if(!parent)return;var i=parseInt(parent.getAttribute('data-vm-index'),10);if(!isNaN(i))toggleFavorite(i);},
+ toggleFavorite:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))toggleFavorite(i);},
  revertSnapshot:function(el){revertSnapshot(el.getAttribute('data-snap-tag')||'');},
  deleteSnapshot:function(el){deleteSnapshot(el.getAttribute('data-snap-tag')||'');},
  doClone:function(el){doClone(parseInt(el.getAttribute('data-clone-linked'),10));},
@@ -1921,7 +1921,7 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
   var mn=document.getElementById('main-content');if(mn&&!mn.hasAttribute('tabindex'))mn.setAttribute('tabindex','-1');
   var aside=document.querySelector('aside');if(aside){aside.id='sidebar';aside.setAttribute('role','navigation');aside.setAttribute('aria-label','VM Library');}
   var hamb=document.querySelector('.hamburger');if(hamb){hamb.setAttribute('aria-controls','sidebar');syncSidebarButton();}
-  var vml=document.getElementById('vmlist');if(vml){vml.setAttribute('role','listbox');vml.setAttribute('aria-label','VM Library');}
+  var vml=document.getElementById('vmlist');if(vml){vml.setAttribute('aria-label','VM Library');vml.setAttribute('role','group');}
   var tb=document.querySelector('.tab-bar');if(tb)tb.setAttribute('role','tablist');
   var tbb=document.querySelectorAll('.tab-btn');for(var i=0;i<tbb.length;i++)tbb[i].setAttribute('role','tab');
   var mItems=document.querySelectorAll('.action-menu .menu-item');for(var mi=0;mi<mItems.length;mi++)mItems[mi].setAttribute('role','menuitem');

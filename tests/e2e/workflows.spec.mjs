@@ -196,8 +196,9 @@ test('sidebar search persists through selection, favorites and refresh', async (
     await expect(items).toHaveCount(1);
     await items.first().click();
     await expect(items).toHaveCount(1);
-    await items.first().locator('.star').click();
-    await expect(items.first().locator('.star')).toHaveClass(/fav/);
+    const star = page.locator('#vmlist .vm-row .star');
+    await star.click();
+    await expect(star).toHaveClass(/fav/);
     await expect(items).toHaveCount(1);
     await page.evaluate(() => refresh());
     await expect(items).toHaveCount(1);

@@ -13,6 +13,7 @@
     "check:contrast": "bun scripts/contrast.ts"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "1.62.1",
     "@rikalabs/oxlint-standards": "^0.8.1",
     "@shadcn/lint": "^0.2.0",

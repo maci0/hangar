@@ -71,6 +71,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
   a per-dialog inline style. Do not add `!important` to the dialog rules to win
   a cascade fight; the remaining `!important` in the sheet are `#display`
   stacking overrides and the reduced-motion block.
+- **VM list rows are `role="button"` with `aria-current` on the selected one**, and the favorite star is a sibling inside `.vm-row`, never a child of the row: axe rejects a button (or option) that contains another control. `#vmlist` is a `role="group"`.
 - **Stat tiles are not interactive.** `.dash-card` carries no hover transform;
   reserve elevation-on-hover for things that can be pressed.
 - **Every composite follows the ARIA keyboard pattern.** `role="menu"`
