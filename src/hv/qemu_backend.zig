@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! QEMU hypervisor backend.
 //!
-//! Wraps `qemu.zig` and `qmp.zig` behind the `Vmm` interface.
+//! Wraps `qemu.zig` behind the `Vmm` interface.
 //! Supports all QEMU platform accelerators: KVM (Linux), HVF (macOS),
 //! WHPX (Windows), and TCG (software, all platforms).
 //!
@@ -15,7 +15,6 @@ const builtin = @import("builtin");
 
 const vm = @import("../vm.zig");
 const qemu = @import("../qemu.zig");
-const qmp = @import("../qmp.zig");
 const appio = @import("../appio.zig");
 const hv = @import("interface.zig");
 
@@ -23,8 +22,6 @@ const hv = @import("interface.zig");
 pub const QemuVm = struct {
     /// The VM config (owned by the caller, referenced here).
     config: *vm.VmConfig,
-    /// The QMP client for runtime control.
-    qmp_client: qmp.QmpClient = .{},
     /// The accelerator in use.
     accelerator: hv.Accelerator,
     /// Allocator for temporary operations.
@@ -59,13 +56,6 @@ pub fn createHandle(config: *vm.VmConfig, accel: vm.VmAccel, allocator: std.mem.
         .allocator = allocator,
     };
     return @ptrCast(qv);
-}
-
-/// Create a QEMU-backed Vmm for a specific VM config (convenience, calls createVmm + createHandle).
-pub fn create(config: *vm.VmConfig, accel: vm.VmAccel, allocator: std.mem.Allocator) !struct { vmm: hv.Vmm, handle: hv.VmmHandle } {
-    const vmm = createVmm(accel);
-    const handle = try createHandle(config, accel, allocator);
-    return .{ .vmm = vmm, .handle = handle };
 }
 
 fn getQv(ctx: hv.VmmHandle) *QemuVm {
@@ -112,7 +102,6 @@ fn createLinkedClone(ctx: hv.VmmHandle, dest: []const u8, backing: []const u8, b
 
 fn deinit(ctx: hv.VmmHandle) void {
     const qv = getQv(ctx);
-    qv.qmp_client.disconnect();
     qv.allocator.destroy(qv);
 }
 
@@ -187,14 +176,4 @@ test "qemu_backend: createHandle + deinit lifecycle" {
     // deinit via the vmm table from createVmm
     const vmm = createVmm(.tcg);
     vmm.deinitFn(handle);
-}
-
-test "qemu_backend: create convenience function returns valid vmm+handle" {
-    var cfg = vm.VmConfig{};
-    cfg.setName("test-create");
-    const result = try create(&cfg, .tcg, std.testing.allocator);
-    defer result.vmm.deinitFn(result.handle);
-    try std.testing.expect(@intFromPtr(result.vmm.startFn) != 0);
-    try std.testing.expect(@intFromPtr(result.handle) != 0);
-    try std.testing.expectEqual(hv.Backend.qemu, result.vmm.backend);
 }
