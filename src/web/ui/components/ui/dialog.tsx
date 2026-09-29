@@ -1,5 +1,5 @@
 import { createContext, type ComponentChildren, type ComponentProps, type RefObject } from "preact";
-import { useCallback, useContext, useLayoutEffect, useMemo, useRef } from "preact/hooks";
+import { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
@@ -17,6 +17,29 @@ const useDialogHandle = (): DialogHandle => {
 
 /** Closes the enclosing `Dialog` through the same path as Escape and the backdrop (guard included). */
 export const useDialogClose = (): (() => void) => useDialogHandle().close;
+
+/**
+ * Runs an async action from a button or form: `busy` is true while it is pending, the dialog
+ * closes when it resolves true, and a rejection is reported without closing.
+ */
+export const useDialogTask = (): { readonly busy: boolean; readonly run: (task: () => Promise<boolean>) => void } => {
+  const close = useDialogClose();
+  const [busy, setBusy] = useState(false);
+  const run = (task: () => Promise<boolean>): void => {
+    const runAndClose = async () => {
+      setBusy(true);
+      try {
+        if (await task()) {
+          close();
+        }
+      } finally {
+        setBusy(false);
+      }
+    };
+    runAndClose().catch(reportError);
+  };
+  return { busy, run };
+};
 
 type Guard = () => boolean | Promise<boolean>;
 

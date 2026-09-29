@@ -23,7 +23,7 @@
   --accent:#3e6f9e;
   --accent-2:#8aa2bf;
   --accent-3:#b0894e;
-  --accent-hover:#4a7dad;
+  --accent-hover:#4675a3;
   --accent-soft:rgba(77,130,184,.16);
   --network-nat:#85aecd;
   --network-bridged:#7eafa5;
@@ -448,7 +448,6 @@ main{
 .empty-state h2{margin-bottom:7px;color:var(--text);font-size:17px;font-weight:600;letter-spacing:-.01em}
 .empty-state p{max-width:430px;color:var(--text-muted);font-size:13px;line-height:1.6}
 .empty-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:16px}
-.req{color:var(--danger-text);font-weight:700}
 
 .console-empty{
   display:flex;
@@ -785,18 +784,7 @@ dialog h3{
   font-weight:600;
 }
 dialog .btn-row{display:flex;gap:8px;justify-content:flex-end;padding:12px 20px 16px;border-top:1px solid var(--border-soft)}
-.dialog-meta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:-2px 0 10px;color:var(--text-muted);font-size:12px}
-.dialog-meta strong{color:var(--text)}
-.warn-text{color:var(--warn)}
 
-/* Snapshots */
-.snapshot-list{max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--bg)}
-.snapshot-empty{padding:18px;text-align:center;color:var(--text-dim);font-size:13px}
-.snapshot-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;border-bottom:1px solid var(--border-soft)}
-.snapshot-row:last-child{border-bottom:0}
-.snapshot-row small{display:block;margin-top:1px;color:var(--text-dim);font-size:11px}
-.snapshot-actions{display:flex;gap:5px}
-.snapshot-actions .btn{min-height:22px;padding:2px 8px;font-size:11px}
 
 /* ── Status bar / loadbar ────────────────────────────────────────── */
 #statusbar{
@@ -968,12 +956,11 @@ kbd{padding:1px 5px;border:1px solid var(--border);border-radius:var(--radius-sm
   .empty-state{min-height:340px;padding:40px 16px}
   .settings-panel{padding:10px}
   .settings-form{grid-template-columns:1fr}
-  .snapshot-row{align-items:flex-start;flex-direction:column}
   dialog{width:calc(100vw - 18px)}
   #toast-container{right:8px;left:8px}.toast{max-width:none}
 }
 @media(pointer:coarse){
-  .btn,.ctx-item,.settings-nav-item,.snapshot-actions .btn,.display-tool,.search-wrap .clear-btn,.sidebar-header .select-toggle,.toast .toast-action{min-height:44px}
+  .btn,.ctx-item,.settings-nav-item,.display-tool,.search-wrap .clear-btn,.sidebar-header .select-toggle,.toast .toast-action{min-height:44px}
   .search-wrap .clear-btn,.sidebar-header .select-toggle{min-width:44px}
   .tab-btn{min-height:44px;display:inline-flex;align-items:center}
   aside .vm-row .star{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;padding:0}
@@ -1068,15 +1055,6 @@ aside .vm-item .vm-meta{flex-basis:100%;padding-left:18px}
 .vm-emblem[hidden]{display:none}
 .os-cell{display:inline-flex;align-items:center;gap:8px}
 .os-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:var(--radius-sm);color:#fff;font-weight:700;font-size:11px;line-height:1;flex:none}
-
-/* Snapshot rows: a camera emblem + stacked tag/timestamp, actions right. */
-.snapshot-row{display:flex;align-items:center;gap:12px}
-.snap-emblem{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:var(--radius-md);background:var(--accent-soft);color:var(--accent);flex:none}
-.snap-emblem .ico{width:17px;height:17px}
-.snap-info{display:flex;flex-direction:column;min-width:0}
-.snap-info strong{font-size:13px}
-.snap-info small{color:var(--text-dim);font-size:11px}
-.snapshot-row .snapshot-actions{margin-left:auto}
 
 /* ── Virtual Network Editor: visual network list ── */
 .vnet-list{display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto;padding:2px}

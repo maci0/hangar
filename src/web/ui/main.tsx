@@ -1,6 +1,11 @@
 import { render } from "preact";
 import { Dialogs, type DialogsState } from "@/components/dialogs/host";
+import type { CloneRequest } from "@/components/dialogs/clone";
+import type { ImportRequest } from "@/components/dialogs/import";
+import type { MigrateRequest } from "@/components/dialogs/migrate";
+import type { NewVmRequest } from "@/components/dialogs/new-vm";
 import type { PrefsRequest } from "@/components/dialogs/prefs";
+import type { SnapshotsState } from "@/components/dialogs/snapshots";
 import { Toolbar, toolbarControl, type ToolbarProps } from "@/components/toolbar";
 import { VmList, type VmListProps } from "@/components/vm-list";
 
@@ -29,6 +34,14 @@ type HangarUi = {
   /** Replaces the log text of the open QEMU log; ignored while it is closed. */
   readonly setLog: (text: string) => void;
   readonly openPrefs: (request: PrefsRequest) => void;
+  readonly openNewVm: (request: NewVmRequest) => void;
+  readonly openImport: (request: ImportRequest) => void;
+  readonly openClone: (request: CloneRequest) => void;
+  readonly openMigrate: (request: MigrateRequest) => void;
+  /** Opens the Snapshot Manager; the list starts as loading until `setSnapshots` pushes it. */
+  readonly openSnapshots: (state: SnapshotsState) => void;
+  /** Merges the fields into the open Snapshot Manager; ignored while it is closed. */
+  readonly setSnapshots: (patch: Partial<SnapshotsState>) => void;
 };
 
 declare global {
@@ -39,30 +52,31 @@ declare global {
   var syncSidebarButton: (() => void) | undefined;
 }
 
-const CLOSED_DIALOGS: DialogsState = { confirm: null, prompt: null, about: null, shortcuts: null, log: null, prefs: null };
+const CLOSED_DIALOGS: DialogsState = {
+  confirm: null,
+  prompt: null,
+  about: null,
+  shortcuts: null,
+  log: null,
+  prefs: null,
+  newVm: null,
+  importVm: null,
+  clone: null,
+  snapshots: null,
+  migrate: null,
+};
 
-type DialogBridge = Pick<
-  HangarUi,
-  | "confirm"
-  | "prompt"
-  | "openAbout"
-  | "setAboutVersion"
-  | "openShortcuts"
-  | "openLog"
-  | "setLog"
-  | "openPrefs"
->;
+type DialogBridge = Omit<HangarUi, "renderVmList" | "setToolbar" | "closeToolbarMenus">;
 
 /** Dialog state lives here; `#dialog-root` is redrawn from it after every change. */
-const createDialogBridge = (): DialogBridge => {
-  let dialogs = CLOSED_DIALOGS;
-  let requestId = 0;
-  const nextId = (): number => {
-    requestId += 1;
-    return requestId;
-  };
+type DialogStore = {
+  readonly get: () => DialogsState;
+  readonly set: (patch: Partial<DialogsState>) => void;
+};
 
-  const setDialogs = (patch: Partial<DialogsState>): void => {
+const createDialogStore = (): DialogStore => {
+  let dialogs = CLOSED_DIALOGS;
+  const set = (patch: Partial<DialogsState>): void => {
     dialogs = { ...dialogs, ...patch };
     const root = document.querySelector("#dialog-root");
     if (root) {
@@ -72,7 +86,7 @@ const createDialogBridge = (): DialogBridge => {
           onClose={(kind, current) => {
             // Clears the slot only if it still holds the dialog that closed, not a newer one.
             if (dialogs[kind] === current) {
-              setDialogs({ [kind]: null });
+              set({ [kind]: null });
             }
           }}
         />,
@@ -80,37 +94,68 @@ const createDialogBridge = (): DialogBridge => {
       );
     }
   };
+  return { get: () => dialogs, set };
+};
 
+const createAnswerDialogs = ({ get, set }: DialogStore): Pick<DialogBridge, "confirm" | "prompt"> => {
+  let requestId = 0;
+  const nextId = (): number => {
+    requestId += 1;
+    return requestId;
+  };
   return {
     confirm: (message, options) => {
       const { promise, resolve } = Promise.withResolvers<boolean>();
-      dialogs.confirm?.resolve(false);
-      setDialogs({
+      get().confirm?.resolve(false);
+      set({
         confirm: { id: nextId(), message, danger: options?.danger ?? false, okLabel: options?.okLabel ?? "OK", resolve },
       });
       return promise;
     },
     prompt: (label, initial, suggestions) => {
       const { promise, resolve } = Promise.withResolvers<string | null>();
-      dialogs.prompt?.resolve(null);
-      setDialogs({ prompt: { id: nextId(), label, initial, suggestions, resolve } });
+      get().prompt?.resolve(null);
+      set({ prompt: { id: nextId(), label, initial, suggestions, resolve } });
       return promise;
     },
-    openAbout: () => setDialogs({ about: dialogs.about ?? { version: "" } }),
-    setAboutVersion: (version) => {
-      if (dialogs.about) {
-        setDialogs({ about: { version } });
-      }
-    },
-    openShortcuts: () => setDialogs({ shortcuts: true }),
-    openLog: (vmName) => setDialogs({ log: { vmName, text: "Loading…" } }),
-    setLog: (text) => {
-      if (dialogs.log) {
-        setDialogs({ log: { ...dialogs.log, text } });
-      }
-    },
-    openPrefs: (request) => setDialogs({ prefs: dialogs.prefs ?? request }),
   };
+};
+
+const createInfoDialogs = ({ get, set }: DialogStore) => ({
+  openAbout: () => set({ about: get().about ?? { version: "" } }),
+  setAboutVersion: (version: string) => {
+    if (get().about) {
+      set({ about: { version } });
+    }
+  },
+  openShortcuts: () => set({ shortcuts: true }),
+  openLog: (vmName: string) => set({ log: { vmName, text: "Loading…" } }),
+  setLog: (text: string) => {
+    const { log } = get();
+    if (log) {
+      set({ log: { ...log, text } });
+    }
+  },
+  openPrefs: (request: PrefsRequest) => set({ prefs: get().prefs ?? request }),
+});
+
+const createVmDialogs = ({ get, set }: DialogStore) => ({
+  openNewVm: (request: NewVmRequest) => set({ newVm: get().newVm ?? request }),
+  openImport: (request: ImportRequest) => set({ importVm: get().importVm ?? request }),
+  openClone: (request: CloneRequest) => set({ clone: get().clone ?? request }),
+  openMigrate: (request: MigrateRequest) => set({ migrate: get().migrate ?? request }),
+  openSnapshots: (state: SnapshotsState) => set({ snapshots: get().snapshots ?? state }),
+  setSnapshots: (patch: Partial<SnapshotsState>) => {
+    const { snapshots } = get();
+    if (snapshots) {
+      set({ snapshots: { ...snapshots, ...patch } });
+    }
+  },
+});
+
+const createDialogBridge = (): DialogBridge => {
+  const store = createDialogStore();
+  return { ...createAnswerDialogs(store), ...createInfoDialogs(store), ...createVmDialogs(store) };
 };
 
 const createBridge = (): HangarUi => {

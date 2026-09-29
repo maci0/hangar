@@ -49,7 +49,8 @@ test('create VM workflow adds a VM to the list', async ({ page }) => {
     await page.fill('#n_mem', '4096');
     await page.fill('#n_cpu', '4');
     await page.fill('#n_disk', '30');
-    await invoke(page, 'createVm');
+    await page.locator('#newdlg button[type="submit"]').click();
+    await expect(page.locator('#newdlg')).toHaveCount(0);
 
     await expect.poll(() => vmCount(page)).toBe(before + 1);
     await expect(page.locator('#vmlist .vm-item', { hasText: name })).toBeVisible();

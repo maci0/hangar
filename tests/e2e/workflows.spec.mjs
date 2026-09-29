@@ -7,7 +7,8 @@
 // booted guest / a second host and would be flaky here.
 import { test, expect } from '@playwright/test';
 import { execFileSync, execSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync } from 'fs';
+import { resolve } from 'path';
 let hasFfmpeg = false;
 try { execSync('ffmpeg -version', { stdio: 'ignore' }); hasFfmpeg = true; } catch (e) {}
 
@@ -502,7 +503,7 @@ test('snapshot manager shows the creation timestamp', async ({ page }) => {
     await page.click('button:has-text("Snapshots")');
     await page.locator('#snapshotMenu .menu-item', { hasText: 'Snapshot Manager' }).first().click();
     await page.fill('#s_tag', 'stamped');
-    await page.click('[data-action="takeSnapshotFromDlg"]');
+    await page.locator('#snapdlg button[type="submit"]').click();
     await expect(page.locator('#snaplist')).toContainText('stamped', { timeout: 15000 });
     // The row carries "Taken YYYY-MM-DD HH:MM:SS" parsed from qemu-img output.
     await expect(page.locator('#snaplist')).toContainText(/Taken \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
@@ -955,4 +956,144 @@ test('QEMU log dialog refreshes in place and closes with Escape', async ({ page 
     await expect(page.locator('#logbody')).toContainText(/No log output yet/);
     await page.keyboard.press('Escape');
     await expect(page.locator('#logdlg')).toHaveCount(0);
+});
+
+test('new VM dialog validates inline, then creates the VM and selects it', async ({ page }) => {
+    await invoke(page, 'newVm');
+    await expect(page.locator('#newdlg')).toBeVisible();
+    await expect(page.locator('#n_name')).toBeFocused();
+    await expect(page.locator('#newdlg [aria-invalid]')).toHaveCount(0);
+
+    await page.locator('#n_mem').fill('64');
+    await expect(page.locator('#err_n_name')).toHaveText('Name is required.');
+    await expect(page.locator('#err_n_mem')).toHaveText('Memory must be 128-65536 MB.');
+    await expect(page.locator('#n_mem')).toHaveAttribute('aria-invalid', 'true');
+    // Enter with invalid fields submits nothing and lands on the first bad field.
+    await page.locator('#n_mem').press('Enter');
+    await expect(page.locator('#newdlg')).toBeVisible();
+    await expect(page.locator('#n_name')).toBeFocused();
+
+    await page.locator('#n_name').fill('wf-newvm-ui');
+    await page.locator('#n_mem').fill('512');
+    await page.locator('#n_cpu').fill('0');
+    await expect(page.locator('#err_n_cpu')).toHaveText('CPU cores must be 1-256.');
+    await page.locator('#n_cpu').fill('1');
+    await page.locator('#n_disk').fill('1');
+    await page.locator('#n_guest_os').selectOption('2');
+    await page.locator('#n_firmware').selectOption('uefi');
+    await page.locator('#n_disk').press('Enter');
+    await expect(page.locator('#newdlg')).toHaveCount(0);
+
+    const vm = (await list(page)).find((v) => v.name === 'wf-newvm-ui');
+    expect(vm).toBeTruthy();
+    expect(vm.mem).toBe(512);
+    await expect(page.locator('.vm-item[aria-current="true"]', { hasText: 'wf-newvm-ui' })).toBeVisible();
+});
+
+test('import dialog rejects bad paths inline and imports a disk image in place', async ({ page }) => {
+    // A real image to import; kept under the repo's gitignored .scratch, never tmpfs.
+    const scratch = resolve(import.meta.dirname, '../../.scratch');
+    mkdirSync(scratch, { recursive: true });
+    const image = resolve(mkdtempSync(resolve(scratch, 'wf-import-')), 'guest.qcow2');
+    execFileSync('qemu-img', ['create', '-f', 'qcow2', image, '1M'], { stdio: 'ignore' });
+
+    await invoke(page, 'importGuest');
+    await expect(page.locator('#importdlg')).toBeVisible();
+    await expect(page.locator('#imp_path')).toBeFocused();
+    await page.locator('#importdlg button[type="submit"]').click();
+    await expect(page.locator('#err_imp_path')).toHaveText('A file path is required.');
+    await page.locator('#imp_path').fill('/x/../guest.qcow2');
+    await page.locator('#importdlg button[type="submit"]').click();
+    await expect(page.locator('#err_imp_path')).toHaveText('Parent directory traversal is not allowed.');
+    await page.locator('#imp_path').fill('/x/guest.txt');
+    await page.locator('#importdlg button[type="submit"]').click();
+    await expect(page.locator('#err_imp_path')).toContainText('disk image extension');
+    await expect(page.locator('#imp_path')).toHaveAttribute('aria-invalid', 'true');
+
+    await page.locator('#imp_path').fill(image);
+    await expect(page.locator('#err_imp_path')).toHaveText('');
+    await page.locator('#imp_name').fill('wf-imported');
+    await page.locator('#imp_name').press('Enter');
+    await expect(page.locator('#importdlg')).toHaveCount(0);
+    await expect.poll(() => indexOf(page, 'wf-imported')).toBeGreaterThanOrEqual(0);
+});
+
+test('clone dialog offers full and linked clones', async ({ page }) => {
+    await createVm(page, 'wf-clone-ui');
+    await page.reload();
+    await page.locator('.vm-item', { hasText: 'wf-clone-ui' }).first().click();
+    await invoke(page, 'cloneGuest');
+    await expect(page.locator('#clone_name')).toHaveText('wf-clone-ui');
+    await page.locator('#clonedlg').getByRole('button', { name: 'Full Clone' }).click();
+    await expect(page.locator('#clonedlg')).toHaveCount(0);
+    await expect.poll(async () => (await list(page)).filter((v) => v.name.includes('wf-clone-ui')).length).toBe(2);
+
+    await invoke(page, 'cloneGuest');
+    await page.locator('#clonedlg').getByRole('button', { name: 'Linked Clone' }).click();
+    await expect(page.locator('#clonedlg')).toHaveCount(0);
+    await expect.poll(async () => (await list(page)).filter((v) => v.name.includes('wf-clone-ui')).length).toBe(3);
+});
+
+test('snapshot manager validates names, reverts and deletes behind confirmations', async ({ page }) => {
+    const idx = await createVm(page, 'wf-snap-ui');
+    await page.reload();
+    await page.locator('.vm-item', { hasText: 'wf-snap-ui' }).first().click();
+    await invoke(page, 'openSnapshots');
+    await expect(page.locator('#snapMeta')).toContainText('wf-snap-ui');
+    await expect(page.locator('#snaplist')).toContainText('No snapshots yet');
+
+    const take = page.locator('#snapdlg button[type="submit"]');
+    await take.click();
+    await expect(page.locator('#err_s_tag')).toHaveText('Enter a snapshot name.');
+    await page.locator('#s_tag').fill('a..b');
+    await take.click();
+    await expect(page.locator('#err_s_tag')).toHaveText('Snapshot name is invalid.');
+
+    await page.locator('#s_tag').fill('first');
+    await page.locator('#s_tag').press('Enter');
+    await expect(page.locator('#snaplist')).toContainText('first', { timeout: 15000 });
+    await expect(page.locator('#s_tag')).toHaveValue('');
+
+    // Cancelling the delete confirmation keeps the snapshot.
+    await page.getByRole('button', { name: 'Delete snapshot first' }).click();
+    await expect(page.locator('#confirmdlg')).toBeVisible();
+    await expect(page.locator('#confirmOkBtn')).toHaveClass(/danger|bg-danger|text-danger/);
+    await page.locator('#confirmCancelBtn').click();
+    await expect(page.locator('#confirmdlg')).toHaveCount(0);
+    await expect(page.locator('#snaplist')).toContainText('first');
+    expect((await api(page, 'GET', `/api/vms/${idx}/snapshots`, null)).text).toContain('first');
+
+    // Reverting closes the manager once confirmed.
+    await page.getByRole('button', { name: 'Revert to snapshot first' }).click();
+    await page.locator('#confirmOkBtn').click();
+    await expect(page.locator('#snapdlg')).toHaveCount(0);
+
+    await invoke(page, 'openSnapshots');
+    await page.getByRole('button', { name: 'Delete snapshot first' }).click();
+    await page.locator('#confirmOkBtn').click();
+    await expect(page.locator('#snaplist')).toContainText('No snapshots yet');
+});
+
+test('migrate dialog builds the URI live and validates the target', async ({ page }) => {
+    await createVm(page, 'wf-migrate-ui');
+    await page.reload();
+    await page.locator('.vm-item', { hasText: 'wf-migrate-ui' }).first().click();
+    await invoke(page, 'migrateGuest');
+    await expect(page.locator('#migrate_vmname')).toHaveText('wf-migrate-ui');
+    await expect(page.locator('#mig_port')).toHaveValue('4444');
+    await expect(page.locator('#mig_uri')).toHaveValue('');
+
+    await page.locator('#migratedlg button[type="submit"]').click();
+    await expect(page.locator('#err_mig_host')).toHaveText('Target host is required.');
+    await expect(page.locator('#mig_host')).toBeFocused();
+
+    await page.locator('#mig_host').fill('192.0.2.7');
+    await page.locator('#mig_port').fill('5555');
+    await expect(page.locator('#mig_uri')).toHaveValue('tcp:192.0.2.7:5555');
+    await expect(page.locator('#mig_uri')).toHaveJSProperty('readOnly', true);
+    await page.locator('#mig_port').fill('70000');
+    await page.locator('#migratedlg button[type="submit"]').click();
+    await expect(page.locator('#err_mig_port')).toHaveText('Port must be 1-65535.');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#migratedlg')).toHaveCount(0);
 });

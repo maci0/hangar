@@ -24,6 +24,7 @@ const PAIRS: ReadonlyArray<Pair> = [
   ),
   { fg: "text", bg: "surface-3", min: TEXT_MIN },
   { fg: "text-on-accent", bg: "accent", min: TEXT_MIN },
+  { fg: "text-on-accent", bg: "accent-hover", min: TEXT_MIN },
   { fg: "text-on-danger", bg: "danger", min: TEXT_MIN },
   { fg: "border", bg: "bg", min: EDGE_MIN },
   { fg: "border", bg: "surface", min: EDGE_MIN },

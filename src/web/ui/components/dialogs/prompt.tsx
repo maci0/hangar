@@ -37,7 +37,7 @@ const PromptContent = ({ request }: { readonly request: PromptRequest }) => {
         <Field label={request.label} labelId="promptLabel" htmlFor="promptInput">
           <Input
             id="promptInput"
-            ref={input}
+            inputRef={input}
             type="text"
             value={value}
             list={request.suggestions.length > 0 ? SUGGESTIONS_ID : undefined}

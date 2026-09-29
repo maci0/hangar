@@ -385,25 +385,15 @@ async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/vms
 async function resumeGuest(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/resume');if(r){await refresh();setStatus('Resumed guest, execution continued.');}}
 async function renameGuest(){if(sel===null)return;const v=vms[sel];const n=await showPromptDialog('Rename VM:',v.name);if(n===null)return;const trimmed=n.trim();if(!trimmed){showToast('Name cannot be empty or whitespace','error');return;}if(trimmed===v.name)return;const r=await apiPost('/api/vms/'+sel+'/rename','name='+encodeURIComponent(trimmed));if(r){await refresh();setStatus('VM renamed.');}}
 async function suspendGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Suspend VM "'+v.name+'" to disk?\nThe VM state will be saved and the VM will be paused.',{okLabel:'Suspend'})))return;const r=await apiPost('/api/vms/'+sel+'/suspend');if(r){await refresh();setStatus('Suspended VM to disk.');}}
-async function cloneGuest(){if(sel===null)return;var cn=document.getElementById('clone_name');var cd=document.getElementById('clonedlg');if(cn)cn.textContent=vms[sel].name;if(cd)cd.showModal();}
-async function doClone(linked){if(sel===null)return;const body=linked?'linked=1':'';const r=await apiPost('/api/vms/'+sel+'/clone',body);if(r){var cd=document.getElementById('clonedlg');if(cd)cd.close();await refresh();setStatus(linked?'Linked clone created.':'VM cloned.');}}
-function importGuest(){var d=document.getElementById('importdlg');if(!d)return;var ip=document.getElementById('imp_path');var im=document.getElementById('imp_name');var ie=document.getElementById('err_imp_path');if(ip){ip.value='';ip.classList.remove('invalid');}if(im)im.value='';if(ie)ie.textContent='';d.showModal();if(ip)ip.focus();}
-async function importConfirm(){var d=document.getElementById('importdlg');var ip=document.getElementById('imp_path');var im=document.getElementById('imp_name');var ie=document.getElementById('err_imp_path');if(!d||!ip)return;
-const trimmed=ip.value.trim();
-function fail(msg){if(ie)ie.textContent=msg;ip.classList.add('invalid');ip.focus();}
-if(!trimmed){fail('A file path is required.');return;}
-if(trimmed.includes('..')){fail('Parent directory traversal is not allowed.');return;}
-if(!/\.(qcow2|qcow|vmdk|vdi|vhdx|raw|img)$/i.test(trimmed)){fail('Path must end with a disk image extension (.qcow2, .vmdk, .vdi, .vhdx, .raw, .img).');return;}
-ip.classList.remove('invalid');if(ie)ie.textContent='';
-const wantName=im?im.value.trim():'';
-const before=vms.map(function(x){return x.name;});
-const r=await apiPost('/api/vms/import','path='+encodeURIComponent(trimmed));
-if(!r)return;
-d.close();await refresh();
+function cloneGuest(){if(sel===null)return;window.hangarUi.openClone({vmName:vms[sel].name,clone:doClone});}
+async function doClone(linked){if(sel===null)return false;const r=await apiPost('/api/vms/'+sel+'/clone',linked?'linked=1':'');if(!r)return false;await refresh();setStatus(linked?'Linked clone created.':'VM cloned.');return true;}
+function importGuest(){window.hangarUi.openImport({importVm:importConfirm});}
+async function importConfirm(path,wantName){const before=vms.map(function(x){return x.name;});
+const r=await apiPost('/api/vms/import','path='+encodeURIComponent(path));if(!r)return false;await refresh();
 var added=vms.findIndex(function(x){return before.indexOf(x.name)<0;});
 if(wantName&&added>=0&&vms[added].name!==wantName){await apiPost('/api/vms/'+added+'/rename','name='+encodeURIComponent(wantName));await refresh();added=vms.findIndex(function(x){return x.name===wantName;});}
 if(added>=0)await select(added);
-setStatus('VM imported.');}
+setStatus('VM imported.');return true;}
 async function batchStart(){var btns=document.querySelectorAll('[data-action="batchStart"]');for(var b=0;b<btns.length;b++){btns[b].setAttribute('data-prev-label',btns[b].textContent);btns[b].disabled=true;btns[b].textContent='...';}
 var started=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped')total++;}
 for(let i=0;i<vms.length;i++){if(vms[i].status==='stopped'){setStatus('Batch start: VM '+(started+failed+1)+' of '+total+'...');const r=await apiPost('/api/vms/'+i+'/start');if(r){started++;}else{failed++;setStatus('Batch start: VM '+(started+failed)+' of '+total+' failed, continuing...');}}}
@@ -415,29 +405,24 @@ var stopped=0,failed=0,total=0;for(let i=0;i<vms.length;i++){if(vms[i].status===
 for(let i=vms.length-1;i>=0;i--){if(vms[i].status==='running'||vms[i].status==='paused'){setStatus('Batch stop: VM '+(stopped+failed+1)+' of '+total+'...');const r=await apiPost('/api/vms/'+i+'/stop');if(r){stopped++;}else{failed++;setStatus('Batch stop: VM '+(stopped+failed)+' of '+total+' failed, continuing...');}}}
 await refresh();setStatus('Batch stop complete: '+stopped+' stopped'+(failed>0?', '+failed+' failed':''));
 for(var b2=0;b2<btns.length;b2++){btns[b2].disabled=false;btns[b2].textContent=btns[b2].getAttribute('data-prev-label')||'Power Off All Running';btns[b2].removeAttribute('data-prev-label');}}
-async function takeSnapshot(){if(sel===null)return;await openSnapshots();var t=document.getElementById('s_tag');if(t){t.focus();t.select();}}
-async function takeSnapshotFromDlg(){if(sel===null){showToast('No VM selected','warn');return;}const st=document.getElementById('s_tag');if(!st)return;const t=st.value.trim();if(!t){showToast('Enter a snapshot name','warn');return;}if(/[\x00-\x1f]|\.\./.test(t)||t.length>255){showToast('Snapshot name is invalid','error');return;}
-var takeBtn=document.querySelector('[data-action="takeSnapshotFromDlg"]');if(takeBtn){takeBtn.disabled=true;takeBtn.textContent='Taking...';}
-const r=await apiPost('/api/vms/'+sel+'/snapshots','tag='+encodeURIComponent(t));if(r){st.value='';loadSnapshots();setStatus('Snapshot taken: '+t);}
-if(takeBtn){takeBtn.disabled=false;takeBtn.textContent='Take';}}
-async function openSnapshots(){if(sel===null)return;var sd=document.getElementById('snapdlg');if(sd)sd.showModal();var sl=document.getElementById('snaplist');if(sl)sl.innerHTML='<div class="snapshot-empty">Loading snapshots…</div>';loadSnapshots();}
-async function loadSnapshots(){if(sel===null)return;const el=document.getElementById('snaplist');if(!el)return;
-var v=selectedVm();var meta=document.getElementById('snapMeta');var running=v&&(v.status==='running'||v.status==='paused');if(meta)meta.innerHTML=v?'<strong>'+escHtml(v.name)+'</strong><span>'+escHtml(statusLabel(v.status))+'</span>'+(running?'<span class="warn-text">Revert and delete require the VM to be powered off.</span>':''):'';
-try{const r=await fetch('/api/vms/'+sel+'/snapshots');if(!r.ok){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';return;}const t=(await r.text()).trim();
-if(!t||t==='(none)'){el.innerHTML='<div class="snapshot-empty">No snapshots yet. Take one above to capture this VM\'s disk state, you can revert to or delete it here later.</div>';return;}
-const lines=t.split('\n');let h='';for(const ln of lines){const parts=ln.split('\t');const tag=(parts[0]||'').trim();if(!tag)continue;const when=(parts[1]||'').trim();
-h+=`<div class="snapshot-row"><span class="snap-emblem" aria-hidden="true"><svg class="ico"><use href="/icons.svg#i-snapshot"/></svg></span><div class="snap-info"><strong>${escHtml(tag)}</strong><small title="${when?escHtml(relAge(when)):''}">${when?'Taken '+escHtml(when):'Saved state'}</small></div><div class="snapshot-actions"><button class="btn" data-action="revertSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Revert to snapshot ${escHtml(tag)}"${running?' disabled title="Power off the VM before reverting"':''}>Revert</button><button class="btn danger" data-action="deleteSnapshot" data-snap-tag="${escHtml(tag)}" aria-label="Delete snapshot ${escHtml(tag)}">Delete</button></div></div>`;}
-el.innerHTML=h;}catch(e){el.innerHTML='<div style="color:var(--text-dim)">Failed to load snapshots</div>';}}
-async function revertSnapshot(tag){if(sel===null||!tag)return;if(!(await showConfirmDialog('Revert to snapshot "'+tag+'"? This will discard current state.',{danger:true,okLabel:'Revert'})))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
-const r=await apiPost('/api/vms/'+sel+'/snapshots/revert','tag='+encodeURIComponent(tag));if(r){setStatus('Reverted to snapshot: '+tag);var sd=document.getElementById('snapdlg');if(sd)sd.close();}else{loadSnapshots();}}
-async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!(await showConfirmDialog('Delete snapshot "'+tag+'"?',{danger:true,okLabel:'Delete'})))return;var btns=document.querySelectorAll('[data-action="revertSnapshot"],[data-action="deleteSnapshot"]');for(var i=0;i<btns.length;i++){btns[i].disabled=true;btns[i].textContent='...';}
+function takeSnapshot(){return openSnapshots();}
+async function takeSnapshotFromDlg(tag){if(sel===null){showToast('No VM selected','warn');return false;}
+const r=await apiPost('/api/vms/'+sel+'/snapshots','tag='+encodeURIComponent(tag));if(!r)return false;loadSnapshots();setStatus('Snapshot taken: '+tag);return true;}
+function snapshotMeta(){var v=selectedVm();return{vmName:v?v.name:'',statusLabel:v?statusLabel(v.status):'',running:!!v&&(v.status==='running'||v.status==='paused')};}
+async function openSnapshots(){if(sel===null)return;window.hangarUi.openSnapshots(Object.assign(snapshotMeta(),{list:{kind:'loading'},take:takeSnapshotFromDlg,revert:revertSnapshot,remove:deleteSnapshot}));loadSnapshots();}
+async function loadSnapshots(){if(sel===null)return;var ui=window.hangarUi;var meta=snapshotMeta();
+try{const r=await fetch('/api/vms/'+sel+'/snapshots');if(!r.ok){ui.setSnapshots(Object.assign(meta,{list:{kind:'failed'}}));return;}const t=(await r.text()).trim();var items=[];
+if(t&&t!=='(none)'){for(const ln of t.split('\n')){const parts=ln.split('\t');const tag=(parts[0]||'').trim();if(!tag)continue;const when=(parts[1]||'').trim();items.push({tag:tag,when:when,age:when?relAge(when):''});}}
+ui.setSnapshots(Object.assign(meta,{list:{kind:'ready',items:items}}));}catch(e){ui.setSnapshots(Object.assign(meta,{list:{kind:'failed'}}));}}
+async function revertSnapshot(tag){if(sel===null||!tag)return false;if(!(await showConfirmDialog('Revert to snapshot "'+tag+'"? This will discard current state.',{danger:true,okLabel:'Revert'})))return false;
+const r=await apiPost('/api/vms/'+sel+'/snapshots/revert','tag='+encodeURIComponent(tag));if(!r){loadSnapshots();return false;}setStatus('Reverted to snapshot: '+tag);return true;}
+async function deleteSnapshot(tag){if(sel===null||!tag)return;if(!(await showConfirmDialog('Delete snapshot "'+tag+'"?',{danger:true,okLabel:'Delete'})))return;
 const r=await apiPost('/api/vms/'+sel+'/snapshots/delete','tag='+encodeURIComponent(tag));if(r){loadSnapshots();setStatus('Deleted snapshot: '+tag);}}
 async function sendCad(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/cad');if(r)setStatus('Ctrl+Alt+Del sent to guest.');}
 async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/vms/'+sel+'/export',{method:'POST',headers:{'X-API-Key':API_KEY}});if(!r.ok){setStatus('Export failed: '+r.status);return;}const blob=await r.blob();const a=document.createElement('a');const url=URL.createObjectURL(blob);a.href=url;a.download=vms[sel].name+'.ova';a.click();setTimeout(function(){URL.revokeObjectURL(url);},60000);setStatus('Export downloaded.');}catch(e){setStatus('Export error: '+e);}}
-async function migrateGuest(){if(sel===null)return;var vm=vms[sel];var mv=document.getElementById('migrate_vmname');if(mv)mv.textContent=vm.name;var md=document.getElementById('migratedlg');if(md){updateMigUri();md.showModal();}}
-function updateMigUri(){var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');var uri=document.getElementById('mig_uri');if(host&&port&&uri){var h=host.value.trim();uri.value=h?('tcp:'+h+':'+port.value):'';}}
+async function migrateGuest(){if(sel===null)return;window.hangarUi.openMigrate({vmName:vms[sel].name,start:doMigrate});}
 var migrating=false;
-async function doMigrate(){if(sel===null||migrating)return;var host=document.getElementById('mig_host');var port=document.getElementById('mig_port');if(!host||!port)return;var h=host.value.trim();var p=parseInt(port.value,10)||0;if(!h){showToast('Target host is required','error');return;}if(p<1||p>65535){showToast('Port must be 1–65535','error');return;}var dest='tcp:'+h+':'+p;migrating=true;migId=vms[sel].id;var resp=await apiPost('/api/vms/'+sel+'/migrate','dest='+encodeURIComponent(dest));if(!resp){migrating=false;migId=null;return;}var j=await resp.json();if(!j||j.status!=='started'){showToast('Migration failed to start','error');migrating=false;migId=null;return;}var md=document.getElementById('migratedlg');if(md)md.close();showMigProgress();pollMigStatus();}
+async function doMigrate(host,port){if(sel===null||migrating)return false;var dest='tcp:'+host+':'+port;migrating=true;migId=vms[sel].id;var resp=await apiPost('/api/vms/'+sel+'/migrate','dest='+encodeURIComponent(dest));if(!resp){migrating=false;migId=null;return false;}var j=await resp.json();if(!j||j.status!=='started'){showToast('Migration failed to start','error');migrating=false;migId=null;return false;}showMigProgress();pollMigStatus();return true;}
 var migPollTimer=null;
 var migId=null;
 var migPollFails=0;
@@ -483,28 +468,9 @@ function disabledReason(name,v){if(!v&&name!=='batch-start'&&name!=='batch-stop'
 function syncToolbar(){if(!window.hangarUi)return;const v=selectedVm();window.hangarUi.setToolbar({hasVm:!!v,powered:!!v&&(v.status==='running'||v.status==='paused'),powerBusy:false,actionReason:function(name){return actionAllowed(name,v)?null:disabledReason(name,v);}});}
 function updateCommandState(){syncToolbar();var v=selectedVm();var nodes=document.querySelectorAll('[data-vm-action]');for(var i=0;i<nodes.length;i++){var n=nodes[i];var name=n.getAttribute('data-vm-action');var ok=actionAllowed(name,v);n.disabled=!ok;n.setAttribute('aria-disabled',ok?'false':'true');if(!ok){n.title=disabledReason(name,v);n.setAttribute('data-disabled-title','1');}else if(n.getAttribute('data-disabled-title')==='1'){n.removeAttribute('title');n.removeAttribute('data-disabled-title');}}
 var tabBar=document.getElementById('tabBar');if(tabBar&&v){var consoleBtn=tabBar.querySelector('[data-tab="console"]');if(consoleBtn){consoleBtn.disabled=!(v.status==='running'&&embeddedDisplayCapable(v));consoleBtn.title=consoleBtn.disabled?'Console requires a running embedded VNC or SPICE display':'Open VM console';}}}
-function newVm(){['n_name','n_mem','n_cpu','n_disk'].forEach(function(id){var e=document.getElementById('err_'+id);if(e)e.textContent='';var f=document.getElementById(id);if(f)f.classList.remove('invalid');});
-var gsel=document.getElementById('n_guest_os');
-if(gsel&&!gsel.options.length){var gOpts=[['0','Linux'],['1','Windows'],['2','FreeBSD'],['3','macOS'],['4','Other']];var gh='';for(var gi=0;gi<gOpts.length;gi++)gh+='<option value="'+gOpts[gi][0]+'">'+escHtml(gOpts[gi][1])+'</option>';gsel.innerHTML=gh;}
-var d=document.getElementById('newdlg');if(d)d.showModal();}
-function setNewVmError(id,msg){var err=document.getElementById('err_'+id);var f=document.getElementById(id);if(err)err.textContent=msg||'';if(f){f.classList.toggle('invalid',!!msg);if(msg){f.setAttribute('aria-invalid','true');f.setAttribute('aria-describedby','err_'+id);}else{f.removeAttribute('aria-invalid');f.removeAttribute('aria-describedby');}}}
-function validateNewVm(show){var nn=document.getElementById('n_name');var nm=document.getElementById('n_mem');var nc=document.getElementById('n_cpu');var nd=document.getElementById('n_disk');if(!nn||!nm||!nc||!nd)return false;
-var n=nn.value.trim();var m=parseInt(nm.value,10);var c=parseInt(nc.value,10);var d=parseInt(nd.value,10);
-var ok=true;function fail(id,msg){ok=false;if(show)setNewVmError(id,msg);}function clr(id){if(show)setNewVmError(id,'');}
-clr('n_name');clr('n_mem');clr('n_cpu');clr('n_disk');
-if(!n)fail('n_name','Name is required.');
-if(!Number.isFinite(m)||m<128||m>65536)fail('n_mem','Memory must be 128-65536 MB.');
-if(!Number.isFinite(c)||c<1||c>256)fail('n_cpu','CPU cores must be 1-256.');
-if(!Number.isFinite(d)||d<1||d>65536)fail('n_disk','Disk size must be 1-65536 GB.');
-return ok;}
-async function createVm(){const nn=document.getElementById('n_name');const nm=document.getElementById('n_mem');const nc=document.getElementById('n_cpu');const nd=document.getElementById('n_disk');
-if(!nn||!nm||!nc||!nd)return;
-const n=nn.value.trim();const m=parseInt(nm.value,10)||0;
-const c=parseInt(nc.value,10)||0;const d=parseInt(nd.value,10)||0;
-if(!validateNewVm(true)){var bad=document.querySelector('#newdlg .invalid');if(bad)bad.focus();showToast('Fix highlighted fields before creating the VM.','error');return;}
-const gos=document.getElementById('n_guest_os');const iso=document.getElementById('n_iso');const fw=document.getElementById('n_firmware');
-var extra='';if(gos&&gos.value)extra+='&guest_os='+encodeURIComponent(gos.value);if(iso&&iso.value.trim())extra+='&iso_path='+encodeURIComponent(iso.value.trim());if(fw&&fw.value)extra+='&firmware='+encodeURIComponent(fw.value);
-const r=await apiPost('/api/vms','name='+encodeURIComponent(n)+'&mem='+m+'&cpu='+c+'&disk='+d+extra);if(r){var ndlg=document.getElementById('newdlg');if(ndlg)ndlg.close();await refresh();var ni=vms.findIndex(function(x){return x.name===n;});if(ni>=0)await select(ni);setStatus('VM created.');}}
+function newVm(){window.hangarUi.openNewVm({create:createVm});}
+async function createVm(v){var extra='&guest_os='+encodeURIComponent(v.guestOs)+'&firmware='+encodeURIComponent(v.firmware);if(v.isoPath)extra+='&iso_path='+encodeURIComponent(v.isoPath);
+const r=await apiPost('/api/vms','name='+encodeURIComponent(v.name)+'&mem='+v.memoryMb+'&cpu='+v.cpuCores+'&disk='+v.diskGb+extra);if(!r)return false;await refresh();var ni=vms.findIndex(function(x){return x.name===v.name;});if(ni>=0)await select(ni);setStatus('VM created.');return true;}
 async function deleteVm(){if(sel===null)return;var deleted=vms[sel];if(!deleted)return;if(!(await showConfirmDialog('Delete VM "'+deleted.name+'"?',{danger:true,okLabel:'Delete'})))return;var r=await apiPost('/api/vms/'+sel+'/delete');if(r){sel=null;var delName=deleted.name;await refresh();toastUndo('Deleted "'+delName+'"',async function(){await apiPost('/api/vms/undo');await refresh();});}}
 function reorderVm(from,to){var oldFrom=from,oldTo=to,oldSel=sel;
 if(saveInFlight)return;
@@ -782,19 +748,13 @@ var dialogFocusStack=[];
 var FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 function trapFocus(dlg){if(dlg._trapFocusHandler)return;var prev=document.activeElement;var items=dlg.querySelectorAll(FOCUSABLE);if(!items.length)return;var first=items[0],last=items[items.length-1];function onKey(e){if(e.key!=='Tab')return;if(e.shiftKey){if(document.activeElement===first){e.preventDefault();last.focus();}}else{if(document.activeElement===last){e.preventDefault();first.focus();}}};dlg._trapFocusHandler=onKey;dlg.addEventListener('keydown',onKey);first.focus();dialogFocusStack.push({dlg:dlg,prev:prev});}
 function releaseFocus(dlg){var handler=dlg._trapFocusHandler;if(handler){dlg.removeEventListener('keydown',handler);delete dlg._trapFocusHandler;}dlg.dispatchEvent(new Event('trap-release'));for(var i=dialogFocusStack.length-1;i>=0;i--){if(dialogFocusStack[i].dlg===dlg){var prev=dialogFocusStack[i].prev;dialogFocusStack.splice(i,1);if(prev&&typeof prev.focus==='function'){setTimeout(function(){try{prev.focus();}catch(e){}},0);}break;}}}
-['newdlg','importdlg','snapdlg','clonedlg','vnetdlg','catalogdlg','migratedlg','topodlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;var origClose=dlg.close;dlg.showModal=function(){if(dlg.hasAttribute('data-closing')){dlg.removeAttribute('data-closing');trapFocus(dlg);return;}trapFocus(dlg);origShow.call(dlg);};dlg.close=function(){if(!dlg.open||dlg.hasAttribute('data-closing'))return;if(dlg._closeGuard&&!dlg.hasAttribute('data-guard-ok')){var guard=dlg._closeGuard();if(guard&&typeof guard.then==='function'){guard.then(function(ok){if(ok){dlg.setAttribute('data-guard-ok','');dlg.close();}dlg.removeAttribute('data-guard-ok');});return;}if(!guard)return;}dlg.setAttribute('data-closing','');function done(){if(!dlg.hasAttribute('data-closing'))return;dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
+['vnetdlg','catalogdlg','topodlg'].forEach(function(id){var dlg=document.getElementById(id);if(!dlg)return;dlg.addEventListener('click',function(e){if(e.target===dlg)dlg.close();});dlg.addEventListener('close',function(){releaseFocus(dlg);});var origShow=dlg.showModal;var origClose=dlg.close;dlg.showModal=function(){if(dlg.hasAttribute('data-closing')){dlg.removeAttribute('data-closing');trapFocus(dlg);return;}trapFocus(dlg);origShow.call(dlg);};dlg.close=function(){if(!dlg.open||dlg.hasAttribute('data-closing'))return;if(dlg._closeGuard&&!dlg.hasAttribute('data-guard-ok')){var guard=dlg._closeGuard();if(guard&&typeof guard.then==='function'){guard.then(function(ok){if(ok){dlg.setAttribute('data-guard-ok','');dlg.close();}dlg.removeAttribute('data-guard-ok');});return;}if(!guard)return;}dlg.setAttribute('data-closing','');function done(){if(!dlg.hasAttribute('data-closing'))return;dlg.removeAttribute('data-closing');dlg.removeEventListener('animationend',done);origClose.call(dlg);}dlg.addEventListener('animationend',done);setTimeout(function(){if(dlg.hasAttribute('data-closing'))done();},200);};});
 // ── Network editor: unsaved edits are confirmed before any close path ──
 (function(){var vd=document.getElementById('vnetdlg');if(!vd)return;
  vd._closeGuard=function(){if(!vnetsDirty)return true;return showConfirmDialog('Discard unsaved network changes?',{danger:true,okLabel:'Discard'});};
  vd.addEventListener('input',function(){vnetsDirty=true;});})();
-// ── Enter in a dialog input triggers its primary action ──
-[{id:'newdlg',fn:createVm},{id:'importdlg',fn:importConfirm},{id:'migratedlg',fn:doMigrate},{id:'snapdlg',fn:takeSnapshotFromDlg}].forEach(function(o){var d=document.getElementById(o.id);if(!d)return;d.addEventListener('keydown',function(e){if(e.key!=='Enter')return;var t=e.target;if(t&&t.tagName==='INPUT'&&t.type!=='button'&&!t.readOnly){e.preventDefault();o.fn();}});});
-// ── New VM dialog: live inline validation (mirrors the Settings form) ──
-(function(){var d=document.getElementById('newdlg');if(!d)return;d.addEventListener('input',function(e){var t=e.target;if(t&&(t.id==='n_name'||t.id==='n_mem'||t.id==='n_cpu'||t.id==='n_disk'))validateNewVm(true);});})();
 // ── Sidebar Overlay Click-to-Close ──
 document.body.addEventListener('click',function(e){if(document.body.classList.contains('sidebar-overlay')&&!e.target.closest('aside')){closeSidebar();}});
-// ── Migrate dialog close cleanup ──
-(function(){var md=document.getElementById('migratedlg');if(md)md.addEventListener('close',function(){if(migrating){hideMigProgress();}});})();
 // ── Toolbar More Click-Outside ──
 // ── Right-Click Context Menu ──
 let ctxMenu=null,ctxVmIdx=-1;
@@ -1664,15 +1624,14 @@ var actionHandlers={
  resetGuest:function(){resetGuest();},suspendGuest:function(){suspendGuest();},
  sendCad:function(){sendCad();},editVm:function(){editVm();},
  renameGuest:function(){renameGuest();},cloneGuest:function(){cloneGuest();},
- importGuest:function(){importGuest();},importConfirm:function(){importConfirm();},takeSnapshot:function(){takeSnapshot();},openSnapshots:function(){openSnapshots();},
- exportOvf:function(){exportOvf();},migrateGuest:function(){migrateGuest();},doMigrate:function(){doMigrate();},openVnets:function(){openVnets();},
+ importGuest:function(){importGuest();},takeSnapshot:function(){takeSnapshot();},openSnapshots:function(){openSnapshots();},
+ exportOvf:function(){exportOvf();},migrateGuest:function(){migrateGuest();},openVnets:function(){openVnets();},
  openPrefs:function(){openPrefs();},openAbout:function(){openAbout();},openCatalog:function(){openCatalog();},
  showShortcutsModal:function(){showShortcutsModal();},
  quickstartVm:function(el){var slug=el.getAttribute('data-catalog-id');if(slug)quickstartVm(slug);},
  batchStart:function(){batchStart();},batchStop:function(){batchStop();},
  deleteVm:function(){deleteVm();},clearSearch:function(){clearSearch();},
- newVm:function(){newVm();},createVm:function(){createVm();},
- takeSnapshotFromDlg:function(){takeSnapshotFromDlg();},
+ newVm:function(){newVm();},
  manualDisconnectSerial:function(){manualDisconnectSerial();},reconnectSerial:function(){reconnectSerial();},
  clearSerial:function(){if(serialTerm)serialTerm.reset();serialBuf='';},
  exportSerial:function(){if(!serialBuf)return;var blob=new Blob([serialBuf],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='hangar-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
@@ -1693,9 +1652,6 @@ var actionHandlers={
 	 topoSelectVm:function(el){topoSelectVm(el.getAttribute('data-vm-name'));},
 	 topoEditNet:function(el){topoEditNet(el.getAttribute('data-net-name'));},
  toggleFavorite:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))toggleFavorite(i);},
- revertSnapshot:function(el){revertSnapshot(el.getAttribute('data-snap-tag')||'');},
- deleteSnapshot:function(el){deleteSnapshot(el.getAttribute('data-snap-tag')||'');},
- doClone:function(el){doClone(parseInt(el.getAttribute('data-clone-linked'),10));},
  switchTab:function(el){switchTab(el.getAttribute('data-tab')||'summary');},
  closeDlg:function(el){var id=el.getAttribute('data-dialog');if(id){var d=document.getElementById(id);if(d)d.close();}},
  viewLog:function(){viewLog();},refreshLog:function(){refreshLog();},
@@ -1727,7 +1683,6 @@ document.body.addEventListener('input',function(e){
   if(filterTimer)clearTimeout(filterTimer);
   filterTimer=setTimeout(filterList,180);
  }
- if(e.target.id==='mig_host'||e.target.id==='mig_port')updateMigUri();
 });
 document.body.addEventListener('change',function(e){
  if(e.target.closest('#tabSettings')){settingsDirty=true;validateSettings(true);}

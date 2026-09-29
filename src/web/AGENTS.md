@@ -7,9 +7,9 @@ plus the Preact + Tailwind source in `ui/`. Bun bundles `ui/` to `dist/` (gitign
 Targets VMware (vSphere/Workstation) admin conventions.
 
 ## Ownership
-- `index.html`: markup, the remaining legacy dialogs, script tags. The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`. Confirm, prompt, About, Keyboard Shortcuts, QEMU log and Preferences are not here either: `#dialog-root` is the mount for the Preact `Dialogs`.
+- `index.html`: markup, the remaining legacy dialogs (`vnetdlg`, `topodlg`, `catalogdlg`), script tags. The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`. Confirm, prompt, About, Keyboard Shortcuts, QEMU log, Preferences, New VM, Import, Clone, Snapshot Manager and Migrate are not here either: `#dialog-root` is the mount for the Preact `Dialogs`. The migration progress bar (`#mig_progress`, `#mig_pct`, `#mig_cancel`) is page markup below the tabs, not part of the Migrate dialog.
 - `app.js`: refresh poll, render, action dispatch, the remaining legacy dialogs,
-  console/serial viewers, command palette, folders, topology. `showConfirmDialog`, `showPromptDialog`, `openPrefs`, `openAbout`, `showShortcutsModal` and `viewLog` keep their signatures and promise behavior but only call `hangarUi` (`confirm`, `prompt`, `openPrefs`, `openAbout`, `openShortcuts`, `openLog`); the fetches stay in `app.js`.
+  console/serial viewers, command palette, folders, topology. `showConfirmDialog`, `showPromptDialog`, `openPrefs`, `openAbout`, `showShortcutsModal` and `viewLog` keep their signatures and promise behavior but only call `hangarUi` (`confirm`, `prompt`, `openPrefs`, `openAbout`, `openShortcuts`, `openLog`); the fetches stay in `app.js`. `newVm`, `importGuest`, `cloneGuest`, `openSnapshots` (also `takeSnapshot`) and `migrateGuest` open their dialog through `hangarUi` and hand it the action callbacks: `createVm(values)`, `importConfirm(path, name)`, `doClone(linked)`, `takeSnapshotFromDlg(tag)`, `revertSnapshot(tag)`, `deleteSnapshot(tag)` and `doMigrate(host, port)`. Each takes typed, already validated values and resolves whether the dialog may close; `loadSnapshots` pushes the list with `hangarUi.setSnapshots`. The dialogs own their form state and field validation.
 - `app.css`: flat slate theme (`:root` dark default + `:root.light`) + components.
   Logo and empty-state emblems use the shared accent and radius tokens, without
   decorative gradients or colored shadows.
@@ -65,7 +65,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
   the button contents with text. A platform emoji in a control is a defect: it
   ignores the accent and radius tokens and renders at the platform's whim.
 - **Emblem radius follows emblem size**: 20px `.os-badge` -> `--radius-sm`,
-  30px `.vm-emblem` and 34px `.snap-emblem` -> `--radius-md`, 44px `.cat-emblem` ->
+  30px `.vm-emblem` and the 34px snapshot row emblem (Preact, `rounded-md`) -> `--radius-md`, 44px `.cat-emblem` ->
   `--radius-lg`. The four read as one family; never round them independently.
 - **Dialog chrome comes from the shared rules**, not from a per-dialog inline style:
   the `Dialog` primitive for Preact dialogs (`ui/components/ui/dialog.tsx`), the
@@ -92,7 +92,7 @@ Targets VMware (vSphere/Workstation) admin conventions.
   for dialog-openers; dialog footers are `.btn-row` (right-aligned, primary last,
   destructive `.btn.danger` grouped left when present). Destructive-action rule:
   recoverable deletes use the undo toast (`toastUndo`), irreversible operations
-  (snapshot revert, disk ops) use `showConfirmDialog({danger:true})`. Don't mix.
+  (snapshot revert and delete, disk ops) use `showConfirmDialog({danger:true})`. Don't mix.
   Status and notification glyphs come from the sprite too (`toastIcons` maps
   success/error/info/warn to `i-check`/`i-x`/`i-info`/`i-alert`); a text
   substitute like `✓` or `＋` is a defect. VanJS-built buttons get their sprite
@@ -158,11 +158,15 @@ Targets VMware (vSphere/Workstation) admin conventions.
   survives rename) or name (`idxByName`), never a frozen index. Multi-select keeps
   `checkedIds`; migration tracks `migId`.
 - **Preact dialogs are removed from the DOM when closed**, so `#confirmdlg`, `#promptdlg`,
-  `#aboutdlg`, `#shortcutsdlg`, `#logdlg` and `#prefsdlg` exist only while open (a test asserts
+  `#aboutdlg`, `#shortcutsdlg`, `#logdlg`, `#prefsdlg`, `#newdlg`, `#importdlg`, `#clonedlg`, `#snapdlg` and `#migratedlg` exist only while open (a test asserts
   `toHaveCount(0)`, not hidden). `dlg.close()` on one still works: the `Dialog` replaces it with
   the guarded, animated close, which is what the `closeDlg` action and the Escape sweep call.
   Preferences applies the theme as it is picked and puts the original back on every close except a
   save; that state is in the component, not in `app.js`.
+  New VM, Import and Migrate validate inline (`aria-invalid` on the control, message in `#err_<field id>`),
+  focus the first bad field on submit, and disable the submit button while the request is pending;
+  none has a dirty guard. The Snapshot Manager reverts only with the VM powered off, and a
+  successful revert closes it.
 - **Vendored-bundle globals are not their class:** `noVNC` exposes the RFB class as
   `noVNC.default` (NOT `noVNC.RFB`); SPICE uses `SpiceHtml5.SpiceMainConn`; elk is `ELK`.
   Resolve `noVNC.default || noVNC.RFB` so a re-vendor can't silently break the console.

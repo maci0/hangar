@@ -33,3 +33,45 @@ for (const theme of ['dark', 'light']) {
         }
     });
 }
+
+// Dialogs open over the page (native modal), so each is scanned on its own with its error state showing.
+const DIALOGS = [
+    ['newVm', 'newdlg', async (page) => page.locator('#n_mem').fill('64')],
+    ['importGuest', 'importdlg', async (page) => page.locator('#importdlg button[type="submit"]').click()],
+    ['cloneGuest', 'clonedlg', async () => {}],
+    ['openSnapshots', 'snapdlg', async (page) => page.locator('#snapdlg button[type="submit"]').click()],
+    ['migrateGuest', 'migratedlg', async (page) => page.locator('#migratedlg button[type="submit"]').click()],
+];
+
+for (const theme of ['dark', 'light']) {
+    test(`axe finds no violations in the VM dialogs (${theme})`, async ({ page }) => {
+        await page.addInitScript((t) => localStorage.setItem('hangar-theme', t), theme);
+        await page.goto('/', { waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('#vmlist');
+        const created = await page.evaluate(async () => (await fetch('/api/vms', {
+            method: 'POST',
+            headers: { 'X-API-Key': 'hangar' },
+            body: 'name=a11y-dlg-vm&mem=1024&cpu=1&disk=1&guest_os=0',
+        })).status);
+        expect(created).toBeLessThan(400);
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        const row = page.locator('#vmlist .vm-item', { hasText: 'a11y-dlg-vm' });
+        await row.waitFor();
+        await row.click();
+        try {
+            for (const [fn, id, prepare] of DIALOGS) {
+                await page.evaluate((name) => window[name](), fn);
+                await page.locator(`#${id}`).waitFor();
+                await prepare(page);
+                await page.waitForTimeout(SETTLE_MS);
+                const { violations } = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
+                expect(violations.map((v) => `${id}: ${v.id} ${v.nodes[0].target}`)).toEqual([]);
+                await page.keyboard.press('Escape');
+                await expect(page.locator(`#${id}`)).toHaveCount(0);
+            }
+        } finally {
+            const idx = await page.evaluate(() => vms.findIndex((v) => v.name === 'a11y-dlg-vm'));
+            await page.evaluate(async (i) => fetch(`/api/vms/${i}/delete`, { method: 'POST', headers: { 'X-API-Key': 'hangar' } }), idx);
+        }
+    });
+}
