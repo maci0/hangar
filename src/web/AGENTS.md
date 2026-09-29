@@ -98,8 +98,7 @@ Exclude vendored `xterm.css`: the validator rejects its valid `text-decoration`
 shorthand (`overline underline`); do not edit the bundle to satisfy validation.
 
 ## Notes
-Headless Chromium completes WebSockets to the daemon fine, if a WS sticks in
-CONNECTING, suspect the server's 101 response first (a Zig multiline literal once
-emitted literal `\r` text instead of CRLF and broke every console; `ws.zig` has
-regression tests). The live-console e2e boots a real guest headlessly and asserts
-canvas + serial connect.
+If a WebSocket sticks in CONNECTING under headless Chromium, suspect the server's
+101 response before the client: malformed CRLF there breaks every console at once
+(`ws.zig` has regression tests for it). The live-console e2e boots a real guest
+headlessly and asserts canvas + serial connect.

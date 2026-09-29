@@ -28,9 +28,8 @@ zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 `zig build check` runs all executables, formatting, shell/JS lint, the
 unit/fuzz suite, and `zig build test-cli` (help/version and stdout-failure exit
 codes for all three binaries, plus invalid client API-key checks without a daemon).
-CI runs the build, lint and
-unit/fuzz steps; `test-cli` is an additional local check. Integration and browser
-tests remain standalone.
+CI runs the build, lint and unit/fuzz steps; `test-cli` is an additional local check.
+Integration and browser tests remain standalone.
 
 Static analysis (blocking CI steps, all scoped to git-tracked files so vendored
 code and scratch trees are excluded):
@@ -89,8 +88,10 @@ Zig 0.16's C importer rejects GLib headers (they emit file-scope `_Pragma`). No 
 - `web_server.zig` is the router + VM CRUD/lifecycle core; cohesive handler groups and leaf utilities have been carved into their own modules, which `web_server` `@import`s and (for the leaf helpers) aliases so call sites read unchanged:
   - HTTP plumbing (leaf): `httpreq.zig` (request-line/header/route parsers), `httpresp.zig` (status codes + response writer + `isServerErrToken`/`sanitizeHeaderValue`), `wlog.zig` (structured logging), `netutil.zig` (socket constants + `setTcpNoDelay`), `auth.zig` (API-key check, exempt list, host/WS gates).
   - Handler groups: `snapshots.zig`, `migrate.zig`, `disk.zig` (info/compact/resize), `cdrom.zig`, `guestagent.zig`, `streams.zig` (conn-streaming: screenshot/download/upload/exportOva), `wsproxy.zig` (VNC/SPICE/serial relays), `catalog.zig`, `framebuffer.zig`.
-  - The uniform `POST /api/vms/<id>/<action>` routes dispatch through a comptime `post_routes` table in `web_server.zig`; create/save form fields apply through `@field`-driven tables (`applyBoolField`/`applyEnumField`/`applyStrField`). Add a new uniform POST route or boolean/enum/string field by extending the table, not by copy-pasting an arm.
-- Hypervisor abstraction: the `g_vmm.*Fn` dispatch table (`hv/interface.zig` + `hv/qemu_backend.zig`) covers PROCESS lifecycle only: `start`, `forceStop`, `isAlive`, `reap`, `createLinkedClone`, `deinit`. Guest control (pause/resume/shutdown/reset/cdrom/migrate/screenshot) goes directly to QMP via `web_server.vmQmpByName` (fresh connection, lock released); offline disk/snapshot ops call `qemu.*`/`qemu-img` directly. Extend the dispatch interface only when a real second backend needs more.
+  - Uniform `POST /api/vms/<id>/<action>` routes and create/save form fields are
+    table-driven, not copy-pasted arms; the table names and extension rule are in
+    `src/AGENTS.md`.
+- Hypervisor abstraction: the `g_vmm.*Fn` dispatch table (`hv/interface.zig` + `hv/qemu_backend.zig`) covers PROCESS lifecycle only. Guest control (pause/resume/shutdown/reset/cdrom/migrate/screenshot) goes directly to QMP via `web_server.vmQmpByName` (fresh connection, lock released); offline disk/snapshot ops call `qemu.*`/`qemu-img` directly. See `src/hv/AGENTS.md` before widening the interface.
 
 ## Configuration (environment variables)
 
@@ -101,26 +102,23 @@ autostarting guests. All variables are optional.
 | --- | --- | --- |
 | `KV_API_KEY` | `hangar` (built-in) | X-API-Key secret. **Setting it also opts the daemon into binding all interfaces (`::`).** With no key set, the daemon binds **loopback only** (`::ffff:127.0.0.1`, the IPv4-mapped loopback on its dual-stack socket) so the weak default is never reachable off-host. Must be 1–64 printable-ASCII bytes (no spaces or control characters); an invalid value aborts startup. Setting it to the built-in default value (`hangar`) is treated as unset, the daemon stays loopback-only rather than exposing all interfaces behind the known default. |
 | `KV_PORT` | `9080` | TCP listen port. Must parse as a non-zero `u16`; otherwise startup aborts. |
-| `HANGAR_CONFIG_HOME` | `$HOME` | Base dir for `~/.config/hangar/*` state (see Persistence). |
+| `HANGAR_CONFIG_HOME` | `$HOME` | Home directory that holds `.config/hangar/` state (see Persistence). |
 
-Never commit a real `KV_API_KEY`. For any non-local deployment, set a strong `KV_API_KEY` (which is also what exposes the daemon beyond loopback).
+For any non-local deployment, set a strong `KV_API_KEY` (which is also what exposes the daemon beyond loopback).
 
 ## Persistence
 
 - VMs: `~/.config/hangar/vms.json` (override via `HANGAR_CONFIG_HOME`).
 - Virtual networks: `~/.config/hangar/networks.json` (owned by `vnet.zig`).
 - Only configuration is persisted. Runtime state (`status`, `pid`, ...) is never written.
-- When adding fields to `VmConfig`, also update `VmJson`, `emitVmJson`, `fromVmJson` / `parseVmObject` in `persist.zig`, and add parser tests. Large string fields (e.g. `cloud_init`, 8 KB) also need the `parseVmObject` `str_buf`, the create/save `val_buf`, and the VM-detail render buffer sized to hold them.
+- Adding a `VmConfig` field has a fixed checklist in `src/AGENTS.md`; follow it there.
 
 ## Testing
 
 - Tests live at the bottom of each module's `.zig` (not in separate files), except for thin wrappers (`appstate_test.zig`, `hv_*_test.zig`).
-- Fuzz tests are deterministic PRNG harnesses (fixed seed) and are ordinary `zig build test` entries. They cover parsers, setters, arg builders, and pure helpers.
-- Every enum must have tests for: fromIndex round-trip, toIndex inverts fromIndex, toStr values, label values, out-of-range default.
-- `qemu.zig` arg-builder tests must use the `buildScriptStr` / `buildArgs` functions, never by spawning QEMU.
+- Fuzz tests are deterministic PRNG harnesses (fixed seed) and are ordinary `zig build test` entries. They cover parsers, setters, arg builders, and pure helpers. Enum and `qemu.zig` arg-builder test rules live in `src/AGENTS.md`.
 - **Confirm source or embedded-asset changes with `zig build` (the exe link), not only a single-module test:** tests may not instantiate code reachable solely through the executable. A missing string in a binary does not prove cache corruption. Check the worktree, build options, and artifact path first; if needed, rebuild with fresh repository-local `--cache-dir` and `--prefix` paths rather than deleting existing caches or outputs.
-- The Playwright e2e suite (`tests/e2e/`, config `playwright.config.mjs`) is a **standalone** `zig build web-e2e` step, NOT in the umbrella `test`. Playwright launches the built binary on a dedicated port against a temp `$HOME`. Run `bun install --frozen-lockfile` and `bun run e2e:install` (Chromium) once before the first run. The build invokes the repository-local Playwright CLI and fails if it is missing instead of downloading a runner. The shell integration tests `zig build test-api` / `zig build test-vmrun` are likewise standalone (they spawn a real daemon).
-- **Every user-facing workflow must have an end-to-end Playwright test.** Any web-UI flow (VM create/clone/delete/rename, power on/off, snapshots, settings save, import/export, log viewer, console, vnet editor, preferences) needs a Playwright e2e test that drives the real built binary (temp port + temp `$HOME`, same as the smoke harness) and asserts the observable result. Add or extend the e2e test alongside the feature, never after. A new workflow without a Playwright e2e test is incomplete.
+- The Playwright e2e suite and the shell integration tests are **standalone** steps, not part of `zig build test`; they spawn real daemons. **Every user-facing workflow must ship an e2e test with the feature, never after.** Setup commands, per-suite isolation, and result-reading rules are in `tests/AGENTS.md`.
 
 ## Code Style & Conventions
 
@@ -171,8 +169,7 @@ Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, 
 
 ### Concurrency
 - Use `sync.SpinMutex` (per project rule); atomics for cross-thread scalar flags.
-- Never touch `appstate.vms` / `vm_count` without `vms_mutex`.
-- Do not hold locks during QEMU/QMP/filesystem/network I/O.
+- Shared-state lock rules (including the one bounded I/O exception) are in `src/AGENTS.md`.
 
 ### build.zig
 - The compiler must exactly match `build.zig.zon`'s `minimum_zig_version`; `build.zig` rejects other versions.
@@ -278,5 +275,5 @@ When the user requests a durable behavior change, record it here or in the relev
 
 Owned by the parent (no child doc): `docs/` (design notes, DESIGN/PRD/GAP-ANALYSIS/
 TEST-COVERAGE/WEB-UI-CUJS/TODO/VIDEO-PIPELINE; reference material, not contracts), `reference/`
-(read-only external material: VMware WS7), `zig-pkg/` (vendored Zig deps, do not edit),
-and the root build files (`build.zig`, `build.zig.zon`, `package.json`, `playwright.config.mjs`).
+(read-only external material: VMware WS7), and the root build files (`build.zig`,
+`build.zig.zon`, `package.json`, `playwright.config.mjs`).
