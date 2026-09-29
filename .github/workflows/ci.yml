@@ -52,13 +52,14 @@ jobs:
       - name: Install system build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libvncserver-dev pkg-config shellcheck
+          sudo apt-get install --no-install-recommends -y libvncserver-dev pkg-config shellcheck yamllint
       - name: Build
         run: zig build
-      - name: Static analysis (zig fmt + shellcheck + bun js syntax)
+      - name: Static analysis (zig fmt + shellcheck + yamllint + bun js syntax)
         run: |
           zig build fmt-check
           zig build lint-shell
+          zig build lint-yaml
           zig build lint-js
       - name: Hermetic unit + fuzz tests
         run: zig build test --summary all

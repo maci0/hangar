@@ -1,0 +1,16 @@
+# yamllint config for tracked YAML (CI workflows). `zig build lint-yaml` passes
+# --no-warnings so the rule set below is the whole contract; --norc on shellcheck
+# exists for the same reason, and this file must stay machine-local-proof.
+extends: default
+
+rules:
+  # GitHub Actions keys the trigger map on a bare `on:`, which YAML 1.1 reads
+  # as the boolean true. Allow it rather than quoting the key.
+  truthy:
+    allowed-values: ["true", "false", "on"]
+  # 80 is yamllint's default; the longest line in the workflow is under 110.
+  line-length:
+    max: 120
+  # Single-document workflow files; the `---` start marker carries no meaning.
+  document-start: disable
+  comments-indentation: disable

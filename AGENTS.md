@@ -25,7 +25,7 @@ zig build test-api     # HTTP API integration test (spawns a real daemon)
 zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 ```
 
-`zig build check` runs all executables, formatting, shell/JS lint, the
+`zig build check` runs all executables, formatting, shell/YAML/JS lint, the
 unit/fuzz suite, and `zig build test-cli` (help/version and stdout-failure exit
 codes for all three binaries, plus invalid client API-key checks without a daemon).
 CI runs the build, lint and unit/fuzz steps; `test-cli` is an additional local check.
@@ -37,13 +37,18 @@ code and scratch trees are excluded):
 ```bash
 zig build fmt-check    # zig fmt --check --ast-check over tracked *.zig/*.zon
 zig build lint-shell   # shellcheck over tracked *.sh
+zig build lint-yaml    # yamllint over tracked *.yml/*.yaml (CI workflows)
 zig build lint-js      # bun build over hand-written JS (vendored src/web bundles excluded)
 ```
 
-`build.zig` owns lint flags; `.github/workflows/ci.yml` owns CI setup.
-Preserve file-enumeration failure propagation and whitespace-safe filenames.
-`fmt-check` uses the Zig executable running the build. `lint-shell` uses `--norc`
-so machine-local ShellCheck configuration cannot change the blocking rule set.
+`build.zig` owns lint flags; `.yamllint` owns the YAML rule set;
+`.github/workflows/ci.yml` owns CI setup. Preserve file-enumeration failure
+propagation and whitespace-safe filenames. `fmt-check` uses the Zig executable
+running the build. `lint-shell` uses `--norc` so machine-local ShellCheck
+configuration cannot change the blocking rule set. `lint-yaml` passes `-c` for
+the same reason and runs `yamllint --no-warnings`, so every rule in `.yamllint`
+blocks. Both tools are installed in CI from apt: a version the checked-in
+configs do not parse must fail loudly, not pass quietly.
 
 ### Running a single test module
 

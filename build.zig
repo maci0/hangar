@@ -149,6 +149,20 @@ pub fn build(b: *std.Build) !void {
     });
     lint_shell.dependOn(&lint_shell_cmd.step);
 
+    // CI workflow YAML is the one tracked non-Zig, non-shell language, so it
+    // gets a gate too. The config path is passed explicitly (yamllint otherwise
+    // falls back to a machine-local config) and --no-warnings makes every rule
+    // in .yamllint blocking, so "warning" can never scroll by unnoticed.
+    const lint_yaml = b.step("lint-yaml", "Lint tracked YAML (yamllint)");
+    const lint_yaml_cmd = b.addSystemCommand(&.{
+        "bash",      "-euo",                      "pipefail", "-c",
+        \\git ls-files -z '*.yml' '*.yaml' |
+        \\xargs -0rn1 yamllint --no-warnings -c "$1"
+        ,
+        "lint-yaml", b.pathFromRoot(".yamllint"),
+    });
+    lint_yaml.dependOn(&lint_yaml_cmd.step);
+
     // Syntax gate over hand-written JS (app.js is @embedFile'd raw, so the exe
     // builds fine even when it does not parse). Excludes the vendored bundles
     // listed in src/web/AGENTS.md; any new non-vendored file is covered.
@@ -243,11 +257,12 @@ pub fn build(b: *std.Build) !void {
     client_config_test.addArtifactArg(vmrun_exe);
     cli_test.dependOn(&client_config_test.step);
 
-    const check = b.step("check", "Run CI checks (build, format, lint, unit + fuzz tests)");
+    const check = b.step("check", "Run CI checks (build, format, shell/YAML/JS lint, unit + fuzz tests)");
     check.dependOn(cli_test);
     check.dependOn(b.getInstallStep());
     check.dependOn(fmt_check);
     check.dependOn(lint_shell);
+    check.dependOn(lint_yaml);
     check.dependOn(lint_js);
     check.dependOn(test_step);
 }
