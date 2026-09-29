@@ -7,10 +7,10 @@ Tailwind v4 entry sheet. Bundled by `scripts/build-web.ts` into `src/web/dist/ui
 The legacy `../app.js` and `../app.css` still own everything not yet ported here.
 
 ## Ownership
-- `main.tsx`: entry. Replaces a legacy DOM node with its Preact component.
+- `main.tsx`: entry. Replaces legacy DOM with Preact components and registers the `hangarUi` bridge.
 - `components/ui/`: shadcn-style primitives (cva variants, `cn` merge). `components.json`
   at the repo root maps the shadcn CLI aliases here.
-- `components/`: feature components.
+- `components/`: feature components. `vm-list.tsx` renders the sidebar; `main.tsx` exposes `window.hangarUi.renderVmList`, which the legacy `renderList` in `app.js` calls with precomputed rows (folders, favorites, roving tab stop). Rows keep `data-action` attributes so the delegated handlers stay in `app.js`. `icon.tsx` draws a sprite symbol.
 - `lib/cn.ts`: class merge helper.
 - `styles.css`: Tailwind `theme` and `utilities` layers only (no preflight while `app.css`
   owns resets). `@theme inline` exposes the `app.css` tokens as utilities.

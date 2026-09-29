@@ -166,42 +166,18 @@ async function moveToFolder(){if(sel===null||sel>=vms.length)return;var v=vms[se
   var f=await showPromptDialog('Move "'+v.name+'" to folder (blank = none):',cur,folders);if(f===null)return;f=f.trim();
   var r=await apiPost('/api/vms/'+sel,'folder='+encodeURIComponent(f));
   if(r){await refresh();setStatus(f?('Moved to '+escHtml(f)):'Removed from folder');}}
-function renderList(filter){const e=document.getElementById('vmlist');if(!e)return;e.removeAttribute('aria-busy');const search=document.getElementById('search');const f=(filter===undefined?(search?search.value:''):(filter||'')).toLowerCase();let h='';
-// The list is replaced wholesale by the 5s poll; without this a keyboard user's
-// focus lands on <body> mid-interaction and arrow navigation stops working.
-const act=document.activeElement;
-const keepRow=act&&act.closest?act.closest('#vmlist [data-vm-index],#vmlist .folder-hdr'):null;
-const keepIdx=keepRow&&keepRow.classList.contains('vm-item')?keepRow.getAttribute('data-vm-index'):null;
-const keepFolder=keepRow&&keepRow.classList.contains('folder-hdr')?keepRow.getAttribute('data-folder'):null;
+function renderList(filter){const e=document.getElementById('vmlist');if(!e||!window.hangarUi)return;e.removeAttribute('aria-busy');const search=document.getElementById('search');const f=(filter===undefined?(search?search.value:''):(filter||'')).toLowerCase();
 const viz=vms.map((v,i)=>({i,show:!f||(v.name||'').toLowerCase().includes(f)||(v.tags||'').toLowerCase().includes(f),fav:v.favorite==='true',v}));
 const firstVisible=viz.find(x=>x.show);
-const rovingIdx=String(sel!==null?sel:(firstVisible?firstVisible.i:-1));
-let hasFavs=false,hasNon=false,maxMem=16384;for(const x of viz){if(!x.show)continue;if(x.fav)hasFavs=true;else hasNon=true;const m=x.v.mem||0;if(m>maxMem)maxMem=m;}
-function vmBars(v){var cpu=Number(v.cpu)||1;var ramTxt=memText(v.mem);return '<div class="vm-meta" aria-hidden="true">'+escHtml(cpu)+' vCPU · '+escHtml(ramTxt)+'</div>';}
-function vmItemHtml(x){
- const dotCls=x.v.status==='running'?'running':x.v.status==='paused'?'paused':x.v.status==='suspended'?'suspended':'';
- const dotLabel=x.v.status==='running'?'Running':x.v.status==='paused'?'Paused':x.v.status==='suspended'?'Suspended':'Stopped';
- const star=x.fav?'<button type="button" class="star fav" data-vm-index="'+x.i+'" data-action="toggleFavorite" aria-pressed="true" aria-label="Remove from favorites"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-star"/></svg></button>':'<button type="button" class="star" data-vm-index="'+x.i+'" data-action="toggleFavorite" aria-pressed="false" aria-label="Add to favorites"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-star"/></svg></button>';
- const cb=selectMode?('<input type="checkbox" class="vm-check" data-action="toggleCheck" data-vm-id="'+escHtml(x.v.id)+'"'+(checkedIds.has(x.v.id)?' checked':'')+' aria-label="Select '+escHtml(x.v.name)+'">'):'';
- // Roving tabindex: the list is one tab stop. The selected row is that stop;
- // with nothing selected the first rendered row takes it so Tab still reaches the list.
- const ti=String(x.i)===rovingIdx?'0':'-1';
- return '<div class="vm-row"><div class="vm-item'+(sel===x.i?' active':'')+(transitioningIdx===x.i?' transitioning':'')+(selectMode?' selectable':'')+'" role="button"'+(sel===x.i?' aria-current="true"':'')+' data-vm-index="'+x.i+'" tabindex="'+ti+'" data-action="select" draggable="true" title="'+escHtml(x.v.name)+'">'+cb+'<span class="dot '+dotCls+'" role="img" aria-label="'+dotLabel+'" title="'+dotLabel+'"></span> '+escHtml(x.v.name)+vmBars(x.v)+'</div>'+star+'</div>';
-}
-for(const x of viz){if(!x.show||!x.fav)continue;h+=vmItemHtml(x);}
-if(hasFavs&&hasNon)h+='<div role="separator" aria-hidden="true" style="color:var(--text-dim);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);margin:4px 0">──────────</div>';
-// Non-favorites: group into collapsible folders (folder:<path> tag); ungrouped last.
+// Roving tabindex: the list is one tab stop. The selected row is that stop;
+// with nothing selected the first rendered row takes it so Tab still reaches the list.
+const rovingIdx=sel!==null?sel:(firstVisible?firstVisible.i:-1);
+function rowFor(x){return {index:x.i,id:String(x.v.id),name:x.v.name,status:['running','paused','suspended'].includes(x.v.status)?x.v.status:'stopped',meta:(Number(x.v.cpu)||1)+' vCPU \u00b7 '+memText(x.v.mem),favorite:x.fav,active:sel===x.i,transitioning:transitioningIdx===x.i,checked:checkedIds.has(x.v.id),tabStop:x.i===rovingIdx};}
+// Non-favorites group into collapsible folders (folder:<path> tag); ungrouped last.
 const groups={},order=[],ungrouped=[];
-for(const x of viz){if(!x.show||x.fav)continue;const fld=vmFolder(x.v);if(fld){if(!groups[fld]){groups[fld]=[];order.push(fld);}groups[fld].push(x);}else ungrouped.push(x);}
+for(const x of viz){if(!x.show||x.fav)continue;const fld=vmFolder(x.v);if(fld){if(!groups[fld]){groups[fld]=[];order.push(fld);}groups[fld].push(rowFor(x));}else ungrouped.push(rowFor(x));}
 order.sort();
-for(const fld of order){const open=folderOpen(fld);
- h+='<div class="folder-hdr'+(open?' open':'')+'" data-action="toggleFolder" data-folder="'+escHtml(fld)+'" role="button" tabindex="0" aria-expanded="'+open+'"><span class="folder-caret" aria-hidden="true">▸</span><span class="folder-name">'+escHtml(fld)+'</span><span class="folder-count">'+groups[fld].length+'</span></div>';
- if(open){h+='<div class="folder-body">';for(const x of groups[fld])h+=vmItemHtml(x);h+='</div>';}}
-for(const x of ungrouped)h+=vmItemHtml(x);
-if(!h){if(f)h='<div class="sidebar-empty"><p>No matching VMs</p><button class="btn" data-action="clearSearch">Clear search</button></div>';else h='<div class="sidebar-empty"><p>No virtual machines yet</p><button class="btn primary" data-action="newVm"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-plus"/></svg>New VM</button></div>';}
-e.innerHTML=h;
-if(keepIdx!==null){var kr=e.querySelector('.vm-item[data-vm-index="'+keepIdx+'"]');if(kr)kr.focus();}
-else if(keepFolder!==null){var kf=e.querySelector('.folder-hdr[data-folder="'+CSS.escape(keepFolder)+'"]');if(kf)kf.focus();}
+window.hangarUi.renderVmList({favorites:viz.filter(x=>x.show&&x.fav).map(rowFor),folders:order.map(fld=>({name:fld,open:folderOpen(fld),rows:groups[fld]})),ungrouped:ungrouped,selectMode:selectMode,filtered:f!==''});
 updateBulkBar();
 let cnt=0,running=0,paused=0,suspended=0;for(let v of vms){cnt++;if(v.status==='running')running++;else if(v.status==='paused')paused++;else if(v.status==='suspended')suspended++;}
 let parts=cnt+(cnt===1?' virtual machine':' virtual machines');if(running>0)parts+=', '+running+' running';if(paused>0)parts+=', '+paused+' paused';if(suspended>0)parts+=', '+suspended+' suspended';
