@@ -60,8 +60,6 @@ function idxById(id){if(!id)return -1;for(var i=0;i<vms.length;i++){if(vms[i].id
 // every consumer below compares them as the strings 'true'/'false'. Coerce any
 // boolean-valued property back to that string form so the comparisons hold.
 function normVmBools(arr){if(Array.isArray(arr)){for(var i=0;i<arr.length;i++){var v=arr[i];if(v&&typeof v==='object'){for(var k in v){if(typeof v[k]==='boolean')v[k]=v[k]?'true':'false';}}}}return arr;}
-var openActionMenu=null;
-var actionMenuTrigger=null; // the toolbar button that opened the current menu, for keyboard focus-return
 var dashSort={col:'name',dir:1}; // host-dashboard inventory-table sort state
 var selectMode=false; var checkedIds=new Set(); // sidebar multi-select bulk-ops state
 var settingsCategory='compute';
@@ -110,21 +108,9 @@ function setBusy(){if(busy)return false;busy=true;var gen=++busyGen;setTimeout(f
 async function apiPost(url,body){if(!setBusy()){showToast('Another operation is in progress, please wait.','warn');return null;}var sb=document.getElementById('statusmsg');var wasIdle=apiPostPending<=0;var prev=sb?sb.textContent:'Ready';if(wasIdle){setStatusLoading('Working...');setLoadBar(true);}apiPostPending++;try{var opts={method:'POST',body:body||'',headers:{'X-API-Key':API_KEY}};var r=await fetch(url,opts);if(!r.ok){var msg=await r.text().catch(function(){return '';});try{var j=JSON.parse(msg);if(j.error)msg=j.error;}catch(e){}throw new Error(msg||'HTTP '+r.status);}apiPostPending--;if(apiPostPending<=0){setStatus(prev);setLoadBar(false);}busy=false;busyGen++;return r;}catch(e){apiPostPending--;if(apiPostPending<=0){setStatus('Error: '+e.message);setLoadBar(false);}busy=false;busyGen++;showToast(e.message||'Request failed','error');return null;}}
 var sidebarOpen=false;
 function isMobileSidebar(){return window.matchMedia('(max-width:900px)').matches;}
-function syncSidebarButton(){const btn=document.querySelector('.hamburger');const aside=document.querySelector('aside');var expanded=isMobileSidebar()?sidebarOpen:!document.body.classList.contains('sidebar-collapsed');if(btn){btn.setAttribute('aria-expanded',expanded?'true':'false');btn.setAttribute('aria-label',expanded?'Collapse VM Library':'Expand VM Library');}if(aside){aside.toggleAttribute('inert',!expanded);aside.setAttribute('aria-hidden',expanded?'false':'true');}}
+function syncSidebarButton(){const aside=document.querySelector('aside');var expanded=isMobileSidebar()?sidebarOpen:!document.body.classList.contains('sidebar-collapsed');if(window.hangarUi)window.hangarUi.setToolbar({sidebarExpanded:expanded});if(aside){aside.toggleAttribute('inert',!expanded);aside.setAttribute('aria-hidden',expanded?'false':'true');}}
 function toggleSidebar(){const aside=document.querySelector('aside');if(isMobileSidebar()){sidebarOpen=!sidebarOpen;if(aside){if(sidebarOpen){aside.classList.add('open');document.body.classList.add('sidebar-overlay');}else{aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}}}else{sidebarOpen=false;if(aside)aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');document.body.classList.toggle('sidebar-collapsed');}syncSidebarButton();}
 function closeSidebar(){if(!isMobileSidebar()){syncSidebarButton();return;}if(!sidebarOpen)return;sidebarOpen=false;const aside=document.querySelector('aside');if(aside){aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}syncSidebarButton();}
-var toolbarMoreOpen=false,toolbarMoreTrigger=null;
-function toggleToolbarMore(){toolbarMoreOpen=!toolbarMoreOpen;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');
-if(tb){if(toolbarMoreOpen){tb.classList.add('open-more');}else{tb.classList.remove('open-more');}}
-if(btn)btn.setAttribute('aria-expanded',toolbarMoreOpen?'true':'false');
-if(popover){if(toolbarMoreOpen){populateToolbarMore(popover);positionToolbarMore(popover,btn);popover.classList.add('open');toolbarMoreTrigger=btn;var first=popover.querySelector('.btn:not([disabled])');if(first)first.focus();}else{popover.classList.remove('open');}}
-}
-function populateToolbarMore(popover){popover.innerHTML='';const tb=document.querySelector('.toolbar');if(!tb)return;const children=tb.querySelectorAll('.btn:not(.keep-mobile):not(.toolbar-more):not(.theme-toggle-btn), .sep');children.forEach(function(el){if(el.classList.contains('sep')){const clone=document.createElement('span');clone.className='sep';clone.setAttribute('aria-hidden','true');popover.appendChild(clone);return;}if(!el.matches('.btn:not(.keep-mobile)'))return;const clone=document.createElement('button');clone.className='btn';clone.setAttribute('role','menuitem');if(el.classList.contains('danger-menu'))clone.classList.add('danger');clone.innerHTML=el.innerHTML||escHtml(el.getAttribute('title')||el.getAttribute('aria-label')||'');clone.setAttribute('data-action',el.getAttribute('data-action')||'');['data-menu','data-vm-action','aria-haspopup','aria-controls','aria-expanded'].forEach(function(a){var v=el.getAttribute(a);if(v!==null)clone.setAttribute(a,v);});popover.appendChild(clone);});updateCommandState();}
-function positionToolbarMore(popover,btn){if(!btn)return;var r=btn.getBoundingClientRect();popover.style.top='0px';popover.style.left='0px';popover.style.right='auto';popover.style.bottom='auto';var base=popover.getBoundingClientRect();var top=r.bottom+6-base.top;var pr=popover.getBoundingClientRect();var desiredLeft=Math.max(8,Math.min(r.right-pr.width,window.innerWidth-pr.width-8));popover.style.top=top+'px';popover.style.left=(desiredLeft-base.left)+'px';}
-function closeToolbarMore(returnFocus){if(!toolbarMoreOpen)return;toolbarMoreOpen=false;const tb=document.querySelector('.toolbar');const btn=document.querySelector('.toolbar-more');const popover=document.querySelector('.toolbar-more-popover');if(tb)tb.classList.remove('open-more');if(btn)btn.setAttribute('aria-expanded','false');if(popover)popover.classList.remove('open');const trig=toolbarMoreTrigger;toolbarMoreTrigger=null;if(returnFocus&&trig)trig.focus();}
-function closeActionMenus(returnFocus){var menus=document.querySelectorAll('.action-menu.open');for(var i=0;i<menus.length;i++)menus[i].classList.remove('open');var btns=document.querySelectorAll('[data-action="toggleActionMenu"]');for(var j=0;j<btns.length;j++)btns[j].setAttribute('aria-expanded','false');openActionMenu=null;var trig=actionMenuTrigger;actionMenuTrigger=null;if(returnFocus&&trig)trig.focus();} // returnFocus: keyboard (Escape) returns focus to the trigger; click-outside callers omit it
-function positionActionMenu(menu,btn){if(!menu||!btn)return;var r=btn.getBoundingClientRect();menu.style.top='0px';menu.style.left='0px';menu.style.right='auto';var base=menu.getBoundingClientRect();var mr=menu.getBoundingClientRect();var desiredLeft=Math.max(8,Math.min(r.left,window.innerWidth-mr.width-8));menu.style.top=(r.bottom+6-base.top)+'px';menu.style.left=(desiredLeft-base.left)+'px';}
-function toggleActionMenu(btn){if(!btn)return;var id=btn.getAttribute('data-menu');var menu=id?document.getElementById(id):null;if(!menu)return;if(openActionMenu===id){closeActionMenus();return;}closeActionMenus();menu.classList.add('open');btn.setAttribute('aria-expanded','true');openActionMenu=id;actionMenuTrigger=btn;positionActionMenu(menu,btn);updateCommandState();var firstItem=menu.querySelector('.menu-item:not([disabled])');if(firstItem)firstItem.focus();}
 function clearSearch(){var s=document.getElementById('search');if(!s)return;s.value='';filterList();}
 var settingsDirty=false;
 function syncTabPanels(){var panelIds={console:'tabConsole',summary:'tabSummary',settings:'tabSettings'};var btns=document.querySelectorAll('.tab-btn');for(var bi=0;bi<btns.length;bi++){var on=btns[bi].getAttribute('data-tab')===activeTab;btns[bi].classList.toggle('active',on);btns[bi].setAttribute('aria-selected',on?'true':'false');btns[bi].setAttribute('tabindex',on?'0':'-1');} // roving tabindex: one tab stop for the tablist
@@ -190,7 +176,8 @@ function statusLabel(s){if(s==='running')return 'Running';if(s==='paused')return
 function embeddedDisplayCapable(v){var dt=Number(v&&v.display);return v&&v.embed_display==='true'&&(dt===2||dt===3);}
 function networkLabel(v){var n=(v&&v.net)||'user';if(n==='user')return 'NAT (user mode)';if(n==='gvproxy')return 'gvproxy (user mode)';if(n==='bridge')return 'Bridged';if(n==='none')return 'Disconnected';return n;}
 function displayInfo(v){var displayLabel=displayLabels[Number(v&&v.display)]||'Display';var gpuLabel=gpuLabels[Number(v&&v.gpu_device)]||'GPU';var has3d=v&&v.enable_3d==='true';if(!has3d)gpuLabel=gpuLabel.replace(/ \(virgl 3D\)/,'');var embedLabel=v&&v.embed_display==='true'?'Embedded':'Native';var accelLabel=has3d?'3D accelerated':'2D';return {displayLabel:displayLabel,gpuLabel:gpuLabel,embedLabel:embedLabel,accelLabel:accelLabel};}
-async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;settingsDirty=false;}stopFb();stopSerial(true);sel=i;renderList();closeSidebar();closeToolbarMore();closeActionMenus();if(sel!==null){var v=vms[sel];if(v&&v.status==='running'&&embeddedDisplayCapable(v)&&activeTab!=='settings')activeTab='console';if(activeTab==='settings')editVm();else renderDetails();if(v&&v.status==='running'){startFb();startSerial(sel);}}else{showEmptyState();}updateCommandState();}
+function closeToolbarMenus(returnFocus){return !!(window.hangarUi&&window.hangarUi.closeToolbarMenus(returnFocus));}
+async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;settingsDirty=false;}stopFb();stopSerial(true);sel=i;renderList();closeSidebar();closeToolbarMenus(false);if(sel!==null){var v=vms[sel];if(v&&v.status==='running'&&embeddedDisplayCapable(v)&&activeTab!=='settings')activeTab='console';if(activeTab==='settings')editVm();else renderDetails();if(v&&v.status==='running'){startFb();startSerial(sel);}}else{showEmptyState();}updateCommandState();}
 async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}stopFb();stopSerial(true);sel=null;renderList();showEmptyState();updateCommandState();}
 // Host inventory dashboard shown when no VM is selected: state breakdown +
 // allocated-capacity totals + an attention list. Pure render from the polled vms[].
@@ -389,9 +376,9 @@ function viewLog(){if(sel===null||sel>=vms.length)return;var nm=document.getElem
 function refreshLog(){if(sel===null)return;loadLogInto(sel);}
 async function powerToggle(){let idx=sel;if(idx===null)return;const v=vms[idx];if(!v)return;const stop=v.status==='running'||v.status==='paused';if(stop){if(!(await showConfirmDialog('Power off VM "'+v.name+'"?\nUnsaved data may be lost.',{danger:true,okLabel:'Power Off'})))return;}
 idx=v.id?idxById(v.id):idxByName(v.name);if(idx<0)return;
-var btn=document.getElementById('powerbtn');if(btn){btn.disabled=true;btn.textContent='...';btn.setAttribute('aria-busy','true');}
+if(window.hangarUi)window.hangarUi.setToolbar({powerBusy:true});
 transitioningIdx=idx;renderList();
-try{const r=await apiPost('/api/vms/'+idx+(stop?'/stop':'/start'));transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);renderList();}finally{if(btn){updatePowerBtn();btn.disabled=false;}}}else{if(btn){updatePowerBtn();btn.disabled=false;}renderList();}}catch(e){transitioningIdx=null;if(btn){updatePowerBtn();btn.disabled=false;}renderList();setStatus('Power toggle failed: '+e.message);}}
+try{const r=await apiPost('/api/vms/'+idx+(stop?'/stop':'/start'));transitioningIdx=null;if(r){try{await refresh();}catch(e){setStatus('Refresh after power toggle failed: '+e.message);renderList();}finally{syncToolbar();}}else{syncToolbar();renderList();}}catch(e){transitioningIdx=null;syncToolbar();renderList();setStatus('Power toggle failed: '+e.message);}}
 async function shutdownGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Send ACPI shutdown to "'+v.name+'"?')))return;const r=await apiPost('/api/vms/'+sel+'/shutdown');if(r)setStatus('Shut down guest, ACPI power button sent.');}
 async function resetGuest(){if(sel===null)return;const v=vms[sel];if(!(await showConfirmDialog('Reset guest "'+v.name+'"?\nUnsaved data in the guest may be lost.',{danger:true,okLabel:'Reset'})))return;const r=await apiPost('/api/vms/'+sel+'/reset');if(r)setStatus('Reset guest, system_reset sent.');}
 async function pauseGuest(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/pause');if(r){await refresh();setStatus('Paused guest, execution frozen.');}}
@@ -493,12 +480,8 @@ case'batch-start':return vms.some(function(x){return x.status==='stopped'||x.sta
 case'batch-stop':return vms.some(function(x){return x.status==='running'||x.status==='paused';});
 default:return true;}}
 function disabledReason(name,v){if(!v&&name!=='batch-start'&&name!=='batch-stop')return 'Select a VM first';if(name==='display')return 'Requires a running VM with embedded VNC or SPICE display';if(name==='serial')return 'Requires a running VM with serial enabled';if(name==='resume')return 'Only paused or suspended VMs can resume';if(name==='shutdown'||name==='reset'||name==='pause'||name==='suspend'||name==='cad'||name==='migrate')return 'Requires a running VM';if(name==='hard-power')return 'Requires a running or paused VM';if(name==='power-on')return 'VM is already running';if(name==='batch-start')return 'No stopped VMs';if(name==='batch-stop')return 'No running VMs';return 'Unavailable';}
-function updatePowerBtn(){const b=document.getElementById('powerbtn');if(!b)return;const v=selectedVm();b.removeAttribute('aria-busy');b.disabled=!v;var pi='<svg class="ico" aria-hidden="true"><use href="/icons.svg#i-power"/></svg>';if(!v){b.innerHTML=pi+'Power On';b.className='btn primary keep-mobile';b.title='Select a VM first';return;}
-if(v.status==='running'||v.status==='paused'){b.innerHTML=pi+'Power Off';b.className='btn danger keep-mobile';b.title='Hard power off selected VM';}else{b.innerHTML=pi+'Power On';b.className='btn primary keep-mobile';b.title='Power on selected VM';}}
-function updateCommandState(){updatePowerBtn();var v=selectedVm();var nodes=document.querySelectorAll('[data-vm-action]');for(var i=0;i<nodes.length;i++){var n=nodes[i];var name=n.getAttribute('data-vm-action');var ok=actionAllowed(name,v);n.disabled=!ok;n.setAttribute('aria-disabled',ok?'false':'true');if(!ok){n.title=disabledReason(name,v);n.setAttribute('data-disabled-title','1');}else if(n.getAttribute('data-disabled-title')==='1'){n.removeAttribute('title');n.removeAttribute('data-disabled-title');}}
-// VM-scoped dropdown triggers gray out with no selection, like Power On/Settings.
-var trigs=document.querySelectorAll('[data-action="toggleActionMenu"][data-menu]');
-for(var ti=0;ti<trigs.length;ti++){var tmenu=trigs[ti].getAttribute('data-menu');var scoped=tmenu!=='dangerMenu'&&tmenu!=='toolsMenu';trigs[ti].disabled=scoped&&!v;trigs[ti].title=scoped&&!v?'Select a VM first':'';}
+function syncToolbar(){if(!window.hangarUi)return;const v=selectedVm();window.hangarUi.setToolbar({hasVm:!!v,powered:!!v&&(v.status==='running'||v.status==='paused'),powerBusy:false,actionReason:function(name){return actionAllowed(name,v)?null:disabledReason(name,v);}});}
+function updateCommandState(){syncToolbar();var v=selectedVm();var nodes=document.querySelectorAll('[data-vm-action]');for(var i=0;i<nodes.length;i++){var n=nodes[i];var name=n.getAttribute('data-vm-action');var ok=actionAllowed(name,v);n.disabled=!ok;n.setAttribute('aria-disabled',ok?'false':'true');if(!ok){n.title=disabledReason(name,v);n.setAttribute('data-disabled-title','1');}else if(n.getAttribute('data-disabled-title')==='1'){n.removeAttribute('title');n.removeAttribute('data-disabled-title');}}
 var tabBar=document.getElementById('tabBar');if(tabBar&&v){var consoleBtn=tabBar.querySelector('[data-tab="console"]');if(consoleBtn){consoleBtn.disabled=!(v.status==='running'&&embeddedDisplayCapable(v));consoleBtn.title=consoleBtn.disabled?'Console requires a running embedded VNC or SPICE display':'Open VM console';}}}
 function newVm(){['n_name','n_mem','n_cpu','n_disk'].forEach(function(id){var e=document.getElementById('err_'+id);if(e)e.textContent='';var f=document.getElementById(id);if(f)f.classList.remove('invalid');});
 var gsel=document.getElementById('n_guest_os');
@@ -825,8 +808,6 @@ document.body.addEventListener('click',function(e){if(document.body.classList.co
 // ── Migrate dialog close cleanup ──
 (function(){var md=document.getElementById('migratedlg');if(md)md.addEventListener('close',function(){if(migrating){hideMigProgress();}});})();
 // ── Toolbar More Click-Outside ──
-document.body.addEventListener('click',function(e){if(toolbarMoreOpen&&!e.target.closest('.toolbar')){closeToolbarMore();}});
-document.body.addEventListener('click',function(e){if(openActionMenu&&!e.target.closest('.action-menu')&&!e.target.closest('[data-action="toggleActionMenu"]'))closeActionMenus();});
 // ── Right-Click Context Menu ──
 let ctxMenu=null,ctxVmIdx=-1;
 function hideCtxMenu(){if(ctxMenu){ctxMenu.remove();ctxMenu=null;ctxVmIdx=-1;}}
@@ -1064,11 +1045,10 @@ document.addEventListener('keydown',async function(e){var shift=e.shiftKey;
 if((e.ctrlKey||e.metaKey)&&e.key==='s'&&activeTab==='settings'&&sel!==null){e.preventDefault();saveVm();return;}
 if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K')){e.preventDefault();openPalette();return;}
 if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT')return;
-if(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Home'||e.key==='End'){var om=openActionMenu?document.getElementById(openActionMenu):(toolbarMoreOpen?document.querySelector('.toolbar-more-popover'):null);if(om&&om.contains(e.target)){e.preventDefault();var its=Array.prototype.slice.call(om.querySelectorAll('[role="menuitem"]:not([disabled])'));if(!its.length)return;var ci=its.indexOf(e.target);var ni;if(e.key==='Home')ni=0;else if(e.key==='End')ni=its.length-1;else if(e.key==='ArrowDown')ni=ci<0?0:(ci+1)%its.length;else ni=ci<=0?its.length-1:ci-1;its[ni].focus();return;}}
 if(e.key==='ArrowUp'||e.key==='ArrowDown'){var listEl=document.getElementById('vmlist');if(listEl&&listEl.contains(e.target)){e.preventDefault();var dir=e.key==='ArrowUp'?-1:1;var idx=sel===null?(dir<0?vms.length-1:0):Math.max(0,Math.min(vms.length-1,sel+dir));Promise.resolve(select(idx)).then(function(){var ni=document.querySelector('#vmlist .vm-item[data-vm-index="'+idx+'"]');if(ni)ni.focus();});return;}}
 if((e.key==='ArrowLeft'||e.key==='ArrowRight')&&e.target.closest('[role="tablist"]')){var tabs=Array.from(document.querySelectorAll('.tab-btn:not([disabled])'));var cur=tabs.indexOf(e.target);if(cur<0)return;e.preventDefault();var next=cur+(e.key==='ArrowRight'?1:-1);if(next<0)next=tabs.length-1;if(next>=tabs.length)next=0;switchTab(tabs[next].getAttribute('data-tab')||'summary');tabs[next].focus();return;}
 if(e.key==='Escape'){
-  if(openActionMenu||toolbarMoreOpen||ctxMenu){closeActionMenus(true);closeToolbarMore(true);hideCtxMenu();return;}
+  if(closeToolbarMenus(true)||ctxMenu){hideCtxMenu();return;}
   var anyOpen=false;var openDlgs=document.querySelectorAll('dialog[open]');for(var di=0;di<openDlgs.length;di++){openDlgs[di].close();anyOpen=true;}
   if(!anyOpen&&document.body.classList.contains('displayonly')){exitDisplayOnly();return;}
   if(!anyOpen&&sel!==null){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}sel=null;renderList();showEmptyState();}
@@ -1694,8 +1674,6 @@ var filterTimer=null;
 // ── Event Delegation (CSP-safe: no inline handlers) ──
 var actionHandlers={
 	 toggleSidebar:function(){toggleSidebar();},deselectVm:function(){deselectVm();},
-	 toggleToolbarMore:function(){toggleToolbarMore();},
-	 toggleActionMenu:function(el){toggleActionMenu(el);},
 	 powerToggle:function(){powerToggle();},pauseGuest:function(){pauseGuest();},
  resumeGuest:function(){resumeGuest();},shutdownGuest:function(){shutdownGuest();},
  resetGuest:function(){resetGuest();},suspendGuest:function(){suspendGuest();},
@@ -1756,12 +1734,8 @@ var actionHandlers={
 	};
 document.body.addEventListener('click',function(e){
  // Click anywhere outside an open menu/popover closes it (Escape already does).
- if(openActionMenu&&!e.target.closest('.action-menu')&&!e.target.closest('[data-action="toggleActionMenu"]'))closeActionMenus();
- if(toolbarMoreOpen&&!e.target.closest('.toolbar-more-popover')&&!e.target.closest('.toolbar-more'))closeToolbarMore();
  var el=e.target.closest('[data-action]');if(!el)return;
  var action=el.getAttribute('data-action');var h=actionHandlers[action];if(h)h(el);
- if(e.target.closest('.toolbar-more-popover'))closeToolbarMore();
- if(e.target.closest('.action-menu')&&action!=='toggleActionMenu')closeActionMenus();
 });
 document.body.addEventListener('input',function(e){
  if(e.target.closest('#tabSettings')){settingsDirty=true;validateSettings(true);}
@@ -1789,7 +1763,6 @@ document.body.addEventListener('keydown',function(e){
  }
 });
 window.addEventListener('beforeunload',function(){stopFb();stopSerial(true);clearSerialReconnect();});
-window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=document.querySelector('.toolbar-more-popover');var btn=document.querySelector('.toolbar-more');if(popover&&btn)positionToolbarMore(popover,btn);}});
 // ── Drag-to-reorder VM list ──
 (function initDragReorder(){
   var dragIdx=null;
@@ -1896,10 +1869,9 @@ window.addEventListener('resize',function(){if(toolbarMoreOpen){var popover=docu
   sl.addEventListener('click',function(e){e.preventDefault();var mn=document.getElementById('main-content');if(mn){if(!mn.hasAttribute('tabindex'))mn.setAttribute('tabindex','-1');mn.focus();}});
   var mn=document.getElementById('main-content');if(mn&&!mn.hasAttribute('tabindex'))mn.setAttribute('tabindex','-1');
   var aside=document.querySelector('aside');if(aside){aside.id='sidebar';aside.setAttribute('role','navigation');aside.setAttribute('aria-label','VM Library');}
-  var hamb=document.querySelector('.hamburger');if(hamb){hamb.setAttribute('aria-controls','sidebar');syncSidebarButton();}
+  syncSidebarButton();
   var vml=document.getElementById('vmlist');if(vml){vml.setAttribute('aria-label','VM Library');vml.setAttribute('role','group');}
   var tb=document.querySelector('.tab-bar');if(tb)tb.setAttribute('role','tablist');
   var tbb=document.querySelectorAll('.tab-btn');for(var i=0;i<tbb.length;i++)tbb[i].setAttribute('role','tab');
-  var mItems=document.querySelectorAll('.action-menu .menu-item');for(var mi=0;mi<mItems.length;mi++)mItems[mi].setAttribute('role','menuitem');
 })();
 window.addEventListener('resize',function(){if(!isMobileSidebar()){sidebarOpen=false;var aside=document.querySelector('aside');if(aside)aside.classList.remove('open');document.body.classList.remove('sidebar-overlay');}syncSidebarButton();});

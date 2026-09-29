@@ -8,12 +8,12 @@ The legacy `../app.js` and `../app.css` still own everything not yet ported here
 
 ## Ownership
 - `main.tsx`: entry. Replaces legacy DOM with Preact components and registers the `hangarUi` bridge.
-- `components/ui/`: shadcn-style primitives (cva variants, `cn` merge). `components.json`
+- `components/ui/`: shadcn-style primitives (cva variants, `cn` merge): `button.tsx`, `menu.tsx` (`Menu` positions under an anchor and handles Arrow/Home/End; `MenuItem`; `MenuSeparator`). `components.json`
   at the repo root maps the shadcn CLI aliases here.
-- `components/`: feature components. `vm-list.tsx` renders the sidebar; `main.tsx` exposes `window.hangarUi.renderVmList`, which the legacy `renderList` in `app.js` calls with precomputed rows (folders, favorites, roving tab stop). Rows keep `data-action` attributes so the delegated handlers stay in `app.js`. `icon.tsx` draws a sprite symbol.
+- `components/`: feature components. `vm-list.tsx` renders the sidebar; `main.tsx` exposes `window.hangarUi.renderVmList`, which the legacy `renderList` in `app.js` calls with precomputed rows (folders, favorites, roving tab stop). Rows keep `data-action` attributes so the delegated handlers stay in `app.js`. `icon.tsx` draws a sprite symbol. `toolbar.tsx` renders the VM toolbar, the five action menus and the More popover into `#toolbar-root`; `main.tsx` exposes `hangarUi.setToolbar(patch)` (merged into the props, then redrawn) and `hangarUi.closeToolbarMenus(returnFocus)`. Open/closed state, focus handling, outside-click and positioning live in the component; `app.js` supplies data only (`hasVm`, `powered`, `powerBusy`, `sidebarExpanded`, `actionReason`). Rows keep `data-action`, `data-menu`, `data-vm-action` and the ids `powerbtn`, `powerMenu`, `snapshotMenu`, `devicesMenu`, `toolsMenu`, `dangerMenu`, plus the `open` class on a shown menu.
 - `lib/cn.ts`: class merge helper.
 - `styles.css`: Tailwind `theme` and `utilities` layers only (no preflight while `app.css`
-  owns resets). `@theme inline` exposes the `app.css` tokens as utilities.
+  owns resets). `@theme inline` exposes the `app.css` tokens as utilities. Custom breakpoints `compact` (1100px) and `phone` (520px) and the `displayonly` variant (body class for the full-screen console) are declared here.
 
 ## Local Contracts
 - Tokens are declared once, in `app.css` `:root` and `:root.light`. `styles.css` maps them

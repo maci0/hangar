@@ -7,7 +7,7 @@ plus the Preact + Tailwind source in `ui/`. Bun bundles `ui/` to `dist/` (gitign
 Targets VMware (vSphere/Workstation) admin conventions.
 
 ## Ownership
-- `index.html`: markup, dialogs, the inline SVG icon sprite (`#i-*`), script tags.
+- `index.html`: markup, dialogs, script tags. The toolbar and its menus are not here: `#toolbar-root` is the mount for the Preact `Toolbar`.
 - `app.js`: refresh poll, render, action dispatch, dialogs,
   console/serial viewers, command palette, folders, topology.
 - `app.css`: flat slate theme (`:root` dark default + `:root.light`) + components.
@@ -75,9 +75,10 @@ Targets VMware (vSphere/Workstation) admin conventions.
 - **Stat tiles are not interactive.** `.dash-card` carries no hover transform;
   reserve elevation-on-hover for things that can be pressed.
 - **Every composite follows the ARIA keyboard pattern.** `role="menu"`
-  containers hold `role="menuitem"` children (the More popover's clones set the
-  role too) and move focus with Arrow/Home/End, returning it to the trigger on
-  Escape. `role="tablist"` and the VM listbox use a roving `tabindex`: exactly
+  containers hold `role="menuitem"` children (the toolbar's More popover rows too) and
+  move focus with Arrow/Home/End, returning it to the trigger on Escape. The toolbar
+  menus are Preact (`ui/components/toolbar.tsx`); `app.js` only calls
+  `hangarUi.closeToolbarMenus(returnFocus)` from its Escape handler and `select()`. `role="tablist"` and the VM listbox use a roving `tabindex`: exactly
   one item is `0` (the selected one, or the first row when nothing is selected),
   the rest are `-1`. A control that only works by pointer gets a keyboard
   equivalent too: `#serialResize` is a `role="separator"` with Arrow (16px,
@@ -102,8 +103,13 @@ Targets VMware (vSphere/Workstation) admin conventions.
   not a form-only re-render.
 
 - **Navigation**: Tools stays available without a selected VM; only VM-specific
-  entries are disabled. Responsive toolbar hiding applies to direct toolbar buttons,
-  not the buttons inside More. Context-menu actions stop when selection is cancelled.
+  entries are disabled. Below 1100px the five menu triggers collapse into the More
+  popover; the other toolbar buttons stay. `syncToolbar()` (called from
+  `updateCommandState`) pushes `hasVm`, `powered` and the `actionReason(name)`
+  callback (`actionAllowed`/`disabledReason`) to `hangarUi.setToolbar`; enabled
+  state, titles and the Power On/Off button are props, never DOM edits. Toolbar
+  markup is not in `index.html`, so `syncSidebarButton` and `powerToggle` also go
+  through `setToolbar` (`sidebarExpanded`, `powerBusy`). Context-menu actions stop when selection is cancelled.
 - **Power actions**: toolbar, batch and multi-select requests use `/start` or `/stop`,
   never `/power`, so duplicate delivery cannot reverse the requested state. Capture
   the toolbar's intended state before confirmation and re-resolve its VM afterward.

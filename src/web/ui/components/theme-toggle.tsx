@@ -14,12 +14,12 @@ declare global {
 /** Toolbar theme cycle. The legacy `toggleTheme` delegator handles the click and swaps the icon. */
 export const ThemeToggle = () => (
   <Button
-    class="theme-toggle-btn keep-mobile"
+    class="theme-toggle-btn"
     data-action="toggleTheme"
     title="Toggle theme"
     aria-label="Toggle theme"
   >
-    <svg class="ico" aria-hidden="true">
+    <svg class="ico size-3.75" aria-hidden="true">
       <use href={`/icons.svg#${ICON_BY_THEME[globalThis.hangarTheme ?? "system"] ?? "i-monitor"}`} />
     </svg>
   </Button>

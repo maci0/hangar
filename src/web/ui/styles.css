@@ -13,7 +13,15 @@
      operator console, and a native stack matches the surrounding desktop. */
   --font-sans: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  /* Toolbar collapse points: below compact the menu buttons move into the More
+     popover; below phone the toolbar tightens its padding. */
+  --breakpoint-compact: 1100px;
+  --breakpoint-phone: 520px;
+  --animate-menu-in: menu-in 0.09s ease;
 }
+
+/* Full-screen console hides the chrome; the body carries the class. */
+@custom-variant displayonly (&:where(.displayonly *));
 
 @theme inline {
   --color-bg: var(--bg);
@@ -34,7 +42,9 @@
   --color-success: var(--success);
   --color-warn: var(--warn);
   --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
   --color-danger-text: var(--danger-text);
+  --shadow-menu: var(--shadow-pop);
   --color-on-accent: var(--text-on-accent);
   --color-on-danger: var(--text-on-danger);
 }
