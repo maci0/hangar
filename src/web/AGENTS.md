@@ -23,6 +23,9 @@ The browser UI, hand-written vanilla JS/CSS/HTML (no framework, no build step),
     running `bun install`, copying the dist file in, and updating the header.
     `novnc.js`/`spice.js` have no registry pin (upstream version not recorded at
     vendor time): record upstream + date in their headers when re-vendoring.
+    `../../THIRD-PARTY-NOTICES.md` carries the same inventory for every vendored
+    and declared dependency, with the license obligations that survive shipping;
+    it moves in the same change as any bump or re-vendor.
   - Treat bundles as binary: never hand-edit code inside them; only prepend/adjust
     the metadata header.
 

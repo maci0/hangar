@@ -190,6 +190,9 @@ Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, 
 
 - `CLAUDE.md` is a symlink to this file.
 - Longer design notes (if needed) are in `docs/`.
+- `THIRD-PARTY-NOTICES.md` lists every vendored or declared dependency with its
+  version, source, and license. Update it in the same change that bumps or
+  re-vendors one.
 - Consumer release notes and upgrade steps are in `README.md` under "Release notes and upgrades".
 
 # DOX framework
