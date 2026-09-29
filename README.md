@@ -159,9 +159,38 @@ lifecycle already goes through a dispatch table (`src/hv/`).
 
 ## Release notes and upgrades
 
-`v0.4.0` is the latest tagged release. `build.zig.zon` and the private
-frontend-test `package.json` declare `0.4.0`. There is no stated compatibility
+`v0.5.0` is the latest tagged release. `build.zig.zon` and the private
+frontend-test `package.json` declare `0.5.0`. There is no stated compatibility
 or deprecation policy.
+
+### v0.5.0 (2026-09-29)
+
+#### Changed: web UI rebuilt on Preact and Tailwind
+
+- The web UI is now typed Preact components styled with Tailwind v4, bundled by
+  Bun during `zig build` and embedded in the daemon. The hand-written `app.js`,
+  `app.css`, `van.js` and the inline icon sprite are gone. The daemon API, the
+  strict CSP and every request payload are unchanged.
+- Design tokens (colors, radius, fonts) live in one Tailwind `@theme` block.
+  Icons come from `assets/icons` and are served as `/icons.svg`.
+- Keyboard and screen-reader fixes: VM rows are buttons with the favorite star
+  beside them (axe reported a button inside a listbox option), tab bar Arrow/Home/End,
+  and contrast fixes for selected rows, the active settings section and the
+  hovered primary button. Toast icons now render.
+- Preferences now shows the saved values (it read the wrong keys before). Virtual
+  network validation is stricter and the editor refuses to open when the network
+  list fails to load, so a failed load can no longer be saved back as an empty set.
+- Display-only mode no longer shows a blank screen, and the console "client failed
+  to load" Retry button is now visible.
+- Lighthouse scores 100 for accessibility and best practices, and an axe check
+  over the main views and every dialog runs in the e2e suite.
+
+#### Added
+
+- `docs/BRAND.md` (tokens, palette with contrast ratios, logo, voice),
+  `docs/brand/icons.html` (icon index), `bun run check:contrast`.
+- Web UI development commands in this README: `bun run lint`, `typecheck`,
+  `test`, `build:web`.
 
 ### v0.4.0 (2026-09-29)
 
