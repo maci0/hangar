@@ -47,6 +47,7 @@ artifacts.
 | Package | Version | Used for | License |
 | --- | --- | --- | --- |
 | @playwright/test (and `playwright`, `playwright-core`) | 1.62.1 | e2e and visual suites | Apache-2.0 |
+| @webgpu/types | 0.1.74 | WebGPU type declarations for `src/web/ui/lib/presenter.ts` (no code shipped) | BSD-3-Clause |
 | @xterm/xterm, @xterm/addon-fit, @xterm/addon-webgl, elkjs | see above | sources for re-vendoring the browser bundles | see above |
 | zig_webui | 2.5.0-beta.4 | native WebView wrapper (`zig build webui`) | not stated in the tarball; upstream declares MIT |
 | webui (transitive of zig_webui) | 2.5.0-beta.4 | WebView assets, linked into the wrapper | not stated in the tarball; upstream is MIT |

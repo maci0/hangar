@@ -10,7 +10,8 @@ under `zig build test`).
   `hangar-web` on a dedicated port against a temp `$HOME` (config: `../playwright.config.mjs`,
   fresh `mkdtemp` HOME per run, created under the repo's gitignored `.scratch/`, never
   `os.tmpdir()`, which is tmpfs).
-- `e2e/a11y.spec.mjs`: axe WCAG 2.2 AA gate over dashboard, VM summary, every settings section (with a validation error and a warning showing), the command palette, the context menu and a stack of toasts, plus the New VM, Import, Clone, Snapshot Manager, Migrate, Virtual Network Editor (validation error showing), Network Topology and VM Catalog dialogs, in both themes.
+- `e2e/a11y.spec.mjs`: axe WCAG 2.2 AA gate over dashboard, VM summary, every settings section (with a validation error and a warning showing), the command palette, the context menu and a stack of toasts, plus the New VM, Import, Clone, Snapshot Manager, Migrate, Virtual Network Editor (validation error showing), Network Topology and VM Catalog dialogs, in both themes. A live-console test boots a guest and scans the Console tab (display and serial panel showing) and display-only mode in both themes.
+- `e2e/workflows.spec.mjs` covers the console with real guests: VNC and serial connect, SPICE, the H.264 overlay (skipped without ffmpeg), and one test that fails the noVNC bundle (Retry), reconnects, enters and leaves display-only mode (F11, Escape, the Exit button) and drives the `#serialResize` keys and Disconnect. The migration bar and the console empty-state message run against mocked `/migrate` routes and the bridge, since a migration needs a second host.
 - `e2e/config.spec.mjs`: checks Playwright daemon environment isolation. The
   daemon pins `HANGAR_CONFIG_HOME` to its test HOME and `KV_API_KEY` to `hangar`,
   overriding operator settings while preserving the `KV_PORT` selector.

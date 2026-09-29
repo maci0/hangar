@@ -10,7 +10,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "types": ["bun"],
+    "types": ["bun", "@webgpu/types"],
     "paths": {
       "@/*": ["./src/web/ui/*"],
       "react": ["./node_modules/preact/compat"],

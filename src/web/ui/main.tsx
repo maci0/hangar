@@ -11,6 +11,7 @@ import type { TopologyState } from "@/components/dialogs/topology";
 import type { VnetsRequest } from "@/components/dialogs/vnets";
 import type { PaletteCommand } from "@/components/dialogs/palette";
 import { netKindOf, type NetKind } from "@/lib/network";
+import { createConsoleBridge, type ConsoleBridge } from "@/console-bridge";
 import { createPanelsBridge, type PanelsBridge } from "@/panels";
 import { createOverlayBridge, createShellBridge, type OverlayBridge, type ShellBridge } from "@/shell";
 import { Toolbar, toolbarControl, type ToolbarProps } from "@/components/toolbar";
@@ -67,6 +68,7 @@ type HangarUi = {
   readonly openPalette: (commands: ReadonlyArray<PaletteCommand>) => void;
 } & ShellBridge &
   OverlayBridge &
+  ConsoleBridge &
   PanelsBridge;
 
 declare global {
@@ -77,6 +79,7 @@ declare global {
   var syncSidebarButton: (() => void) | undefined;
   var syncShell: (() => void) | undefined;
   var syncPanels: (() => void) | undefined;
+  var syncConsole: (() => void) | undefined;
 }
 
 const CLOSED_DIALOGS: DialogsState = {
@@ -97,7 +100,7 @@ const CLOSED_DIALOGS: DialogsState = {
   palette: null,
 };
 
-type DialogBridge = Omit<HangarUi, "renderVmList" | "setToolbar" | "closeToolbarMenus" | keyof ShellBridge | keyof OverlayBridge | keyof PanelsBridge>;
+type DialogBridge = Omit<HangarUi, "renderVmList" | "setToolbar" | "closeToolbarMenus" | keyof ShellBridge | keyof OverlayBridge | keyof PanelsBridge | keyof ConsoleBridge>;
 
 /** Dialog state lives here; `#dialog-root` is redrawn from it after every change. */
 type DialogStore = {
@@ -243,6 +246,7 @@ const createBridge = (): HangarUi => {
     ...createShellBridge(),
     ...createOverlayBridge(),
     ...createPanelsBridge(),
+    ...createConsoleBridge(),
     renderVmList: (props) => {
       const list = document.querySelector("#vmlist");
       if (list) {
@@ -267,3 +271,4 @@ globalThis.syncToolbar?.();
 globalThis.syncSidebarButton?.();
 globalThis.syncShell?.();
 globalThis.syncPanels?.();
+globalThis.syncConsole?.();

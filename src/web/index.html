@@ -13,11 +13,11 @@
 
 
 <!-- Connection-lost banner, sidebar head, bulk bar, VM header, status bar and toasts are Preact,
-     and so are the Summary and Settings panels (mounted in #summary-root and #settings-root). -->
+     and so are the Console, Summary and Settings panels (mounted in #console-root, #summary-root and #settings-root). -->
 <div id="banner-root" class="contents"></div>
 
 <!-- ═══ Sidebar ═══ -->
-<aside id="sidebar" aria-label="VM Library">
+<aside id="sidebar" class="displayonly:hidden" aria-label="VM Library">
   <div id="sidebar-head-root" class="contents"></div>
   <div id="vmlist" role="group" aria-label="VM Library">
     <div class="px-5 py-10 text-center">
@@ -28,60 +28,33 @@
 </aside>
 
 <!-- ═══ Main Content ═══ -->
-<main id="main-content" tabindex="-1">
+<main id="main-content" class="displayonly:col-span-full displayonly:row-span-full displayonly:flex displayonly:items-center displayonly:justify-center displayonly:bg-black displayonly:p-0" tabindex="-1">
   <h1 class="sr-only">Hangar VM Manager</h1>
   <!-- Toolbar -->
   <div id="toolbar-root" class="contents"></div>
 
   <!-- Content Area -->
-  <div class="content-area">
+  <div class="content-area displayonly:block displayonly:overflow-hidden displayonly:scrollbar-gutter-auto displayonly:p-0">
     <!-- VM header + tab bar -->
     <div id="vmheader-root" class="contents"></div>
 
     <!-- Tab: Console -->
-    <div id="tabConsole" class="hidden" role="tabpanel" aria-labelledby="tab-btn-console" aria-hidden="true">
-    <div id="display" role="group" aria-label="VM console" aria-describedby="displayHint">
-      <div class="display-badge" id="displayBadge" aria-hidden="true"></div>
-      <div class="display-toolbar" role="toolbar" aria-label="Display controls">
-        <button class="display-tool" data-action="enterDisplayOnly" data-vm-action="display" title="Display only" aria-label="Display only"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-maximize"/></svg></button>
-        <button class="display-tool" data-action="reconnectDisplay" data-vm-action="display" title="Reconnect display" aria-label="Reconnect display"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-refresh"/></svg></button>
-        <button class="display-tool" data-action="sendCad" data-vm-action="cad" title="Send Ctrl+Alt+Del" aria-label="Send Ctrl+Alt+Del"><svg class="ico" aria-hidden="true"><use href="/icons.svg#i-keyboard"/></svg></button>
-      </div>
-      <div id="displayHint" class="display-hint" aria-live="polite"></div>
-    </div>
-    <!-- Serial console panel -->
-    <div id="serialpanel">
-      <div id="serialStatus" role="status" aria-live="polite"></div>
-      <div id="serialterm" role="group" aria-label="Serial console terminal"></div>
-      <div class="serial-resize-handle" id="serialResize" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize serial console" aria-valuemin="60" aria-valuemax="600" aria-valuenow="240" title="Drag to resize"></div>
-      <div class="serial-toolbar">
-        <button class="btn" data-action="clearSerial">Clear</button>
-        <button class="btn" data-action="exportSerial">Export</button>
-        <span class="flex-1"></span>
-        <button class="btn" data-action="manualDisconnectSerial">Disconnect</button>
-      </div>
-    </div>
-      <div id="consoleHint" role="status" aria-live="polite"></div>
+    <div id="tabConsole" class="hidden displayonly:block!" role="tabpanel" aria-labelledby="tab-btn-console" aria-hidden="true">
+      <div id="console-root" class="contents"></div>
     </div>
 
     <!-- Tab: Summary -->
-    <div id="tabSummary" role="tabpanel" aria-labelledby="tab-btn-summary" aria-hidden="false">
+    <div id="tabSummary" class="displayonly:hidden!" role="tabpanel" aria-labelledby="tab-btn-summary" aria-hidden="false">
       <div id="summary-root" class="contents"></div>
     </div>
 
     <!-- Tab: Settings (hidden) -->
-    <div id="tabSettings" class="hidden" role="tabpanel" aria-labelledby="tab-btn-settings" aria-hidden="true">
+    <div id="tabSettings" class="hidden displayonly:hidden!" role="tabpanel" aria-labelledby="tab-btn-settings" aria-hidden="true">
       <div id="settings-root" class="contents"></div>
     </div>
 
-    <!-- Migration progress bar -->
-    <div id="mig_bar_container" class="mt-5">
-      <div id="mig_progress" class="mb-1.5 hidden h-1 overflow-hidden rounded-xs bg-border" role="progressbar" aria-label="Migration progress" aria-valuemin="0" aria-valuemax="100">
-        <div class="h-full w-0 rounded-xs bg-accent transition-all duration-300 ease-in-out"></div>
-      </div>
-      <span id="mig_pct" class="hidden text-xs text-fg-muted" role="status" aria-live="polite"></span>
-      <button id="mig_cancel" class="btn danger ml-3 hidden px-2.5 py-0.75 text-caption" data-action="cancelMigrate">Cancel</button>
-    </div>
+    <!-- Migration progress bar (Preact) -->
+    <div id="mig_bar_container" class="displayonly:hidden"></div>
   </div>
 </main>
 
@@ -91,12 +64,8 @@
 <!-- Toasts and the context menu. The toast container is the live region and mounts before any toast. -->
 <div id="overlay-root"></div>
 
-<!-- Display-only overlay bar -->
-<div class="displayonly-bar">
-  <span>Display-only mode</span>
-  <kbd>F11</kbd><span>or</span><kbd>Esc</kbd><span>to exit</span>
-  <button type="button" class="displayonly-exit" data-action="exitDisplayOnly" aria-label="Exit display-only mode">Exit</button>
-</div>
+<!-- Display-only exit bar (Preact) -->
+<div id="displayonly-root" class="contents"></div>
 
 <!-- Every dialog is Preact and mounts here while open. -->
 <div id="dialog-root"></div>

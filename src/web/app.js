@@ -61,7 +61,6 @@ function idxById(id){if(!id)return -1;for(var i=0;i<vms.length;i++){if(vms[i].id
 // boolean-valued property back to that string form so the comparisons hold.
 function normVmBools(arr){if(Array.isArray(arr)){for(var i=0;i<arr.length;i++){var v=arr[i];if(v&&typeof v==='object'){for(var k in v){if(typeof v[k]==='boolean')v[k]=v[k]?'true':'false';}}}}return arr;}
 var selectMode=false; var checkedIds=new Set(); // sidebar multi-select bulk-ops state
-var displayLabels=['GTK','SDL','SPICE','VNC','None'];
 function relAge(ts){var t=Date.parse(String(ts).replace(' ','T'));if(!t)return '';var d=Math.floor((Date.now()-t)/1000);if(d<0)return '';
 if(d<60)return 'just now';if(d<3600)return Math.floor(d/60)+' min ago';if(d<86400)return Math.floor(d/3600)+' h ago';return Math.floor(d/86400)+' d ago';}
 // Shared OS/distro visual identity (emblem color + monogram), used by the
@@ -137,10 +136,10 @@ async function refresh(){if(document.hidden)return;if(refreshBusy)return;if(tran
 setServerDown(false);vms=normVmBools(await r.json());publishVms();
 // Only act on a status transition if the selection still points at the SAME VM
 // we sampled before the await. If the user switched VMs mid-fetch, select()
-// already (re)started the console for the new VM, touching fb/serial here with
+// already (re)started the console for the new VM, touching the display and serial here with
 // the stale prevStatus would flap it. Compare by name (indices shift on
 // delete/reorder).
-if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){startFb();startSerial(sel);if(activeTab==='summary'&&embeddedDisplayCapable(vms[sel]))switchTab('console');}else{stopFb();stopSerial(true);if(activeTab==='console')switchTab('summary');}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();else if(sel===null)showEmptyState();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
+if(sel!==null&&sel<vms.length&&vms[sel].name===prevName){const curStatus=vms[sel].status;if(curStatus!==prevStatus){if(curStatus==='running'){window.hangarUi.startDisplay();window.hangarUi.startSerial(sel);if(activeTab==='summary'&&embeddedDisplayCapable(vms[sel]))switchTab('console');}else{window.hangarUi.stopDisplay();window.hangarUi.stopSerial(true);if(activeTab==='console')switchTab('summary');}}}renderList();if(sel!==null&&sel<vms.length)renderDetails();else if(sel===null)showEmptyState();}catch(e){clearTimeout(t);if(!serverDown){setServerDown(true);}}}finally{refreshBusy=false;}}
 function filterList(){const s=document.getElementById('search');if(!s)return;const f=s.value;renderList(f.toLowerCase());}
 // VM folders are a `folder:<path>` tag convention (no backend change). The sidebar
 // groups non-favorite VMs into collapsible folders; open/closed persists locally.
@@ -175,8 +174,8 @@ function selectedVm(){return sel!==null&&sel<vms.length?vms[sel]:null;}
 function statusLabel(s){return window.hangarUi.statusLabel(s);}
 function embeddedDisplayCapable(v){var dt=Number(v&&v.display);return v&&v.embed_display==='true'&&(dt===2||dt===3);}
 function closeToolbarMenus(returnFocus){return !!(window.hangarUi&&window.hangarUi.closeToolbarMenus(returnFocus));}
-async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;settingsDirty=false;}stopFb();stopSerial(true);sel=i;renderList();closeSidebar();closeToolbarMenus(false);if(sel!==null){var v=vms[sel];if(v&&v.status==='running'&&embeddedDisplayCapable(v)&&activeTab!=='settings')activeTab='console';if(activeTab==='settings')editVm();else renderDetails();if(v&&v.status==='running'){startFb();startSerial(sel);}}else{showEmptyState();}updateCommandState();}
-async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}stopFb();stopSerial(true);sel=null;renderList();showEmptyState();updateCommandState();}
+async function select(i){if(i===sel)return;if(activeTab==='settings'&&settingsDirty&&sel!==i){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;settingsDirty=false;}window.hangarUi.stopDisplay();window.hangarUi.stopSerial(true);sel=i;renderList();closeSidebar();closeToolbarMenus(false);if(sel!==null){var v=vms[sel];if(v&&v.status==='running'&&embeddedDisplayCapable(v)&&activeTab!=='settings')activeTab='console';if(activeTab==='settings')editVm();else renderDetails();if(v&&v.status==='running'){window.hangarUi.startDisplay();window.hangarUi.startSerial(sel);}}else{showEmptyState();}updateCommandState();}
+async function deselectVm(){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}window.hangarUi.stopDisplay();window.hangarUi.stopSerial(true);sel=null;renderList();showEmptyState();updateCommandState();}
 // Hardware slot limits: served by GET /api/capabilities (vm.zig constants);
 // the defaults below only cover the window before that fetch resolves.
 var MAX_NICS=8,MAX_EXTRA_DISKS=4;
@@ -205,7 +204,6 @@ t.style.display='block';s.style.display='none';if(c)c.style.display='none';activ
 t.setAttribute('aria-hidden','false');s.setAttribute('aria-hidden','true');if(c)c.setAttribute('aria-hidden','true');
 if(vms.length&&!dashShown)fetchHost();
 dashShown=vms.length>0;pushDashboard();ui.closeSettings();settingsDirty=false;
-var ch0=document.getElementById('consoleHint');if(ch0)ch0.innerHTML='<div class="console-empty"><strong>No VM selected.</strong><span>Select a running VM with embedded VNC or SPICE display to open the browser console.</span></div>';
 updateCommandState();}
 function renderDetails(){if(sel===null||sel>=vms.length){showEmptyState();return;}
 const ts=document.getElementById('tabSummary');
@@ -214,10 +212,6 @@ const v=vms[sel];
 if(activeTab==='console'&&!(v.status==='running'&&embeddedDisplayCapable(v)))activeTab='summary';
 syncTabPanels();
 document.title='Hangar: '+v.name;
-var displayLabel=displayLabels[Number(v.display)]||'Display';
-var ch=document.getElementById('consoleHint');
-if(ch){if(embeddedDisplayCapable(v)){ch.innerHTML=v.status==='running'?'':'<div class="console-empty"><strong>'+escHtml(v.name)+' is powered off.</strong><span>Power on the VM to open its console here.</span></div>';}
-else{ch.innerHTML='<div class="console-empty"><strong>No embedded browser console for this display.</strong><span>Switch Display to VNC or SPICE and enable Embed Display in Settings, or use the native '+escHtml(displayLabel)+' QEMU window.</span></div>';}}
 dashShown=false;
 window.hangarUi.setSummary(summaryProps(v));
 if(v.hasDisk==='true')loadDiskInfo(sel);
@@ -273,36 +267,7 @@ const r=await apiPost('/api/vms/'+sel+'/snapshots/delete','tag='+encodeURICompon
 async function sendCad(){if(sel===null)return;const r=await apiPost('/api/vms/'+sel+'/cad');if(r)setStatus('Ctrl+Alt+Del sent to guest.');}
 async function exportOvf(){if(sel===null)return;try{const r=await fetch('/api/vms/'+sel+'/export',{method:'POST',headers:{'X-API-Key':API_KEY}});if(!r.ok){setStatus('Export failed: '+r.status);return;}const blob=await r.blob();const a=document.createElement('a');const url=URL.createObjectURL(blob);a.href=url;a.download=vms[sel].name+'.ova';a.click();setTimeout(function(){URL.revokeObjectURL(url);},60000);setStatus('Export downloaded.');}catch(e){setStatus('Export error: '+e);}}
 async function migrateGuest(){if(sel===null)return;window.hangarUi.openMigrate({vmName:vms[sel].name,start:doMigrate});}
-var migrating=false;
-async function doMigrate(host,port){if(sel===null||migrating)return false;var dest='tcp:'+host+':'+port;migrating=true;migId=vms[sel].id;var resp=await apiPost('/api/vms/'+sel+'/migrate','dest='+encodeURIComponent(dest));if(!resp){migrating=false;migId=null;return false;}var j=await resp.json();if(!j||j.status!=='started'){showToast('Migration failed to start','error');migrating=false;migId=null;return false;}showMigProgress();pollMigStatus();return true;}
-var migPollTimer=null;
-var migId=null;
-var migPollFails=0;
-var MIG_POLL_MAX_FAILS=5;
-function showMigProgress(){migPollFails=0;var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar&&info){bar.style.display='block';bar.removeAttribute('aria-valuenow');info.style.display='inline';info.textContent='Migration in progress...';var fill=bar.firstElementChild;if(fill)fill.style.width='0%';}if(cancel)cancel.style.display='inline';}
-function hideMigProgress(){migrating=false;migId=null;migPollFails=0;if(migPollTimer){clearTimeout(migPollTimer);migPollTimer=null;}var bar=document.getElementById('mig_progress');var info=document.getElementById('mig_pct');var cancel=document.getElementById('mig_cancel');if(bar)bar.style.display='none';if(info)info.style.display='none';if(cancel)cancel.style.display='none';}
-async function pollMigStatus(){if(migId===null){hideMigProgress();return;}
-var mi=idxById(migId);if(mi<0){showToast('Migrating VM no longer in the list','warn');hideMigProgress();return;}
-var t='';try{var ctl=new AbortController();var tid=setTimeout(function(){ctl.abort();},10000);var resp=await fetch('/api/vms/'+mi+'/migrate',{signal:ctl.signal});clearTimeout(tid);t=await resp.text();}catch(e){}
-var info=document.getElementById('mig_pct');var bar=document.getElementById('mig_progress');
-if(!info||!bar)return;
-var fill=bar.firstElementChild;
-// A single dropped poll (timeout, busy daemon during transfer) must not abort
-// a migration that is still running server-side. Tolerate a few consecutive
-// failures before declaring the connection lost.
-if(!t){migPollFails++;if(migPollFails>=MIG_POLL_MAX_FAILS){info.textContent='Migration failed: connection lost';hideMigProgress();setStatus('Migration failed');return;}info.textContent='Migration in progress... (retrying)';migPollTimer=setTimeout(pollMigStatus,500);return;}
-migPollFails=0;
-try{
-var s=JSON.parse(t);
-if(s.status==='completed'){info.textContent='Migration completed.';bar.setAttribute('aria-valuenow','100');if(fill){fill.style.width='100%';fill.style.background='var(--success)';}setStatus('Migration completed');setTimeout(hideMigProgress,3000);return;}
-if(s.status==='failed'||s.status==='error'){info.textContent='Migration failed.';if(fill)fill.style.background='var(--danger)';setStatus('Migration failed');setTimeout(hideMigProgress,3000);return;}
-if(s.status==='cancelled'){info.textContent='Migration cancelled.';if(fill)fill.style.background='var(--warn)';setStatus('Migration cancelled');setTimeout(hideMigProgress,3000);return;}
-// Update progress bar if server provides percentage
-if(typeof s.pct==='number'&&fill){var pc=Math.min(100,Math.max(0,s.pct));fill.style.width=pc+'%';bar.setAttribute('aria-valuenow',String(Math.round(pc)));}
-info.textContent='Migration '+s.status+'...';
-}catch(e){info.textContent='Migration polling error';}
-migPollTimer=setTimeout(pollMigStatus,500);}
-async function cancelMigrate(){if(migId===null)return;var mi=idxById(migId);if(mi<0){hideMigProgress();return;}var r=await apiPost('/api/vms/'+mi+'/migrate/cancel','');if(r){var info=document.getElementById('mig_pct');if(info)info.textContent='Cancelling...';setStatus('Migration cancel requested');}}
+async function doMigrate(host,port){if(sel===null)return false;return window.hangarUi.startMigration(vms[sel].id,sel,'tcp:'+host+':'+port);}
 function actionAllowed(name,v){var has=!!v;var running=v&&v.status==='running';var paused=v&&v.status==='paused';switch(name){
 case'settings':case'rename':case'clone':case'export':case'delete':case'snapshot':return has;
 case'power-toggle':return has;
@@ -317,8 +282,12 @@ case'batch-stop':return vms.some(function(x){return x.status==='running'||x.stat
 default:return true;}}
 function disabledReason(name,v){if(!v&&name!=='batch-start'&&name!=='batch-stop')return 'Select a VM first';if(name==='display')return 'Requires a running VM with embedded VNC or SPICE display';if(name==='serial')return 'Requires a running VM with serial enabled';if(name==='resume')return 'Only paused or suspended VMs can resume';if(name==='shutdown'||name==='reset'||name==='pause'||name==='suspend'||name==='cad'||name==='migrate')return 'Requires a running VM';if(name==='hard-power')return 'Requires a running or paused VM';if(name==='power-on')return 'VM is already running';if(name==='batch-start')return 'No stopped VMs';if(name==='batch-stop')return 'No running VMs';return 'Unavailable';}
 function syncToolbar(){if(!window.hangarUi)return;const v=selectedVm();window.hangarUi.setToolbar({hasVm:!!v,powered:!!v&&(v.status==='running'||v.status==='paused'),powerBusy:false,actionReason:function(name){return actionAllowed(name,v)?null:disabledReason(name,v);}});}
-function updateCommandState(){syncToolbar();syncShell();var v=selectedVm();var nodes=document.querySelectorAll('[data-vm-action]');for(var i=0;i<nodes.length;i++){var n=nodes[i];var name=n.getAttribute('data-vm-action');var ok=actionAllowed(name,v);n.disabled=!ok;n.setAttribute('aria-disabled',ok?'false':'true');if(!ok){n.title=disabledReason(name,v);n.setAttribute('data-disabled-title','1');}else if(n.getAttribute('data-disabled-title')==='1'){n.removeAttribute('title');n.removeAttribute('data-disabled-title');}}
-}
+// The console tab, display-only mode and the migration bar live in the Preact bundle; it gets the
+// selection and the daemon calls it needs once, then the selected VM and the button reasons on every change.
+var consoleReady=false;
+function consoleHost(){return {selected:function(){return sel;},vmAt:function(i){return vms[i];},log:logDebug,post:apiPost,indexOfId:idxById,announce:setStatus,toast:showToast};}
+function syncConsole(){var ui=window.hangarUi;if(!ui)return;if(!consoleReady){consoleReady=true;ui.initConsole(consoleHost());}var v=selectedVm();ui.setConsole({vm:v,actionReason:function(name){return actionAllowed(name,v)?null:disabledReason(name,v);}});}
+function updateCommandState(){syncToolbar();syncShell();syncConsole();}
 function newVm(){window.hangarUi.openNewVm({create:createVm});}
 async function createVm(v){var extra='&guest_os='+encodeURIComponent(v.guestOs)+'&firmware='+encodeURIComponent(v.firmware);if(v.isoPath)extra+='&iso_path='+encodeURIComponent(v.isoPath);
 const r=await apiPost('/api/vms','name='+encodeURIComponent(v.name)+'&mem='+v.memoryMb+'&cpu='+v.cpuCores+'&disk='+v.diskGb+extra);if(!r)return false;await refresh();var ni=vms.findIndex(function(x){return x.name===v.name;});if(ni>=0)await select(ni);setStatus('VM created.');return true;}
@@ -419,7 +388,7 @@ function openCtxMenu(idx,x,y){
     {label:'Snapshot Manager…',icon:'grid',action:'snapshot',fn:openSnapshots},
     {label:'Open Console',icon:'terminal',action:'display',fn:function(){select(idx).then(function(){switchTab('console');});}},
     {label:'Send Ctrl+Alt+Del',icon:'keyboard',action:'cad',fn:sendCad},
-    {label:'Display Only',icon:'maximize',action:'display',fn:enterDisplayOnly},
+    {label:'Display Only',icon:'maximize',action:'display',fn:function(){window.hangarUi.enterDisplayOnly();}},
     {sep:true},
     {label:'Settings',icon:'gear',action:'settings',fn:editVm},
     {label:'Move to Folder…',icon:'folder',action:'settings',fn:moveToFolder},
@@ -497,41 +466,7 @@ function topoLayout(res,meta){
 }
 function openTopologyTarget(t){if(t.kind==='vm')topoSelectVm(t.name);else topoEditNet(t.name);}
 async function openTopology(){if(!document.getElementById('topodlg'))window.hangarUi.openTopology({view:{kind:'loading',message:'Computing layout…'},open:openTopologyTarget});await renderTopology();}
-// On-demand browser bundles. The layout engine, the two console clients and
-// the serial terminal add up to over a megabyte that the VM library never
-// touches, so they are fetched the first time the surface that needs them
-// opens. Concurrent callers share the pending promise; a failed or timed-out
-// load clears it so the surface's Retry button starts a fresh attempt.
-const ASSET_LOAD_TIMEOUT_MS=15000;
-const pendingAssets={};
-function ensureAsset(src,isReady){
- if(isReady())return Promise.resolve();
- if(pendingAssets[src])return pendingAssets[src];
- pendingAssets[src]=new Promise(function(resolve,reject){
-  var s=document.createElement('script');
-  var timer=setTimeout(function(){finish(false);},ASSET_LOAD_TIMEOUT_MS);
-  function finish(ok){
-   clearTimeout(timer);s.onload=null;s.onerror=null;
-   if(ok){resolve();}else{s.remove();delete pendingAssets[src];reject(new Error('Failed to load '+src));}
-  }
-  s.src=src;s.async=true;
-  s.onload=function(){finish(isReady());};
-  s.onerror=function(){finish(false);};
-  document.head.appendChild(s);
- });
- return pendingAssets[src];
-}
-function ensureStylesheet(href){
- if(document.querySelector('link[data-asset="'+href+'"]'))return Promise.resolve();
- return new Promise(function(resolve,reject){
-  var l=document.createElement('link');
-  l.rel='stylesheet';l.href=href;l.dataset.asset=href;
-  l.onload=function(){l.onload=null;l.onerror=null;resolve();};
-  l.onerror=function(){l.onload=null;l.onerror=null;l.remove();reject(new Error('Failed to load '+href));};
-  document.head.appendChild(l);
- });
-}
-function ensureElk(){return ensureAsset('/elk.js',function(){return typeof ELK==='function';});}
+function ensureElk(){return window.hangarUi.ensureAsset('/elk.js',function(){return typeof ELK==='function';});}
 // Every step pushes a view to the dialog: loading (engine, then layout), failed (Retry), empty or ready.
 async function renderTopology(){
  var ui=window.hangarUi;
@@ -595,7 +530,7 @@ if(e.key==='ArrowUp'||e.key==='ArrowDown'){var listEl=document.getElementById('v
 if(e.key==='Escape'){
   if(closeToolbarMenus(true)||closeCtxMenu(true))return;
   var anyOpen=false;var openDlgs=document.querySelectorAll('dialog[open]');for(var di=0;di<openDlgs.length;di++){openDlgs[di].close();anyOpen=true;}
-  if(!anyOpen&&document.body.classList.contains('displayonly')){exitDisplayOnly();return;}
+  if(!anyOpen&&document.body.classList.contains('displayonly')){window.hangarUi.exitDisplayOnly();return;}
   if(!anyOpen&&sel!==null){if(activeTab==='settings'&&settingsDirty){if(!(await showConfirmDialog('You have unsaved changes. Discard them?',{danger:true,okLabel:'Discard'})))return;}sel=null;renderList();showEmptyState();}
   return;
 }
@@ -610,8 +545,8 @@ if(e.ctrlKey&&e.key==='p'){e.preventDefault();openPrefs();return;}
 if(e.ctrlKey&&e.key==='f'){e.preventDefault();var searchEl=document.getElementById('search');if(searchEl){searchEl.focus();searchEl.select();}return;}
 if(e.ctrlKey&&e.key==='Enter'){e.preventDefault();if(sel!==null)editVm();return;}
 if(e.key==='F5'){e.preventDefault();refresh();return;}
-if(e.key==='F11'){e.preventDefault();if(document.body.classList.contains('displayonly')){exitDisplayOnly();}
-else if(rfb||spice){enterDisplayOnly();}
+if(e.key==='F11'){e.preventDefault();if(document.body.classList.contains('displayonly')){window.hangarUi.exitDisplayOnly();}
+else if(window.hangarUi.displayConnected()){window.hangarUi.enterDisplayOnly();}
 else if(!document.fullscreenElement)document.documentElement.requestFullscreen().catch(function(){});else document.exitFullscreen();return;}
 if(e.key==='Delete'){if(e.target.closest('button,a[href]'))return;if(sel!==null)deleteVm();return;}
 if(e.key==='Enter'){if(e.target.closest('button,a[href]'))return;if(sel!==null)powerToggle();return;}
@@ -619,23 +554,6 @@ if(e.altKey&&e.key==='ArrowUp'&&sel!==null&&sel>0){e.preventDefault();reorderVm(
 if(e.altKey&&e.key==='ArrowDown'&&sel!==null&&sel<vms.length-1){e.preventDefault();reorderVm(sel,sel+1);return;}
 });
 function showShortcutsModal(){window.hangarUi.openShortcuts();}
-function enterDisplayOnly(){
-  if(!rfb&&!spice){showToast('No embedded display is connected','warn');return;}
-  document.body.classList.add('displayonly');
-  document.documentElement.requestFullscreen().catch(function(){});
-  setStatus('Display-only, F11 or Esc to exit');
-  // Briefly reveal the exit bar so first-time users can find their way out;
-  // it otherwise stays hidden until hover, leaving keyboard-unaware users stuck.
-  var bar=document.querySelector('.displayonly-bar');
-  if(bar){bar.classList.add('reveal');setTimeout(function(){if(document.body.classList.contains('displayonly'))bar.classList.remove('reveal');},3500);}
-}
-function exitDisplayOnly(){
-  document.body.classList.remove('displayonly');
-  var bar=document.querySelector('.displayonly-bar');if(bar)bar.classList.remove('reveal');
-  if(document.fullscreenElement)document.exitFullscreen();
-  setStatus('Exited display-only mode');
-}
-function reconnectDisplay(){if(sel===null||sel>=vms.length)return;stopFb();startFb();}
 // ── Periodic Refresh ──
 refresh();
 setInterval(refresh,5000);
@@ -647,571 +565,6 @@ es.onopen=function(){streamLive=true;syncShell();};
 es.onerror=function(){streamLive=false;syncShell();};
 es.addEventListener('change',function(){if(deb)clearTimeout(deb);deb=setTimeout(function(){refresh();},120);});}catch(e){}})();
 document.addEventListener('visibilitychange',function(){if(!document.hidden)refresh();});
-// ── noVNC / SPICE live viewer ──
-var rfb = null; // noVNC RFB client instance
-// Auto-reconnect for the embedded display: if the RFB/SPICE session drops while
-// the VM is still running (QEMU restart, transient relay loss), retry with
-// exponential backoff instead of leaving a dead console.
-var fbReconnectTimer=null,fbReconnectDelay=1000;
-function clearFbReconnect(){if(fbReconnectTimer){clearTimeout(fbReconnectTimer);fbReconnectTimer=null;}}
-function scheduleFbReconnect(){if(fbReconnectTimer)return;fbReconnectTimer=setTimeout(function(){fbReconnectTimer=null;if(sel!==null&&sel<vms.length){var v=vms[sel];if(v.status==='running'&&embeddedDisplayCapable(v)&&!rfb&&!spice){fbReconnectDelay=Math.min(fbReconnectDelay*2,15000);startFb();}}},fbReconnectDelay);}
-var spice = null; // SPICE HTML5 client instance
-var displayPresenter = null;
-
-function findProtocolCanvas(displayEl) {
-  if (!displayEl) return null;
-  var canvases = displayEl.querySelectorAll('canvas');
-  for (var i = 0; i < canvases.length; i++) {
-    if (!canvases[i].classList.contains('gpu-presenter')) return canvases[i];
-  }
-  return null;
-}
-
-function ensurePresenterCanvas(p) {
-  if (p.canvas) return p.canvas;
-  var canvas = document.createElement('canvas');
-  canvas.className = 'gpu-presenter';
-  canvas.setAttribute('aria-hidden', 'true');
-  p.displayEl.appendChild(canvas);
-  p.canvas = canvas;
-  return canvas;
-}
-
-function stopDisplayPresenter() {
-  if (!displayPresenter) return;
-  displayPresenter.stopped = true;
-  if (displayPresenter.raf) cancelAnimationFrame(displayPresenter.raf);
-  if (displayPresenter.canvas && displayPresenter.canvas.parentNode) {
-    displayPresenter.canvas.parentNode.removeChild(displayPresenter.canvas);
-  }
-  if (displayPresenter.displayEl) {
-    displayPresenter.displayEl.classList.remove('gpu-presenting');
-    displayPresenter.displayEl.removeAttribute('data-renderer');
-    var sources = displayPresenter.displayEl.querySelectorAll('.display-source-canvas');
-    for (var i = 0; i < sources.length; i++) sources[i].classList.remove('display-source-canvas');
-  }
-  displayPresenter = null;
-}
-
-function markPresenterReady(p, mode) {
-  p.mode = mode;
-  p.displayEl.classList.add('gpu-presenting');
-  p.displayEl.setAttribute('data-renderer', mode);
-  updateDisplayBadge('connected', p.protocol);
-}
-
-function startDisplayPresenter(displayEl, protocol) {
-  stopDisplayPresenter();
-  var p = { displayEl: displayEl, protocol: protocol, mode: 'canvas', stopped: false, raf: 0, canvas: null };
-  displayPresenter = p;
-  if (navigator.gpu) {
-    initWebGpuPresenter(p).catch(function() {
-      if (!p.stopped) initWebGlPresenter(p);
-    });
-  } else {
-    initWebGlPresenter(p);
-  }
-}
-
-async function initWebGpuPresenter(p) {
-  if (!navigator.gpu) throw new Error('WebGPU unavailable');
-  var adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!adapter) throw new Error('WebGPU adapter unavailable');
-  var device = await adapter.requestDevice();
-  if (p.stopped) return;
-  var canvas = ensurePresenterCanvas(p);
-  var context = canvas.getContext('webgpu');
-  if (!context) throw new Error('WebGPU canvas unavailable');
-  var format = navigator.gpu.getPreferredCanvasFormat ? navigator.gpu.getPreferredCanvasFormat() : 'bgra8unorm';
-  context.configure({ device: device, format: format, alphaMode: 'opaque' });
-  var sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-  var shader = device.createShaderModule({ code:
-    'struct Out { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };\n' +
-    '@vertex fn vs(@builtin(vertex_index) i: u32) -> Out {\n' +
-    '  var pos = array<vec2<f32>, 6>(vec2<f32>(-1.0,-1.0), vec2<f32>(1.0,-1.0), vec2<f32>(-1.0,1.0), vec2<f32>(-1.0,1.0), vec2<f32>(1.0,-1.0), vec2<f32>(1.0,1.0));\n' +
-    '  var uv = array<vec2<f32>, 6>(vec2<f32>(0.0,1.0), vec2<f32>(1.0,1.0), vec2<f32>(0.0,0.0), vec2<f32>(0.0,0.0), vec2<f32>(1.0,1.0), vec2<f32>(1.0,0.0));\n' +
-    '  var out: Out; out.pos = vec4<f32>(pos[i], 0.0, 1.0); out.uv = uv[i]; return out;\n' +
-    '}\n' +
-    '@group(0) @binding(0) var frameTex: texture_2d<f32>;\n' +
-    '@group(0) @binding(1) var frameSampler: sampler;\n' +
-    '@fragment fn fs(in: Out) -> @location(0) vec4<f32> { return textureSample(frameTex, frameSampler, in.uv); }\n'
-  });
-  var bindLayout = device.createBindGroupLayout({ entries: [
-    { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-    { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} }
-  ]});
-  var pipeline = device.createRenderPipeline({
-    layout: device.createPipelineLayout({ bindGroupLayouts: [bindLayout] }),
-    vertex: { module: shader, entryPoint: 'vs' },
-    fragment: { module: shader, entryPoint: 'fs', targets: [{ format: format }] },
-    primitive: { topology: 'triangle-list' }
-  });
-  p.webgpu = { device: device, context: context, sampler: sampler, bindLayout: bindLayout, pipeline: pipeline, texture: null, bindGroup: null, width: 0, height: 0 };
-  markPresenterReady(p, 'webgpu');
-  function frame() {
-    if (p.stopped) return;
-    var source = findProtocolCanvas(p.displayEl);
-    if (source && source.width > 0 && source.height > 0) {
-      source.classList.add('display-source-canvas');
-      if (canvas.width !== source.width || canvas.height !== source.height) {
-        canvas.width = source.width;
-        canvas.height = source.height;
-      }
-      if (p.webgpu.width !== source.width || p.webgpu.height !== source.height) {
-        p.webgpu.width = source.width;
-        p.webgpu.height = source.height;
-        p.webgpu.texture = device.createTexture({
-          size: [source.width, source.height, 1],
-          format: 'rgba8unorm',
-          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
-        });
-        p.webgpu.bindGroup = device.createBindGroup({
-          layout: bindLayout,
-          entries: [
-            { binding: 0, resource: p.webgpu.texture.createView() },
-            { binding: 1, resource: sampler }
-          ]
-        });
-      }
-      device.queue.copyExternalImageToTexture({ source: source }, { texture: p.webgpu.texture }, { width: source.width, height: source.height });
-      var encoder = device.createCommandEncoder();
-      var pass = encoder.beginRenderPass({ colorAttachments: [{
-        view: context.getCurrentTexture().createView(),
-        clearValue: { r: 0, g: 0, b: 0, a: 1 },
-        loadOp: 'clear',
-        storeOp: 'store'
-      }]});
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, p.webgpu.bindGroup);
-      pass.draw(6);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
-    }
-    p.raf = requestAnimationFrame(frame);
-  }
-  frame();
-}
-
-function initWebGlPresenter(p) {
-  var canvas = ensurePresenterCanvas(p);
-  var mode = 'webgl2';
-  var gl = canvas.getContext('webgl2', { alpha: false, antialias: false });
-  if (!gl) {
-    mode = 'webgl';
-    gl = canvas.getContext('webgl', { alpha: false, antialias: false });
-  }
-  if (!gl) {
-    p.mode = 'canvas';
-    if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
-    p.canvas = null;
-    p.displayEl.classList.remove('gpu-presenting');
-    p.displayEl.setAttribute('data-renderer', 'canvas');
-    updateDisplayBadge('connected', p.protocol);
-    return;
-  }
-  function shader(type, source) {
-    var s = gl.createShader(type);
-    gl.shaderSource(s, source);
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'shader compile failed');
-    return s;
-  }
-  try {
-    var vs = shader(gl.VERTEX_SHADER, 'attribute vec2 aPos;attribute vec2 aUv;varying vec2 vUv;void main(){vUv=aUv;gl_Position=vec4(aPos,0.0,1.0);}');
-    var fs = shader(gl.FRAGMENT_SHADER, 'precision mediump float;varying vec2 vUv;uniform sampler2D uTex;void main(){gl_FragColor=texture2D(uTex,vUv);}');
-    var program = gl.createProgram();
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'program link failed');
-    gl.useProgram(program);
-    var data = new Float32Array([
-      -1,-1, 0,0,  1,-1, 1,0,  -1,1, 0,1,
-      -1,1, 0,1,   1,-1, 1,0,   1,1, 1,1
-    ]);
-    var buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    var stride = 4 * 4;
-    var aPos = gl.getAttribLocation(program, 'aPos');
-    var aUv = gl.getAttribLocation(program, 'aUv');
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, stride, 0);
-    gl.enableVertexAttribArray(aUv);
-    gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, stride, 8);
-    var tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    markPresenterReady(p, mode);
-    function frame() {
-      if (p.stopped) return;
-      var source = findProtocolCanvas(p.displayEl);
-      if (source && source.width > 0 && source.height > 0) {
-        source.classList.add('display-source-canvas');
-        if (canvas.width !== source.width || canvas.height !== source.height) {
-          canvas.width = source.width;
-          canvas.height = source.height;
-          gl.viewport(0, 0, canvas.width, canvas.height);
-        }
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-      }
-      p.raf = requestAnimationFrame(frame);
-    }
-    frame();
-  } catch (e) {
-    p.mode = 'canvas';
-    if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
-    p.canvas = null;
-    p.displayEl.classList.remove('gpu-presenting');
-    p.displayEl.setAttribute('data-renderer', 'canvas');
-    updateDisplayBadge('connected', p.protocol);
-  }
-}
-
-// ── Encoded video stream (WebCodecs ← /ws/video, docs/VIDEO-PIPELINE.md) ──
-// When the VM has video_stream and the browser has VideoDecoder, an H.264
-// stream paints onto an overlay canvas (pointer-events:none, so input still
-// flows to the noVNC layer underneath). Fails silently back to noVNC.
-var videoWs=null,videoDec=null,videoCanvas=null,videoTs=0,videoRetry=0,videoRetryTimer=null;
-function startVideoStream(idx){
-  if(videoWs||typeof VideoDecoder==='undefined')return;
-  var v=vms[idx];if(!v||v.video_stream!=='true')return;
-  var displayEl=document.getElementById('display');if(!displayEl)return;
-  try{
-    var ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/ws/video/'+idx);
-    ws.binaryType='arraybuffer';videoWs=ws;
-    ws.onmessage=function(e){
-      var b=new Uint8Array(e.data);if(!b.length)return;
-      if(b[0]===1){ // config: u16 w, u16 h, u8 codec
-        var w=b[1]|(b[2]<<8),h=b[3]|(b[4]<<8);
-        if(!videoCanvas){videoCanvas=document.createElement('canvas');videoCanvas.className='video-layer';displayEl.appendChild(videoCanvas);}
-        videoCanvas.width=w;videoCanvas.height=h;
-        videoDec=new VideoDecoder({output:function(frame){
-          try{var ctx=videoCanvas.getContext('2d');ctx.drawImage(frame,0,0);}catch(err){}
-          frame.close();
-        },error:function(){stopVideoStream();}});
-        videoDec.configure({codec:'avc1.42E01F',optimizeForLatency:true,hardwareAcceleration:'no-preference'});
-        displayEl.classList.add('video-active');
-        updateDisplayBadge('connected','vnc');
-        var bg=document.getElementById('displayBadge');if(bg)bg.textContent='H264 · WEBCODECS';
-        return;
-      }
-      if((b[0]===2||b[0]===3)&&videoDec&&videoDec.state==='configured'){
-        var key=b[0]===3;
-        if(videoTs===0&&!key)return; // wait for the first key frame
-        videoTs+=33333;
-        try{videoDec.decode(new EncodedVideoChunk({type:key?'key':'delta',timestamp:videoTs,data:b.subarray(1)}));}catch(err){stopVideoStream();}
-      }
-    };
-    ws.onerror=function(){if(videoWs===ws)stopVideoStream();};
-    ws.onclose=function(){if(videoWs!==ws)return;var hadConfig=!!videoDec;stopVideoStream();
-     // Early close (e.g. connected before the capture session was up): retry
-     // a few times while the VM is still running.
-     if(!hadConfig&&videoRetry<5&&sel===idx&&vms[idx]&&vms[idx].status==='running'){videoRetry++;videoRetryTimer=setTimeout(function(){videoRetryTimer=null;startVideoStream(idx);},2000);}};
-  }catch(e){stopVideoStream();}
-}
-function stopVideoStream(){
-  if(videoRetryTimer){clearTimeout(videoRetryTimer);videoRetryTimer=null;}
-  if(videoWs){try{videoWs.close();}catch(e){}videoWs=null;}
-  if(videoDec){try{videoDec.close();}catch(e){}videoDec=null;}
-  if(videoCanvas&&videoCanvas.parentNode)videoCanvas.parentNode.removeChild(videoCanvas);
-  videoCanvas=null;videoTs=0;
-  var d=document.getElementById('display');if(d)d.classList.remove('video-active');
-}
-
-function startFb() {
-  if (rfb || spice) return; // already connected
-  const idx = sel;
-  if (idx === null || idx >= vms.length) return;
-  const v = vms[idx];
-  if (v.status !== 'running') return;
-  var displayEl = document.getElementById('display');
-  if (!displayEl) return;
-  displayEl.style.display = 'block';
-  displayEl.classList.add('loading');
-  displayEl.classList.remove('connected');
-  var hint=document.getElementById('displayHint');if(hint)hint.textContent='';
-
-  // Dispatch based on display type: 2 = SPICE, 3 = VNC
-  videoRetry=0;startVideoStream(idx);
-  var dt = Number(v.display);
-  if (dt === 2) {
-    updateDisplayBadge('connecting', 'spice');
-    startSpice(idx, displayEl, v);
-  } else if (dt === 3) {
-    updateDisplayBadge('connecting', 'vnc');
-    startVnc(idx, displayEl);
-  } else {
-    displayEl.classList.remove('loading');
-    displayEl.classList.remove('connected');
-    displayEl.setAttribute('data-renderer','native');
-    updateDisplayBadge('native');
-    if(hint)hint.innerHTML='<strong>Native '+escHtml((displayLabels[dt]||'QEMU'))+' display</strong><span>Browser console requires embedded VNC or SPICE. Change Display & Video in Settings to use this pane.</span>';
-  }
-  // Other display types (GTK, SDL, None) have no remote framebuffer; skip.
-}
-
-function startVnc(idx, displayEl) {
-  stopDisplayPresenter();
-  // Remove any previously-created canvas.
-  var oldCanvases = displayEl.querySelectorAll('canvas');
-  for (var ci = 0; ci < oldCanvases.length; ci++) { if (oldCanvases[ci].parentNode === displayEl) displayEl.removeChild(oldCanvases[ci]); }
-  return connectConsole(idx, displayEl, 'VNC', function(){return ensureAsset('/novnc.js',function(){return !!(window.noVNC&&(noVNC.default||noVNC.RFB));});}, function(url){
-    // The vendored noVNC bundle exposes the RFB class as its `default` export
-    // (noVNC.default), not noVNC.RFB. Accept either so a bundle update can't
-    // silently break the console again.
-    var RFBClass=(window.noVNC&&(noVNC.default||noVNC.RFB))||null;
-    if(typeof RFBClass!=='function')throw new Error('noVNC bundle has no RFB class');
-    rfb = new RFBClass(displayEl, url, {});
-    rfb.addEventListener('connect', function() {
-      fbReconnectDelay=1000;clearFbReconnect();
-      displayEl.classList.remove('loading');
-      displayEl.classList.add('connected');
-      updateDisplayBadge('connected', 'vnc');
-      startDisplayPresenter(displayEl, 'vnc');
-    });
-    rfb.addEventListener('disconnect', function() {
-      stopFb();
-      scheduleFbReconnect();
-    });
-    rfb.addEventListener('credentialsrequired', function() {
-      rfb.sendCredentials({ password: '' });
-    });
-    rfb.scaleViewport = true;
-    rfb.resizeSession = true;
-  });
-}
-
-function startSpice(idx, displayEl, v) {
-  stopDisplayPresenter();
-  // Remove any previously-created canvas.
-  var oldCanvases = displayEl.querySelectorAll('canvas');
-  for (var ci = 0; ci < oldCanvases.length; ci++) { if (oldCanvases[ci].parentNode === displayEl) displayEl.removeChild(oldCanvases[ci]); }
-  return connectConsole(idx, displayEl, 'SPICE', function(){return ensureAsset('/spice.js',function(){return typeof SpiceHtml5!=='undefined';});}, function(url){
-    if(typeof SpiceHtml5==='undefined')throw new Error('SPICE bundle did not register');
-    spice = new SpiceHtml5.SpiceMainConn({
-      uri: url,
-      password: '',
-      screen_id: 'display',
-      onerror: function(e) {
-        logDebug('SPICE error:', e);
-        stopFb();
-      },
-      onsuccess: function() {
-        displayEl.classList.remove('loading');
-        displayEl.classList.add('connected');
-        updateDisplayBadge('connected', 'spice');
-        startDisplayPresenter(displayEl, 'spice');
-      }
-    });
-  });
-}
-
-// Shared console-connect path: fetch the client bundle on first use, then open
-// the relay socket. A bundle that fails to load leaves the pane visible with a
-// Retry button (reconnectDisplay) instead of a silently dead display.
-function connectConsole(idx, displayEl, label, ensureClient, connect) {
-  var hint=document.getElementById('displayHint');
-  if(hint)hint.textContent='Loading '+label+' client…';
-  var ready=ensureClient();
-  return ready.then(function(){
-    // The selection may have moved (or the pane closed) while the bundle
-    // downloaded; connecting now would bind the relay to a stale VM.
-    if(sel!==idx)return;
-    if(hint)hint.textContent='';
-    var proto=location.protocol==='https:'?'wss:':'ws:';
-    var url=proto+'//'+location.host+'/ws/'+label.toLowerCase()+'/'+idx;
-    connect(url);
-  },function(){
-    if(sel!==idx)return;
-    displayEl.classList.remove('loading');
-    updateDisplayBadge('disconnected');
-    var h=document.getElementById('displayHint');
-    if(h)h.innerHTML='<strong>'+escHtml(label)+' client failed to load.</strong><button type="button" class="btn" data-action="reconnectDisplay">Retry</button>';
-  }).catch(function(e){
-    if(sel!==idx)return;
-    logDebug(label+' connect failed:',e);
-    stopFb();
-  });
-}
-
-function stopFb() {
-  stopVideoStream();
-  stopDisplayPresenter();
-  if (rfb) {
-    try { rfb.disconnect(); } catch (e) {}
-    rfb = null;
-  }
-  if (spice) {
-    try { spice.stop(); } catch (e) {}
-    spice = null;
-  }
-  var displayEl = document.getElementById('display');
-  if (displayEl) {
-    var canvases = displayEl.querySelectorAll('canvas');
-    for (var ci = 0; ci < canvases.length; ci++) { if (canvases[ci].parentNode === displayEl) displayEl.removeChild(canvases[ci]); }
-    displayEl.style.display = 'none';
-    displayEl.classList.remove('loading');
-    displayEl.classList.remove('connected');
-    displayEl.removeAttribute('data-renderer');
-    var hint=document.getElementById('displayHint');if(hint)hint.textContent='';
-    updateDisplayBadge('disconnected');
-  }
-}
-function updateDisplayBadge(state, proto)  { if(typeof videoCanvas!=='undefined'&&videoCanvas){var vb=document.getElementById('displayBadge');if(vb){vb.textContent='H264 · WEBCODECS';return;}}
-  var badge = document.getElementById('displayBadge');
-  if (!badge) return;
-  badge.classList.remove('vnc', 'spice');
-  if (state === 'connecting') {
-    badge.textContent = 'Connecting\u2026';
-  } else if (state === 'connected') {
-    var mode = displayPresenter && displayPresenter.mode ? displayPresenter.mode.toUpperCase() : 'Canvas';
-    badge.textContent = (proto ? proto.toUpperCase() : 'Display') + ' · ' + mode;
-  } else if (state === 'native') {
-    badge.textContent = 'Native Display';
-  } else {
-    badge.textContent = 'Disconnected';
-  }
-  if (proto) badge.classList.add(proto);
-}
-// Serial console
-let serialWs=null,serialIdx=null,serialManualOff=false,serialManualOffVmIdx=-1;
-let serialReconnectDelay=1000,serialReconnectTimeoutId=null;
-function scheduleSerialReconnect(){if(serialReconnectTimeoutId)return;serialReconnectTimeoutId=setTimeout(function(){serialReconnectTimeoutId=null;if(sel!==null&&sel<vms.length){const v=vms[sel];if(serialManualOff&&sel===serialManualOffVmIdx){serialReconnectDelay=1000;return;}if(v.status==='running'&&v.hasSerial==='true'){startSerial(sel);serialReconnectDelay=Math.min(serialReconnectDelay*2,30000);}else{serialReconnectDelay=1000;}}},serialReconnectDelay);}
-function clearSerialReconnect(){if(serialReconnectTimeoutId){clearTimeout(serialReconnectTimeoutId);serialReconnectTimeoutId=null;}serialReconnectDelay=1000;}
-// xterm.js serial terminal: real ANSI emulation, bidirectional (onData →
-// guest), WebGL renderer when available (canvas/DOM fallback inside xterm).
-// The terminal bundles are ~740 KB of the initial page load for a panel most
-// sessions never open, so they load on the first serial connection.
-var serialTerm=null,serialFit=null,serialBuf='';
-function ensureXterm(){
- return Promise.all([
-  ensureStylesheet('/xterm.css'),
-  ensureAsset('/xterm.js',function(){return typeof Terminal!=='undefined';}),
- ]).then(function(){
-  return Promise.all([
-   ensureAsset('/xterm-fit.js',function(){return typeof FitAddon!=='undefined';}),
-   ensureAsset('/xterm-webgl.js',function(){return typeof WebglAddon!=='undefined';}),
-  ]);
- });
-}
-function setSerialStatus(msg,isError){
- var st=document.getElementById('serialStatus');
- if(!st)return;
- st.textContent=msg||'';
- st.classList.toggle('error',!!isError);
- if(msg&&isError)st.innerHTML=escHtml(msg)+' <button type="button" class="btn" data-action="reconnectSerial">Retry</button>';
-}
-function ensureSerialTerm(){
- if(serialTerm)return Promise.resolve(serialTerm);
- var host=document.getElementById('serialterm');if(!host)return Promise.resolve(null);
- setSerialStatus('Loading terminal…',false);
- return ensureXterm().then(function(){
-  if(typeof Terminal==='undefined')throw new Error('xterm did not register');
-  serialTerm=new Terminal({fontSize:12,fontFamily:'ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace',cursorBlink:true,scrollback:5000,convertEol:false,theme:{background:'#101214',foreground:'#b7c5bd',cursor:'#86c89a',cursorAccent:'#101214',selectionBackground:'rgba(77,130,184,.4)'}});
-  try{serialFit=new FitAddon.FitAddon();serialTerm.loadAddon(serialFit);}catch(e){}
-  serialTerm.open(host);
-  try{serialTerm.loadAddon(new WebglAddon.WebglAddon());}catch(e){/* GPU unavailable: xterm falls back to its DOM/canvas renderer */}
-  serialTerm.onData(function(d){if(serialWs&&serialWs.readyState===WebSocket.OPEN)serialWs.send(d);});
-  if(serialFit){try{serialFit.fit();}catch(e){}}
-  setSerialStatus('',false);
-  return serialTerm;
- },function(){
-  setSerialStatus('Serial terminal failed to load.',true);
-  return null;
- });
-}
-function serialFitNow(){if(serialFit){try{serialFit.fit();}catch(e){}}}
-function startSerial(idx){if(serialManualOff&&serialManualOffVmIdx===idx)return;
-clearSerialReconnect();
-if(serialWs){if(serialIdx===idx&&(serialWs.readyState===WebSocket.OPEN||serialWs.readyState===WebSocket.CONNECTING))return;
-serialWs.close();serialWs=null;} /* close stale CONNECTING socket before reconnect */
-const sameVm=(serialIdx===idx);
-stopSerial(!sameVm); /* clear terminal only when switching VMs */
-if(idx===null||idx>=vms.length)return;const v=vms[idx];if(v.status!=='running'||v.hasSerial!=='true')return;
-serialIdx=idx;const sp=document.getElementById('serialpanel');if(!sp)return;sp.style.display='block';sp.classList.add('connected');
-// The terminal bundle may still be downloading; open the relay socket once it
-// is ready, unless the selection moved on in the meantime.
-ensureSerialTerm().then(function(t){
-if(!t||sel!==idx)return;
-if(!sameVm){t.reset();serialBuf='';}
-const proto=location.protocol==='https:'?'wss:':'ws:';const ws=new WebSocket(proto+'//'+location.host+'/ws/serial/'+idx);
-ws.binaryType='arraybuffer';
-serialWs=ws; // reassign before old onclose fires to avoid closing the new socket
-ws.onmessage=e=>{var data=e.data instanceof ArrayBuffer?new Uint8Array(e.data):e.data;t.write(data);
- var txt=typeof data==='string'?data:new TextDecoder('utf-8',{fatal:false}).decode(data);
- serialBuf+=txt;var SERIAL_MAX=256*1024;if(serialBuf.length>SERIAL_MAX)serialBuf=serialBuf.slice(serialBuf.length-SERIAL_MAX);};
-ws.onopen=()=>{serialReconnectDelay=1000;sp.classList.add('connected');serialFitNow();};
-ws.onclose=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
-ws.onerror=()=>{if(serialWs===ws){serialWs=null;serialIdx=null;const sp2=document.getElementById('serialpanel');if(sp2){sp2.style.display='none';sp2.classList.remove('connected');}if(!serialManualOff||serialManualOffVmIdx!==idx)scheduleSerialReconnect();}};
-}); /* terminal ready */
-}
-function stopSerial(clearTerm){if(clearTerm===void 0)clearTerm=true;clearSerialReconnect();if(serialWs){serialWs.close();serialWs=null;}serialIdx=null;if(clearTerm){if(serialTerm)serialTerm.reset();serialBuf='';}setSerialStatus('',false);const sp=document.getElementById('serialpanel');if(sp){sp.style.display='none';sp.classList.remove('connected');}}
-function reconnectSerial(){if(sel===null||sel>=vms.length)return;startSerial(sel);}
-function manualDisconnectSerial(){serialManualOff=true;serialManualOffVmIdx=sel!==null?sel:-1;clearSerialReconnect();stopSerial(true);}
-// (keyboard input now flows through xterm's onData)
-// Serial panel resize handle
-(function() {
-  var handle = document.getElementById('serialResize');
-  var term = document.getElementById('serialterm');
-  if (!handle || !term) return;
-  // After any height change, refit the xterm grid to the new box.
-  var refit = function(){ if (typeof serialFitNow === 'function') serialFitNow(); };
-  var startY = 0, startH = 0, dragging = false;
-  function dragStart(clientY){dragging=true;startY=clientY;startH=term.offsetHeight;document.body.style.cursor='ns-resize';document.body.style.userSelect='none';}
-  handle.addEventListener('touchstart', function(e){ if(e.touches.length===1){ e.preventDefault(); dragStart(e.touches[0].clientY); } }, {passive:false});
-  window.addEventListener('touchmove', function(e){ if(!dragging||!e.touches.length) return; var dy=e.touches[0].clientY-startY; var nh=Math.max(60,Math.min(600,startH+dy)); term.style.height=nh+'px'; refit(); }, {passive:true});
-  window.addEventListener('touchend', function(){ if(!dragging) return; dragging=false; document.body.style.cursor=''; document.body.style.userSelect=''; refit(); });
-  handle.addEventListener('mousedown', function(e) {
-    e.preventDefault();
-    dragStart(e.clientY);
-  });
-  window.addEventListener('mousemove', function(e) {
-    if (!dragging) return;
-    var dy = e.clientY - startY;
-    var newH = Math.max(60, Math.min(600, startH + dy));
-    term.style.height = newH + 'px';
-    refit();
-  });
-  window.addEventListener('mouseup', function() {
-    if (!dragging) return;
-    dragging = false;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    refit();
-  });
-  // Keyboard equivalent for the drag handle: arrows resize in steps, Home/End
-  // jump to the limits. Without it the pane height is pointer-only.
-  function syncHandleValue(){
-    var h=Math.round(term.offsetHeight);
-    if(!handle.getAttribute('aria-valuenow')||Math.abs(Number(handle.getAttribute('aria-valuenow'))-h)>1){
-      handle.setAttribute('aria-valuenow',String(h));
-      handle.setAttribute('aria-valuetext',h+' pixels');
-    }
-  }
-  function setHeight(h){
-    term.style.height=Math.max(60,Math.min(600,h))+'px';
-    syncHandleValue();
-    refit();
-  }
-  handle.addEventListener('keydown', function(e) {
-    var h=term.offsetHeight, step=e.shiftKey?48:16, handled=true;
-    if(e.key==='ArrowUp')setHeight(h-step);
-    else if(e.key==='ArrowDown')setHeight(h+step);
-    else if(e.key==='Home')setHeight(600);
-    else if(e.key==='End')setHeight(60);
-    else handled=false;
-    if(handled)e.preventDefault();
-  });
-  handle.addEventListener('focus',syncHandleValue);
-  syncHandleValue();
-})();
 var filterTimer=null;
 // ── Event Delegation (CSP-safe: no inline handlers) ──
 var actionHandlers={
@@ -1228,9 +581,8 @@ var actionHandlers={
  batchStart:function(){batchStart();},batchStop:function(){batchStop();},
  deleteVm:function(){deleteVm();},clearSearch:function(){clearSearch();},
  newVm:function(){newVm();},
- manualDisconnectSerial:function(){manualDisconnectSerial();},reconnectSerial:function(){reconnectSerial();},
- clearSerial:function(){if(serialTerm)serialTerm.reset();serialBuf='';},
- exportSerial:function(){if(!serialBuf)return;var blob=new Blob([serialBuf],{type:'text/plain'});var a=document.createElement('a');var url=URL.createObjectURL(blob);a.href=url;a.download='hangar-serial-'+new Date().toISOString().replace(/[:.]/g,'-')+'.txt';a.click();setTimeout(function(){URL.revokeObjectURL(url);},100);},
+ manualDisconnectSerial:function(){window.hangarUi.disconnectSerial();},reconnectSerial:function(){window.hangarUi.reconnectSerial();},
+ clearSerial:function(){window.hangarUi.clearSerial();},exportSerial:function(){window.hangarUi.exportSerial();},
  saveVm:function(){saveVm();},
  select:function(el){var i=parseInt(el.getAttribute('data-vm-index'),10);if(!isNaN(i))select(i);},
 	 toggleSelectMode:function(){toggleSelectMode();},
@@ -1246,7 +598,7 @@ var actionHandlers={
  closeDlg:function(el){var id=el.getAttribute('data-dialog');if(id){var d=document.getElementById(id);if(d)d.close();}},
  viewLog:function(){viewLog();},refreshLog:function(){refreshLog();},
  dismissBanner:function(){serverDown=false;syncShell();setStatus('');},
- cancelMigrate:function(){cancelMigrate();},
+ cancelMigrate:function(){window.hangarUi.cancelMigration();},
  toggleTheme:function(){window.cycleTheme();},
  filterList:function(){filterList();},
 	 disk2upload:function(){uploadDisk2();},
@@ -1256,9 +608,9 @@ var actionHandlers={
 	 changeCd:function(){changeCd();},
 	 ejectCd:function(){ejectCd();},
 	 takeScreenshot:function(){takeScreenshot();},
-	 enterDisplayOnly:function(){enterDisplayOnly();},
-	 exitDisplayOnly:function(){exitDisplayOnly();},
-	 reconnectDisplay:function(){reconnectDisplay();}
+	 enterDisplayOnly:function(){window.hangarUi.enterDisplayOnly();},
+	 exitDisplayOnly:function(){window.hangarUi.exitDisplayOnly();},
+	 reconnectDisplay:function(){window.hangarUi.reconnectDisplay();}
 	};
 document.body.addEventListener('click',function(e){
  // Click anywhere outside an open menu/popover closes it (Escape already does).
@@ -1281,7 +633,7 @@ document.body.addEventListener('keydown',function(e){
   }
  }
 });
-window.addEventListener('beforeunload',function(){stopFb();stopSerial(true);clearSerialReconnect();});
+window.addEventListener('beforeunload',function(){window.hangarUi.stopDisplay();window.hangarUi.stopSerial(true);});
 // ── Drag-to-reorder VM list ──
 (function initDragReorder(){
   var dragIdx=null;

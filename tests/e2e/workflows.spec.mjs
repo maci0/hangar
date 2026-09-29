@@ -831,6 +831,8 @@ test('video stream: H.264 over /ws/video paints the WebCodecs overlay', async ({
     expect((await list(page))[idx].video_bitrate_kbps, 'bitrate round-trips').toBe(2500);
     await api(page, 'POST', `/api/vms/${idx}/power`, '');
     await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-video')].status, { timeout: 25000 }).toBe('running');
+    const videoSockets = [];
+    page.on('websocket', (socket) => { if (socket.url().includes('/ws/video/')) videoSockets.push(socket); });
     await page.reload();
     await page.locator('.vm-item', { hasText: 'wf-video' }).first().click();
     // The overlay canvas must exist, size itself from the config frame, and
@@ -849,7 +851,8 @@ test('video stream: H.264 over /ws/video paints the WebCodecs overlay', async ({
     await expect.poll(() => page2.evaluate(() => { const c = document.querySelector('#display .video-layer'); return c ? c.width : 0; }), { timeout: 15000 }).toBeGreaterThan(0);
     await page2.close();
     // First viewer must still be streaming after the second leaves.
-    expect(await page.evaluate(() => videoWs && videoWs.readyState === WebSocket.OPEN)).toBe(true);
+    expect(videoSockets.some((socket) => !socket.isClosed()), 'the first viewer keeps its video socket').toBe(true);
+    await expect(page.locator('#displayBadge')).toHaveText('H264 · WEBCODECS');
     await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-video')}/power`, '');
 });
 
@@ -869,6 +872,119 @@ test('live console: embedded VNC canvas and serial panel connect for a running V
     // The serial relay shares the same upgrade path; the panel shows when connected.
     await expect(page.locator('#serialpanel')).toBeVisible({ timeout: 10000 });
     await api(page, 'POST', `/api/vms/${idx}/power`, ''); // power off
+});
+
+test('live console: client Retry, reconnect, display-only mode and the serial panel', async ({ page }) => {
+    test.setTimeout(120_000);
+    await api(page, 'POST', '/api/vms', 'name=wf-console&mem=1024&cpu=1&disk=1&display=vnc&embed_display=true&enable_serial=true&firmware=bios');
+    const idx = await indexOf(page, 'wf-console');
+    await api(page, 'POST', `/api/vms/${idx}/power`, '');
+    try {
+        await expect.poll(async () => (await list(page))[await indexOf(page, 'wf-console')].status, { timeout: 25000 }).toBe('running');
+        const canvasWidth = () => page.evaluate(() => { const c = document.querySelector('#display canvas'); return c ? c.width : 0; });
+
+        // A client bundle that never arrives leaves a visible message and a Retry, not a dead pane.
+        await page.route('**/novnc.js', (route) => route.abort());
+        await page.reload();
+        await page.locator('.vm-item', { hasText: 'wf-console' }).first().click();
+        await expect(page.locator('#displayHint')).toContainText('VNC client failed to load.');
+        await expect(page.locator('#displayBadge')).toHaveText('Disconnected');
+        await page.unroute('**/novnc.js');
+        await page.locator('#displayHint').getByRole('button', { name: 'Retry' }).click();
+        await expect.poll(canvasWidth, { timeout: 20000 }).toBeGreaterThan(0);
+        await expect(page.locator('#displayHint button')).toHaveCount(0);
+        await expect(page.locator('#displayBadge')).toContainText('VNC');
+
+        // Reconnect drops the client and opens a fresh one.
+        await page.locator('#display [data-action="reconnectDisplay"]').click();
+        await expect.poll(canvasWidth, { timeout: 20000 }).toBeGreaterThan(0);
+
+        // Display-only: F11 enters, the bar names the way out, Escape and the Exit button leave.
+        const bar = page.getByRole('button', { name: 'Exit display-only mode' });
+        await page.keyboard.press('F11');
+        await expect(page.locator('body')).toHaveClass(/displayonly/);
+        await expect(bar).toHaveCSS('opacity', '1');
+        const viewport = page.viewportSize();
+        expect((await page.locator('#display').boundingBox()).height).toBe(viewport.height);
+        await page.keyboard.press('Escape');
+        await expect(page.locator('body')).not.toHaveClass(/displayonly/);
+        await page.locator('#display [data-action="enterDisplayOnly"]').click();
+        await expect(page.locator('body')).toHaveClass(/displayonly/);
+        await bar.click();
+        await expect(page.locator('body')).not.toHaveClass(/displayonly/);
+
+        // The serial handle resizes with the keyboard: arrows by 16px, Shift by 48px, Home and End to the limits.
+        await expect(page.locator('#serialpanel')).toBeVisible({ timeout: 10000 });
+        const handle = page.locator('#serialResize');
+        await expect(handle).toHaveAttribute('aria-valuenow', '170');
+        await handle.focus();
+        await page.keyboard.press('ArrowDown');
+        await expect(handle).toHaveAttribute('aria-valuenow', '186');
+        await page.keyboard.press('Shift+ArrowDown');
+        await expect(handle).toHaveAttribute('aria-valuenow', '234');
+        await page.keyboard.press('ArrowUp');
+        await expect(handle).toHaveAttribute('aria-valuenow', '218');
+        await page.keyboard.press('Home');
+        await expect(handle).toHaveAttribute('aria-valuenow', '600');
+        await expect(page.locator('#serialterm')).toHaveCSS('height', '600px');
+        await page.keyboard.press('End');
+        await expect(handle).toHaveAttribute('aria-valuenow', '60');
+
+        // Disconnect closes the panel and it stays closed.
+        await page.locator('#serialpanel').getByRole('button', { name: 'Disconnect' }).click();
+        await expect(page.locator('#serialpanel')).toBeHidden();
+    } finally {
+        await api(page, 'POST', `/api/vms/${await indexOf(page, 'wf-console')}/power`, '');
+    }
+});
+
+test('console tab says why it is empty', async ({ page }) => {
+    await api(page, 'POST', '/api/vms', 'name=wf-notice&mem=1024&cpu=1&disk=1&display=vnc&embed_display=true');
+    await api(page, 'POST', '/api/vms', 'name=wf-notice-native&mem=1024&cpu=1&disk=1&display=0');
+    await page.reload();
+    await expect(page.locator('.vm-item', { hasText: 'wf-notice' }).first()).toBeVisible();
+    // The tab is disabled for both VMs, so the panel is unreachable by click; drive the bridge the app uses.
+    const notice = (name) => page.evaluate((n) => {
+        hangarUi.setConsole({ vm: vms.find((v) => v.name === n) ?? null, actionReason: () => null });
+        return document.getElementById('consoleHint').textContent;
+    }, name);
+    expect(await notice('wf-notice')).toContain('wf-notice is powered off.');
+    expect(await notice('wf-notice-native')).toContain('No embedded browser console for this display.');
+    expect(await notice('wf-notice-native')).toContain('native GTK QEMU window');
+    expect(await notice('nobody')).toContain('No VM selected.');
+    await removeVms(page, 'wf-notice', 'wf-notice-native');
+});
+
+test('migration bar follows the status poll, cancels and clears itself', async ({ page }) => {
+    await createVm(page, 'wf-migbar');
+    await page.reload();
+    await page.locator('.vm-item', { hasText: 'wf-migbar' }).first().click();
+    const poll = { body: { status: 'active', pct: 40 } };
+    let cancels = 0;
+    await page.route(/\/api\/vms\/\d+\/migrate$/, (route) =>
+        route.request().method() === 'POST' ? route.fulfill({ json: { status: 'started' } }) : route.fulfill({ json: poll.body }));
+    await page.route(/\/api\/vms\/\d+\/migrate\/cancel$/, (route) => { cancels += 1; return route.fulfill({ json: {} }); });
+    await expect(page.locator('#mig_progress')).toBeHidden();
+    await invoke(page, 'migrateGuest');
+    await page.locator('#mig_host').fill('192.0.2.7');
+    await page.locator('#migratedlg button[type="submit"]').click();
+    await expect(page.locator('#migratedlg')).toHaveCount(0);
+
+    const bar = page.locator('#mig_progress');
+    await expect(bar).toBeVisible();
+    await expect(bar).toHaveAttribute('aria-valuenow', '40');
+    await expect(page.locator('#mig_pct')).toContainText('Migration');
+    await page.locator('#mig_cancel').click();
+    await expect.poll(() => cancels).toBe(1);
+    await expect(page.locator('#statusannounce')).toHaveText('Migration cancel requested');
+
+    poll.body = { status: 'completed' };
+    await expect(page.locator('#mig_pct')).toHaveText('Migration completed.');
+    await expect(bar).toHaveAttribute('aria-valuenow', '100');
+    await expect(bar.locator('div')).toHaveClass(/bg-success/);
+    await expect(page.locator('#statusannounce')).toHaveText('Migration completed');
+    await expect(bar).toBeHidden({ timeout: 8000 });
+    await removeVms(page, 'wf-migbar');
 });
 
 test('stable VM id is assigned and survives a rename', async ({ page }) => {

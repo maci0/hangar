@@ -97,6 +97,78 @@
 /* Full-screen console hides the chrome; the body carries the class. */
 @custom-variant displayonly (&:where(.displayonly *));
 
+/* Touch screens have no hover: the display-only exit bar stays visible there. */
+@custom-variant no-hover (@media (hover: none));
+
+/*
+ * Canvases the vendored clients and the presenter append to the display. They are not Preact
+ * nodes, so their rules live here: the client canvas fills the box, the H.264 layer and the
+ * presenter sit over it, and once a presenter draws (data-gpu) the client canvas stays on top,
+ * invisible, so pointer and keyboard input still reach it. The !important pair beats the inline
+ * size the client sets on its canvas.
+ */
+@utility display-surface {
+  & canvas {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    max-height: 72vh;
+    object-fit: contain;
+  }
+  & .video-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    height: 100%;
+    pointer-events: none;
+    background: transparent;
+  }
+  &[data-video] > canvas:not(.video-layer) {
+    opacity: 0;
+  }
+  &[data-gpu] {
+    isolation: isolate;
+  }
+  &[data-gpu] .gpu-presenter {
+    position: relative;
+    z-index: 1;
+    background: black;
+  }
+  &[data-gpu] .display-source-canvas {
+    position: absolute !important;
+    inset: 0;
+    z-index: 2;
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none;
+    max-height: none;
+    opacity: 0;
+  }
+  :where(.displayonly) & canvas {
+    width: 100%;
+    height: 100%;
+    max-width: 100vw;
+    max-height: 100vh;
+  }
+  /* Full screen: the presenter fills the box instead of stacking below the client's screen. */
+  :where(.displayonly) &[data-gpu] .gpu-presenter {
+    position: absolute;
+    inset: 0;
+  }
+}
+
+/* No reserved scrollbar column: the full-screen console spans the whole viewport. */
+@utility scrollbar-gutter-auto {
+  scrollbar-gutter: auto;
+}
+
+/* The terminal fills the box it was opened in. */
+@utility xterm-host {
+  & .xterm {
+    height: 100%;
+  }
+}
+
 @theme inline {
   --color-bg: var(--bg);
   --color-bg-alt: var(--bg-alt);
@@ -104,6 +176,8 @@
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
   --color-inset: var(--inset);
+  --color-display: var(--display-bg);
+  --color-serial: var(--serial-bg);
   --color-border: var(--border);
   --color-border-soft: var(--border-soft);
   --color-border-hover: var(--border-hover);

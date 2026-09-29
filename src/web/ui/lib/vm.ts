@@ -82,8 +82,8 @@ type VmFields = {
 export type Vm = VmFields & NicSlots & ExtraDiskSlots;
 
 /** The browser console needs an embedded SPICE (2) or VNC (3) display. */
-const SPICE_DISPLAY = 2;
-const VNC_DISPLAY = 3;
+export const SPICE_DISPLAY = 2;
+export const VNC_DISPLAY = 3;
 
 export const embeddedDisplayCapable = (vm: Vm): boolean =>
   vm.embed_display === "true" && (vm.display === SPICE_DISPLAY || vm.display === VNC_DISPLAY);
@@ -118,7 +118,7 @@ export const networkLabel = (vm: Vm): string => {
   return NETWORK_LABELS[net] ?? net;
 };
 
-const DISPLAY_LABELS: ReadonlyArray<string> = ["GTK", "SDL", "SPICE", "VNC", "None"];
+export const DISPLAY_LABELS: ReadonlyArray<string> = ["GTK", "SDL", "SPICE", "VNC", "None"];
 const GPU_LABELS: ReadonlyArray<string> = [
   "Virtio-GPU (virgl 3D)",
   "Virtio-VGA (virgl 3D)",

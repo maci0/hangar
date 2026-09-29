@@ -119,3 +119,45 @@ for (const theme of ['dark', 'light']) {
         }
     });
 }
+
+// The console tab needs a running guest: scan it with the display and serial panels showing, then display-only mode.
+test('axe finds no violations on the live console (dark and light)', async ({ page }) => {
+    test.setTimeout(150_000);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#vmlist');
+    const api = (method, path) => page.evaluate(async ([m, p, b]) => (await fetch(p, { method: m, headers: { 'X-API-Key': 'hangar' }, body: b })).status,
+        [method, path, method === 'POST' ? '' : undefined]);
+    const created = await page.evaluate(async () => (await fetch('/api/vms', {
+        method: 'POST',
+        headers: { 'X-API-Key': 'hangar' },
+        body: 'name=a11y-live&mem=1024&cpu=1&disk=1&display=vnc&embed_display=true&enable_serial=true&firmware=bios',
+    })).status);
+    expect(created).toBeLessThan(400);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const index = () => page.evaluate(() => vms.findIndex((v) => v.name === 'a11y-live'));
+    await page.locator('#vmlist .vm-item', { hasText: 'a11y-live' }).waitFor();
+    await api('POST', `/api/vms/${await index()}/power`);
+    try {
+        await expect.poll(() => page.evaluate(() => vms.find((v) => v.name === 'a11y-live')?.status), { timeout: 25000 }).toBe('running');
+        for (const theme of ['dark', 'light']) {
+            await page.evaluate((t) => localStorage.setItem('hangar-theme', t), theme);
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            await page.locator('#vmlist .vm-item', { hasText: 'a11y-live' }).click();
+            await expect.poll(() => page.evaluate(() => { const c = document.querySelector('#display canvas'); return c ? c.width : 0; }), { timeout: 20000 }).toBeGreaterThan(0);
+            await expect(page.locator('#serialpanel')).toBeVisible({ timeout: 10000 });
+            await page.waitForTimeout(SETTLE_MS);
+            await scan(page, `console (${theme})`);
+            await page.locator('#display [data-action="enterDisplayOnly"]').click();
+            await expect(page.locator('body')).toHaveClass(/displayonly/);
+            await page.waitForTimeout(SETTLE_MS);
+            await scan(page, `display-only (${theme})`);
+            await page.keyboard.press('Escape');
+            await expect(page.locator('body')).not.toHaveClass(/displayonly/);
+        }
+    } finally {
+        const i = await index();
+        await api('POST', `/api/vms/${i}/power`);
+        await expect.poll(() => page.evaluate(() => vms.find((v) => v.name === 'a11y-live')?.status), { timeout: 20000 }).not.toBe('running');
+        await api('POST', `/api/vms/${await index()}/delete`);
+    }
+});
