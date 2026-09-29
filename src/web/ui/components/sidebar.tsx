@@ -3,6 +3,10 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
 export type SidebarHeadProps = {
+  /** Called on every edit of the search text; the app debounces the redraw. */
+  readonly onSearch: () => void;
+  readonly onClearSearch: () => void;
+  readonly onToggleSelectMode: () => void;
   /** Multi-select is on: the rows show checkboxes and the bulk bar is open. */
   readonly selectMode: boolean;
   /** The search box holds text, so its clear button shows. */
@@ -12,10 +16,10 @@ export type SidebarHeadProps = {
 const TOGGLE_LABEL = "Select multiple VMs";
 
 /**
- * Sidebar title row and search box. The input is uncontrolled: `app.js` reads its value when it
- * redraws the list, and the delegated `filterList` action debounces the input event.
+ * Sidebar title row and search box. The input is uncontrolled: the app reads its value when it
+ * redraws the list, and `onSearch` (debounced by the app) runs on every edit.
  */
-export const SidebarHead = ({ selectMode, searchActive }: SidebarHeadProps) => (
+export const SidebarHead = ({ selectMode, searchActive, onSearch, onClearSearch, onToggleSelectMode }: SidebarHeadProps) => (
   <>
     <div class="sidebar-header flex min-h-10 items-center gap-2 border-b border-border-soft px-3 py-2">
       <div
@@ -32,6 +36,7 @@ export const SidebarHead = ({ selectMode, searchActive }: SidebarHeadProps) => (
           "ml-auto inline-flex size-6 items-center justify-center rounded-sm border border-transparent bg-transparent text-fg-dim transition-colors hover:border-border-hover hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent aria-pressed:border-accent aria-pressed:bg-accent-soft aria-pressed:text-accent pointer-coarse:size-11",
         )}
         data-action="toggleSelectMode"
+        onClick={onToggleSelectMode}
         aria-pressed={selectMode}
         title="Select multiple VMs (bulk actions)"
         aria-label={TOGGLE_LABEL}
@@ -46,7 +51,7 @@ export const SidebarHead = ({ selectMode, searchActive }: SidebarHeadProps) => (
         type="search"
         class="no-search-cancel empty-hint h-6.5 w-full rounded-md border border-border bg-bg px-6.5 text-xs text-fg outline-none hover:border-border-hover focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent-soft"
         placeholder="Search VMs…"
-        data-action="filterList"
+        onInput={onSearch}
         aria-label="Search VMs"
         autocomplete="off"
       />
@@ -55,7 +60,7 @@ export const SidebarHead = ({ selectMode, searchActive }: SidebarHeadProps) => (
           id="searchClear"
           type="button"
           class="absolute top-1/2 right-3 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-sm border-0 bg-transparent p-0 text-fg-dim hover:bg-surface-2 hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent pointer-coarse:size-11"
-          data-action="clearSearch"
+          onClick={onClearSearch}
           aria-label="Clear search"
         >
           <Icon name="x" class="ico size-3.5" />
@@ -66,6 +71,10 @@ export const SidebarHead = ({ selectMode, searchActive }: SidebarHeadProps) => (
 );
 
 export type BulkBarProps = {
+  readonly onPower: (on: boolean) => void;
+  readonly onSnapshot: () => void;
+  readonly onDelete: () => void;
+  readonly onToggleSelectMode: () => void;
   readonly selectMode: boolean;
   readonly checkedCount: number;
 };
@@ -74,7 +83,7 @@ const BULK_BUTTON = "min-h-5.5 gap-1 px-1.75 py-0.5 text-caption";
 const BULK_ICON = "ico size-3";
 
 /** Actions for the checked rows; open only in select mode. */
-export const BulkBar = ({ selectMode, checkedCount }: BulkBarProps) =>
+export const BulkBar = ({ selectMode, checkedCount, onPower, onSnapshot, onDelete, onToggleSelectMode }: BulkBarProps) =>
   selectMode && (
     <div
       id="bulkBar"
@@ -86,24 +95,24 @@ export const BulkBar = ({ selectMode, checkedCount }: BulkBarProps) =>
         {checkedCount} selected
       </span>
       <div class="flex flex-wrap gap-1">
-        <Button class={BULK_BUTTON} data-action="bulkPower" data-on="1" title="Power on selected">
+        <Button class={BULK_BUTTON} data-action="bulkPower" data-on="1" onClick={() => onPower(true)} title="Power on selected">
           <Icon name="power" class={BULK_ICON} />
           On
         </Button>
-        <Button class={BULK_BUTTON} data-action="bulkPower" data-on="0" title="Power off selected">
+        <Button class={BULK_BUTTON} data-action="bulkPower" data-on="0" onClick={() => onPower(false)} title="Power off selected">
           <Icon name="power" class={BULK_ICON} />
           Off
         </Button>
-        <Button class={BULK_BUTTON} data-action="bulkSnapshot" title="Snapshot selected">
+        <Button class={BULK_BUTTON} onClick={onSnapshot} title="Snapshot selected">
           <Icon name="snapshot" class={BULK_ICON} />
           Snapshot
         </Button>
-        <Button variant="danger" class={BULK_BUTTON} data-action="bulkDelete" title="Delete selected">
+        <Button variant="danger" class={BULK_BUTTON} data-action="bulkDelete" onClick={onDelete} title="Delete selected">
           <Icon name="trash" class={BULK_ICON} />
           Delete
         </Button>
       </div>
-      <Button data-action="toggleSelectMode" title="Exit select mode">
+      <Button data-action="toggleSelectMode" onClick={onToggleSelectMode} title="Exit select mode">
         Done
       </Button>
     </div>

@@ -480,7 +480,7 @@ test "httpresp: writeHttpAssetResponse serves 200 with ETag, then 304 on If-None
     // First request: full 200 response carrying the strong ETag.
     var fds1: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds1));
-    const req1 = "GET /app.js HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    const req1 = "GET /ui.js HTTP/1.1\r\nHost: localhost\r\n\r\n";
     writeHttpAssetResponse(fds1[1], HTTP_OK, "application/javascript; charset=utf-8", body, &etag_storage, req1);
     try std.testing.expect(etag_storage != null);
     var resp_buf: [4096]u8 = undefined;
@@ -499,7 +499,7 @@ test "httpresp: writeHttpAssetResponse serves 200 with ETag, then 304 on If-None
     var fds2: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds2));
     var req_buf: [256]u8 = undefined;
-    const req2 = try std.fmt.bufPrint(&req_buf, "GET /app.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\n", .{tag});
+    const req2 = try std.fmt.bufPrint(&req_buf, "GET /ui.js HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {s}\r\n\r\n", .{tag});
     wlog.beginRequest(req2);
     defer wlog.endRequest();
     var id_buf: [48]u8 = undefined;
@@ -516,7 +516,7 @@ test "httpresp: writeHttpAssetResponse serves 200 with ETag, then 304 on If-None
     // Stale or malformed validators must fall through to the full response.
     var fds3: [2]c.fd_t = undefined;
     try std.testing.expectEqual(@as(c_int, 0), c.pipe(&fds3));
-    const req3 = "GET /app.js HTTP/1.1\r\nIf-None-Match: \"stale\"\r\n\r\n";
+    const req3 = "GET /ui.js HTTP/1.1\r\nIf-None-Match: \"stale\"\r\n\r\n";
     writeHttpAssetResponse(fds3[1], HTTP_OK, "application/javascript; charset=utf-8", body, &etag_storage, req3);
     _ = c.close(fds3[1]);
     const resp3 = try drainPipe(fds3[0], &resp_buf);
@@ -567,7 +567,7 @@ test "httpresp: failed conditional asset send logs correlated wire outcome" {
     wlog.log_fd = fds[1];
     defer wlog.log_fd = saved_log_fd;
 
-    const req = "GET /app.js HTTP/1.1\r\nIf-None-Match: \"cached\"\r\n\r\n";
+    const req = "GET /ui.js HTTP/1.1\r\nIf-None-Match: \"cached\"\r\n\r\n";
     wlog.beginRequest(req);
     defer wlog.endRequest();
     var id_buf: [48]u8 = undefined;
@@ -582,6 +582,6 @@ test "httpresp: failed conditional asset send logs correlated wire outcome" {
     try std.testing.expect(std.mem.indexOf(u8, line, "hangar warn: ") != null);
     try std.testing.expect(std.mem.indexOf(u8, line, correlation) != null);
     try std.testing.expect(std.mem.indexOf(u8, line, "http_response status=304 duration_ms=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, line, "sent=false request=[GET /app.js HTTP/1.1]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "sent=false request=[GET /ui.js HTTP/1.1]") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, line, "\n"));
 }

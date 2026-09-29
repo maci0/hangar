@@ -2351,8 +2351,6 @@ fn handleConfigSave(req: []const u8) ![]const u8 {
 const index_html = @embedFile("web/index.html");
 /// Lazily computed strong ETag for the app shell (see writeHttpShellResponse).
 var index_html_etag: ?[]const u8 = null;
-const app_css = @embedFile("web/app.css");
-const app_js = @embedFile("web/app.js");
 const ui_js = @embedFile("web/dist/ui.js");
 const ui_css = @embedFile("web/dist/ui.css");
 const icons_svg = @embedFile("web/dist/icons.svg");
@@ -2369,8 +2367,6 @@ const xterm_css = @embedFile("web/xterm.css");
 /// Guarded by writeHttpAssetResponse: a request holding the current tag gets a
 /// header-only 304, so a reloaded tab revalidates instead of re-downloading.
 var STATIC_ASSETS = [_]struct { route: []const u8, body: []const u8, ct: []const u8, etag: ?[]const u8 = null }{
-    .{ .route = "GET /app.css", .body = app_css, .ct = "text/css; charset=utf-8" },
-    .{ .route = "GET /app.js", .body = app_js, .ct = "application/javascript; charset=utf-8" },
     .{ .route = "GET /ui.js", .body = ui_js, .ct = "application/javascript; charset=utf-8" },
     .{ .route = "GET /ui.css", .body = ui_css, .ct = "text/css; charset=utf-8" },
     .{ .route = "GET /icons.svg", .body = icons_svg, .ct = "image/svg+xml" },
@@ -3521,8 +3517,8 @@ test "fuzz: serveHtml routing never panics on random method/URL input" {
         "GET /ws/vnc/",
         "GET /ws/spice/",
         "GET /ws/serial/",
-        "GET /app.js",
-        "GET /app.css",
+        "GET /ui.js",
+        "GET /ui.css",
         "GET /novnc.js",
         "GET /spice.js",
         "GET /favicon",
@@ -3625,8 +3621,8 @@ test "fuzz: routeExact rejects boundary-confusable requests" {
         "POST /api/vms",        "POST /api/vms/save",
         "POST /api/vms/undo",   "POST /api/vms/reorder",
         "POST /api/vms/import", "POST /api/networks",
-        "POST /api/config",     "GET /app.css",
-        "GET /app.js",          "GET /novnc.js",
+        "POST /api/config",     "GET /ui.css",
+        "GET /ui.js",           "GET /novnc.js",
         "GET /spice.js",
     };
 
@@ -4039,8 +4035,8 @@ test "handleUndo: restores the deleted VM at its original index" {
 
 test "isAuthExempt: root and static assets are exempt for GET" {
     try std.testing.expect(isAuthExempt(true, "/"));
-    try std.testing.expect(isAuthExempt(true, "/app.js"));
-    try std.testing.expect(isAuthExempt(true, "/app.css"));
+    try std.testing.expect(isAuthExempt(true, "/ui.js"));
+    try std.testing.expect(isAuthExempt(true, "/ui.css"));
 }
 
 test "isAuthExempt: favicon prefix is exempt for GET" {
@@ -4119,7 +4115,7 @@ test "isAuthExempt: non-exempt paths are rejected for GET" {
 
 test "isAuthExempt: all non-GET methods are non-exempt" {
     try std.testing.expect(!isAuthExempt(false, "/"));
-    try std.testing.expect(!isAuthExempt(false, "/app.js"));
+    try std.testing.expect(!isAuthExempt(false, "/ui.js"));
     try std.testing.expect(!isAuthExempt(false, "/api/vms"));
     try std.testing.expect(!isAuthExempt(false, "/api/vms/0"));
 }

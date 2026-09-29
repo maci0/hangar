@@ -1,8 +1,7 @@
 import { render, type ComponentChild, type Ref } from "preact";
-import { ConsoleHint, DisplayView, SerialView } from "@/components/console";
+import { ConsoleHint, DisplayView, SerialView, type DisplayActions, type SerialActions } from "@/components/console";
 import { DisplayOnlyBar } from "@/components/display-only-bar";
 import { MigrationBar } from "@/components/migration-bar";
-import { ensureAsset } from "@/lib/assets";
 import { createDisplayController, IDLE_DISPLAY, type DisplayController, type DisplayHost, type DisplayState } from "@/lib/display";
 import {
   createMigrationController,
@@ -12,18 +11,23 @@ import {
   type MigrationView,
 } from "@/lib/migration";
 import { createSerialController, IDLE_SERIAL, type SerialController, type SerialHost, type SerialState } from "@/lib/serial";
+import type { VmAction } from "@/lib/actions";
 import type { Vm } from "@/lib/vm";
 
-/** What the console tab, display-only mode and the migration bar need from `app.js`. */
+/** What the console tab, display-only mode and the migration bar need from the app. */
 export type ConsoleHost = DisplayHost & SerialHost & MigrationHost;
 
 /** The selected VM and the reason each VM action is off (null when it works), for the display buttons. */
 export type ConsoleProps = {
   readonly vm: Vm | null;
-  readonly actionReason: (vmAction: string) => string | null;
+  readonly actionReason: (vmAction: VmAction) => string | null;
+  /** Sends Ctrl+Alt+Del to the guest (a daemon call). */
+  readonly sendCad: () => void;
 };
 
 export type ConsoleBridge = {
+  /** Draws the console tab, the display-only bar and the migration bar. Call once the page is drawn. */
+  readonly mountConsole: () => void;
   /** Hands over the host; the controllers exist from here on. Later calls are ignored. */
   readonly initConsole: (host: ConsoleHost) => void;
   /** Draws the console tab for the selected VM (the empty-state message and the display buttons). */
@@ -40,22 +44,12 @@ export type ConsoleBridge = {
   readonly startSerial: (index: number) => void;
   /** Closes the serial socket; `clear` also empties the terminal. */
   readonly stopSerial: (clear: boolean) => void;
-  /** Connects the selected VM's serial console again (the Retry after the terminal failed to load). */
-  readonly reconnectSerial: () => void;
   /** Closes the serial console and keeps it closed until the page reloads. */
   readonly disconnectSerial: () => void;
-  /** Empties the terminal and the export buffer. */
-  readonly clearSerial: () => void;
-  /** Downloads the serial output as a text file. */
-  readonly exportSerial: () => void;
   readonly enterDisplayOnly: () => void;
   readonly exitDisplayOnly: () => void;
-  /** Asks the daemon to cancel the running migration. */
-  readonly cancelMigration: () => void;
   /** Starts migrating the VM with `id` (list index `index`) to `dest`; resolves whether it started. */
   readonly startMigration: (id: string, index: number, dest: string) => Promise<boolean>;
-  /** Loads a vendored script once (see `lib/assets.ts`). */
-  readonly ensureAsset: (src: string, isReady: () => boolean) => Promise<void>;
 };
 
 const REVEAL_MS = 3500;
@@ -69,13 +63,17 @@ type Controllers = {
 };
 
 /**
- * Stable refs and callbacks: Preact calls a ref function again whenever its identity changes. The
- * buttons need none: they carry `data-action`, and the delegated handlers in `app.js` call the bridge.
+ * Stable refs and callbacks: Preact calls a ref function again whenever its identity changes, and
+ * a resize handler that changes would refit the terminal on every draw.
  */
 type Handlers = {
   readonly displayRef: Ref<HTMLDivElement>;
   readonly terminalRef: Ref<HTMLDivElement>;
   readonly onResized: () => void;
+  readonly display: DisplayActions;
+  readonly serial: SerialActions;
+  readonly exitDisplayOnly: () => void;
+  readonly cancelMigration: () => void;
 };
 
 type Live = {
@@ -107,20 +105,21 @@ const drawConsole = (live: Live): void => {
         state={live.displayState}
         displayReason={props.actionReason("display")}
         cadReason={props.actionReason("cad")}
+        actions={handlers.display}
         elementRef={handlers.displayRef}
       />
-      <SerialView state={live.serialState} terminalRef={handlers.terminalRef} onResized={handlers.onResized} />
+      <SerialView state={live.serialState} terminalRef={handlers.terminalRef} onResized={handlers.onResized} actions={handlers.serial} />
       <ConsoleHint vm={props.vm} />
     </>,
   );
 };
 
 const drawDisplayOnly = (live: Live): void => {
-  mount("#displayonly-root", <DisplayOnlyBar revealed={live.revealed} />);
+  mount("#displayonly-root", <DisplayOnlyBar revealed={live.revealed} onExit={live.handlers.exitDisplayOnly} />);
 };
 
 const drawMigration = (live: Live): void => {
-  mount("#mig_bar_container", <MigrationBar view={live.migrationView} />);
+  mount("#mig_bar_container", <MigrationBar view={live.migrationView} onCancel={live.handlers.cancelMigration} />);
 };
 
 const setRevealed = (live: Live, revealed: boolean): void => {
@@ -180,6 +179,21 @@ const createHandlers = (current: () => Live): Handlers => ({
   onResized: () => {
     current().controllers?.serial.fit();
   },
+  display: {
+    enterDisplayOnly: () => enterDisplayOnly(current()),
+    reconnect: () => current().controllers?.display.reconnect(),
+    sendCad: () => current().props.sendCad(),
+  },
+  serial: {
+    reconnect: () => current().controllers?.serial.reconnect(),
+    clear: () => current().controllers?.serial.clear(),
+    exportLog: () => current().controllers?.serial.exportLog(),
+    disconnect: () => current().controllers?.serial.disconnect(),
+  },
+  exitDisplayOnly: () => exitDisplayOnly(current()),
+  cancelMigration: () => {
+    void current().controllers?.migration.cancel();
+  },
 });
 
 const initControllers = (live: Live, host: ConsoleHost): void => {
@@ -201,6 +215,11 @@ const initControllers = (live: Live, host: ConsoleHost): void => {
 };
 
 const bridgeOf = (live: Live): ConsoleBridge => ({
+  mountConsole: () => {
+    drawConsole(live);
+    drawDisplayOnly(live);
+    drawMigration(live);
+  },
   initConsole: (host) => {
     if (live.controllers === null) {
       initControllers(live, host);
@@ -226,17 +245,8 @@ const bridgeOf = (live: Live): ConsoleBridge => ({
   stopSerial: (clear) => {
     live.controllers?.serial.stop(clear);
   },
-  reconnectSerial: () => {
-    live.controllers?.serial.reconnect();
-  },
   disconnectSerial: () => {
     live.controllers?.serial.disconnect();
-  },
-  clearSerial: () => {
-    live.controllers?.serial.clear();
-  },
-  exportSerial: () => {
-    live.controllers?.serial.exportLog();
   },
   enterDisplayOnly: () => {
     enterDisplayOnly(live);
@@ -244,18 +254,14 @@ const bridgeOf = (live: Live): ConsoleBridge => ({
   exitDisplayOnly: () => {
     exitDisplayOnly(live);
   },
-  cancelMigration: () => {
-    void live.controllers?.migration.cancel();
-  },
   startMigration: (id, index, dest) => live.controllers?.migration.start(id, index, dest) ?? Promise.resolve(false),
-  ensureAsset,
 });
 
 /** Console tab, display-only bar and migration bar. Draws into `#console-root`, `#displayonly-root` and `#mig_bar_container`. */
 export const createConsoleBridge = (): ConsoleBridge => {
   const live: Live = {
     handlers: createHandlers(() => live),
-    props: { vm: null, actionReason: () => null },
+    props: { vm: null, actionReason: () => null, sendCad: () => undefined },
     displayState: IDLE_DISPLAY,
     serialState: IDLE_SERIAL,
     migrationView: IDLE_MIGRATION,
@@ -265,9 +271,5 @@ export const createConsoleBridge = (): ConsoleBridge => {
     displayElement: null,
     terminalElement: null,
   };
-  const bridge = bridgeOf(live);
-  drawConsole(live);
-  drawDisplayOnly(live);
-  drawMigration(live);
-  return bridge;
+  return bridgeOf(live);
 };

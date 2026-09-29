@@ -1,3 +1,5 @@
+import { listOf } from "@/lib/wire";
+
 /** One virtual network as the daemon stores it (`GET`/`POST /api/networks`). */
 export type Vnet = {
   readonly name: string;
@@ -97,3 +99,33 @@ export const validateVnet = (net: Vnet): VnetErrors => {
 /** Index of the first network with a problem, or -1. */
 export const firstInvalid = (nets: ReadonlyArray<Vnet>): number =>
   nets.findIndex((net) => Object.keys(validateVnet(net)).length > 0);
+
+const isVnet = (net: unknown): net is Vnet =>
+  typeof net === "object" &&
+  net !== null &&
+  "name" in net &&
+  typeof net.name === "string" &&
+  "type" in net &&
+  typeof net.type === "string" &&
+  "subnet" in net &&
+  typeof net.subnet === "string" &&
+  "mask" in net &&
+  typeof net.mask === "string" &&
+  "dhcp" in net &&
+  typeof net.dhcp === "boolean" &&
+  "dhcp_start" in net &&
+  typeof net.dhcp_start === "string" &&
+  "dhcp_end" in net &&
+  typeof net.dhcp_end === "string" &&
+  "host_iface" in net &&
+  typeof net.host_iface === "string" &&
+  "gateway" in net &&
+  typeof net.gateway === "string" &&
+  "port_forwards" in net &&
+  typeof net.port_forwards === "string";
+
+/** Reads `GET /api/networks`; null when the body is not `{ networks: [...] }` of complete network records. */
+export const parseVnets = (body: unknown): Array<Vnet> | null => {
+  const networks = typeof body === "object" && body !== null && "networks" in body ? listOf(body.networks) : null;
+  return networks?.every((net) => isVnet(net)) === true ? networks.filter((net) => isVnet(net)) : null;
+};

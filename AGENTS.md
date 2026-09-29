@@ -17,7 +17,7 @@ Zig 0.16.0. No libvirt.
 ## Build / Run / Test Commands
 
 ```bash
-zig build check        # Build + fmt + shell/YAML/JS lint + unit/fuzz suite + test-cli
+zig build check        # Build + fmt + shell/YAML lint + unit/fuzz suite + test-cli
 zig build web          # Build + launch web backend (HTTP on :9080; also the remote daemon)
 zig build webui        # Build + launch native WebView desktop wrapper
 zig build test         # Unit + fuzz tests; local sockets and optional QEMU subprocesses
@@ -38,10 +38,9 @@ code and scratch trees are excluded):
 zig build fmt-check    # zig fmt --check --ast-check over tracked *.zig/*.zon
 zig build lint-shell   # shellcheck over tracked *.sh
 zig build lint-yaml    # yamllint over tracked *.yml/*.yaml (CI workflows)
-zig build lint-js      # bun build over hand-written JS (vendored src/web bundles excluded)
-bun run lint           # oxlint strict + Rika anti-slop + @shadcn/lint over src/web/ui and scripts
-bun run typecheck      # tsc --noEmit over src/web/ui and scripts
-bun run test           # bun test over src/web/ui (pure formatting, dashboard and settings logic)
+bun run lint           # oxlint strict + Rika anti-slop + @shadcn/lint over src/web/ui, scripts and tests
+bun run typecheck      # tsc --noEmit over src/web/ui, scripts and tests
+bun run test           # bun test over src/web/ui (pure logic: formatting, inventory, settings, decoders)
 bun run build:web      # bundle src/web/ui to src/web/dist (zig build runs this itself)
 ```
 
@@ -267,7 +266,7 @@ When the user requests a durable behavior change, record it here or in the relev
 - [src/AGENTS.md](src/AGENTS.md): Zig core: VM model, persistence, QEMU/QMP, HTTP server +
   remote daemon, leaf utils, the module map and source-local contracts. Children:
   - [src/hv/AGENTS.md](src/hv/AGENTS.md): hypervisor process-lifecycle dispatch table.
-  - [src/web/AGENTS.md](src/web/AGENTS.md): embedded web UI (legacy vanilla JS + vendored libs).
+  - [src/web/AGENTS.md](src/web/AGENTS.md): embedded web UI (page shell, tokens, vendored libs).
     - [src/web/ui/AGENTS.md](src/web/ui/AGENTS.md): Preact + Tailwind v4 source, bundled to `dist/`.
 - [tests/AGENTS.md](tests/AGENTS.md): standalone integration/e2e suites (Playwright,
   shell API/vmrun) that drive the built binary; distinct from the in-module unit/fuzz tests.
@@ -275,4 +274,4 @@ When the user requests a durable behavior change, record it here or in the relev
 Owned by the parent (no child doc): `docs/` (design notes, DESIGN/PRD/GAP-ANALYSIS/
 TEST-COVERAGE/WEB-UI-CUJS/TODO/VIDEO-PIPELINE; reference material, not contracts), `reference/`
 (read-only external material: VMware WS7), and the root build files (`build.zig`,
-`build.zig.zon`, `package.json`, `playwright.config.mjs`).
+`build.zig.zon`, `package.json`, `playwright.config.ts`).

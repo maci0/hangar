@@ -122,7 +122,7 @@ export type CatalogDialogProps = {
   readonly onClose: () => void;
 };
 
-/** VM Catalog. app.js fetches the templates and pushes the list; Create calls back into it. */
+/** VM Catalog. The app fetches the templates and pushes the list; Create calls back into it. */
 export const CatalogDialog = ({ state, onClose }: CatalogDialogProps) => (
   <Dialog id="catalogdlg" titleId="catalog-title" class="w-215" onClose={onClose}>
     <DialogTitle id="catalog-title">VM Catalog</DialogTitle>

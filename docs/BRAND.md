@@ -6,8 +6,8 @@ Hangar is an operator console for QEMU virtual machines. The look is flat, dense
 
 One source per value, consumed everywhere.
 
-- Colors: `:root` (dark, default) and `:root.light` in `src/web/app.css`. Tailwind reads them through `@theme inline` in `src/web/ui/styles.css` (`bg-surface`, `text-fg-muted`, `border-border-soft`).
-- Radius and fonts: `@theme static` in `src/web/ui/styles.css`.
+- Colors: the dark palette (default) is the first `@theme static` block of `src/web/ui/styles.css`; the light palette overrides the same names under `:root.light` in the same file. Utilities read them through `@theme inline` (`bg-surface`, `text-fg-muted`, `border-border-soft`).
+- Radius, fonts, type steps and animations: the second `@theme static` block of the same file.
 - No hex value, pixel radius, or font stack appears in a component.
 
 ## Palette and contrast

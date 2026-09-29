@@ -17,5 +17,5 @@
       "react-dom": ["./node_modules/preact/compat"]
     }
   },
-  "include": ["src/web/ui", "scripts"]
+  "include": ["src/web/ui", "scripts", "tests", "playwright.config.ts"]
 }

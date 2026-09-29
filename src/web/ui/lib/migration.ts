@@ -56,7 +56,7 @@ const FINISHES: Readonly<Record<MigrationOutcome, Finish>> = {
 
 export const finishOf = (outcome: MigrationOutcome): Finish => FINISHES[outcome];
 
-/** What `app.js` provides: the daemon calls, VM lookup by stable id, and the status line and toasts. */
+/** What the app provides: the daemon calls, VM lookup by stable id, and the status line and toasts. */
 export type MigrationHost = {
   /** POSTs a form body; resolves the response, or null after reporting a failure itself. */
   readonly post: (path: string, body: string) => Promise<Response | null>;

@@ -2,6 +2,7 @@
 import type { FitAddon as XtermFit } from "@xterm/addon-fit";
 import type { WebglAddon as XtermWebgl } from "@xterm/addon-webgl";
 import type { Terminal as Xterm } from "@xterm/xterm";
+import type { ElkEngine } from "@/lib/topology";
 
 /** The part of noVNC's RFB client the console uses. */
 export type RfbClient = {
@@ -30,6 +31,7 @@ export type SpiceConnection = { readonly stop: () => void };
 export type SpiceModule = { readonly SpiceMainConn: new (options: SpiceOptions) => SpiceConnection };
 
 declare global {
+  var ELK: (new () => ElkEngine) | undefined;
   var noVNC: NoVncModule | undefined;
   var SpiceHtml5: SpiceModule | undefined;
   var Terminal: typeof Xterm | undefined;

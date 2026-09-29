@@ -20,6 +20,11 @@ header on its first lines; the header and this table must agree.
 | `xterm.css` | @xterm/xterm | 6.0.0 | npm `@xterm/xterm`, `css/xterm.css` | MIT |
 | `xterm-fit.js` | @xterm/addon-fit | 0.11.0 | npm `@xterm/addon-fit`, `lib/addon-fit.js` | MIT |
 | `xterm-webgl.js` | @xterm/addon-webgl | 0.19.0 | npm `@xterm/addon-webgl`, `lib/addon-webgl.js` | MIT |
+| `dist/ui.js` (built from `ui/`) | preact | 10.29.8 | npm `preact`, bundled by Bun | MIT |
+| `dist/ui.js` | clsx | 2.1.1 | npm `clsx`, bundled by Bun | MIT |
+| `dist/ui.js` | class-variance-authority | 0.7.1 | npm `class-variance-authority`, bundled by Bun | Apache-2.0 |
+| `dist/ui.js` | tailwind-merge | 3.7.0 | npm `tailwind-merge`, bundled by Bun | MIT |
+| `dist/ui.css` | tailwindcss (theme, preflight, utilities) | 4.3.3 | npm `tailwindcss`, compiled by `@tailwindcss/cli` | MIT |
 
 `novnc.js` and `spice.js` have no registry pin. Their upstream version must be
 recorded in their header and in the table above at the next re-vendor; until

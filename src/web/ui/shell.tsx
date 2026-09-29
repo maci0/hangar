@@ -1,22 +1,8 @@
-import { render, type ComponentChild } from "preact";
+import { render } from "preact";
+import { AppShell, type ShellHandlers, type ShellState } from "@/components/app-shell";
 import { ContextMenu, type ContextMenuRequest } from "@/components/context-menu";
-import { BulkBar, SidebarHead } from "@/components/sidebar";
-import { ConnectionBanner, StatusBar } from "@/components/status-bar";
 import { MAX_TOASTS, Toasts, type ToastEntry, type ToastRequest } from "@/components/toasts";
-import { VmHeader, type VmHeaderProps } from "@/components/vm-header";
-
-/** Everything the page chrome shows. `app.js` derives it from its own state and pushes patches. */
-export type ShellState = {
-  readonly selectMode: boolean;
-  readonly checkedCount: number;
-  readonly searchActive: boolean;
-  /** The daemon is unreachable and the banner has not been dismissed. */
-  readonly bannerVisible: boolean;
-  readonly header: VmHeaderProps;
-  readonly status: { readonly text: string; readonly loading: boolean };
-  readonly live: boolean;
-  readonly announcement: string;
-};
+import type { ToolbarProps } from "@/components/toolbar";
 
 const INITIAL: ShellState = {
   selectMode: false,
@@ -27,39 +13,56 @@ const INITIAL: ShellState = {
   status: { text: "Ready", loading: false },
   live: false,
   announcement: "",
-};
-
-const mount = (selector: string, node: ComponentChild): void => {
-  const root = document.querySelector(selector);
-  if (root) {
-    render(node, root);
-  }
+  loading: false,
+  sidebar: { collapsed: false, overlayOpen: false, expanded: true },
+  list: { favorites: [], folders: [], ungrouped: [], selectMode: false, filtered: false },
+  toolbar: {
+    sidebarExpanded: false,
+    hasVm: false,
+    powered: false,
+    batchBusy: null,
+    actionReason: () => null,
+  },
 };
 
 export type ShellBridge = {
+  /** Hands over what the chrome calls back into and draws the page. Call once, before any state. */
+  readonly bindShell: (handlers: ShellHandlers) => void;
   /** Merges the given fields into the chrome state and redraws it. */
   readonly setShell: (patch: Partial<ShellState>) => void;
+  /** Merges the given fields into the toolbar state and redraws it. */
+  readonly setToolbar: (patch: Partial<Omit<ToolbarProps, "handlers">>) => void;
 };
 
+/** Draws the page into `#app`; the panel bridges draw into the empty mounts it leaves. */
 export const createShellBridge = (): ShellBridge => {
   let state = INITIAL;
+  let handlers: ShellHandlers | null = null;
   const draw = (): void => {
-    mount("#banner-root", <ConnectionBanner visible={state.bannerVisible} />);
-    mount("#sidebar-head-root", <SidebarHead selectMode={state.selectMode} searchActive={state.searchActive} />);
-    mount("#bulk-root", <BulkBar selectMode={state.selectMode} checkedCount={state.checkedCount} />);
-    mount("#vmheader-root", <VmHeader {...state.header} />);
-    mount("#statusbar-root", <StatusBar {...state.status} live={state.live} announcement={state.announcement} />);
+    const root = document.querySelector("#app");
+    if (root && handlers !== null) {
+      render(<AppShell state={state} handlers={handlers} />, root);
+    }
   };
-  draw();
   return {
+    bindShell: (next) => {
+      handlers = next;
+      draw();
+    },
     setShell: (patch) => {
       state = { ...state, ...patch };
+      draw();
+    },
+    setToolbar: (patch) => {
+      state = { ...state, toolbar: { ...state.toolbar, ...patch } };
       draw();
     },
   };
 };
 
 export type OverlayBridge = {
+  /** Draws the toast container (a live region that must exist before the first toast). Call once the page is drawn. */
+  readonly mountOverlay: () => void;
   /** Shows a toast; the oldest goes when more than five are up. */
   readonly showToast: (request: ToastRequest) => void;
   /** Opens the VM context menu at a viewport point, replacing any open one. */
@@ -79,13 +82,16 @@ export const createOverlayBridge = (): OverlayBridge => {
   const state: OverlayState = { toasts: [], menu: null, nextId: 0 };
   const actions = {
     draw: (): void => {
-      mount(
-        "#overlay-root",
-        <>
-          <Toasts toasts={state.toasts} onDone={actions.removeToast} />
-          {state.menu && <ContextMenu request={state.menu} onClose={actions.dismissMenu} />}
-        </>,
-      );
+      const root = document.querySelector("#overlay-root");
+      if (root) {
+        render(
+          <>
+            <Toasts toasts={state.toasts} onDone={actions.removeToast} />
+            {state.menu && <ContextMenu request={state.menu} onClose={actions.dismissMenu} />}
+          </>,
+          root,
+        );
+      }
     },
     removeToast: (id: number): void => {
       state.toasts = state.toasts.filter((toast) => toast.id !== id);
@@ -96,9 +102,9 @@ export const createOverlayBridge = (): OverlayBridge => {
       actions.draw();
     },
   };
-  actions.draw();
 
   return {
+    mountOverlay: actions.draw,
     showToast: (request) => {
       state.nextId += 1;
       state.toasts = [...state.toasts, { ...request, id: state.nextId }].slice(-MAX_TOASTS);

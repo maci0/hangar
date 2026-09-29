@@ -101,7 +101,7 @@ pub fn build(b: *std.Build) !void {
     // ── Web UI E2E tests (Playwright) ──
     // Per AGENTS.md, every user-facing workflow has a Playwright e2e test in
     // tests/e2e. Playwright launches the built binary itself (see
-    // playwright.config.mjs); we only need the binary installed first. Requires
+    // playwright.config.ts); we only need the binary installed first. Requires
     // `bun install` and `bun run e2e:install` (Chromium) to have been run once.
     // Standalone (not in the umbrella `test` step): Playwright needs `bun
     // install` + a downloaded Chromium, so depending on it would make the
@@ -166,19 +166,6 @@ pub fn build(b: *std.Build) !void {
         "lint-yaml", b.pathFromRoot(".yamllint"),
     });
     lint_yaml.dependOn(&lint_yaml_cmd.step);
-
-    // Syntax gate over hand-written JS (app.js is @embedFile'd raw, so the exe
-    // builds fine even when it does not parse). Excludes the vendored bundles
-    // listed in src/web/AGENTS.md; any new non-vendored file is covered.
-    const lint_js = b.step("lint-js", "Syntax-check hand-written JS (bun build)");
-    const lint_js_cmd = b.addSystemCommand(&.{
-        "bash", "-euo", "pipefail", "-c",
-        \\git ls-files -z '*.js' '*.mjs' |
-        \\grep -zvE '^src/web/(novnc|spice|elk|xterm(-fit|-webgl)?)\.js$' |
-        \\xargs -0rn1 bun build --no-bundle >/dev/null
-        \\
-    });
-    lint_js.dependOn(&lint_js_cmd.step);
 
     const cli_test = b.step("test-cli", "Check CLI help/version output and write failures without a daemon");
     for ([_]*std.Build.Step.Compile{ vmrun_exe, web_exe, webui_app }) |exe| {
@@ -267,6 +254,5 @@ pub fn build(b: *std.Build) !void {
     check.dependOn(fmt_check);
     check.dependOn(lint_shell);
     check.dependOn(lint_yaml);
-    check.dependOn(lint_js);
     check.dependOn(test_step);
 }

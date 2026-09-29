@@ -16,6 +16,8 @@ export type VnetsRequest = {
   readonly save: (networks: ReadonlyArray<Vnet>, saved: string | null) => Promise<boolean>;
   /** Asks whether unsaved edits may be thrown away. */
   readonly confirmDiscard: () => Promise<boolean>;
+  /** Opens Network Topology over the editor. */
+  readonly openTopology: () => void;
 };
 
 /** Networks restored by Defaults: the three VMware-style switches. */
@@ -295,9 +297,10 @@ type FooterProps = {
   readonly busy: boolean;
   readonly editor: Editor;
   readonly run: (task: () => Promise<boolean>) => void;
+  readonly openTopology: () => void;
 };
 
-const VnetsFooter = ({ count, hasSelection, busy, editor, run }: FooterProps) => {
+const VnetsFooter = ({ count, hasSelection, busy, editor, run, openTopology }: FooterProps) => {
   const { networks, selected, persist } = editor;
   return (
     <DialogFooter>
@@ -313,7 +316,7 @@ const VnetsFooter = ({ count, hasSelection, busy, editor, run }: FooterProps) =>
         <Button type="button" data-action="vnetDefaults" onClick={editor.restoreDefaults}>
           Defaults
         </Button>
-        <Button type="button" data-action="openTopology" title="Visual network topology">
+        <Button type="button" data-action="openTopology" onClick={openTopology} title="Visual network topology">
           <Icon name="net" />
           Topology
         </Button>
@@ -360,7 +363,7 @@ const VnetsEditor = ({ request, dirty }: { readonly request: VnetsRequest; reado
           )}
         </div>
       </DialogBody>
-      <VnetsFooter count={networks.length} hasSelection={current !== undefined} busy={busy} editor={editor} run={run} />
+      <VnetsFooter count={networks.length} hasSelection={current !== undefined} busy={busy} editor={editor} run={run} openTopology={request.openTopology} />
     </>
   );
 };

@@ -1,18 +1,24 @@
 import { Icon } from "@/components/icon";
 import { Button } from "@/components/ui/button";
 
-/** New VM, Import VM and Catalog: the three ways to add a VM. Handlers are the delegated `data-action`s. */
-export const LibraryActions = () => (
+export type LibraryHandlers = {
+  readonly newVm: () => void;
+  readonly importVm: () => void;
+  readonly openCatalog: () => void;
+};
+
+/** New VM, Import VM and Catalog: the three ways to add a VM. */
+export const LibraryActions = ({ handlers }: { readonly handlers: LibraryHandlers }) => (
   <>
-    <Button variant="primary" data-action="newVm">
+    <Button variant="primary" onClick={handlers.newVm}>
       <Icon name="plus" class="ico size-3.25" />
       New VM
     </Button>
-    <Button data-action="importGuest">
+    <Button onClick={handlers.importVm}>
       <Icon name="import" class="ico size-3.25" />
       Import VM
     </Button>
-    <Button data-action="openCatalog">
+    <Button data-action="openCatalog" onClick={handlers.openCatalog}>
       <Icon name="grid" class="ico size-3.25" />
       Catalog
     </Button>

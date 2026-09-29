@@ -1,4 +1,4 @@
-/** Config flags reach the UI as these strings (`app.js` coerces the daemon's JSON booleans). */
+/** Config flags reach the UI as these strings (`parseVmList` turns the daemon's JSON booleans into them). */
 export type Flag = "true" | "false";
 
 export type VmStatus = "running" | "paused" | "suspended" | "stopped";
@@ -74,6 +74,8 @@ type VmFields = {
   readonly favorite: Flag;
   readonly video_stream: Flag;
   readonly video_bitrate_kbps: number;
+  /** Seconds the guest has run, as the daemon counts them; unusable values are ignored. */
+  readonly uptime_sec?: number;
   /** Not part of the list JSON: the settings form starts it empty. */
   readonly cloud_init?: string;
 };

@@ -62,7 +62,7 @@ zig build test-vmrun   # vmrun CLI integration test (tests/test_vmrun.sh)
 ## Visual Tests
 
 ```bash
-bun tests/visual/screenshots.mjs   # Playwright screenshots of the web UI (images only)
+bun tests/visual/screenshots.ts   # Playwright screenshots of the web UI (images only)
 ```
 
 ## Running Tests

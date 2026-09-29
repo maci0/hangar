@@ -89,12 +89,12 @@ unimplemented; `0x03` is already the keyframe marker.
 Auth/handshake identical to the other WS routes (subprotocol echoed).
 
 Source: `serveVideoClient` / `emitAu` in [dbusdisplay.zig](../src/dbusdisplay.zig)
-and `startVideoStream` in [app.js](../src/web/app.js); introduced in `b2005c7`.
+and `createVideoStream` in [video.ts](../src/web/ui/lib/video.ts); introduced in `b2005c7`.
 
 ### Browser side (shipped)
 
 The decoder, overlay, and badge are described in [phase 3](#phases), introduced
-in `b2005c7`. `startVideoStream` in [app.js](../src/web/app.js) checks for
+in `b2005c7`. `createVideoStream` in [video.ts](../src/web/ui/lib/video.ts) checks for
 `VideoDecoder` and the VM's `video_stream` flag, not an encoder advertisement
 in `/api/capabilities`. It configures `hardwareAcceleration:'no-preference'`,
 draws decoded frames through a 2D canvas context, and closes each frame.
@@ -157,7 +157,7 @@ not the shipped browser path.
     `serveVideoClient` / `emitAu` share one encoder across up to
     `MAX_VIDEO_CLIENTS` (8) viewers per VM; a ninth viewer is closed, and the
     encoder stops after the last viewer detaches. The video test in
-    [workflows.spec.mjs](../tests/e2e/workflows.spec.mjs) also checks a second
+    [console.test.ts](../tests/e2e/console.test.ts) also checks a second
     viewer's configured overlay and that the first socket stays open after
     the second viewer leaves. Remaining: cursor channel, AV1, virgl/dmabuf
     zero-copy capture.

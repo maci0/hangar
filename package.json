@@ -5,8 +5,8 @@
   "packageManager": "bun@1.4.0",
   "type": "module",
   "scripts": {
-    "e2e": "playwright test",
-    "e2e:install": "playwright install chromium",
+    "e2e": "bun ./node_modules/@playwright/test/cli.js test",
+    "e2e:install": "bun ./node_modules/@playwright/test/cli.js install chromium",
     "build:web": "bun scripts/build-web.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test src/web/ui",

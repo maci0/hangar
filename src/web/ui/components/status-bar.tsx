@@ -41,7 +41,7 @@ export const StatusBar = ({ text, loading, live, announcement }: StatusBarProps)
 );
 
 /** Shown while the daemon is unreachable; Dismiss hides it until the next outage. */
-export const ConnectionBanner = ({ visible }: { readonly visible: boolean }) => (
+export const ConnectionBanner = ({ visible, onDismiss }: { readonly visible: boolean; readonly onDismiss: () => void }) => (
   <div
     id="connbanner"
     class={cn(
@@ -52,6 +52,6 @@ export const ConnectionBanner = ({ visible }: { readonly visible: boolean }) => 
     aria-live="assertive"
   >
     <span>Connection lost: retrying automatically</span>
-    <Button data-action="dismissBanner">Dismiss</Button>
+    <Button onClick={onDismiss}>Dismiss</Button>
   </div>
 );

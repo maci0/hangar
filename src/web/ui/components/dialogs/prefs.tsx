@@ -4,11 +4,7 @@ import { Dialog, DialogBody, DialogClose, DialogFooter, DialogForm, DialogTitle,
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-
-declare global {
-  // Set by the legacy theme code in app.js; applies and persists a theme name.
-  var applyTheme: ((theme: string) => void) | undefined;
-}
+import { applyTheme, currentTheme, isTheme } from "@/lib/theme";
 
 /** Form state, all strings as typed. The daemon validates ranges. */
 export type PrefsValues = {
@@ -74,7 +70,9 @@ const ThemeField = ({ value, onChange }: ThemeFieldProps) => (
       onChange={(event) => {
         onChange(event.currentTarget.value);
         // Live preview; closing without saving puts the original back.
-        globalThis.applyTheme?.(event.currentTarget.value);
+        if (isTheme(event.currentTarget.value)) {
+          applyTheme(event.currentTarget.value);
+        }
       }}
     >
       <option value="system">System</option>
@@ -149,13 +147,13 @@ export type PrefsDialogProps = {
 
 /** Preferences. The theme applies as it is picked and reverts on any close except a save. */
 export const PrefsDialog = ({ request, onClose }: PrefsDialogProps) => {
-  const originalTheme = useRef(globalThis.hangarTheme);
+  const originalTheme = useRef(currentTheme());
   const saved = useRef(false);
 
   const onClosed = () => {
     const original = originalTheme.current;
-    if (!saved.current && original !== undefined && globalThis.hangarTheme !== original) {
-      globalThis.applyTheme?.(original);
+    if (!saved.current && currentTheme() !== original) {
+      applyTheme(original);
     }
     onClose();
   };

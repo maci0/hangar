@@ -309,7 +309,7 @@ guests.
 
 ### Gaps To Address
 
-Re-verified against the current build (`src/web/app.js`, `src/web/index.html`);
+Re-verified against the current build (`src/web/ui`, `src/web/index.html`);
 most gaps from the original review have since shipped:
 
 | # | Gap | Status |

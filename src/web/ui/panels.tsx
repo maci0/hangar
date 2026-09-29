@@ -1,19 +1,34 @@
 import { render, type ComponentChild } from "preact";
 import { Dashboard, type HostInfo } from "@/components/dashboard";
 import { EmptyState } from "@/components/empty-state";
-import { SettingsForm, settingsControl, type SettingsRequest } from "@/components/settings";
+import { SettingsForm, settingsControl, type SettingsRequest, type SettingsTools } from "@/components/settings";
 import { Summary, type SummaryProps } from "@/components/summary";
-import { LibraryActions } from "@/components/library-actions";
+import { LibraryActions, type LibraryHandlers } from "@/components/library-actions";
 import { DEFAULT_SORT, nextSort, type DashRow, type SortColumn, type SortState } from "@/lib/dashboard";
 import { memText, statusLabel } from "@/lib/format";
 
-/** What the Summary panel shows. `app.js` picks the view from the selection and the VM list. */
+/** What the Summary panel shows. The app picks the view from the selection and the VM list. */
 export type SummaryView =
   | { readonly kind: "welcome" }
   | { readonly kind: "dashboard"; readonly rows: ReadonlyArray<DashRow>; readonly host: HostInfo }
-  | ({ readonly kind: "vm" } & SummaryProps);
+  | ({ readonly kind: "vm" } & Omit<SummaryProps, "onViewLog" | "onScreenshot">);
+
+/** What the Summary panel asks of the app. */
+export type PanelHandlers = {
+  readonly library: LibraryHandlers;
+  /** Opens the VM at this list index (an inventory row). */
+  readonly selectVm: (index: number) => void;
+  readonly viewLog: () => void;
+  readonly screenshot: () => void;
+  /** The buttons under the media and disk fields of the Settings form. */
+  readonly settingsTools: SettingsTools;
+  /** Cancel in the Settings form. */
+  readonly cancelSettings: () => void;
+};
 
 export type PanelsBridge = {
+  /** Hands over the panel handlers. Call once, before the first view. */
+  readonly bindPanels: (handlers: PanelHandlers) => void;
   /** Draws the Summary panel: the welcome state, the host dashboard or the selected VM. */
   readonly setSummary: (view: SummaryView) => void;
   /** Opens the Settings form for a VM, replacing any form (its edits are dropped). */
@@ -35,8 +50,8 @@ const mount = (selector: string, node: ComponentChild): void => {
   }
 };
 
-const Welcome = () => (
-  <EmptyState icon="monitor" title="No Virtual Machines Yet" actions={<LibraryActions />}>
+const Welcome = ({ library }: { readonly library: LibraryHandlers }) => (
+  <EmptyState icon="monitor" title="No Virtual Machines Yet" actions={<LibraryActions handlers={library} />}>
     Create your first virtual machine, import an existing disk image, or start from a catalog template.
   </EmptyState>
 );
@@ -47,16 +62,21 @@ const NoSelection = () => (
   </EmptyState>
 );
 
-type SummaryPanelProps = { readonly view: SummaryView; readonly sort: SortState; readonly onSort: (col: SortColumn) => void };
+type SummaryPanelProps = {
+  readonly view: SummaryView;
+  readonly sort: SortState;
+  readonly onSort: (col: SortColumn) => void;
+  readonly handlers: PanelHandlers;
+};
 
-const SummaryPanel = ({ view, sort, onSort }: SummaryPanelProps) => {
+const SummaryPanel = ({ view, sort, onSort, handlers }: SummaryPanelProps) => {
   if (view.kind === "dashboard") {
-    return <Dashboard rows={view.rows} host={view.host} sort={sort} onSort={onSort} />;
+    return <Dashboard rows={view.rows} host={view.host} sort={sort} onSort={onSort} onSelect={handlers.selectVm} library={handlers.library} />;
   }
   if (view.kind === "vm") {
-    return <Summary {...view} />;
+    return <Summary {...view} onViewLog={handlers.viewLog} onScreenshot={handlers.screenshot} />;
   }
-  return <Welcome />;
+  return <Welcome library={handlers.library} />;
 };
 
 /** Summary and Settings panels. They mount into `#summary-root` and `#settings-root` inside their tab panels. */
@@ -65,13 +85,16 @@ export const createPanelsBridge = (): PanelsBridge => {
   let sort: SortState = DEFAULT_SORT;
   let settings: { readonly id: number; readonly request: SettingsRequest } | null = null;
   let category = "";
+  let handlers: PanelHandlers | null = null;
 
   const drawSummary = (): void => {
     const onSort = (col: SortColumn): void => {
       sort = nextSort(sort, col);
       drawSummary();
     };
-    mount("#summary-root", <SummaryPanel view={view} sort={sort} onSort={onSort} />);
+    if (handlers !== null) {
+      mount("#summary-root", <SummaryPanel view={view} sort={sort} onSort={onSort} handlers={handlers} />);
+    }
   };
 
   const drawSettings = (): void => {
@@ -81,17 +104,25 @@ export const createPanelsBridge = (): PanelsBridge => {
     };
     mount(
       "#settings-root",
-      settings === null ? (
+      settings === null || handlers === null ? (
         <NoSelection />
       ) : (
-        <SettingsForm key={settings.id} request={settings.request} category={category} onCategory={onCategory} />
+        <SettingsForm
+          key={settings.id}
+          request={{ ...settings.request, tools: handlers.settingsTools, cancel: handlers.cancelSettings }}
+          category={category}
+          onCategory={onCategory}
+        />
       ),
     );
   };
 
-  drawSummary();
-  drawSettings();
   return {
+    bindPanels: (next) => {
+      handlers = next;
+      drawSummary();
+      drawSettings();
+    },
     setSummary: (next) => {
       view = next;
       drawSummary();

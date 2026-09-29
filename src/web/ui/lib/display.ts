@@ -20,7 +20,7 @@ import type { RfbClient, RfbConstructor, SpiceConnection } from "@/lib/vendor";
 import { createVideoStream, type VideoHost, type VideoStream } from "@/lib/video";
 import { DISPLAY_LABELS, embeddedDisplayCapable, SPICE_DISPLAY, VNC_DISPLAY, type Vm } from "@/lib/vm";
 
-/** What the display asks of `app.js`: the selection, and a place to report what went wrong. */
+/** What the display asks of the session: the selection, and a place to report what went wrong. */
 export type DisplayHost = VideoHost & {
   readonly log: (message: string, detail: unknown) => void;
 };

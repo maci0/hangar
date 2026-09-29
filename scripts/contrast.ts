@@ -1,6 +1,8 @@
 // Prints WCAG contrast ratios for the token pairs documented in docs/BRAND.md.
 // Fails when a text pair drops below 4.5:1 or a non-text edge below 3:1.
-// Reads solid hex tokens from src/web/app.css. Run: bun run check:contrast
+// Reads solid hex tokens from src/web/ui/styles.css. The dark palette is the `@theme static` block.
+// The light palette is the `:root.light` overrides, which fall back to the dark value.
+// Run: bun run check:contrast
 const MARKER = "package.json";
 const TEXT_MIN = 4.5;
 const EDGE_MIN = 3;
@@ -43,11 +45,14 @@ const findRoot = async (start: string): Promise<string> => {
   return dir;
 };
 
-/** Collects `--name:#hex` declarations from the rule that starts at `selector`. */
+/** Collects `--name: #hex` declarations from the rule whose header is `selector`. */
 const readTokens = (css: string, selector: string): Map<string, string> => {
-  const start = css.indexOf(`${selector}{`);
+  const start = css.indexOf(`${selector} {`);
+  if (start === -1) {
+    throw new Error(`no ${selector} block in styles.css`);
+  }
   const block = css.slice(start, css.indexOf("}", start));
-  return new Map([...block.matchAll(/--([a-z0-9\-]+):(#[0-9a-f]{3,6})\b/gv)].map((m) => [m[1] ?? "", m[2] ?? ""]));
+  return new Map([...block.matchAll(/--([a-z0-9\-]+):\s*(#[0-9a-f]{3,6})\b/gv)].map((m) => [m[1] ?? "", m[2] ?? ""]));
 };
 
 const channel = (hex: string, index: number): number => {
@@ -63,13 +68,14 @@ const ratio = (a: string, b: string): number => {
   return ((hi ?? 0) + CONTRAST_OFFSET) / ((lo ?? 0) + CONTRAST_OFFSET);
 };
 
-const css = await Bun.file(`${await findRoot(import.meta.dir)}/src/web/app.css`).text();
+const css = await Bun.file(`${await findRoot(import.meta.dir)}/src/web/ui/styles.css`).text();
+const dark = readTokens(css, "@theme static");
+const light = new Map([...dark, ...readTokens(css, ":root.light")]);
 let failures = 0;
-for (const [theme, selector] of [
-  ["dark", ":root"],
-  ["light", ":root.light"],
+for (const [theme, tokens] of [
+  ["dark", dark],
+  ["light", light],
 ] as const) {
-  const tokens = readTokens(css, selector);
   for (const { fg, bg, min } of PAIRS) {
     const fgHex = tokens.get(fg);
     const bgHex = tokens.get(bg);

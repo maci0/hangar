@@ -12,6 +12,7 @@ export type VmHeaderProps = {
   readonly activeTab: TabId;
   /** The console tab needs a running VM with an embedded display. */
   readonly consoleEnabled: boolean;
+  readonly onSwitchTab: (tab: TabId) => void;
 };
 
 type TabDef = {
@@ -43,7 +44,7 @@ const tabTarget = (key: string, current: number, count: number): number => {
 
 /**
  * Arrow/Home/End move to another enabled tab and activate it. Activation is the tab's own click,
- * so the delegated `switchTab` action (and its unsaved-changes guard) runs as for a pointer.
+ * so `onSwitchTab` (and its unsaved-changes guard) runs as for a pointer.
  */
 const onTabKeyDown = (event: KeyboardEvent & { readonly currentTarget: HTMLElement }) => {
   if (!TAB_KEYS.has(event.key)) {
@@ -60,7 +61,8 @@ const onTabKeyDown = (event: KeyboardEvent & { readonly currentTarget: HTMLEleme
   next?.focus();
 };
 
-const TabButton = ({ tab, selected, disabled, title }: {
+const TabButton = ({ tab, selected, disabled, title, onSelect }: {
+  readonly onSelect: () => void;
   readonly tab: TabDef;
   readonly selected: boolean;
   readonly disabled: boolean;
@@ -73,8 +75,7 @@ const TabButton = ({ tab, selected, disabled, title }: {
       "-mb-px inline-flex items-center border-0 border-b-2 border-transparent bg-transparent px-3.5 py-1.5 text-field font-medium text-fg-muted transition-colors hover:border-border-hover hover:text-fg focus-visible:outline-2 -outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-42 disabled:hover:border-transparent disabled:hover:text-fg-muted pointer-coarse:min-h-11",
       selected && "border-accent font-semibold text-fg hover:border-accent",
     )}
-    data-action="switchTab"
-    data-tab={tab.id}
+    onClick={onSelect}
     role="tab"
     tabIndex={selected ? 0 : -1}
     aria-controls={tab.panel}
@@ -87,7 +88,7 @@ const TabButton = ({ tab, selected, disabled, title }: {
 );
 
 /** Heading row above the tab panels: VM emblem and name on the left, the view tabs on the right. */
-export const VmHeader = ({ name, emblem, tabsVisible, activeTab, consoleEnabled }: VmHeaderProps) => (
+export const VmHeader = ({ name, emblem, tabsVisible, activeTab, consoleEnabled, onSwitchTab }: VmHeaderProps) => (
   <div class="vm-header mb-3 flex items-center justify-between gap-4 max-narrow:flex-col max-narrow:items-stretch max-narrow:gap-2 displayonly:hidden">
     <div class="flex min-w-0 items-center">
       {emblem !== null && (
@@ -115,6 +116,7 @@ export const VmHeader = ({ name, emblem, tabsVisible, activeTab, consoleEnabled 
           <TabButton
             key={tab.id}
             tab={tab}
+            onSelect={() => onSwitchTab(tab.id)}
             selected={tab.id === activeTab}
             disabled={tab.id === "console" && !consoleEnabled}
             title={tab.id === "console" ? consoleTitle(consoleEnabled) : undefined}

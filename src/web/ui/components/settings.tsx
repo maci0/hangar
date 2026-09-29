@@ -26,7 +26,17 @@ import {
 } from "@/lib/settings";
 import type { Vm } from "@/lib/vm";
 
-/** What `app.js` hands over to edit one VM. */
+/** The buttons under the media and disk fields. Each name is also the button's `data-action` test hook. */
+export type SettingsTools = {
+  readonly changeCd: () => void;
+  readonly ejectCd: () => void;
+  readonly resizeDisk: () => void;
+  readonly compactDisk: () => void;
+  readonly disk2upload: () => void;
+  readonly disk2download: () => void;
+};
+
+/** What the app hands over to edit one VM. */
 export type SettingsRequest = {
   readonly vm: Vm;
   readonly slots: HardwareSlots;
@@ -38,6 +48,13 @@ export type SettingsRequest = {
   readonly onInvalid: () => void;
 };
 
+/** A request plus the handlers the panel bridge supplies. */
+export type SettingsFormRequest = SettingsRequest & {
+  readonly tools: SettingsTools;
+  /** Leaves the form without saving (Cancel). */
+  readonly cancel: () => void;
+};
+
 /** Lets code outside the tree (Ctrl+S, `saveVm`) submit the open form. */
 export const settingsControl = {
   submit: (): void => undefined,
@@ -47,7 +64,7 @@ const LOCKED_TITLE = "Power off the VM to change virtual hardware";
 const SAVE_LABEL = "Save Changes";
 const SAVING_LABEL = "Saving...";
 
-const TOOLS: Readonly<Record<FieldTools, ReadonlyArray<{ readonly action: string; readonly label: string }>>> = {
+const TOOLS: Readonly<Record<FieldTools, ReadonlyArray<{ readonly action: keyof SettingsTools; readonly label: string }>>> = {
   media: [
     { action: "changeCd", label: "Change CD/ISO" },
     { action: "ejectCd", label: "Eject CD/ISO" },
@@ -62,10 +79,10 @@ const TOOLS: Readonly<Record<FieldTools, ReadonlyArray<{ readonly action: string
   ],
 };
 
-const FieldToolButtons = ({ tools }: { readonly tools: FieldTools }) => (
+const FieldToolButtons = ({ tools, handlers }: { readonly tools: FieldTools; readonly handlers: SettingsTools }) => (
   <div class="flex flex-wrap gap-1.5">
     {TOOLS[tools].map(({ action, label }) => (
-      <Button key={action} type="button" data-action={action}>
+      <Button key={action} type="button" data-action={action} onClick={handlers[action]}>
         {label}
       </Button>
     ))}
@@ -138,7 +155,7 @@ const SettingControl = ({ field, value, issue, locked, onChange }: ControlProps)
   );
 };
 
-const SettingRow = (props: ControlProps) => {
+const SettingRow = ({ tools, ...props }: ControlProps & { readonly tools: SettingsTools }) => {
   const { field, issue } = props;
   const id = `e_${field.key}`;
   return (
@@ -160,7 +177,7 @@ const SettingRow = (props: ControlProps) => {
       errorTone={issue?.severity === "warning" ? "warning" : "error"}
     >
       <SettingControl {...props} />
-      {field.tools !== undefined && <FieldToolButtons tools={field.tools} />}
+      {field.tools !== undefined && <FieldToolButtons tools={field.tools} handlers={tools} />}
     </Field>
   );
 };
@@ -199,7 +216,7 @@ const Nav = ({ sections, category, onSelect }: NavProps) => {
             onClick={() => onSelect(section.id)}
           >
             <span class={cn("block text-field font-semibold whitespace-nowrap", active ? "text-accent-2" : "text-fg")}>{section.title}</span>
-            <small class={cn("mt-px block text-caption leading-snug max-narrow:hidden", active ? "text-fg-muted" : "text-fg-dim")}>
+            <small class={`mt-px block text-caption leading-snug max-narrow:hidden ${active ? "text-fg-muted" : "text-fg-dim"}`}>
               {section.note}
             </small>
           </button>
@@ -215,11 +232,12 @@ type PanelProps = {
   readonly values: SettingValues;
   readonly issues: Issues;
   readonly status: Vm["status"];
+  readonly tools: SettingsTools;
   readonly onChange: (key: string, next: string) => void;
 };
 
 /** Every panel stays in the page and inactive ones are hidden, so each control keeps its `e_<key>` id. */
-const Panel = ({ section, active, values, issues, status, onChange }: PanelProps) => (
+const Panel = ({ section, active, values, issues, status, tools, onChange }: PanelProps) => (
   <section
     class={cn(
       "settings-panel mb-3 rounded-md border border-border-soft bg-surface p-3.5 shadow-card max-phone:p-2.5",
@@ -239,6 +257,7 @@ const Panel = ({ section, active, values, issues, status, onChange }: PanelProps
           value={values[field.key] ?? ""}
           issue={issues[field.key]}
           locked={fieldLocked(field.key, status)}
+          tools={tools}
           onChange={(next) => onChange(field.key, next)}
         />
       ))}
@@ -257,7 +276,7 @@ type Submit = {
  * Validates and saves. While a request is pending the form is busy; the same function runs for the Save
  * button and Ctrl+S (through `settingsControl`).
  */
-const useSubmit = ({ request, values, sections, onInvalid }: Submit): boolean => {
+const useSubmit = ({ request, values, sections, onInvalid }: Submit): { readonly busy: boolean; readonly submit: () => void } => {
   const [busy, setBusy] = useState(false);
   const submit = async (): Promise<void> => {
     if (busy) {
@@ -286,7 +305,7 @@ const useSubmit = ({ request, values, sections, onInvalid }: Submit): boolean =>
       settingsControl.submit = () => undefined;
     };
   }, []);
-  return busy;
+  return { busy, submit: () => void latest.current() };
 };
 
 type FocusRequest = { readonly key: string; readonly count: number };
@@ -296,6 +315,7 @@ type FormState = {
   readonly values: SettingValues;
   readonly issues: Issues;
   readonly busy: boolean;
+  readonly submit: () => void;
   readonly setField: (key: string, next: string) => void;
 };
 
@@ -318,7 +338,7 @@ const useSettingsForm = (request: SettingsRequest, onCategory: (id: string) => v
     }
   }, [focusRequest]);
 
-  const busy = useSubmit({
+  const { busy, submit } = useSubmit({
     request,
     values,
     sections,
@@ -332,6 +352,7 @@ const useSettingsForm = (request: SettingsRequest, onCategory: (id: string) => v
     sections,
     values,
     busy,
+    submit,
     issues: checked ? validateSettings(values, slots) : {},
     setField: (key, next) => {
       setChecked(true);
@@ -340,12 +361,12 @@ const useSettingsForm = (request: SettingsRequest, onCategory: (id: string) => v
   };
 };
 
-const ActionBar = ({ busy }: { readonly busy: boolean }) => (
+const ActionBar = ({ busy, onCancel, onSave }: { readonly busy: boolean; readonly onCancel: () => void; readonly onSave: () => void }) => (
   <div class="settings-actions sticky bottom-0 z-30 -mx-3.5 mt-3.5 -mb-3.5 flex justify-end gap-2 border-t border-border bg-bg-alt px-3.5 py-2.5">
-    <Button type="button" data-action="switchTab" data-tab="summary">
+    <Button type="button" onClick={onCancel}>
       Cancel
     </Button>
-    <Button id="savevmbtn" type="button" variant="primary" data-action="saveVm" title="Save VM settings">
+    <Button id="savevmbtn" type="button" variant="primary" onClick={onSave} title="Save VM settings">
       {busy ? SAVING_LABEL : SAVE_LABEL}
     </Button>
   </div>
@@ -357,11 +378,11 @@ export const SettingsForm = ({
   category,
   onCategory,
 }: {
-  readonly request: SettingsRequest;
+  readonly request: SettingsFormRequest;
   readonly category: string;
   readonly onCategory: (id: string) => void;
 }) => {
-  const { sections, values, issues, busy, setField } = useSettingsForm(request, onCategory);
+  const { sections, values, issues, busy, submit, setField } = useSettingsForm(request, onCategory);
   const active = sections.some((section) => section.id === category) ? category : (sections[0]?.id ?? "");
   const { status } = request.vm;
   return (
@@ -386,12 +407,13 @@ export const SettingsForm = ({
                 values={values}
                 issues={issues}
                 status={status}
+                tools={request.tools}
                 onChange={setField}
               />
             ))}
           </div>
         </div>
-        <ActionBar busy={busy} />
+        <ActionBar busy={busy} onCancel={request.cancel} onSave={submit} />
       </fieldset>
     </>
   );

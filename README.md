@@ -13,8 +13,8 @@ hand-written `qemu-system-*` command lines that nobody can remember, or libvirt
 with its daemon, XML domain format, and policy layers. Hangar keeps QEMU's
 process model and drops everything else: one static binary owns the VM configs
 (a single JSON file), spawns QEMU directly, and talks QMP for guest control.
-The web UI is embedded in that binary with no build step, so `zig build web`
-and a browser is the whole install.
+The web UI is embedded in that binary (`zig build` bundles it with Bun), so
+`zig build web` and a browser is the whole install.
 
 ## Features
 
@@ -94,6 +94,26 @@ need a Playwright test under `tests/e2e/` and a `zig build web-e2e` run.
 Open http://127.0.0.1:9080 after `zig build web`. A daemon started without
 `KV_API_KEY` binds the IPv4 loopback, so address it as `127.0.0.1`, not
 `localhost` (which resolves to `::1` on most distributions).
+
+## Web UI development
+
+The UI is Preact, Tailwind v4 and shadcn-style components under `src/web/ui`,
+bundled by Bun into `src/web/dist` (gitignored) and embedded in the daemon.
+`zig build` runs the bundle step itself; these commands cover the rest:
+
+```bash
+bun install --frozen-lockfile   # once, plus `bun run e2e:install` for Chromium
+bun run build:web               # bundle src/web/ui into src/web/dist (ui.js, ui.css, icons.svg)
+bun run lint                    # oxlint (strict, anti-slop, shadcn) over the UI, scripts and tests
+bun run typecheck               # tsc --noEmit
+bun run test                    # bun test over the UI's pure logic
+zig build web-e2e               # Playwright against the built daemon
+```
+
+Rebuild with `zig build` after a UI change: the bundle is embedded in the
+executable, so a running daemon serves the old UI until it is rebuilt.
+Design tokens live in `src/web/ui/styles.css` (`bun run check:contrast`
+checks the palettes); the UI layout is described in `src/web/ui/AGENTS.md`.
 
 ## Using the CLI
 

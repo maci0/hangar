@@ -40,6 +40,8 @@ export type TopologyState = {
   readonly view: TopologyView;
   /** Called with the target of a clicked node; the caller closes this dialog and navigates. */
   readonly open: (target: TopologyTarget) => void;
+  /** Computes the layout again (Refresh, and Retry after a failure). */
+  readonly refresh: () => void;
 };
 
 const MESSAGE = "p-9 text-center text-field text-fg-dim";
@@ -132,7 +134,7 @@ const Body = ({ state }: { readonly state: TopologyState }) => {
       return (
         <div role="alert" class={MESSAGE}>
           {view.message}{" "}
-          <Button type="button" data-action="openTopology">
+          <Button type="button" data-action="openTopology" onClick={state.refresh}>
             Retry
           </Button>
         </div>
@@ -155,7 +157,7 @@ export type TopologyDialogProps = {
   readonly onClose: () => void;
 };
 
-/** Network Topology. app.js loads the layout engine, computes the layout and pushes the view. */
+/** Network Topology. The app loads the layout engine, computes the layout and pushes the view. */
 export const TopologyDialog = ({ state, onClose }: TopologyDialogProps) => (
   <Dialog id="topodlg" titleId="topo-title" class="w-250" onClose={onClose}>
     <DialogTitle id="topo-title">Network Topology</DialogTitle>
@@ -168,7 +170,7 @@ export const TopologyDialog = ({ state, onClose }: TopologyDialogProps) => (
       </div>
     </DialogBody>
     <DialogFooter>
-      <Button type="button" data-action="openTopology" title="Recompute layout">
+      <Button type="button" data-action="openTopology" onClick={state.refresh} title="Recompute layout">
         <Icon name="refresh" />
         Refresh
       </Button>

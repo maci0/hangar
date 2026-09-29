@@ -1,41 +1,120 @@
 # AGENTS.md: src/web/ui (Preact + Tailwind source)
 
 ## Purpose
-Typed source for the browser UI: Preact components, shadcn-style primitives, and the
-Tailwind v4 entry sheet. Bundled by `scripts/build-web.ts` into `src/web/dist/ui.js` and
-`ui.css` (gitignored), which `web_server.zig` embeds and serves as `/ui.js` and `/ui.css`.
-`../app.js` keeps the data, the fetches and the action dispatch, and `../app.css` the tokens and the page shells; everything drawn inside them is here: the page chrome, the VM list, the toolbar, every dialog, the host dashboard, the Summary, Settings and Console tabs, display-only mode and the migration bar.
+The whole browser UI as typed source: the page, the session logic that talks to the daemon,
+Preact components, shadcn-style primitives and the Tailwind v4 entry sheet. Bundled by
+`scripts/build-web.ts` into `src/web/dist/ui.js` and `ui.css` (gitignored), which
+`web_server.zig` embeds and serves as `/ui.js` and `/ui.css`. `../index.html` is only the
+`#app` mount and the two tags.
 
 ## Ownership
-- `main.tsx`: entry. Replaces legacy DOM with Preact components and registers the `hangarUi` bridge.
-- `components/ui/`: shadcn-style primitives (cva variants, `cn` merge): `button.tsx`, `textarea.tsx`, `menu.tsx` (`Menu` positions under an anchor and handles Arrow/Home/End; `MenuItem`; `MenuSeparator`), `dialog.tsx`, and the form controls `input.tsx` (takes `inputRef`, not `ref`: Preact binds `ref` on a function component to the component), `select.tsx` (native select, same chrome), `label.tsx` (`RequiredMark`, `LabelHint`), `field.tsx` (`Field` label over control, `FieldError` live region with an `error` or `warning` tone, `InputField` for a labelled input with `err_<id>` validation line, `invalidProps`, `focusFirstInvalid`). `Dialog` is a native `<dialog>` opened with `showModal()` on mount: Escape, backdrop click and `dlg.close()` all run the optional `guard` (may return a promise; false keeps it open), then the exit animation, then close; focus returns to the opener; `aria-labelledby` comes from `titleId`. The owner unmounts it in `onClose`. `DialogTitle`, `DialogBody` (the scrolling part), `DialogFooter`, `DialogForm` (Enter submits) and `DialogClose` (keeps `data-action="closeDlg"`) compose it; `useDialogClose()` closes the enclosing dialog from a child; `useDialogTask()` runs an async action with a `busy` flag and closes the dialog when it resolves true. Build a new dialog from these, never a bare `<dialog>`. `components.json`
-  at the repo root maps the shadcn CLI aliases here.
-- `components/`: feature components. `vm-list.tsx` renders the sidebar; `main.tsx` exposes `window.hangarUi.renderVmList`, which the legacy `renderList` in `app.js` calls with precomputed rows (folders, favorites, roving tab stop). Rows keep `data-action` attributes so the delegated handlers stay in `app.js`. `icon.tsx` draws a sprite symbol. `toolbar.tsx` renders the VM toolbar, the five action menus and the More popover into `#toolbar-root`; `main.tsx` exposes `hangarUi.setToolbar(patch)` (merged into the props, then redrawn) and `hangarUi.closeToolbarMenus(returnFocus)`. Open/closed state, focus handling, outside-click and positioning live in the component; `app.js` supplies data only (`hasVm`, `powered`, `powerBusy`, `sidebarExpanded`, `actionReason`). Rows keep `data-action`, `data-menu`, `data-vm-action` and the ids `powerbtn`, `powerMenu`, `snapshotMenu`, `devicesMenu`, `toolsMenu`, `dangerMenu`, plus the `open` class on a shown menu.
-- `components/dialogs/`: `confirm.tsx`, `prompt.tsx`, `about.tsx`, `shortcuts.tsx`, `log.tsx`, `prefs.tsx`, `new-vm.tsx`, `import.tsx`, `clone.tsx`, `snapshots.tsx`, `migrate.tsx`, `vnets.tsx`, `topology.tsx`, `catalog.tsx` and `host.tsx` (`Dialogs`, drawn into `#dialog-root`). `main.tsx` keeps which dialogs are open and exposes `hangarUi.confirm(message, {danger, okLabel})` and `hangarUi.prompt(label, initial, suggestions)` (promises; a newer call resolves the older one as cancelled), `openAbout`/`setAboutVersion`, `openShortcuts`, `openLog`/`setLog`, and `openPrefs({values, save})`, `openNewVm({create})`, `openImport({importVm})`, `openClone({vmName, clone})`, `openMigrate({vmName, start})` and `openSnapshots(state)` / `setSnapshots(patch)` (the state carries the VM meta, the list as `loading`, `failed` or `ready`, and the `take`, `revert`, `remove` callbacks). Network surfaces: `openVnets({networks, select?, save, confirmDiscard})` with `selectVnet(name)`; `openTopology({view, open})` with `setTopology(patch)`, where `view` is `loading`, `failed`, `empty` or `ready` (an SVG layout of edge paths and positioned nodes with a `target` for the clickable ones); `openCatalog({list, create})` with `setCatalog(patch)` (`list` is `loading`, `failed`, `empty` or `ready` entries carrying the emblem color and monogram); and `netKind(type)`, which app.js uses to color topology nodes. The VNet editor owns the working copy of the networks, validation and the dirty guard; the topology and catalog are stateless views. The action callbacks resolve whether the dialog may close. Data and fetches stay in `app.js`; the components own form state and field validation. Ids kept for tests and legacy code: `confirmdlg`, `confirmmsg`, `confirmOkBtn`, `confirmCancelBtn`, `promptdlg`, `promptInput`, `promptLabel`, `promptOptions`, `promptOkBtn`, `promptCancelBtn`, `aboutdlg`, `aboutVersion`, `shortcutsdlg`, `logdlg`, `log_vmname`, `logbody`, `prefsdlg`, `p_*`, `newdlg`, `n_*`, `importdlg`, `imp_*`, `clonedlg`, `clone_name`, `snapdlg`, `snapMeta`, `s_tag`, `snaplist`, `migratedlg`, `migrate_vmname`, `mig_host`, `mig_port`, `mig_uri`, `vnetdlg`, `vnet_sel`, `vn_*`, `topodlg`, `topoWrap`, `catalogdlg`, `catalogList`, and the `err_*` validation lines. Class markers kept for tests: `vnet-item` (`active` when selected), `vnet-type-badge`, `topo-svg`, `topo-node` (plus `vm`, `vnet`, `net`, `host`), `cat-card`, `cat-create`.
-- `panels.tsx`: the Summary and Settings bridge. `createPanelsBridge()` draws `SummaryView` (`welcome`, `dashboard`, `vm`) into `#summary-root` and the settings form or its no-VM state into `#settings-root`, and exposes `hangarUi.setSummary(view)`, `openSettings(request)`, `closeSettings()`, `saveSettings()`, `memText(mib)` and `statusLabel(status)`. It owns the dashboard sort column and the chosen settings category, and remounts the form (a fresh `key`) on every `openSettings`. `components/dashboard.tsx` (`Dashboard`: capacity gauges, stat tiles, attention list, sortable inventory; the sort header carries `data-action="sortInv"` for tests but the component handles the click and Enter/Space), `components/summary.tsx` (`Summary`: fact chips, hardware, guest, options, tags, folder and notes cards, warnings, log and screenshot buttons; `Lookup<T>` is a value that arrives after the draw: `loading`, `ready` or `unavailable`), `components/settings.tsx` (`SettingsForm`: nav, panels, Cancel and Save bar; `settingsControl.submit` lets `saveVm` and Ctrl+S submit it; `SettingsRequest` carries the VM, the slot counts and the `save`, `onDirty` and `onInvalid` callbacks), `components/vm-parts.tsx` (`StatusDot`, `OsBadge`, `TagChip`), `components/empty-state.tsx` (`EmptyState`) and `components/library-actions.tsx` (New VM, Import VM, Catalog). Ids and classes kept for tests: `.dash`, `.dash-head`, `.dash-card`, `.dash-attention`, `.cap-panel`, `.cap-row`, `.cap-val`, `.cap-over`, `.cap-fill` (`bg-danger` or `bg-accent`), `.inv`, `.inv-name`, `.vm-facts`, `.srow`, `#guestIpVal`, `#diskUsageVal`, `.settings-shell`, `.settings-nav-item`, `.settings-panel`, `.settings-form`, `.settings-runlock`, `.settings-actions`, `#savevmbtn`, `#e_<key>` and `#err_e_<key>` for every settings field.
-- `shell.tsx`: the page chrome bridge. `createShellBridge()` renders the connection banner (`#banner-root`), `SidebarHead` (`#sidebar-head-root`), `BulkBar` (`#bulk-root`), `VmHeader` (`#vmheader-root`) and `StatusBar` (`#statusbar-root`) from one `ShellState` and exposes `hangarUi.setShell(patch)`. `createOverlayBridge()` owns the toast list and the context menu in `#overlay-root` and exposes `showToast(request)`, `openContextMenu(request)` and `closeContextMenu(returnFocus)`. Both draw once at load, so the toast live region exists before any toast. `app.js` derives the state (`syncShell`) and this side only draws it. Components: `sidebar.tsx` (`SidebarHead`: logo, `#selectToggle` with `aria-pressed`, uncontrolled `#search` whose `filterList` action stays delegated, `#searchClear` only while it holds text; `BulkBar`: `#bulkBar` and `#bulkCount`, present only in select mode), `vm-header.tsx` (`#vmemblem`, `#vmname` as an `h2` under the page `h1` in `index.html`, `#tabBar` with `#tab-btn-<tab>`, roving tabindex and Arrow/Home/End through the tab's own click so `switchTab` and its unsaved-changes guard run), `status-bar.tsx` (`#statusbar`, `#statusmsg`, `#livebadge`, `#statusannounce`, `#connbanner` with its `dismissBanner` action), `toasts.tsx` (`#toast-container`; each toast owns its timer and exit animation; UNDO carries `data-toast-action="undo"`), `context-menu.tsx` (built on `Menu`, which also accepts a viewport point as anchor and clamps to the viewport) and `dialogs/palette.tsx` (`openPalette(commands)`, listed in `Dialogs`).
-- `console-bridge.tsx`: the Console tab bridge. `createConsoleBridge()` draws the console panel into `#console-root`, the display-only exit bar into `#displayonly-root` and the migration bar into `#mig_bar_container`, and exposes `hangarUi.initConsole(host)` (once; it creates the controllers), `setConsole({vm, actionReason})`, `startDisplay`, `stopDisplay`, `reconnectDisplay`, `displayConnected`, `startSerial(index)`, `stopSerial(clear)`, `reconnectSerial`, `disconnectSerial`, `clearSerial`, `exportSerial`, `enterDisplayOnly`, `exitDisplayOnly`, `startMigration(id, index, dest)`, `cancelMigration` and `ensureAsset`. Before `initConsole` every action is a no-op. Display-only mode adds the `displayonly` class to `body` (the `displayonly:` variant keys off it), asks for fullscreen (a refusal is fine), and reveals the exit bar for 3.5 s; the bar is otherwise invisible and ignores the pointer, and shows on keyboard focus and always on touch screens. The buttons carry `data-action`, not click handlers: `app.js` maps each action to the bridge. `components/console.tsx` (`DisplayView` = `#display` with `#displayBadge`, the `role="toolbar"` of three buttons and `#displayHint`; `SerialView` = `#serialpanel` with `#serialStatus`, `#serialterm`, the `#serialResize` separator and Clear, Export, Disconnect; `ConsoleHint` = `#consoleHint`), `components/display-only-bar.tsx` and `components/migration-bar.tsx` (`#mig_progress` as a `role="progressbar"`, `#mig_pct`, `#mig_cancel`) draw them. The serial box height is component state (60-600px, default 170); the terminal refits after each change.
-- `lib/console.ts`: pure logic with tests: `relayUrl`, `nextDelay`, `badgeLabel`, `isGpuRenderer`, `appendSerial` (256 KiB cap), `serialExportName`, `serialHeightForKey`/`clampSerialHeight`, `consoleNotice`. `lib/display.ts`: the display controller (noVNC or SPICE loaded on demand into the Preact-owned `#display`, presenter, reconnect with backoff to 15 s, native-display message); `lib/presenter.ts`: the WebGPU/WebGL copy of the client canvas (falls back to the client canvas); `lib/video.ts`: the H.264 overlay; `lib/serial.ts`: the xterm.js terminal and its relay socket (reconnect, manual disconnect per VM index, export); `lib/migration.ts`: the status poll (`parseMigrationPoll`, 500 ms, five failures tolerated) and start/cancel; `lib/assets.ts`: `ensureAsset` and `ensureStylesheet`; `lib/vendor.d.ts`: types of the globals the vendored bundles register (`noVNC`, `SpiceHtml5`, xterm's `Terminal`, `FitAddon`, `WebglAddon`). Controllers are plain state records plus small functions, publish a typed state after every change and touch no Preact node except through refs. `@webgpu/types` supplies the WebGPU declarations.
-- `lib/cn.ts`: class merge helper. `lib/format.ts`: memory (`memText`, `memGiB`, exact MiB in, binary units out), `fmtBytes`, `statusLabel`, `visibleTags`, `percentOf`. `lib/vm.ts`: the `Vm` record as `GET /api/vms` returns it (config flags as `"true"`/`"false"` strings), display capability, `vmWarnings`, `networkLabel`, `videoSummary`. `lib/dashboard.ts`: inventory stats, sorting, capacity `gauge`. `lib/settings.ts`: the settings field catalogue by section, `initialValues`, `settingsBody` (request payload and key order), `isDirty`, `validateSettings`, `firstError`, hardware lock rules. Each has a `*.test.ts` beside it; `lib/vm-fixture.ts` is the sample VM those tests share. `lib/network.ts`: network accent kinds (`nat`, `bridged`, `host_only`, `dim`, `accent`) with static class maps for dots, borders and SVG strokes and fills. `lib/vnet.ts`: the `Vnet` record as the daemon stores it, plus its validation and cleaning (limits mirror `src/vnet.zig`).
-- `styles.css`: Tailwind `theme` and `utilities` layers only (no preflight while `app.css`
-  owns resets). `@theme inline` exposes the `app.css` tokens as utilities (including `backdrop` and the `dialog` shadow). Type steps `text-caption` (11px), `text-field` (13px) and `text-title` (15px), the dialog blur and the dialog enter/exit keyframes are declared here; `empty-hint` styles the dimmed text of an empty field; `no-search-cancel` hides the browser's clear control in a search input; `text-heading` (17px) is the VM name; the toast and status-pulse animations are declared here. `grid-cols-catalog`, `grid-cols-summary`, `grid-cols-tiles`, `grid-cols-fields`, `grid-cols-settings` and `grid-cols-gauge` are the column utilities of the catalog, summary cards, dashboard tiles, settings fields, settings shell and capacity rows (the shadcn lint rejects arbitrary values); `shadow-card` maps the card shadow token. Custom breakpoints `compact` (1100px), `narrow` (900px, where the sidebar becomes an overlay) and `phone` (520px), the `displayonly` variant (body class for the full-screen console) and the `no-hover` variant (touch screens) are declared here. `bg-display` and `bg-serial` map the display and serial panel tokens. The `display-surface` utility styles the canvases the clients and the presenter append to `#display` (they are not Preact nodes), including the full-screen sizing; `xterm-host` sizes the terminal; `scrollbar-gutter-auto` drops the reserved scrollbar column in display-only mode.
+- `main.tsx`: entry, one call to `app/start.ts`.
+- `bridge.tsx`: `ui`, the one object from app code to the components. It merges the surface bridges
+  (`shell.tsx`, `panels.tsx`, `console-bridge.tsx`, the dialog store) and `ui.mount(handlers)` draws
+  the page. Components never import `app/`; the app never renders JSX. State goes down as props
+  (`ui.setShell`, `setToolbar`, `setSummary`, `setConsole`, `openX(request)`), and the callbacks a
+  surface needs travel in `UiHandlers` (bound once by `mount`) or inside the request that opens it.
+- `app/`: the session, one module per concern, no import cycles (lower layers first):
+  - `state.ts`: the `state` record (VM list, selection, active tab, select mode, status text, flags)
+    and `indexOfId`, `indexOfName`, `selectedVm`. The poll replaces `vms` wholesale, so any code that
+    resolves a VM after an `await` looks it up again by id (`indexOfId`, survives rename) or name; never
+    trust a frozen index. Multi-select keeps `checkedIds`; the migration controller follows its VM by id.
+  - `feedback.ts`: `syncShell` (derives the chrome state from `state` and pushes it), status text
+    (`setStatus` announces, `setStatusText` is passive, `setStatusLoading` pulses), `showToast`, `toastUndo`,
+    the load bar. `api.ts`: `apiPost` (adds `X-API-Key`, one write at a time, status and toast on failure).
+    `console-host.ts`: what the console controllers use from the session (`sendCad`, `consoleHost`).
+  - `view.ts`: pushes state to the surfaces: `renderList`, `renderDetails`, `showEmptyState`, `syncToolbar`,
+    `syncConsole`, `updateCommandState`, and the guest-IP, disk-usage and host lookups.
+  - `poll.ts`: `refresh` (poll, connection banner, follows a status change of the selected VM), `reloadList`,
+    `showTab`. `settings-tools.ts`: the CD/ISO and disk buttons of the Settings tab.
+    `session.ts`: `select`, `deselectVm`, `switchTab`, `editVm`, the Settings save, `confirmDiscard`.
+    `sidebar.ts`: sidebar overlay and collapse.
+  - `vm-actions.ts`: power, guest control, rename, export, screenshot. `library.ts`: create, import, clone,
+    delete with undo, favorites, folders, reorder, search, select mode, bulk and batch operations.
+    `dialogs.ts`: snapshots, log, preferences, about, catalog, virtual networks and topology.
+  - `menus.ts`: context menu, command palette, theme toggle. `keyboard.ts`: global shortcuts.
+    `handlers.ts`: builds `UiHandlers` (the only place that wires components to actions).
+    `start.ts`: theme and folder state, mount, first draw, key handlers, poll, SSE.
+  - Refresh loop: `refresh()` on load, every 5 s, on tab visibility and 120 ms after each `/api/events`
+    `change`; `#livebadge` follows the stream, the poll is the fallback. A network or 5xx failure shows
+    `#connbanner` (a 4xx does not). It stands still while a write, a Settings save, a reorder or a power
+    change is running.
+- `components/ui/`: shadcn-style primitives (cva variants, `cn` merge): `button.tsx`, `textarea.tsx`, `menu.tsx`
+  (`Menu` positions under an anchor and handles Arrow/Home/End; `MenuItem`; `MenuSeparator`), `dialog.tsx`, and
+  the form controls `input.tsx` (takes `inputRef`, not `ref`: Preact binds `ref` on a function component to the
+  component), `select.tsx`, `label.tsx`, `field.tsx` (`Field`, `FieldError`, `InputField` with its `err_<id>` line,
+  `invalidProps`, `focusFirstInvalid`). `Dialog` is a native `<dialog>` opened with `showModal()`: Escape, backdrop
+  click and `dlg.close()` all run the optional `guard` (may return a promise; false keeps it open), then the exit
+  animation, then close; focus returns to the opener. `DialogClose` (a `data-action="closeDlg"` test hook),
+  `useDialogClose()` and `useDialogTask()` (busy flag; closes when the task resolves true) compose it. Build a
+  dialog from these, never a bare `<dialog>`. `components.json` at the repo root maps the shadcn CLI aliases here.
+- `components/app-shell.tsx`: the page grid: skip link, banner, sidebar (`SidebarPane`), toolbar, VM header, the
+  three tab panels, status bar. Panels the other bridges draw are empty mounts (`#console-root`, `#summary-root`,
+  `#settings-root`, `#mig_bar_container`, `#overlay-root`, `#displayonly-root`, `#dialog-root`); Preact leaves
+  foreign children alone. The sidebar is `collapsed` (wide) or `overlayOpen` (below 900px) from `ShellState`.
+  `shell.tsx` holds `ShellState` and draws `AppShell` into `#app`; `createOverlayBridge` owns toasts and the context
+  menu. Tab panels hide with the `hidden` class from `header.activeTab`, and `displayonly:` utilities reshape the
+  page for display-only mode (a `displayonly` class on `body`).
+- `components/`: `vm-list.tsx` (rows, folders, favorites, roving tab stop; `vm-list-reorder.ts` is mouse and touch
+  drag), `sidebar.tsx`, `vm-header.tsx`, `status-bar.tsx`, `toolbar.tsx` (five action menus plus the More popover;
+  every entry is a typed `MenuAction` with a handler in `ToolbarHandlers.menu` and keeps `data-action=<name>` as a test
+  hook), `theme-toggle.tsx`, `toasts.tsx`, `context-menu.tsx`, `dashboard.tsx`, `summary.tsx`, `settings.tsx`,
+  `console.tsx`, `display-only-bar.tsx`, `migration-bar.tsx`, `empty-state.tsx`, `library-actions.tsx`, `vm-parts.tsx`,
+  `icon.tsx` (sprite symbol). `panels.tsx` draws the Summary (welcome, dashboard, VM) and the Settings form with
+  `PanelHandlers`. `console-bridge.tsx` draws the Console tab, display-only bar and migration bar and owns the
+  display, serial and migration controllers (`initConsole(host)` once, then `setConsole({vm, actionReason, sendCad})`).
+- `components/dialogs/`: `confirm`, `prompt`, `about`, `shortcuts`, `log`, `prefs`, `new-vm`, `import`, `clone`,
+  `snapshots`, `migrate`, `vnets`, `topology`, `catalog`, `palette` and `host.tsx` (`Dialogs`, drawn into `#dialog-root`).
+  `bridge.tsx` keeps which are open. Every action callback resolves whether the dialog may close; dialogs own their form
+  state and validation. `ui.confirm(message, {danger, okLabel})` and `ui.prompt(label, initial, suggestions)` return
+  promises (a newer call resolves the older one as cancelled). Dialogs are removed from the DOM when closed.
+- Buttons whose `data-action` stays: toolbar menu entries, `deselectVm`, `editVm`, `toggleSelectMode`, `bulkPower`
+  (with `data-on`), `bulkDelete`, `closeDlg`, `openTopology`, the `vnet*` editor buttons, `refreshLog`, `viewLog`,
+  `takeScreenshot`, the Settings tools (`resizeDisk`, `compactDisk`, `changeCd`, `ejectCd`, `disk2upload`,
+  `disk2download`), the console buttons (`enterDisplayOnly`, `reconnectDisplay`, `reconnectSerial`, `exitDisplayOnly`),
+  `cancelMigrate`, `openCatalog`, `sortInv` and `setSettingsCategory`. They exist for the e2e tests and are never read by the
+  app; every click is a direct handler.
+- `lib/`: pure logic, each with a `*.test.ts`: `format` (memory, bytes, labels), `vm` (the `Vm` record as `GET /api/vms`
+  returns it, config flags as `"true"`/`"false"` strings), `inventory` (`parseVmList`, `buildVmList`, status line,
+  uptime), `actions` (`actionAllowed`, `disabledReason`, `actionReason`), `folders`, `snapshots`, `topology` (elk input
+  graph and layout), `catalog`, `prefs`, `wire` (decoders for the small JSON documents; wrong-typed fields read as
+  absent), `api` (`API_KEY`, `errorText`, `responseError`), `os-brand`, `theme` (`system`/`light`/`dark`, class on
+  `<html>`, `localStorage` `hangar-theme`), `dashboard`, `settings` (field catalogue, `settingsBody` payload and key
+  order, validation), `vnet`, `network`, `console`, `migration`, `assets` (`ensureAsset`, `ensureStylesheet`),
+  `vendor.d.ts` (globals of the vendored bundles), `cn`. Display, serial, presenter and video controllers are plain state
+  records plus small functions that publish a typed state and touch no Preact node except through refs. Storage access
+  goes through promises so a blocked `localStorage` never breaks the page.
+- `styles.css`: the Tailwind entry and the single home of design tokens. The first `@theme static` block is the
+  dark palette (`--bg`, `--surface`, `--text`, `--accent`, `--danger`, shadows, `--backdrop` ...); `:root.light`
+  in `@layer base` overrides the same names; `bun run check:contrast` reads both. The second `@theme static` block
+  holds radii, fonts, breakpoints (`compact` 1100px, `narrow` 900px, `phone` 520px), animations, the type steps
+  `text-caption` (11px), `text-field` (13px), `text-title` (15px), `text-heading` (17px) and `--blur-dialog`.
+  `@theme inline` exposes tokens as colors and shadows (`bg-surface`, `text-fg-muted`, `shadow-card` ...). Preflight
+  is the reset, `@layer base` holds the body defaults, scrollbars and the reduced-motion rule, `@layer components`
+  the `.ico` sprite size. Custom utilities: `grid-cols-app*`, `grid-cols-vm-row*`, `grid-cols-catalog`, `-summary`, `-tiles`,
+  `-fields`, `-settings`, `-gauge` (the shadcn lint rejects arbitrary values), `scrollbar-quiet`, `scrollbar-gutter-auto`,
+  `display-surface` (canvases the vendored clients append to `#display`), `xterm-host`, `empty-hint`, `no-search-cancel`;
+  variants `displayonly` and `no-hover`. Class names are scanned from this folder only (`@source "./"`).
 
 ## Local Contracts
-- Tokens are declared once, in `app.css` `:root` and `:root.light`. `styles.css` maps them
-  and never redefines a value. No hex, px radius, or font stack in a component.
-- Ported components keep the legacy ids, classes, and `data-action` attributes so the
-  delegated click handler and the Playwright suites keep working unchanged.
-- Strict CSP (`script-src 'self'`): no inline handlers; actions go through `data-action`
-  until the surrounding surface is fully ported.
-- Toolchain is Bun only. `bun run lint` (oxlint strict preset, Rika anti-slop,
-  `@shadcn/lint`), `bun run typecheck`, and `bun run build:web` must all pass with no
-  disabled rules. oxlint is pinned to 1.57.0 because the Rika 0.8.1 preset names rules
-  that later oxlint versions dropped; move both together.
-- Function components and helpers are `const` arrow functions (the preset's `func-style`).
+- Tokens are written only in `styles.css`. No hex, px radius or font stack in a component (an OS brand color from
+  `lib/os-brand.ts` is data, not a token).
+- `cn` is `twMerge`: it reads the custom type steps (`text-caption`) as text colors and drops one of a pair. Where a type
+  step and a `text-fg-*` color must both apply, write the class string without `cn` (`vm-list.tsx` uses `clsx`).
+- Strict CSP (`script-src 'self'`): no inline handlers; every action is a direct handler prop or a listener added in code.
+- XSS: user strings reach the DOM only through Preact text and attribute nodes, which escape them. No `innerHTML`.
+- Daemon payloads: bodies stay form-encoded exactly as before (`settingsBody` key order; `/api/networks` is JSON);
+  power actions from the toolbar, batch and bulk use `/start` and `/stop`, never `/power`.
+- Toolchain is Bun only. `bun run lint` (oxlint strict preset, Rika anti-slop, `@shadcn/lint`), `bun run typecheck`,
+  `bun run build:web` and `bun run test` pass with no disabled rules. oxlint is pinned to 1.57.0 because the Rika 0.8.1
+  preset names rules that later oxlint versions dropped; move both together. Function components and helpers are `const`
+  arrow functions. Decode daemon JSON with explicit checks (`lib/wire.ts`, type guards), not casts.
 
 ## Work Guidance
-- Port one surface at a time: build the component, remove its legacy code and CSS in the
-  same change, and keep `zig build web-e2e` green.
+- New surface: build the component with its handlers as props, push its state through `ui`, wire the handler in
+  `app/handlers.ts` (or the request that opens it), add the e2e in the matching `tests/e2e/*.test.ts` in the same change.
+- New daemon call: use `apiPost` for writes so the gate, status text and error toast apply.
+- Pure logic goes in `lib/` with a test beside it.
 
 ## Verification
 `bun run lint && bun run typecheck && bun run test && zig build web-e2e`.

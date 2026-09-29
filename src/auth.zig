@@ -87,7 +87,6 @@ pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
     // UI must load (to prompt for the key) and liveness/capabilities carry no
     // secrets.
     if (std.mem.eql(u8, path, "/")) return true;
-    if (std.mem.eql(u8, path, "/app.js")) return true;
     if (std.mem.eql(u8, path, "/ui.js")) return true;
     if (std.mem.eql(u8, path, "/ui.css")) return true;
     if (std.mem.eql(u8, path, "/icons.svg")) return true;
@@ -98,7 +97,6 @@ pub fn isAuthExempt(method_get: bool, path: []const u8) bool {
     if (std.mem.eql(u8, path, "/xterm-fit.js")) return true;
     if (std.mem.eql(u8, path, "/xterm-webgl.js")) return true;
     if (std.mem.eql(u8, path, "/xterm.css")) return true;
-    if (std.mem.eql(u8, path, "/app.css")) return true;
     if (std.mem.startsWith(u8, path, "/favicon")) return true;
     if (std.mem.eql(u8, path, "/api/capabilities")) return true;
     if (std.mem.eql(u8, path, "/api/host")) return true;
@@ -236,7 +234,7 @@ test "auth: exposed mode removes data-read exemptions" {
     try std.testing.expect(!isAuthExempt(true, "/api/vms/0/log"));
     // static + health stay exempt even when exposed
     try std.testing.expect(isAuthExempt(true, "/"));
-    try std.testing.expect(isAuthExempt(true, "/app.js"));
+    try std.testing.expect(isAuthExempt(true, "/ui.js"));
     try std.testing.expect(isAuthExempt(true, "/api/health"));
 }
 

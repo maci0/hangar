@@ -6,6 +6,7 @@ const KEY_CAP = "rounded-xs border border-white/20 bg-white/15 px-1.25 py-px tex
 export type DisplayOnlyBarProps = {
   /** Shown for a few seconds after entering, so a first-time user finds the way out. */
   readonly revealed: boolean;
+  readonly onExit: () => void;
 };
 
 /**
@@ -13,7 +14,7 @@ export type DisplayOnlyBarProps = {
  * every click), and appears on keyboard focus, for a few seconds after entering, and always on touch
  * screens.
  */
-export const DisplayOnlyBar = ({ revealed }: DisplayOnlyBarProps) => (
+export const DisplayOnlyBar = ({ revealed, onExit }: DisplayOnlyBarProps) => (
   <div
     class={cn(
       "pointer-events-none fixed inset-x-0 top-0 z-10000 hidden items-center gap-3 bg-black/72 px-3 py-1 text-caption text-white/85 opacity-0 transition-opacity displayonly:flex focus-within:pointer-events-auto focus-within:opacity-100 no-hover:pointer-events-auto no-hover:opacity-100",
@@ -29,6 +30,7 @@ export const DisplayOnlyBar = ({ revealed }: DisplayOnlyBarProps) => (
       variant="ghost"
       class="ml-auto min-h-6 border-white/35 bg-white/12 px-2.5 py-0.5 font-semibold text-white hover:bg-white/22 hover:text-white focus-visible:outline-white"
       data-action="exitDisplayOnly"
+      onClick={onExit}
       aria-label="Exit display-only mode"
     >
       Exit

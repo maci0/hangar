@@ -44,7 +44,7 @@ export const ShortcutsDialog = ({ onClose }: ShortcutsDialogProps) => (
                 {keys.map((key, index) => (
                   <>
                     {index > 0 && " / "}
-                    <kbd>{key}</kbd>
+                    <kbd class="rounded-sm border border-border bg-surface-2 px-1.25 py-px font-mono text-caption leading-tight font-medium text-fg-muted">{key}</kbd>
                   </>
                 ))}
               </th>

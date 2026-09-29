@@ -1,9 +1,64 @@
-/* Tailwind v4 layers for the Preact UI. No preflight: the legacy sheet (app.css)
-   still owns resets until the migration finishes. Radius and font tokens are
-   declared here once and read by both sheets; color tokens stay in app.css
-   (:root / :root.light) and are exposed to utilities below, never redefined. */
+/* Tailwind v4 entry sheet: the design tokens, the resets (preflight) and every custom utility.
+   @theme is the one home of the tokens. The dark palette is the default; the light palette overrides
+   the same names under :root.light. `theme.ts` toggles that class on <html>. Utilities and components
+   read tokens through the @theme inline block below and never write a value of their own.
+   The sources scanned for class names are this folder only. */
+@layer theme, base, components, utilities;
 @import "tailwindcss/theme" layer(theme);
-@import "tailwindcss/utilities" layer(utilities);
+@import "tailwindcss/preflight" layer(base);
+@import "tailwindcss/utilities" layer(utilities) source(none);
+@source "./";
+
+/* Color and elevation tokens, dark palette. */
+@theme static {
+  --bg: #16191d;
+  --bg-alt: #1b1f24;
+  --surface: #1e2227;
+  --surface-2: #252a30;
+  --surface-3: #2d333a;
+  /* The recessed fill behind capacity bars, spec chips and disabled controls. */
+  --inset: rgba(255, 255, 255, 0.055);
+  --border: #798089;
+  --border-soft: #4b525b;
+  --border-hover: #8d95a0;
+  /* Three distinct steps: keep them ordered by emphasis and at least 4.5:1 on every surface. */
+  --text: #dde1e6;
+  --text-muted: #9aa1a9;
+  --text-dim: #8d949c;
+  --accent: #3e6f9e;
+  --accent-2: #8aa2bf;
+  --accent-3: #b0894e;
+  --accent-hover: #4675a3;
+  --accent-soft: rgba(77, 130, 184, 0.16);
+  --network-nat: #85aecd;
+  --network-bridged: #7eafa5;
+  --network-host-only: #c3a272;
+  --success: #5fb56d;
+  --pause: #c9a04a;
+  --warn: #cfa94f;
+  /* Fills keep --danger (white text on it); --danger-text is the text and edge tone, tuned for 4.5:1
+     on every dark surface. */
+  --danger: #b8493f;
+  --danger-text: #e07a6c;
+  --danger-soft: rgba(196, 85, 77, 0.12);
+  --display-bg: #0a0b0d;
+  --serial-bg: #101214;
+  --serial-fg: #86c89a;
+  --serial-text: #b7c5bd;
+  --serial-selection: rgba(77, 130, 184, 0.4);
+  --text-on-accent: #fff;
+  --text-on-danger: #fff;
+  --text-on-warn: #15130a;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 3px 10px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.5);
+  --backdrop: rgba(8, 9, 11, 0.62);
+  --backdrop-overlay: rgba(8, 9, 11, 0.45);
+  --transition: 120ms cubic-bezier(0.2, 0.6, 0.3, 1);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  --shadow-pop: 0 0 0 1px rgba(0, 0, 0, 0.28), 0 8px 24px rgba(0, 0, 0, 0.42);
+  --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 24px 64px rgba(0, 0, 0, 0.55);
+}
 
 @theme static {
   --radius-sm: 5px;
@@ -20,6 +75,13 @@
   /* Below narrow the sidebar becomes an overlay and the VM header stacks. */
   --breakpoint-narrow: 900px;
   --animate-menu-in: menu-in 0.09s ease;
+  --animate-panel-in: panel-in 0.08s ease;
+  --animate-loadbar: loadbar-slide 0.95s ease-in-out infinite;
+  --animate-dot-breathe: dot-breathe 2.6s ease-in-out infinite;
+  /* Halo around a state dot. */
+  --shadow-dot-success: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
+  --shadow-dot-pause: 0 0 0 3px color-mix(in srgb, var(--pause) 16%, transparent);
+  --shadow-dot-warn: 0 0 0 3px color-mix(in srgb, var(--warn) 16%, transparent);
   --animate-dialog-in: dialog-in 0.12s ease;
   --animate-dialog-out: dialog-out 0.1s ease forwards;
   --animate-toast-in: toast-in 0.14s cubic-bezier(0.2, 0.6, 0.3, 1);
@@ -32,6 +94,46 @@
   --text-title: 15px;
   --text-heading: 17px;
   --blur-dialog: 7px;
+
+  @keyframes menu-in {
+    from {
+      opacity: 0;
+      transform: translateY(-2px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes panel-in {
+    from {
+      opacity: 0.4;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes loadbar-slide {
+    0% {
+      margin-left: -35%;
+    }
+    60%,
+    100% {
+      margin-left: 100%;
+    }
+  }
+
+  @keyframes dot-breathe {
+    0%,
+    100% {
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 22%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--success) 6%, transparent);
+    }
+  }
 
   @keyframes dialog-in {
     from {
@@ -77,6 +179,116 @@
     50% {
       opacity: 0.45;
     }
+  }
+}
+
+/* Light palette: same names, overriding the dark defaults above. */
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  :root.light {
+    color-scheme: light;
+    --bg: #f3f4f6;
+    --bg-alt: #eceef1;
+    --surface: #ffffff;
+    --surface-2: #f6f7f9;
+    --surface-3: #eaedf0;
+    --inset: rgba(30, 36, 43, 0.06);
+    --border: #828892;
+    --border-soft: #c2c7cd;
+    --border-hover: #767d85;
+    --text: #22272d;
+    --text-muted: #555c64;
+    --text-dim: #646c75;
+    --accent: #2a6496;
+    --accent-2: #4a6a86;
+    --accent-3: #8a5f1a;
+    --accent-hover: #347ab4;
+    --accent-soft: rgba(42, 100, 150, 0.1);
+    --network-nat: #4a7dad;
+    --network-bridged: #3d8a7b;
+    --network-host-only: #a5701e;
+    --success: #1c7337;
+    --pause: #8a5f1a;
+    --warn: #7f6410;
+    --danger: #b03f38;
+    --danger-text: #b03f38;
+    --danger-soft: rgba(176, 63, 56, 0.08);
+    --serial-bg: #14171a;
+    --serial-fg: #8ed0a2;
+    --text-on-warn: #1a1505;
+    --shadow-sm: 0 1px 2px rgba(25, 30, 36, 0.1);
+    --shadow-md: 0 3px 10px rgba(25, 30, 36, 0.14);
+    --shadow-lg: 0 10px 28px rgba(25, 30, 36, 0.2);
+    --backdrop: rgba(30, 35, 42, 0.4);
+    --backdrop-overlay: rgba(30, 35, 42, 0.22);
+    --shadow-card: 0 1px 2px rgba(25, 30, 36, 0.05);
+    --shadow-pop: 0 0 0 1px rgba(25, 30, 36, 0.06), 0 8px 24px rgba(25, 30, 36, 0.14);
+    --shadow-modal: 0 0 0 1px rgba(25, 30, 36, 0.08), 0 24px 64px rgba(25, 30, 36, 0.24);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+
+  /* Chromium scrollbars: slim, quiet, rounded. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-hover);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Sprite icons: 14px unless a size utility says otherwise. */
+@layer components {
+  .ico {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    display: inline-block;
+    vertical-align: -2px;
   }
 }
 
@@ -199,8 +411,8 @@
   --color-danger-text: var(--danger-text);
   --shadow-menu: var(--shadow-pop);
   --shadow-dialog: var(--shadow-modal);
-  --shadow-card: var(--shadow-card);
   --color-backdrop: var(--backdrop);
+  --color-backdrop-overlay: var(--backdrop-overlay);
   --color-on-accent: var(--text-on-accent);
   --color-on-danger: var(--text-on-danger);
   --color-on-warn: var(--text-on-warn);
@@ -234,4 +446,38 @@
 /* Capacity gauge row: label, bar, value, overcommit note. */
 @utility grid-cols-gauge {
   grid-template-columns: 7.5rem 1fr 8.125rem 6.875rem;
+}
+
+/* Page grid: sidebar column and content, or the content alone on narrow screens. */
+@utility grid-cols-app {
+  grid-template-columns: 260px minmax(0, 1fr);
+}
+
+@utility grid-cols-app-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+@utility grid-cols-app-narrow {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Banner row, main row, status bar row. */
+@utility grid-rows-app {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+/* Sidebar row: state dot, name, meta; select mode adds the checkbox column. */
+@utility grid-cols-vm-row {
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+}
+
+@utility grid-cols-vm-row-select {
+  grid-template-columns: auto 8px minmax(0, 1fr) auto;
+}
+
+/* Quiet scrollbar for the scrolling panes. */
+@utility scrollbar-quiet {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }

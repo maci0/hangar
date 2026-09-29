@@ -59,12 +59,11 @@ Uniform `POST /api/vms/<id>/<action>` routes dispatch via a comptime
 ## Web UI Layout
 
 Flat slate design system (dark default + light, token-driven; see
-`src/web/app.css`) with WS-style sidebar + toolbar + tabbed workspace
+`src/web/ui/styles.css`) with WS-style sidebar + toolbar + tabbed workspace
 (Console / Summary / Settings, the embedded display and xterm.js serial
 terminal live inside the Console tab). Reactivity: `GET /api/events` (SSE)
 pushes change notifications; the 5-second `GET /api/vms` poll remains as
-fallback. The host dashboard, Summary and Settings tabs are Preact
-components. Vendored, embedded frontend libs: noVNC, spice-html5, elkjs
+fallback. The whole page is Preact components bundled by Bun (`src/web/ui`). Vendored, embedded frontend libs: noVNC, spice-html5, elkjs
 (vnet topology), @xterm/xterm (+fit/webgl addons). Guest display chain: virtio-vga-gl → virgl
 → egl-headless host render → VNC/SPICE scanout stream → WebGPU/WebGL2
 presenter (see docs/VIDEO-PIPELINE.md for the encoded-video path (phases 1-3
@@ -72,7 +71,7 @@ shipped, polish ongoing)).
 
 ## Keyboard Shortcuts
 
-Handled in the web UI (`src/web/app.js`); press `?` in the app for the full list.
+Handled in the web UI (`src/web/ui/app/keyboard.ts`); press `?` in the app for the full list.
 
 | Key | Action |
 |-----|--------|
@@ -177,7 +176,7 @@ Hand-rolled JSON parser (no `std.json`, linker compatibility).
 ## Visual Verification
 
 ```bash
-bun tests/visual/screenshots.mjs   # Playwright screenshots of the web UI
+bun tests/visual/screenshots.ts   # Playwright screenshots of the web UI
 ```
 
 Drives a headless browser against a `hangar-web` instance on a temp port and a

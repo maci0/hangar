@@ -12,7 +12,7 @@ const FILL_BY_TONE: Readonly<Record<MigrationTone, string>> = {
 const PERCENT_MAX = 100;
 
 /** Progress of a running migration, with its status line and Cancel. Renders hidden while none runs. */
-export const MigrationBar = ({ view }: { readonly view: MigrationView }) => {
+export const MigrationBar = ({ view, onCancel }: { readonly view: MigrationView; readonly onCancel: () => void }) => {
   const active = view.kind === "active";
   const percent = active ? view.percent : null;
   return (
@@ -34,7 +34,7 @@ export const MigrationBar = ({ view }: { readonly view: MigrationView }) => {
       <span id="mig_pct" role="status" aria-live="polite" class="text-xs text-fg-muted">
         {active ? view.label : ""}
       </span>
-      <Button id="mig_cancel" variant="danger" class="ml-3 px-2.5 py-0.75 text-caption" data-action="cancelMigrate">
+      <Button id="mig_cancel" variant="danger" class="ml-3 px-2.5 py-0.75 text-caption" data-action="cancelMigrate" onClick={onCancel}>
         Cancel
       </Button>
     </div>

@@ -22,6 +22,8 @@ export type SummaryProps = {
   readonly guestIp: Lookup<string>;
   readonly diskUsage: Lookup<DiskUsage>;
   readonly slots: HardwareSlots;
+  readonly onViewLog: () => void;
+  readonly onScreenshot: () => void;
 };
 
 const BADGE_TONE: Readonly<Record<VmStatus, string>> = {
@@ -241,8 +243,14 @@ export const Summary = (props: SummaryProps) => {
       <Cards vm={vm} folder={folder} hardware={hardwareRows(props)} />
       {warnings.length > 0 && <Warnings warnings={warnings} />}
       <div class="mt-4 flex gap-2">
-        <Button data-action="viewLog">View QEMU Log</Button>
-        {vm.status === "running" && <Button data-action="takeScreenshot">Screenshot</Button>}
+        <Button data-action="viewLog" onClick={props.onViewLog}>
+          View QEMU Log
+        </Button>
+        {vm.status === "running" && (
+          <Button data-action="takeScreenshot" onClick={props.onScreenshot}>
+            Screenshot
+          </Button>
+        )}
       </div>
     </>
   );

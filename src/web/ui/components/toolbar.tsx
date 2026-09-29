@@ -3,14 +3,46 @@ import { Icon } from "@/components/icon";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Menu, MenuItem, menuIconClass, MenuSeparator } from "@/components/ui/menu";
+import type { VmAction } from "@/lib/actions";
 import { cn } from "@/lib/cn";
 
 type MenuId = "powerMenu" | "snapshotMenu" | "devicesMenu" | "toolsMenu" | "dangerMenu";
 
+/** Every entry of the five menus. `data-action` carries the name as a hook for tests; the click runs the handler. */
+export type MenuAction =
+  | "powerToggle"
+  | "shutdownGuest"
+  | "suspendGuest"
+  | "pauseGuest"
+  | "resumeGuest"
+  | "resetGuest"
+  | "takeSnapshot"
+  | "openSnapshots"
+  | "changeCd"
+  | "ejectCd"
+  | "sendCad"
+  | "reconnectDisplay"
+  | "enterDisplayOnly"
+  | "manualDisconnectSerial"
+  | "renameGuest"
+  | "moveToFolder"
+  | "cloneGuest"
+  | "migrateGuest"
+  | "exportOvf"
+  | "importGuest"
+  | "openCatalog"
+  | "openVnets"
+  | "openPrefs"
+  | "showShortcutsModal"
+  | "openAbout"
+  | "batchStart"
+  | "batchStop"
+  | "deleteVm";
+
 type Item = {
-  readonly action: string;
-  /** Key into the legacy availability rules (`actionAllowed`); absent means always enabled. */
-  readonly vmAction?: string;
+  readonly action: MenuAction;
+  /** Availability rule (`actionAllowed`); absent means always enabled. */
+  readonly vmAction?: VmAction;
   readonly icon: string;
   readonly label: string;
   readonly danger?: boolean;
@@ -110,16 +142,27 @@ export type ToolbarProps = {
   readonly hasVm: boolean;
   /** The selected VM is running or paused, so the power button turns it off. */
   readonly powered: boolean;
-  /** A power request is in flight. */
-  readonly powerBusy: boolean;
   /** Why `vmAction` is unavailable for the selected VM, or null when it is available. */
-  readonly actionReason: (vmAction: string) => string | null;
+  readonly actionReason: (vmAction: VmAction) => string | null;
+  /** A batch power run is going: its menu entry is off and reads `...`. */
+  readonly batchBusy: "batchStart" | "batchStop" | null;
+  readonly handlers: ToolbarHandlers;
+};
+
+export type ToolbarHandlers = {
+  readonly toggleSidebar: () => void;
+  readonly deselectVm: () => void;
+  readonly powerToggle: () => void;
+  readonly newVm: () => void;
+  readonly editVm: () => void;
+  readonly cycleTheme: () => void;
+  readonly menu: Readonly<Record<MenuAction, () => void>>;
 };
 
 type OpenKind = "more" | MenuId;
 type Open = { readonly kind: OpenKind; readonly anchor: HTMLElement } | null;
 
-/** Lets code outside the tree (the legacy Escape handler, VM selection) close the menus. */
+/** Lets code outside the tree (the Escape handler, VM selection) close the menus. */
 export const toolbarControl = {
   /** Closes any open menu; returns whether one was open. */
   close: (_returnFocus: boolean): boolean => false,
@@ -199,7 +242,7 @@ const useMenuState = (): MenuState => {
   };
 };
 
-const ToolbarButtons = ({ sidebarExpanded, hasVm, powered, powerBusy, actionReason }: ToolbarProps) => {
+const ToolbarButtons = ({ sidebarExpanded, hasVm, powered, actionReason, handlers }: ToolbarProps) => {
   let powerLabel = "Power On";
   let powerTitle = "Power on selected VM";
   if (!hasVm) {
@@ -214,14 +257,14 @@ const ToolbarButtons = ({ sidebarExpanded, hasVm, powered, powerBusy, actionReas
       <Button
         variant="ghost"
         class={cn("hamburger border-0 px-2 py-0.75 pointer-coarse:min-w-11", PHONE_BUTTON)}
-        data-action="toggleSidebar"
+        onClick={handlers.toggleSidebar}
         aria-label={sidebarExpanded ? "Collapse VM Library" : "Expand VM Library"}
         aria-controls="sidebar"
         aria-expanded={sidebarExpanded}
       >
         <Icon name="menu" class={WIDE_ICON} />
       </Button>
-      <Button class={PHONE_BUTTON} data-action="deselectVm" title="Deselect VM (Ctrl+W)">
+      <Button class={PHONE_BUTTON} data-action="deselectVm" onClick={handlers.deselectVm} title="Deselect VM (Ctrl+W)">
         <Icon name="home" class={ICON} />
         Home
       </Button>
@@ -229,15 +272,14 @@ const ToolbarButtons = ({ sidebarExpanded, hasVm, powered, powerBusy, actionReas
         id="powerbtn"
         variant={powered ? "danger" : "primary"}
         class={PHONE_BUTTON}
-        data-action="powerToggle"
+        onClick={handlers.powerToggle}
         title={powerTitle}
-        disabled={!hasVm || powerBusy}
-        aria-busy={powerBusy ? "true" : undefined}
+        disabled={!hasVm}
       >
         <Icon name="power" class={ICON} />
-        {powerBusy ? "..." : powerLabel}
+        {powerLabel}
       </Button>
-      <Button variant="primary" class={cn("new-vm-btn", PHONE_BUTTON)} data-action="newVm" title="New VM">
+      <Button variant="primary" class={cn("new-vm-btn", PHONE_BUTTON)} onClick={handlers.newVm} title="New VM">
         <Icon name="plus" class={ICON} />
         New VM
       </Button>
@@ -245,6 +287,7 @@ const ToolbarButtons = ({ sidebarExpanded, hasVm, powered, powerBusy, actionReas
       <Button
         class={PHONE_BUTTON}
         data-action="editVm"
+        onClick={handlers.editVm}
         data-vm-action="settings"
         title={settingsReason ?? "Settings"}
         disabled={settingsReason !== null}
@@ -307,10 +350,12 @@ const MorePopover = ({ hasVm, state }: { readonly hasVm: boolean; readonly state
   );
 };
 
-const ActionMenu = ({ def, state, actionReason }: {
+const ActionMenu = ({ def, state, actionReason, batchBusy, handlers }: {
   readonly def: MenuDef;
   readonly state: MenuState;
   readonly actionReason: ToolbarProps["actionReason"];
+  readonly batchBusy: ToolbarProps["batchBusy"];
+  readonly handlers: ToolbarHandlers["menu"];
 }) => {
   const shown = state.isOpen(def.id);
   return (
@@ -326,6 +371,7 @@ const ActionMenu = ({ def, state, actionReason }: {
         if (entry === "separator") {
           return <MenuSeparator key={`sep-${def.id}-${index}`} />;
         }
+        const running = batchBusy === entry.action;
         const reason = entry.vmAction === undefined ? null : actionReason(entry.vmAction);
         return (
           <MenuItem
@@ -333,12 +379,13 @@ const ActionMenu = ({ def, state, actionReason }: {
             variant={variantOf(entry.danger)}
             data-action={entry.action}
             data-vm-action={entry.vmAction}
-            disabled={reason !== null}
-            aria-disabled={reason !== null}
+            disabled={reason !== null || running}
+            aria-disabled={reason !== null || running}
             title={reason ?? undefined}
+            onClick={handlers[entry.action]}
           >
             <Icon name={entry.icon} class={menuIconClass(entry.danger === true)} />
-            {entry.label}
+            {running ? "..." : entry.label}
           </MenuItem>
         );
       })}
@@ -357,7 +404,7 @@ export const Toolbar = (props: ToolbarProps) => {
     >
       <ToolbarButtons {...props} />
       <MenuTriggers hasVm={props.hasVm} state={state} />
-      <ThemeToggle />
+      <ThemeToggle onCycle={props.handlers.cycleTheme} />
       <Button
         class={cn("toolbar-more hidden max-compact:inline-flex", PHONE_BUTTON)}
         aria-label="More actions"
@@ -369,7 +416,14 @@ export const Toolbar = (props: ToolbarProps) => {
       </Button>
       <MorePopover hasVm={props.hasVm} state={state} />
       {MENUS.map((def) => (
-        <ActionMenu key={def.id} def={def} state={state} actionReason={props.actionReason} />
+        <ActionMenu
+          key={def.id}
+          def={def}
+          state={state}
+          actionReason={props.actionReason}
+          batchBusy={props.batchBusy}
+          handlers={props.handlers.menu}
+        />
       ))}
     </div>
   );

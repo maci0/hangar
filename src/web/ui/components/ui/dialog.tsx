@@ -46,8 +46,8 @@ type Guard = () => boolean | Promise<boolean>;
 /**
  * Returns `close()`: consult the guard, play the exit animation, then close the element.
  * Overlapping calls are ignored, so Escape during a pending guard prompt does not stack prompts.
- * It also replaces `dlg.close`, so legacy callers (the `closeDlg` action, the Escape sweep in
- * app.js) get the same guard and animation.
+ * It also replaces `dlg.close`, so callers that hold the element (the Escape sweep, the topology's
+ * jump to a VM) get the same guard and animation.
  */
 const useGuardedClose = (ref: RefObject<HTMLDialogElement>, guard: Guard | undefined): (() => void) => {
   const busy = useRef(false);
@@ -163,10 +163,21 @@ export const Dialog = ({ id, titleId, class: className, guard, onClose, children
   );
 };
 
-/** Button that closes its dialog. Keeps `data-action="closeDlg"` so the delegated handler in app.js also reaches it. */
-export const DialogClose = (props: ButtonProps) => {
-  const { id } = useDialogHandle();
-  return <Button type="button" data-action="closeDlg" data-dialog={id} {...props} />;
+/** Button that closes its dialog. `data-action="closeDlg"` is a hook for tests. */
+export const DialogClose = ({ onClick, ...props }: ButtonProps) => {
+  const { id, close } = useDialogHandle();
+  return (
+    <Button
+      type="button"
+      data-action="closeDlg"
+      data-dialog={id}
+      {...props}
+      onClick={(event) => {
+        onClick?.call(event.currentTarget, event);
+        close();
+      }}
+    />
+  );
 };
 
 export type DialogTitleProps = ComponentProps<"h2">;

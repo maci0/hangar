@@ -214,7 +214,7 @@ export type SnapshotsDialogProps = {
   readonly onClose: () => void;
 };
 
-/** Snapshot Manager. app.js pushes the list and VM state; actions call back into it. */
+/** Snapshot Manager. The app pushes the list and VM state; actions call back into it. */
 export const SnapshotsDialog = ({ state, onClose }: SnapshotsDialogProps) => (
   <Dialog id="snapdlg" titleId="snap-title" onClose={onClose}>
     <DialogTitle id="snap-title">Snapshot Manager</DialogTitle>

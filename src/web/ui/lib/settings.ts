@@ -15,7 +15,7 @@ export type Control =
   | { readonly kind: "select"; readonly options: ReadonlyArray<Option> }
   | { readonly kind: "textarea"; readonly placeholder: string };
 
-/** Buttons drawn under a field. Their `data-action` handlers live in `app.js`. */
+/** Buttons drawn under a field; `SettingsTools` supplies their handlers. */
 export type FieldTools = "media" | "disk" | "disk2";
 
 export type SettingField = {

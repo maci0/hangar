@@ -28,19 +28,37 @@ const TOOL_BUTTON = cn(
   ON_DISPLAY_BUTTON,
 );
 
+/** What the display buttons do. */
+export type DisplayActions = {
+  readonly enterDisplayOnly: () => void;
+  readonly reconnect: () => void;
+  readonly sendCad: () => void;
+};
+
+/** What the serial panel buttons do. */
+export type SerialActions = {
+  readonly reconnect: () => void;
+  readonly clear: () => void;
+  readonly exportLog: () => void;
+  readonly disconnect: () => void;
+};
+
 type DisplayToolProps = {
+  /** Test hook (`data-action`); the click runs `onClick`. */
   readonly action: string;
+  readonly onClick: () => void;
   readonly icon: string;
   readonly title: string;
   /** Why the button is off, or null when it works. */
   readonly reason: string | null;
 };
 
-const DisplayTool = ({ action, icon, title, reason }: DisplayToolProps) => (
+const DisplayTool = ({ action, onClick, icon, title, reason }: DisplayToolProps) => (
   <button
     type="button"
     class={TOOL_BUTTON}
     data-action={action}
+    onClick={onClick}
     title={reason ?? title}
     aria-label={title}
     disabled={reason !== null}
@@ -50,7 +68,7 @@ const DisplayTool = ({ action, icon, title, reason }: DisplayToolProps) => (
   </button>
 );
 
-const HintContent = ({ hint }: { readonly hint: DisplayHint }) => {
+const HintContent = ({ hint, onRetry }: { readonly hint: DisplayHint; readonly onRetry: () => void }) => {
   if (hint.kind === "loading") {
     return <span class="text-xs text-white/70">Loading {hint.client} client…</span>;
   }
@@ -58,7 +76,7 @@ const HintContent = ({ hint }: { readonly hint: DisplayHint }) => {
     return (
       <>
         <strong class="font-semibold">{hint.client} client failed to load.</strong>
-        <Button data-action="reconnectDisplay" class={ON_DISPLAY_BUTTON}>
+        <Button data-action="reconnectDisplay" onClick={onRetry} class={ON_DISPLAY_BUTTON}>
           Retry
         </Button>
       </>
@@ -82,12 +100,13 @@ export type DisplayViewProps = {
   /** Why the display buttons are off, or null. */
   readonly displayReason: string | null;
   readonly cadReason: string | null;
+  readonly actions: DisplayActions;
   /** A stable callback: the controller mounts the clients into this element. */
   readonly elementRef: Ref<HTMLDivElement>;
 };
 
 /** `#display`: the box the noVNC and SPICE clients paint into, with its badge, buttons and message. */
-export const DisplayView = ({ state, displayReason, cadReason, elementRef }: DisplayViewProps) => {
+export const DisplayView = ({ state, displayReason, cadReason, actions, elementRef }: DisplayViewProps) => {
   const { hint } = state;
   return (
     <div
@@ -116,9 +135,9 @@ export const DisplayView = ({ state, displayReason, cadReason, elementRef }: Dis
         {state.badge}
       </div>
       <div role="toolbar" aria-label="Display controls" class="absolute top-2 left-2 z-4 flex gap-1 displayonly:top-12">
-        <DisplayTool action="enterDisplayOnly" icon="maximize" title={DISPLAY_ONLY_TITLE} reason={displayReason} />
-        <DisplayTool action="reconnectDisplay" icon="refresh" title={RECONNECT_TITLE} reason={displayReason} />
-        <DisplayTool action="sendCad" icon="keyboard" title={CAD_TITLE} reason={cadReason} />
+        <DisplayTool action="enterDisplayOnly" onClick={actions.enterDisplayOnly} icon="maximize" title={DISPLAY_ONLY_TITLE} reason={displayReason} />
+        <DisplayTool action="reconnectDisplay" onClick={actions.reconnect} icon="refresh" title={RECONNECT_TITLE} reason={displayReason} />
+        <DisplayTool action="sendCad" onClick={actions.sendCad} icon="keyboard" title={CAD_TITLE} reason={cadReason} />
       </div>
       {state.loading && (
         <div
@@ -136,7 +155,7 @@ export const DisplayView = ({ state, displayReason, cadReason, elementRef }: Dis
           (hint.kind === "failed" || hint.kind === "native") && "bg-black/25",
         )}
       >
-        <HintContent hint={hint} />
+        <HintContent hint={hint} onRetry={actions.reconnect} />
       </div>
     </div>
   );
@@ -147,6 +166,7 @@ export type SerialViewProps = {
   /** A stable callback: the controller opens the terminal in this element. */
   readonly terminalRef: Ref<HTMLDivElement>;
   readonly onResized: () => void;
+  readonly actions: SerialActions;
 };
 
 type Drag = { readonly startY: number; readonly startHeight: number };
@@ -244,7 +264,7 @@ const SerialResizeHandle = ({ height, setHeight, begin }: ResizeHandleProps) => 
   />
 );
 
-const SerialStatusLine = ({ status }: { readonly status: SerialState["status"] }) => (
+const SerialStatusLine = ({ status, onRetry }: { readonly status: SerialState["status"]; readonly onRetry: () => void }) => (
   <div
     id="serialStatus"
     role="status"
@@ -255,7 +275,7 @@ const SerialStatusLine = ({ status }: { readonly status: SerialState["status"] }
     {status === "failed" && (
       <>
         Serial terminal failed to load.
-        <Button data-action="reconnectSerial" class="ml-1.5 min-h-0 px-2 py-0.5">
+        <Button data-action="reconnectSerial" onClick={onRetry} class="ml-1.5 min-h-0 px-2 py-0.5">
           Retry
         </Button>
       </>
@@ -264,7 +284,7 @@ const SerialStatusLine = ({ status }: { readonly status: SerialState["status"] }
 );
 
 /** `#serialpanel`: the xterm.js terminal with its status line, resize handle and buttons. */
-export const SerialView = ({ state, terminalRef, onResized }: SerialViewProps) => {
+export const SerialView = ({ state, terminalRef, onResized, actions }: SerialViewProps) => {
   const { height, setHeight, begin } = useSerialHeight(onResized);
   return (
     <div
@@ -275,7 +295,7 @@ export const SerialView = ({ state, terminalRef, onResized }: SerialViewProps) =
         !state.visible && "hidden",
       )}
     >
-      <SerialStatusLine status={state.status} />
+      <SerialStatusLine status={state.status} onRetry={actions.reconnect} />
       <div
         id="serialterm"
         ref={terminalRef}
@@ -286,14 +306,14 @@ export const SerialView = ({ state, terminalRef, onResized }: SerialViewProps) =
       />
       <SerialResizeHandle height={height} setHeight={setHeight} begin={begin} />
       <div class="flex gap-1.25 border-t border-border-soft px-2.5 py-1.5">
-        <Button data-action="clearSerial">
+        <Button onClick={actions.clear}>
           Clear
         </Button>
-        <Button data-action="exportSerial">
+        <Button onClick={actions.exportLog}>
           Export
         </Button>
         <span class="flex-1" />
-        <Button data-action="manualDisconnectSerial">
+        <Button onClick={actions.disconnect}>
           Disconnect
         </Button>
       </div>

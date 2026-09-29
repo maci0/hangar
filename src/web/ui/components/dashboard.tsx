@@ -1,4 +1,4 @@
-import { LibraryActions } from "@/components/library-actions";
+import { LibraryActions, type LibraryHandlers } from "@/components/library-actions";
 import { cn } from "@/lib/cn";
 import {
   COLUMNS,
@@ -22,6 +22,9 @@ export type DashboardProps = {
   readonly host: HostInfo;
   readonly sort: SortState;
   readonly onSort: (col: SortColumn) => void;
+  /** Opens the VM at this list index. */
+  readonly onSelect: (index: number) => void;
+  readonly library: LibraryHandlers;
 };
 
 type Tone = "running" | "paused" | "suspended";
@@ -115,12 +118,18 @@ const SortHeader = ({ col, label, sort, onSort }: { readonly col: SortColumn; re
 
 const CELL = "px-3 py-1.25 align-middle whitespace-nowrap";
 
-const InventoryRow = ({ index, vm, brand }: DashRow) => (
+const InventoryRow = ({ index, vm, brand, onSelect }: DashRow & Pick<DashboardProps, "onSelect">) => (
   <tr
     class={cn("cursor-pointer border-t border-border-soft transition-colors first:border-t-0 hover:bg-accent-soft", ROW_FOCUS)}
-    data-action="select"
     data-vm-index={index}
     tabIndex={0}
+    onClick={() => onSelect(index)}
+    onKeyDown={(event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        onSelect(index);
+      }
+    }}
   >
     <td class={cn(CELL, "inv-name font-semibold text-fg")}>{vm.name}</td>
     <td class={cn(CELL, "text-fg")}>
@@ -145,7 +154,7 @@ const InventoryRow = ({ index, vm, brand }: DashRow) => (
   </tr>
 );
 
-const Inventory = ({ rows, sort, onSort }: Pick<DashboardProps, "rows" | "sort" | "onSort">) => (
+const Inventory = ({ rows, sort, onSort, onSelect }: Pick<DashboardProps, "rows" | "sort" | "onSort" | "onSelect">) => (
   <div class="inv-wrap mt-3 overflow-x-auto rounded-md border border-border-soft bg-surface shadow-card">
     <table class="inv w-full border-collapse text-field">
       <thead>
@@ -157,7 +166,7 @@ const Inventory = ({ rows, sort, onSort }: Pick<DashboardProps, "rows" | "sort" 
       </thead>
       <tbody>
         {sortRows(rows, sort).map((row) => (
-          <InventoryRow key={row.vm.id} {...row} />
+          <InventoryRow key={row.vm.id} {...row} onSelect={onSelect} />
         ))}
       </tbody>
     </table>
@@ -194,7 +203,7 @@ const Attention = ({ names }: { readonly names: ReadonlyArray<string> }) => (
 );
 
 /** Host inventory shown while no VM is selected: capacity, state counts, allocation, attention list, sortable table. */
-export const Dashboard = ({ rows, host, sort, onSort }: DashboardProps) => {
+export const Dashboard = ({ rows, host, sort, onSort, onSelect, library }: DashboardProps) => {
   const stats = dashStats(rows.map((row) => row.vm));
   const count = rows.length;
   return (
@@ -208,9 +217,9 @@ export const Dashboard = ({ rows, host, sort, onSort }: DashboardProps) => {
       {(host.cpuCores > 0 || host.ramMib > 0) && <CapacityPanel host={host} vcpu={stats.vcpu} ramMib={stats.ramMib} />}
       <StateTiles stats={stats} />
       {stats.attention.length > 0 && <Attention names={stats.attention} />}
-      <Inventory rows={rows} sort={sort} onSort={onSort} />
+      <Inventory rows={rows} sort={sort} onSort={onSort} onSelect={onSelect} />
       <div class="mt-4.5 flex flex-wrap gap-2">
-        <LibraryActions />
+        <LibraryActions handlers={library} />
       </div>
     </div>
   );

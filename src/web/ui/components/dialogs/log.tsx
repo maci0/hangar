@@ -6,14 +6,16 @@ export type LogState = {
   readonly vmName: string;
   /** Log text, or a status line while loading or when there is none. */
   readonly text: string;
+  /** Fetches the log again. */
+  readonly refresh: () => void;
 };
 
 export type LogDialogProps = LogState & {
   readonly onClose: () => void;
 };
 
-/** QEMU log viewer. app.js fetches the log and pushes `text`; Refresh asks it to fetch again. */
-export const LogDialog = ({ vmName, text, onClose }: LogDialogProps) => {
+/** QEMU log viewer. The app fetches the log and pushes `text`; Refresh asks it to fetch again. */
+export const LogDialog = ({ vmName, text, refresh, onClose }: LogDialogProps) => {
   const body = useRef<HTMLPreElement>(null);
 
   // Newest output is at the end.
@@ -41,7 +43,7 @@ export const LogDialog = ({ vmName, text, onClose }: LogDialogProps) => {
         </pre>
       </DialogBody>
       <DialogFooter>
-        <Button type="button" data-action="refreshLog">
+        <Button type="button" data-action="refreshLog" onClick={refresh}>
           Refresh
         </Button>
         <DialogClose>Close</DialogClose>

@@ -9,7 +9,7 @@ import type { Vm } from "@/lib/vm";
 import type { FitAddon as XtermFit } from "@xterm/addon-fit";
 import type { Terminal as Xterm } from "@xterm/xterm";
 
-/** What the serial console asks of `app.js`. */
+/** What the serial console asks of the session. */
 export type SerialHost = {
   /** Index of the selected VM in the list, or null. */
   readonly selected: () => number | null;
