@@ -41,10 +41,13 @@ jobs:
         id: zig-cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
+          # Keyed on the build configuration only, not the commit: the Zig cache
+          # is content-addressed, so a stale entry costs a miss, never a wrong
+          # artifact. Including github.sha made every commit a unique key and
+          # the cache only ever hit on a re-run of the same commit.
           path: .zig-cache
           key: zig-cache-${{ runner.os }}-${{ hashFiles('build.zig.zon', 'build.zig') }}
           restore-keys: |
-            zig-cache-${{ runner.os }}-${{ hashFiles('build.zig.zon', 'build.zig') }}-
             zig-cache-${{ runner.os }}-
       - name: Install system build dependencies
         run: |
