@@ -34,7 +34,7 @@ under `zig build test`).
 Commands (from repo root):
 - `zig build web-e2e`: Playwright suite.
 - `KV_PORT=<p> bash tests/test_web_api.sh`: API plus startup validation.
-- `bash tests/test_web_api.sh --startup-only`: 10 startup validation checks.
+- `bash tests/test_web_api.sh --startup-only`: startup validation only, no daemon.
 - `bash tests/test_vmrun.sh`: vmrun integration.
 Before daemon-backed commands, satisfy the root Safety rules: a non-default port
 alone does not isolate `/tmp/hangar-daemon.sock`. The shell and screenshot harnesses

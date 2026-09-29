@@ -17,6 +17,7 @@ Zig 0.16.0. No libvirt.
 ## Build / Run / Test Commands
 
 ```bash
+zig build check        # Build + fmt + shell/YAML/JS lint + unit/fuzz suite + test-cli
 zig build web          # Build + launch web backend (HTTP on :9080; also the remote daemon)
 zig build webui        # Build + launch native WebView desktop wrapper
 zig build test         # Unit + fuzz tests; local sockets and optional QEMU subprocesses
@@ -25,9 +26,8 @@ zig build test-api     # HTTP API integration test (spawns a real daemon)
 zig build test-vmrun   # vmrun CLI integration test (spawns a real daemon)
 ```
 
-`zig build check` runs all executables, formatting, shell/YAML/JS lint, the
-unit/fuzz suite, and `zig build test-cli` (help/version and stdout-failure exit
-codes for all three binaries, plus invalid client API-key checks without a daemon).
+`test-cli` covers help/version and stdout-failure exit codes for all three
+binaries, plus invalid client API-key checks without a daemon.
 CI runs the build, lint and unit/fuzz steps; `test-cli` is an additional local check.
 Integration and browser tests remain standalone.
 
@@ -95,7 +95,7 @@ Zig 0.16's C importer rejects GLib headers (they emit file-scope `_Pragma`). No 
 - `web_server.zig` is both the local web UI server and the remote daemon. Remote clients (`vmrun`, `webui_app`) talk to it via `transport.zig` (Unix/TCP + HTTP helpers).
 - `web_server.zig` is the router + VM CRUD/lifecycle core; cohesive handler groups and leaf utilities have been carved into their own modules, which `web_server` `@import`s and (for the leaf helpers) aliases so call sites read unchanged:
   - HTTP plumbing (leaf): `httpreq.zig` (request-line/header/route parsers), `httpresp.zig` (status codes + response writer + `isServerErrToken`/`sanitizeHeaderValue`), `wlog.zig` (structured logging), `netutil.zig` (socket constants + `setTcpNoDelay`), `auth.zig` (API-key check, exempt list, host/WS gates).
-  - Handler groups: `snapshots.zig`, `migrate.zig`, `disk.zig` (info/compact/resize), `cdrom.zig`, `guestagent.zig`, `streams.zig` (conn-streaming: screenshot/download/upload/exportOva), `wsproxy.zig` (VNC/SPICE/serial relays), `catalog.zig`, `framebuffer.zig`.
+  - Handler groups: `snapshots.zig`, `migrate.zig`, `disk.zig` (info/compact/resize), `cdrom.zig`, `guestagent.zig`, `streams.zig` (conn-streaming: screenshot/download/upload/exportOva), `wsproxy.zig` (VNC/SPICE/serial relays), `framebuffer.zig`, `vmrender.zig` (list + detail renders). `catalog.zig` is model/persistence, not a handler group.
   - Uniform `POST /api/vms/<id>/<action>` routes and create/save form fields are
     table-driven, not copy-pasted arms; the table names and extension rule are in
     `src/AGENTS.md`.
@@ -135,7 +135,7 @@ For any non-local deployment, set a strong `KV_API_KEY` (which is also what expo
 - Enums follow the exact `vm.zig` pattern (see `DiskFormat`, `GuestOs`, etc.):
   - `count`, `toIndex`, `fromIndex` (safe default), `toStr` (QEMU CLI value), `label` (UI).
 - Naming: `PascalCase` types, `camelCase` functions, `SCREAMING_SNAKE` hard limits, `snake_case` for enum variants and source lists.
-- Fixed-size buffers for VM data (`name_buf`, `disk_path_buf`); C interop uses `[*:0]const u8`; internal slices are `[]const u8`.
+- Fixed-size buffers for VM data (`name_buf`, `disk_path_buf`); C interop uses `[*:0]const u8`; internal slices are `[]const u8`, converted with `std.mem.span()` only at interop boundaries.
 - UI terminology follows VMware Workstation conventions:
   - "Power On" / "Power Off", "Suspend" / "Resume", "Shut Down Guest", "Take Snapshot" / "Revert to Snapshot", "VM Library", "Settings".
 - Config enums are stored in JSON as their `toStr` values (e.g. `"qcow2"`, `"gtk"`, `"user"`).
@@ -145,7 +145,7 @@ For any non-local deployment, set a strong `KV_API_KEY` (which is also what expo
 Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, `std.posix`, or `std.Thread` APIs. See the `std.Io` migration constraint above for the required replacements.
 
 ### Builtins & comptime
-- Reach for builtins/comptime where natural: `@typeInfo`, `@TypeOf`, `@intCast`, `@enumFromInt`, `@intFromEnum`, `@memcpy`, `@memset`, `@atomicLoad`, `@atomicStore`.
+- Prefer builtins/comptime over hand-rolled bit or type work: `@typeInfo`, `@intCast`, `@enumFromInt`, `@memcpy`, `@atomicLoad`/`@atomicStore`.
 - There is **no** `@builtin`. Platform/build info comes from `const builtin = @import("builtin");`.
 
 ### Avoid low-level OS work
@@ -154,21 +154,11 @@ Target **Zig 0.16.0**. Never write code that assumes older `std.fs`, `std.net`, 
 - Keep existing low-level code behind the local wrappers (`usock`, `appio`, `qemu`).
 - Process spawning: use `std.process` only where Zig 0.16 environment handling is safe. Keep QEMU/`qemu-img` on the existing `qemu.forkExec`/`runWait` wrapper until the env-stripping issue is proven fixed with tests.
 
-### Structured stdlib helpers
-- `std.mem` for slicing/search/copying.
-- `std.fmt.bufPrint` / `bufPrintZ` for fixed buffers.
-- `std.testing` helpers in tests.
-- `std.heap` allocators only when fixed buffers are not enough.
-
 ### Ownership
 - Functions that allocate must document who frees.
-- Prefer caller-provided buffers for hot paths and config serialization.
+- Prefer caller-provided buffers for hot paths and config serialization; reach
+  for an allocator only when a fixed buffer will not do.
 - Use `defer` / `errdefer` consistently.
-
-### Slices over raw pointers
-- Use `[]const u8` / `[]u8` for internal Zig logic.
-- Reserve `[*:0]const u8` for C/QEMU interop boundaries.
-- Convert with `std.mem.span()` only at boundaries.
 
 ### Errors
 - Return `!T` / `!void`.
@@ -231,6 +221,8 @@ Update the closest owning AGENTS.md when a change affects:
 
 Update parent docs when parent-level structure, ownership, workflow, or child index changes. Update child docs when parent changes alter local rules. Remove stale or contradictory text immediately. Small edits that do not change behavior or contracts may leave docs unchanged, but the DOX pass still must happen.
 
+Closeout, once per change: re-check the changed paths against the DOX chain, update the nearest owning doc plus any affected parent or child, refresh every affected Child DOX Index, run the existing verification, and name any doc left unchanged and why.
+
 ## Hierarchy
 
 - Root AGENTS.md is the DOX rail: project-wide instructions, global preferences, durable workflow rules, and the top-level Child DOX Index
@@ -261,15 +253,6 @@ Default section order:
 - Do not duplicate rules across many files unless each scope needs a local version
 - Delete stale notes instead of explaining history
 - Trim obvious statements, repeated rules, misplaced detail, and warnings for risks that no longer exist
-
-## Closeout
-
-1. Re-check changed paths against the DOX chain
-2. Update nearest owning docs and any affected parents or children
-3. Refresh every affected Child DOX Index
-4. Remove stale or contradictory text
-5. Run existing verification when relevant
-6. Report any docs intentionally left unchanged and why
 
 ## User Preferences
 

@@ -20,10 +20,14 @@ globals in `appstate.zig`.
 - **Hypervisor process control:** `src/hv/` (dispatch table). See its AGENTS.md.
 - **QEMU / guest:** `qemu.zig` (arg builders + `forkExec`/`runWait`; never `std.process.spawn`),
   `qmp.zig` (QMP client), `framebuffer.zig`, `vnc_client.zig`.
-- **Video pipeline (phases 1-2):** `dbusdisplay.zig`, QMP add_client + hand-rolled D-Bus
-  subset attaches on power-on of a `video_stream` VM; assembles scanouts into a
-  framebuffer, encodes via an ffmpeg child (qemu.forkExecPiped), serves H.264 access
-  units on `/ws/video/<idx>` to the WebCodecs client (docs/VIDEO-PIPELINE.md).
+- **Video pipeline (phases 1-3 shipped, 4 partial):** `dbusdisplay.zig`, QMP
+  add_client + hand-rolled D-Bus subset attaches on power-on of a `video_stream`
+  VM; assembles scanouts into a framebuffer, encodes via an ffmpeg child
+  (qemu.forkExecPiped), serves H.264 access units on `/ws/video/<idx>` to the
+  WebCodecs client. `web_server.serveVideoClient` and `dbusdisplay.emitAu` share
+  one encoder across up to `MAX_VIDEO_CLIENTS` viewers per VM;
+  `video_bitrate_kbps` is a persisted `VmConfig` field. Remaining: cursor
+  channel, AV1, virgl/dmabuf capture (docs/VIDEO-PIPELINE.md).
 - **Events:** `GET /api/events` (SSE); `handleEvents` streams changes to
   `appstate.state_version`. Successful POSTs reaching the generic response path and
   unexpected VM exits bump it; streaming disk uploads bypass that path.
@@ -110,8 +114,8 @@ globals in `appstate.zig`.
   so a passing `zig build test` stays silent. Untrusted text (VM names, QEMU/QMP replies,
   argv) passes `wlog.sanitizeLogText` first. Direct fd-2 writes are limited to
   CLI usage/startup messages in `web_server`/`webui_app`, not daemon log lines.
-- **Request correlation:** `serveHtml` begins `wlog` context after the first successful
-  read, before rejection gates, and clears it on return. `writeHttpResponse` emits
+- **Request correlation:** `serveHtml` calls `wlog.beginRequest` after the first successful
+  read, before rejection gates, and `wlog.endRequest` on return. `writeHttpResponse` emits
   `X-Request-ID`; conditional asset 304 responses carry it too, and handler logs
   share that ID. Completion logs include status, elapsed milliseconds and actual
   send success for POSTs, server errors and failed sends (including 304s), without
