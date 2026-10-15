@@ -69,6 +69,9 @@ const usage =
     \\Global (accepted in any position):
     \\  help, -h, --help     Show this help and exit
     \\  -v, --version        Show version and exit
+    \\  schema [command]     Print the CLI Spec document and exit
+    \\  -o, --output FMT     auto, text, or json. Before the command.
+    \\                       auto stays text when stdout is not a terminal.
     \\
     \\Environment:
     \\  KV_API_KEY           X-API-Key sent with every request (default: built-in
@@ -85,7 +88,211 @@ const usage =
     \\
 ;
 
-const version = "vmrun 0.5.0\n";
+const release = "0.6.0";
+const version = "vmrun " ++ release ++ "\n";
+const version_json = "{\"version\":\"" ++ release ++ "\"}\n";
+
+const OutputMode = enum { auto, text, json };
+var output_mode: OutputMode = .auto;
+
+fn wantsJson() bool {
+    return output_mode == .json;
+}
+
+fn exitUsage() noreturn {
+    if (output_mode == .json) {
+        fdWrite(c.STDERR_FILENO, "{\"error\":{\"kind\":\"usage\",\"message\":\"invalid arguments\"}}\n");
+    }
+    std.process.exit(@as(u8, 2));
+}
+
+fn exitFail() noreturn {
+    if (output_mode == .json) {
+        fdWrite(c.STDERR_FILENO, "{\"error\":{\"kind\":\"failure\",\"message\":\"command failed\"}}\n");
+    }
+    std.process.exit(@as(u8, 1));
+}
+
+fn setOutputMode(value: []const u8) void {
+    if (std.mem.eql(u8, value, "auto")) {
+        output_mode = .auto;
+    } else if (std.mem.eql(u8, value, "text")) {
+        output_mode = .text;
+    } else if (std.mem.eql(u8, value, "json")) {
+        output_mode = .json;
+    } else {
+        fdWrite(c.STDERR_FILENO, "Error: --output requires auto, text, or json\n");
+        output_mode = .auto;
+        exitUsage();
+    }
+}
+
+/// Next positional argument, after consuming a leading -o / --output.
+/// auto stays text. An explicit value wins.
+fn nextUserArg(it: *std.process.Args.Iterator) ?[]const u8 {
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
+            const value = it.next() orelse {
+                fdWrite(c.STDERR_FILENO, "Error: --output requires auto, text, or json\n");
+                output_mode = .auto;
+                exitUsage();
+            };
+            setOutputMode(value);
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--output=")) {
+            setOutputMode(arg["--output=".len..]);
+            continue;
+        }
+        return arg;
+    }
+    return null;
+}
+
+fn printVersion() void {
+    fdWrite(c.STDOUT_FILENO, if (wantsJson()) version_json else version);
+}
+
+fn schemaSelected(name: []const u8, filter: []const u8) bool {
+    if (filter.len == 0) return true;
+    if (std.mem.eql(u8, name, filter)) return true;
+    return name.len > filter.len and std.mem.startsWith(u8, name, filter) and name[filter.len] == ' ';
+}
+
+const SpecShape = enum { doc, version, list, status, plain };
+
+const SpecCmd = struct {
+    name: []const u8,
+    description: []const u8,
+    effects: []const u8,
+    shape: SpecShape,
+};
+
+const spec_cmds = [_]SpecCmd{
+    .{ .name = "schema", .effects = "read_only", .shape = .doc, .description = "Print this CLI Spec document. schema <command> returns the same document filtered to that command." },
+    .{ .name = "version", .effects = "read_only", .shape = .version, .description = "Print the vmrun version. Invoked with -v or --version in any position. The bare word version is not this command." },
+    .{ .name = "list", .effects = "read_only", .shape = .list, .description = "List the VMs on the server." },
+    .{ .name = "status", .effects = "read_only", .shape = .status, .description = "Show server health. Stdout is the daemon health object in every output mode." },
+    .{ .name = "info", .effects = "read_only", .shape = .plain, .description = "Show one VM. Stdout stays the detail text." },
+    .{ .name = "log", .effects = "read_only", .shape = .plain, .description = "Show the VM QEMU stderr log. Stdout stays the log text." },
+    .{ .name = "guestinfo", .effects = "read_only", .shape = .plain, .description = "Show guest addresses reported by qemu-guest-agent. Stdout stays the status text." },
+    .{ .name = "diskinfo", .effects = "read_only", .shape = .plain, .description = "Show disk virtual and actual sizes. Stdout stays the status text." },
+    .{ .name = "snapshot list", .effects = "read_only", .shape = .plain, .description = "List snapshots for one VM. Stdout stays the status text." },
+    .{ .name = "create", .effects = "non_idempotent", .shape = .plain, .description = "Create a VM. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "import", .effects = "non_idempotent", .shape = .plain, .description = "Import a VM from a disk image on the daemon host. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "export", .effects = "non_idempotent", .shape = .plain, .description = "Write vm-<idx>.ova in the client directory, replacing any file of that name. Stdout is a status line, not the archive. A retry is not safe." },
+    .{ .name = "quickstart", .effects = "non_idempotent", .shape = .plain, .description = "Create a VM from a built-in template. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "start", .effects = "non_idempotent", .shape = .plain, .description = "Power on a VM. The daemon no-ops when it is already running and this command exits 0. The CLI does not report whether the power state changed. Stdout stays a status line." },
+    .{ .name = "stop", .effects = "non_idempotent", .shape = .plain, .description = "Power off a VM. The daemon no-ops when it is already stopped and this command exits 0. The CLI does not report whether the power state changed. Stdout stays a status line." },
+    .{ .name = "restart", .effects = "non_idempotent", .shape = .plain, .description = "Restart a VM. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "shutdown", .effects = "non_idempotent", .shape = .plain, .description = "Ask the guest to power off. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "reset", .effects = "non_idempotent", .shape = .plain, .description = "Hard-reset the guest. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "suspend", .effects = "non_idempotent", .shape = .plain, .description = "Suspend a VM to disk. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "pause", .effects = "non_idempotent", .shape = .plain, .description = "Pause guest execution. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "resume", .effects = "non_idempotent", .shape = .plain, .description = "Resume guest execution. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "clone", .effects = "non_idempotent", .shape = .plain, .description = "Full-clone a VM config. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "linked-clone", .effects = "non_idempotent", .shape = .plain, .description = "Linked-clone a VM. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "delete", .effects = "non_idempotent", .shape = .plain, .description = "Delete a VM. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "rename", .effects = "non_idempotent", .shape = .plain, .description = "Rename a VM. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "resize", .effects = "non_idempotent", .shape = .plain, .description = "Grow the primary disk of a stopped VM. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "cd", .effects = "non_idempotent", .shape = .plain, .description = "Change the mounted CD image. The path is on the daemon host. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "eject", .effects = "non_idempotent", .shape = .plain, .description = "Eject the mounted CD. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "compact", .effects = "non_idempotent", .shape = .plain, .description = "Compact the primary disk of a stopped VM. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "set", .effects = "non_idempotent", .shape = .plain, .description = "Set one config field. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "cad", .effects = "non_idempotent", .shape = .plain, .description = "Send Ctrl+Alt+Del to the guest. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "migrate", .effects = "non_idempotent", .shape = .plain, .description = "Live-migrate a VM to another host. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "snapshot take", .effects = "non_idempotent", .shape = .plain, .description = "Take a snapshot. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "snapshot revert", .effects = "non_idempotent", .shape = .plain, .description = "Revert to a snapshot. A retry is not safe. Stdout stays a status line." },
+    .{ .name = "snapshot delete", .effects = "non_idempotent", .shape = .plain, .description = "Delete a snapshot. A retry is not safe. Stdout stays a status line." },
+};
+
+fn specEmit(list: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
+    try list.appendSlice(alloc, s);
+}
+
+fn specEmitJsonStr(list: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
+    try list.append(alloc, '"');
+    var buf: [512]u8 = undefined;
+    const esc = httpresp.jsonEscape(&buf, s);
+    try list.appendSlice(alloc, if (esc.truncated) "?" else esc.escaped);
+    try list.append(alloc, '"');
+}
+
+fn writeSpecCmd(list: *std.ArrayList(u8), alloc: std.mem.Allocator, cmd: SpecCmd) !void {
+    try specEmit(list, alloc, "{\"name\":");
+    try specEmitJsonStr(list, alloc, cmd.name);
+    try specEmit(list, alloc, ",\"description\":");
+    try specEmitJsonStr(list, alloc, cmd.description);
+    try specEmit(list, alloc, ",\"effects\":\"");
+    try specEmit(list, alloc, cmd.effects);
+    try specEmit(list, alloc, "\"");
+    switch (cmd.shape) {
+        .doc => try specEmit(list, alloc, ",\"output_kind\":\"opaque\",\"media_type\":\"application/json\""),
+        .version => try specEmit(list, alloc, ",\"cardinality\":\"single\",\"output_fields\":[{\"name\":\"version\",\"type\":\"string\",\"description\":\"Release version\"}]"),
+        .list => try specEmit(list, alloc, ",\"cardinality\":\"bounded\",\"output_fields\":[{\"name\":\"index\",\"type\":\"integer\"},{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"status\",\"type\":\"string\"},{\"name\":\"mem\",\"type\":\"integer\"},{\"name\":\"cpu\",\"type\":\"integer\"}]"),
+        .status => try specEmit(list, alloc, ",\"cardinality\":\"single\",\"output_fields\":[{\"name\":\"status\",\"type\":\"string\"},{\"name\":\"version\",\"type\":\"string\"},{\"name\":\"vms\",\"type\":\"integer\"},{\"name\":\"running\",\"type\":\"integer\"},{\"name\":\"persist\",\"type\":\"string\"}]"),
+        .plain => try specEmit(list, alloc, ",\"output_kind\":\"opaque\",\"media_type\":\"text/plain\""),
+    }
+    try specEmit(list, alloc, "}");
+}
+
+fn writeSchema(it: *std.process.Args.Iterator) void {
+    var filt_buf: [160]u8 = undefined;
+    var filt_len: usize = 0;
+    while (nextUserArg(it)) |arg| {
+        if (isHelpArg(arg)) {
+            fdWrite(c.STDOUT_FILENO, usage);
+            return;
+        }
+        if (isVersionArg(arg)) {
+            printVersion();
+            return;
+        }
+        if (arg.len > 0 and arg[0] == '-') {
+            fdWrite(c.STDERR_FILENO, "usage: vmrun schema [command]\n");
+            exitUsage();
+        }
+        if (filt_len != 0 and filt_len < filt_buf.len) {
+            filt_buf[filt_len] = ' ';
+            filt_len += 1;
+        }
+        const room = filt_buf.len - filt_len;
+        const n = @min(arg.len, room);
+        @memcpy(filt_buf[filt_len..][0..n], arg[0..n]);
+        filt_len += n;
+    }
+    const filter = filt_buf[0..filt_len];
+
+    const alloc = std.heap.page_allocator;
+    var list: std.ArrayList(u8) = .empty;
+    defer list.deinit(alloc);
+    specEmit(&list, alloc, "{\"clispec\":\"0.3\",\"name\":\"vmrun\",\"version\":\"" ++ release ++ "\",\"description\":\"Hangar remote VM manager. KV_API_KEY is read from the environment.\",\"output\":{\"tty\":\"text\",\"piped\":\"text\"},\"global_args\":[{\"name\":\"--output\",\"short\":\"-o\",\"type\":\"string\",\"required\":false,\"description\":\"Before the command. auto stays text when piped.\",\"default\":\"auto\",\"enum\":[\"auto\",\"text\",\"json\"]}],\"commands\":[") catch {
+        fdWrite(c.STDERR_FILENO, "Error: command failed\n");
+        exitFail();
+    };
+    var count: usize = 0;
+    for (spec_cmds) |cmd| {
+        if (!schemaSelected(cmd.name, filter)) continue;
+        if (count != 0) specEmit(&list, alloc, ",") catch {
+            fdWrite(c.STDERR_FILENO, "Error: command failed\n");
+            exitFail();
+        };
+        writeSpecCmd(&list, alloc, cmd) catch {
+            fdWrite(c.STDERR_FILENO, "Error: command failed\n");
+            exitFail();
+        };
+        count += 1;
+    }
+    if (count == 0) {
+        fdWrite(c.STDERR_FILENO, "unknown command path\n");
+        exitUsage();
+    }
+    specEmit(&list, alloc, "],\"errors\":[{\"kind\":\"usage\",\"exit_code\":2,\"retryable\":false,\"description\":\"The arguments are not valid.\"},{\"kind\":\"failure\",\"exit_code\":1,\"retryable\":true,\"description\":\"The command failed, including a daemon that cannot be reached.\"}]}\n") catch {
+        fdWrite(c.STDERR_FILENO, "Error: command failed\n");
+        exitFail();
+    };
+    fdWrite(c.STDOUT_FILENO, list.items);
+}
 
 /// Write a slice to a file descriptor using its real length.
 /// Replaces error-prone hand-counted byte lengths in `c.write` calls.
@@ -119,7 +326,7 @@ pub fn main(init: std.process.Init) !void {
         var buf: [128]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: {s}\n", .{@errorName(err)}) catch "Error: command failed\n";
         fdWrite(c.STDERR_FILENO, msg);
-        std.process.exit(1);
+        exitFail();
     };
 }
 
@@ -130,24 +337,29 @@ fn run(init: std.process.Init) !void {
 
     _ = args_iter.next(); // program name
 
-    const server_url = args_iter.next() orelse {
+    const server_url = nextUserArg(&args_iter) orelse {
         fdWrite(c.STDERR_FILENO, usage);
-        std.process.exit(EXIT_USAGE);
+        exitUsage();
     };
 
-    // Help / version are accepted in the first positional slot.
+    // Help / version / schema are accepted in the first positional slot and
+    // never open a connection. The bare word `version` is not a version alias.
     if (isHelpArg(server_url)) {
         fdWrite(c.STDOUT_FILENO, usage);
         std.process.exit(0);
     }
     if (isVersionArg(server_url)) {
-        fdWrite(c.STDOUT_FILENO, version);
+        printVersion();
+        std.process.exit(0);
+    }
+    if (std.mem.eql(u8, server_url, "schema")) {
+        writeSchema(&args_iter);
         std.process.exit(0);
     }
 
-    const command = args_iter.next() orelse {
+    const command = nextUserArg(&args_iter) orelse {
         fdWrite(c.STDERR_FILENO, usage);
-        std.process.exit(EXIT_USAGE);
+        exitUsage();
     };
 
     // Help / version are also accepted in the command slot (e.g. after the
@@ -157,7 +369,11 @@ fn run(init: std.process.Init) !void {
         std.process.exit(0);
     }
     if (isVersionArg(command)) {
-        fdWrite(c.STDOUT_FILENO, version);
+        printVersion();
+        std.process.exit(0);
+    }
+    if (std.mem.eql(u8, command, "schema")) {
+        writeSchema(&args_iter);
         std.process.exit(0);
     }
 
@@ -168,13 +384,13 @@ fn run(init: std.process.Init) !void {
     // makes the tool predictable in scripts.
     var rest: [16][]const u8 = undefined;
     var rest_n: usize = 0;
-    while (args_iter.next()) |a| : (rest_n += 1) {
+    while (nextUserArg(&args_iter)) |a| : (rest_n += 1) {
         if (isHelpArg(a)) {
             fdWrite(c.STDOUT_FILENO, usage);
             std.process.exit(0);
         }
         if (isVersionArg(a)) {
-            fdWrite(c.STDOUT_FILENO, version);
+            printVersion();
             std.process.exit(0);
         }
         if (rest_n < rest.len) rest[rest_n] = a;
@@ -185,21 +401,21 @@ fn run(init: std.process.Init) !void {
 
     _ = transport.apiKey() catch {
         fdWrite(c.STDERR_FILENO, "Error: KV_API_KEY must be 1-64 bytes of printable ASCII (no spaces or control characters)\n");
-        std.process.exit(1);
+        exitFail();
     };
 
     const url = transport.Url.parse(server_url) orelse {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: invalid server URL '{s}' (expected http://host:port or unix:///path)\n", .{server_url}) catch "Error: invalid server URL\n";
         fdWrite(c.STDERR_FILENO, msg);
-        std.process.exit(EXIT_USAGE);
+        exitUsage();
     };
 
     var conn = transport.Connection.connect(&url) orelse {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: failed to connect to server '{s}' (is the daemon running?)\n", .{server_url}) catch "Error: failed to connect to server\n";
         fdWrite(c.STDERR_FILENO, msg);
-        std.process.exit(1);
+        exitFail();
     };
     defer conn.close();
 
@@ -345,7 +561,7 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
     if (std.mem.eql(u8, command, "snapshot")) {
         if (args.len == 0) {
             fdWrite(c.STDERR_FILENO, "Error: snapshot command requires subcommand: list|take|revert|delete\n");
-            std.process.exit(EXIT_USAGE);
+            exitUsage();
         }
         const sub = args[0];
         const is_list = std.mem.eql(u8, sub, "list");
@@ -353,15 +569,15 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
             std.mem.eql(u8, sub, "revert") or std.mem.eql(u8, sub, "delete");
         if (!is_list and !needs_tag) {
             fdWrite(c.STDERR_FILENO, "Error: unknown snapshot subcommand (use: list|take|revert|delete)\n");
-            std.process.exit(EXIT_USAGE);
+            exitUsage();
         }
         if (args.len < 2) {
             fdWrite(c.STDERR_FILENO, "Error: missing VM name or index\n");
-            std.process.exit(EXIT_USAGE);
+            exitUsage();
         }
         if (needs_tag and args.len < 3) {
             fdWrite(c.STDERR_FILENO, "Error: missing snapshot tag\n");
-            std.process.exit(EXIT_USAGE);
+            exitUsage();
         }
         // Reject trailing junk so a typo (e.g. an extra word) fails loudly
         // instead of being silently dropped. list takes 2 args (sub + target),
@@ -369,7 +585,7 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
         const max: usize = if (needs_tag) 3 else 2;
         if (args.len > max) {
             fdWrite(c.STDERR_FILENO, "Error: too many arguments for snapshot command (run with --help for usage)\n");
-            std.process.exit(EXIT_USAGE);
+            exitUsage();
         }
         return;
     }
@@ -382,7 +598,7 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
         var buf: [96]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: unknown {s} '{s}' (run with --help for usage)\n", .{ kind, command }) catch "Error: unknown command\n";
         fdWrite(c.STDERR_FILENO, msg);
-        std.process.exit(EXIT_USAGE);
+        exitUsage();
     };
     if (args.len < arity) {
         // Name the arguments the command actually expects. A generic "missing VM
@@ -392,7 +608,7 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
         var buf: [160]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: '{s}' requires {s} (run with --help for usage)\n", .{ command, argHint(command) }) catch "Error: missing arguments\n";
         fdWrite(c.STDERR_FILENO, msg);
-        std.process.exit(EXIT_USAGE);
+        exitUsage();
     }
     // Reject excess positional arguments. Without this an invocation like
     // `vmrun <url> start vm1 vm2` silently ignores `vm2`, so a mistyped
@@ -401,7 +617,7 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
         var buf: [96]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: too many arguments for '{s}' (run with --help for usage)\n", .{command}) catch "Error: too many arguments\n";
         fdWrite(c.STDERR_FILENO, msg);
-        std.process.exit(EXIT_USAGE);
+        exitUsage();
     }
 
     // Validate argument *values* that can be checked without the daemon (numeric
@@ -421,7 +637,7 @@ fn validateArgs(command: []const u8, args: []const []const u8) void {
         var sb: [256]u8 = undefined;
         const m = std.fmt.bufPrintZ(&sb, "Error: unknown field '{s}' (settable: {s})\n", .{ args[1], SETTABLE_FIELDS_HELP }) catch "Error: unknown field\n";
         fdWrite(c.STDERR_FILENO, m);
-        std.process.exit(EXIT_USAGE);
+        exitUsage();
     }
 }
 
@@ -432,7 +648,7 @@ fn validateUint(command: []const u8, field: []const u8, value: []const u8) void 
         var buf: [192]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: {s} {s} must be a non-negative integer, got '{s}'\n", .{ command, field, value }) catch "Error: invalid number\n";
         fdWrite(c.STDERR_FILENO, msg);
-        std.process.exit(EXIT_USAGE);
+        exitUsage();
     };
 }
 
@@ -444,7 +660,7 @@ fn validatePort(value: []const u8) void {
         var buf: [128]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&buf, "Error: migrate port must be 1-65535, got '{s}'\n", .{value}) catch "Error: invalid port\n";
         fdWrite(c.STDERR_FILENO, msg);
-        std.process.exit(EXIT_USAGE);
+        exitUsage();
     }
 }
 
@@ -454,7 +670,7 @@ fn notFound(target: []const u8) noreturn {
     var buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrintZ(&buf, "Error: VM '{s}' not found\n", .{target}) catch "Error: VM not found\n";
     fdWrite(c.STDERR_FILENO, msg);
-    std.process.exit(1);
+    exitFail();
 }
 
 fn sendRequest(allocator: std.mem.Allocator, conn: *transport.Connection, method: []const u8, path: []const u8, body: ?[]const u8) ![]u8 {
@@ -477,7 +693,7 @@ fn sendRequest(allocator: std.mem.Allocator, conn: *transport.Connection, method
         var ebuf: [320]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&ebuf, "Error: {s}\n", .{detail}) catch "Error: server returned an error\n";
         fdWrite(c.STDERR_FILENO, msg);
-        std.process.exit(1);
+        exitFail();
     }
     return try allocator.dupe(u8, buf[0..n]);
 }
@@ -530,7 +746,7 @@ fn resolveVm(allocator: std.mem.Allocator, conn: *transport.Connection, target: 
         var b: [192]u8 = undefined;
         const m = std.fmt.bufPrintZ(&b, "Error: multiple VMs named '{s}'; address it by index (run `list`)\n", .{target}) catch "Error: ambiguous VM name\n";
         fdWrite(c.STDERR_FILENO, m);
-        std.process.exit(1);
+        exitFail();
     }
     return findVmIdxInJson(json, target);
 }
@@ -593,21 +809,50 @@ fn cmdList(allocator: std.mem.Allocator, conn: *transport.Connection) !void {
     // Parse and display VM names from JSON array.
     var rest: []const u8 = json;
     var idx: usize = 0;
+    var items: std.ArrayList(u8) = .empty;
+    defer items.deinit(allocator);
+    if (wantsJson()) try items.appendSlice(allocator, "{\"items\":[");
     while (nextJsonObject(&rest)) |obj| {
-
-        // Extract name and status
         const name = extractJsonString(obj, "name") orelse "?";
         const status = extractJsonString(obj, "status") orelse "?";
         const mem = extractJsonInt(obj, "mem") orelse 0;
         const cpu = extractJsonInt(obj, "cpu") orelse 0;
 
-        var buf: [256]u8 = undefined;
-        const line = try std.fmt.bufPrint(&buf, "[{d}] {s}  status={s}  mem={d}MB  cpu={d}\n", .{ idx, name, status, mem, cpu });
-        fdWrite(c.STDOUT_FILENO, line);
+        if (wantsJson()) {
+            if (idx != 0) try items.append(allocator, ',');
+            var nbuf: [32]u8 = undefined;
+            const ns = std.fmt.bufPrint(&nbuf, "{d}", .{idx}) catch "0";
+            var mbuf: [32]u8 = undefined;
+            const ms = std.fmt.bufPrint(&mbuf, "{d}", .{mem}) catch "0";
+            var cbuf: [32]u8 = undefined;
+            const cs = std.fmt.bufPrint(&cbuf, "{d}", .{cpu}) catch "0";
+            try items.appendSlice(allocator, "{\"index\":");
+            try items.appendSlice(allocator, ns);
+            try items.appendSlice(allocator, ",\"name\":");
+            try specEmitJsonStr(&items, allocator, name);
+            try items.appendSlice(allocator, ",\"status\":");
+            try specEmitJsonStr(&items, allocator, status);
+            try items.appendSlice(allocator, ",\"mem\":");
+            try items.appendSlice(allocator, ms);
+            try items.appendSlice(allocator, ",\"cpu\":");
+            try items.appendSlice(allocator, cs);
+            try items.append(allocator, '}');
+        } else {
+            var buf: [256]u8 = undefined;
+            const line = try std.fmt.bufPrint(&buf, "[{d}] {s}  status={s}  mem={d}MB  cpu={d}\n", .{ idx, name, status, mem, cpu });
+            fdWrite(c.STDOUT_FILENO, line);
+        }
         idx += 1;
     }
 
-    if (idx == 0) {
+    if (wantsJson()) {
+        var tbuf: [32]u8 = undefined;
+        const ts = std.fmt.bufPrint(&tbuf, "{d}", .{idx}) catch "0";
+        try items.appendSlice(allocator, "],\"total\":");
+        try items.appendSlice(allocator, ts);
+        try items.appendSlice(allocator, "}\n");
+        fdWrite(c.STDOUT_FILENO, items.items);
+    } else if (idx == 0) {
         fdWrite(c.STDOUT_FILENO, "No VMs found.\n");
     }
 }
@@ -636,7 +881,7 @@ fn cmdPower(allocator: std.mem.Allocator, conn: *transport.Connection, idx: usiz
         var ebuf: [200]u8 = undefined;
         const em = std.fmt.bufPrint(&ebuf, "Error: {s} failed for VM [{d}]: {s}\n", .{ action, idx, resp }) catch "Error: power op failed\n";
         fdWrite(c.STDERR_FILENO, em);
-        std.process.exit(1);
+        exitFail();
     }
     var buf: [256]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "{s} VM [{d}]: {s}\n", .{ action, idx, resp });
@@ -831,7 +1076,7 @@ fn cmdExport(conn: *transport.Connection, idx: usize) !void {
     const fd = std.c.open(fname, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(c.mode_t, 0o644));
     if (fd < 0) {
         fdWrite(c.STDERR_FILENO, "Error: could not create output file\n");
-        std.process.exit(1);
+        exitFail();
     }
     defer _ = std.c.close(fd);
     const written = conn.requestToFd("POST", path, null, fd) catch |e| {
@@ -841,7 +1086,7 @@ fn cmdExport(conn: *transport.Connection, idx: usize) !void {
         var ebuf: [160]u8 = undefined;
         const em = std.fmt.bufPrint(&ebuf, "Error: export failed for VM [{d}]: {s}\n", .{ idx, @errorName(e) }) catch "Error: export failed\n";
         fdWrite(c.STDERR_FILENO, em);
-        std.process.exit(1);
+        exitFail();
     };
     var buf: [128]u8 = undefined;
     const line = try std.fmt.bufPrint(&buf, "export VM [{d}]: wrote {d} bytes to {s}\n", .{ idx, written, fname });
@@ -1338,6 +1583,15 @@ test "isHelpArg: accepts all help spellings, rejects others" {
     try std.testing.expect(!isHelpArg("-v"));
     try std.testing.expect(!isHelpArg("start"));
     try std.testing.expect(!isHelpArg(""));
+}
+
+test "schemaSelected: exact name or a longer command path" {
+    try std.testing.expect(schemaSelected("list", ""));
+    try std.testing.expect(schemaSelected("list", "list"));
+    try std.testing.expect(!schemaSelected("list", "status"));
+    try std.testing.expect(schemaSelected("snapshot list", "snapshot"));
+    try std.testing.expect(!schemaSelected("snapshot list", "snap"));
+    try std.testing.expect(!schemaSelected("list", "list extra"));
 }
 
 test "isVersionArg: accepts version spellings, rejects others" {

@@ -159,9 +159,17 @@ lifecycle already goes through a dispatch table (`src/hv/`).
 
 ## Release notes and upgrades
 
-`v0.5.0` is the latest tagged release. `build.zig.zon` and the private
-frontend-test `package.json` declare `0.5.0`. There is no stated compatibility
+`v0.6.0` is the latest tagged release. `build.zig.zon` and the private
+frontend-test `package.json` declare `0.6.0`. There is no stated compatibility
 or deprecation policy.
+
+### v0.6.0 (2026-10-15)
+
+#### Added
+
+- `vmrun schema` prints a CLI Spec 0.3 document and needs no daemon, no config, and no network. `vmrun schema <command>` returns that document filtered to the command.
+- `-o` / `--output` accept `auto`, `text`, or `json` before the command. `auto` stays text on a pipe. `--version` prints `{"version":"0.6.0"}` when JSON mode is explicit. A usage exit (2) or a failure exit (1) then ends with an error object on stderr when JSON mode is explicit.
+- `vmrun -o json list` prints `{"items":[...],"total":N}`. Other commands keep their existing stdout. `KV_API_KEY` stays an environment variable.
 
 ### v0.5.0 (2026-09-29)
 

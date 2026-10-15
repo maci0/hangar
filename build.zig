@@ -248,6 +248,42 @@ pub fn build(b: *std.Build) !void {
     client_config_test.addArtifactArg(vmrun_exe);
     cli_test.dependOn(&client_config_test.step);
 
+    const clispec_test = b.addSystemCommand(&.{
+        "bash",         "-euo", "pipefail", "-c",
+        \\schema=$("$1" schema)
+        \\printf '%s' "$schema" | grep -q '"clispec":"0.3"'
+        \\printf '%s' "$schema" | grep -q '"version":"0.6.0"'
+        \\printf '%s' "$schema" | grep -q '"piped":"text"'
+        \\printf '%s' "$schema" | grep -q '"name":"list"'
+        \\printf '%s' "$schema" | grep -q '"name":"snapshot list"'
+        \\filtered=$("$1" schema list)
+        \\printf '%s' "$filtered" | grep -q '"name":"list"'
+        \\if printf '%s' "$filtered" | grep -q '"name":"create"'; then exit 1; fi
+        \\text=$("$1" -o text schema)
+        \\printf '%s' "$text" | grep -q '"clispec":"0.3"'
+        \\ver=$("$1" -o json --version)
+        \\test "$ver" = '{"version":"0.6.0"}'
+        \\plain=$("$1" -o text --version)
+        \\test "$plain" = 'vmrun 0.6.0'
+        \\help=$("$1" --help)
+        \\printf '%s' "$help" | grep -q 'schema'
+        \\rc=0
+        \\err=$("$1" -o json schema nope 2>&1 >/dev/null) || rc=$?
+        \\test "$rc" -eq 2
+        \\last=$(printf '%s\n' "$err" | tail -n 1)
+        \\test "$last" = '{"error":{"kind":"usage","message":"invalid arguments"}}'
+        \\rc=0
+        \\bad=$("$1" -o nope 2>&1 >/dev/null) || rc=$?
+        \\test "$rc" -eq 2
+        \\if printf '%s' "$bad" | grep -q '^{"error":'; then exit 1; fi
+        ,
+        "test-clispec",
+    });
+    clispec_test.addArtifactArg(vmrun_exe);
+    clispec_test.setEnvironmentVariable("NO_COLOR", "1");
+    clispec_test.setEnvironmentVariable("TERM", "dumb");
+    cli_test.dependOn(&clispec_test.step);
+
     const check = b.step("check", "Run CI checks (build, format, shell/YAML/JS lint, unit + fuzz tests)");
     check.dependOn(cli_test);
     check.dependOn(b.getInstallStep());

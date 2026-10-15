@@ -81,6 +81,8 @@ echo "=== vmrun over TCP ==="
 expect_contains "status reports ok"        '"status":"ok"' "$VMRUN" "$URL" status
 expect_contains "create a VM"              'ok'            "$VMRUN" "$URL" create runVM 1024 1 1
 expect_contains "list shows the VM"        'runVM'         "$VMRUN" "$URL" list
+expect_contains "list json items"          '"items"'       "$VMRUN" -o json "$URL" list
+expect_contains "list json total"          '"total"'       "$VMRUN" -o json "$URL" list
 # info is resolve-by-name + detail = two requests on one Connection (redial).
 expect_contains "info by name (2 requests)" 'Memory:  1024 MB' "$VMRUN" "$URL" info runVM
 expect_contains "log reports no log yet"   'no log'        "$VMRUN" "$URL" log runVM
