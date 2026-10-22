@@ -3,6 +3,9 @@
 Lightweight QEMU VM manager with web UI and optional native WebView wrapper.
 Zig 0.16.0. No libvirt.
 
+Original code is GPL-3.0-or-later (`LICENSE`, `README.md`); dependency notices stay
+separate. Private reports use `SECURITY.md`. Append change evidence to `PROVENANCE.md`.
+
 ## Safety
 
 - Fix failing code, never weaken gates, assertions, or rules to pass.
