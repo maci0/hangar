@@ -1,5 +1,12 @@
 # Hangar
 
+Hangar's original code is licensed under the GNU General Public License,
+version 3 or (at your option) any later version: **GPL-3.0-or-later**.
+See [LICENSE](LICENSE); third-party components retain the licenses in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Private vulnerability reports: [SECURITY.md](SECURITY.md).
+Change and verification ledger: [PROVENANCE.md](PROVENANCE.md).
+
 Lightweight QEMU virtual-machine manager with a web UI and an optional native
 WebView desktop wrapper. No libvirt. Single Zig daemon serves the HTTP API, the
 embedded web UI, and the remote control protocol; `vmrun` is a CLI client.
